@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
@@ -52,7 +52,10 @@ class ContentWriteCoordinator:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        normalized_uri = VikingURI.normalize(uri)
+        try:
+            normalized_uri = canonicalize_uri(uri, ctx)
+        except NamespaceShapeError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
 

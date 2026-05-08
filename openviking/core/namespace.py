@@ -101,7 +101,11 @@ def uri_parts(uri: str) -> list[str]:
 
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the first content segment after a user/agent namespace root."""
-    if len(parts) < 3 or parts[0] not in _CONTENT_TYPES_BY_SCOPE:
+    if len(parts) < 2 or parts[0] not in _CONTENT_TYPES_BY_SCOPE:
+        return None
+    if parts[1] in _CONTENT_TYPES_BY_SCOPE[parts[0]]:
+        return 1
+    if len(parts) < 3:
         return None
     cross_scope_segment = _CROSS_SCOPE_OWNER_SEGMENT[parts[0]]
     if len(parts) >= 5 and parts[2] == cross_scope_segment:

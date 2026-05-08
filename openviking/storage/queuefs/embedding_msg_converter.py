@@ -34,14 +34,19 @@ class EmbeddingMsgConverter:
         if not context_data.get("account_id"):
             user = context_data.get("user") or {}
             context_data["account_id"] = user.get("account_id", "default")
-        if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
+        uri = context_data.get("uri", "")
+        owner_fields = None
+        if uri:
             owner_fields = owner_fields_for_uri(
-                context_data.get("uri", ""),
+                uri,
                 user=context.user,
                 account_id=context_data.get("account_id"),
             )
-            context_data["owner_user_id"] = owner_fields["owner_user_id"]
-            context_data["owner_agent_id"] = owner_fields["owner_agent_id"]
+            context_data["uri"] = owner_fields["uri"]
+        if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
+            if owner_fields is not None:
+                context_data["owner_user_id"] = owner_fields["owner_user_id"]
+                context_data["owner_agent_id"] = owner_fields["owner_agent_id"]
 
         # Derive level field for hierarchical retrieval.
         uri = context_data.get("uri", "")

@@ -99,6 +99,11 @@ viking://agent/memories/patterns/             # Learned patterns
 viking://agent/instructions/                  # Agent instructions
 ```
 
+The short `viking://user/...` and `viking://agent/...` forms above are
+relative to the current request identity. OpenViking expands them internally to
+explicit namespace paths such as `viking://user/{user_id}/...` and
+`viking://agent/{agent_id}/...` before storage and retrieval.
+
 ### Session Data
 
 ```

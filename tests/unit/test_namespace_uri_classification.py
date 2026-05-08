@@ -13,6 +13,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://user/alice/memories/entities/m1.md") == "memory"
+    assert context_type_for_uri("viking://user/memories/entities/m1.md") == "memory"
+    assert context_type_for_uri("viking://agent/memories/cases/m1.md") == "memory"
+    assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://agent/default/memories/cases/m1.md") == "memory"
     assert (
         context_type_for_uri("viking://user/alice/agent/default/memories/entities/m1.md")
@@ -27,10 +30,12 @@ def test_context_type_for_uri_uses_path_segments():
 def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://user/alice/memories/preferences/prefs.md").is_memory
     assert classify_uri("viking://user/alice/memories").is_memory_root
+    assert classify_uri("viking://user/memories").is_memory_root
     assert not classify_uri("viking://user/alice/memories/preferences").is_memory_root
 
     assert classify_uri("viking://agent/default/skills/demo/SKILL.md").is_skill
     assert classify_uri("viking://agent/default/skills/demo").is_skill_root
+    assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://agent/default/skills").is_skill_root
     assert not classify_uri("viking://agent/default/skills/demo/assets").is_skill_root
 

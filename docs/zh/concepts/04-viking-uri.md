@@ -98,6 +98,10 @@ viking://agent/memories/patterns/             # 学习的模式
 viking://agent/instructions/                  # Agent 指令
 ```
 
+上面的 `viking://user/...` 和 `viking://agent/...` 短路径会按当前请求身份解析。
+OpenViking 会在存储和检索前将它们展开为显式命名空间路径，例如
+`viking://user/{user_id}/...` 和 `viking://agent/{agent_id}/...`。
+
 ### 会话数据
 
 ```

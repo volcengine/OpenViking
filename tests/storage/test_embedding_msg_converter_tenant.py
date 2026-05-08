@@ -11,19 +11,22 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.parametrize(
-    ("uri", "expected_owner_user_id", "expected_owner_agent_id"),
+    ("uri", "expected_uri", "expected_owner_user_id", "expected_owner_agent_id"),
     [
         (
             "viking://user/memories/preferences/me.md",
+            lambda user: f"viking://user/{user.user_id}/memories/preferences/me.md",
             lambda user: user.user_id,
             None,
         ),
         (
             "viking://agent/memories/cases/me.md",
+            lambda user: f"viking://agent/{user.agent_id}/memories/cases/me.md",
             None,
             lambda user: user.agent_id,
         ),
         (
+            "viking://resources/doc.md",
             "viking://resources/doc.md",
             None,
             None,
@@ -31,7 +34,7 @@ from openviking_cli.session.user_id import UserIdentifier
     ],
 )
 def test_embedding_msg_converter_backfills_account_and_owner_fields(
-    uri, expected_owner_user_id, expected_owner_agent_id
+    uri, expected_uri, expected_owner_user_id, expected_owner_agent_id
 ):
     user = UserIdentifier("acme", "alice", "helper")
     context = Context(uri=uri, abstract="hello", user=user)
@@ -45,6 +48,8 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
 
     assert msg is not None
     assert msg.context_data["account_id"] == "acme"
+    resolved_uri = expected_uri(user) if callable(expected_uri) else expected_uri
+    assert msg.context_data["uri"] == resolved_uri
     expected_user = (
         expected_owner_user_id(user) if callable(expected_owner_user_id) else expected_owner_user_id
     )
