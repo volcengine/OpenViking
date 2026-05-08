@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-import asyncio
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -12,17 +11,13 @@ from pydantic import BaseModel, ConfigDict
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
-from openviking.server.auth import get_request_context, require_role
+from openviking.server.auth import (
+    get_request_context,
+    require_role,
+)
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
-from openviking.server.responses import error_response, response_from_result
-from openviking.server.routers.maintenance import (
-    REINDEX_TASK_TYPE,
-    ReindexRequest,
-    _background_reindex_tracked,
-    _do_reindex,
-)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import NotFoundError
@@ -44,7 +39,22 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class ReindexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    mode: str = "vectors_only"
+    wait: bool = True
+
+
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+
+def _validate_reindex_uri(uri: str) -> str:
+    raw_uri = uri.strip() if isinstance(uri, str) else ""
+    if raw_uri.startswith("viking://"):
+        return raw_uri
+    return validate_viking_uri(raw_uri)
 
 
 @router.get("/read")
@@ -188,53 +198,19 @@ async def write(
     ).model_dump(exclude_none=True)
 
 
-@router.post("/reindex", deprecated=True)
+@router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
     ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
 ):
-    """Compatibility alias for older clients that still call /api/v1/content/reindex."""
-    from openviking.service.task_tracker import get_task_tracker
-    from openviking.storage.viking_fs import get_viking_fs
-
+    """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     uri = resolve_path_variables(body.uri)
-    uri = validate_viking_uri(uri)
-    viking_fs = get_viking_fs()
-
-    if not await viking_fs.exists(uri, ctx=ctx):
-        return error_response("NOT_FOUND", f"URI not found: {uri}")
-
+    uri = _validate_reindex_uri(uri)
     service = get_service()
-    tracker = get_task_tracker()
-
-    if body.wait:
-        if tracker.has_running(
-            REINDEX_TASK_TYPE,
-            uri,
-            owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
-        ):
-            return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
-        result = await _do_reindex(service, uri, body.regenerate, ctx)
-        return response_from_result(result)
-
-    task = tracker.create_if_no_running(
-        REINDEX_TASK_TYPE,
-        uri,
-        owner_account_id=ctx.account_id,
-        owner_user_id=ctx.user.user_id,
+    result = await service.reindex(
+        uri=uri,
+        mode=body.mode,
+        wait=body.wait,
+        ctx=ctx,
     )
-    if task is None:
-        return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
-    asyncio.create_task(
-        _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
-    )
-    return Response(
-        status="ok",
-        result={
-            "uri": uri,
-            "status": "accepted",
-            "task_id": task.task_id,
-            "message": "Reindex is processing in the background",
-        },
-    )
+    return Response(status="ok", result=result)

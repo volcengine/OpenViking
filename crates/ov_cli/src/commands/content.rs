@@ -64,12 +64,12 @@ pub async fn write(
 pub async fn reindex(
     client: &HttpClient,
     uri: &str,
-    regenerate: bool,
+    mode: &str,
     wait: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.reindex(uri, regenerate, wait).await?;
+    let result = client.reindex(uri, mode, wait).await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }

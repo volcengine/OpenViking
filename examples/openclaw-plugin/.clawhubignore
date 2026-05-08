@@ -4,8 +4,13 @@ __tests__/
 images/
 health_check_tools/
 upgrade_scripts/
-skills/
 INSTALL*.md
-README*.md
+README_CN.md
 install.sh
 vitest.config.ts
+# Excluded so ClawHub CLI's bundle marker pre-scan does not misclassify this
+# code-plugin as a bundle-plugin. The later npm pack step still includes
+# commands/setup.ts and skills/ through package.json "files".
+commands/
+skills/
+*.tgz

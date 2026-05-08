@@ -25,6 +25,9 @@ _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
 )
+_ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS = {
+    "/api/v1/content/reindex",
+}
 _TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
 
 
@@ -39,14 +42,19 @@ def _root_request_requires_explicit_tenant(path: str) -> bool:
     """Return True when a ROOT request targets tenant-scoped data APIs.
 
     Root still needs access to admin and monitoring endpoints without a tenant
-    context. For data APIs, implicit fallback to default/default is misleading,
-    so callers must provide explicit account and user headers.
+    context. For data APIs, implicit fallback to default/default is misleading.
     """
     if path in _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS:
+        return False
+    if path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS:
         return False
     if path.startswith(_ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES):
         return False
     return True
+
+
+def _root_request_requires_explicit_account_only(path: str) -> bool:
+    return path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS
 
 
 def _trusted_request_requires_explicit_identity(path: str) -> bool:
@@ -237,19 +245,20 @@ async def get_request_context(
     path = request.url.path
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
-    if (
-        auth_mode == AuthMode.API_KEY
-        and api_key_manager is not None
-        and identity.role == Role.ROOT
-        and _root_request_requires_explicit_tenant(path)
-    ):
+    if auth_mode == AuthMode.API_KEY and api_key_manager is not None and identity.role == Role.ROOT:
         account_header = request.headers.get("X-OpenViking-Account")
-        user_header = request.headers.get("X-OpenViking-User")
-        if not account_header or not user_header:
-            raise InvalidArgumentError(
-                "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
-                "and X-OpenViking-User headers. Use a user key for regular data access."
-            )
+        if _root_request_requires_explicit_account_only(path):
+            if not account_header:
+                raise InvalidArgumentError(
+                    "ROOT requests to reindex must include X-OpenViking-Account header."
+                )
+        elif _root_request_requires_explicit_tenant(path):
+            user_header = request.headers.get("X-OpenViking-User")
+            if not account_header or not user_header:
+                raise InvalidArgumentError(
+                    "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
+                    "and X-OpenViking-User headers. Use a user key for regular data access."
+                )
 
     if auth_mode == AuthMode.TRUSTED:
         is_admin_path = path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
