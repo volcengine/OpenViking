@@ -23,6 +23,7 @@ import { registerOpenVikingCommands } from "./commands";
 import { registerOpenVikingMcpProvider } from "./mcp/register";
 import { registerOpenVikingParticipant } from "./participant";
 import { OPENVIKING_SETTINGS, SECRETS_API_KEY } from "./settings-schema";
+import { registerOpenVikingRecallTool } from "./tools/recall";
 
 let handle: ActivationHandle | null = null;
 
@@ -46,6 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   context.subscriptions.push(registerOpenVikingParticipant(context, handle));
+  context.subscriptions.push(registerOpenVikingRecallTool(context, handle));
   context.subscriptions.push(registerOpenVikingMcpProvider(handle));
 
   context.subscriptions.push(

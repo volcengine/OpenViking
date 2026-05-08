@@ -1,0 +1,53 @@
+{
+  "finalDescriptionId": "phase2-final-v2",
+  "thresholds": {
+    "minRelevantAutoInvokeRate": 0.7,
+    "maxIrrelevantFalsePositiveRate": 0.1
+  },
+  "variants": [
+    {
+      "id": "baseline-memory-v1",
+      "description": "Search OpenViking memory for relevant saved context before answering.",
+      "relevantAutoInvokeRate": 0.75,
+      "irrelevantFalsePositiveRate": 0.2
+    },
+    {
+      "id": "phase2-final-v2",
+      "description": "Retrieve only previously stored OpenViking long-term memory that is relevant to the user's current coding question, task, debugging context, design decision, repository convention, personal preference, or past project history. Use this tool before answering when the prompt asks what was decided before, refers to prior work, asks about repo-specific conventions, mentions preferences, asks about dates or events, or depends on context that may have been saved outside the current chat. Do not use this tool for generic programming knowledge, questions fully answered by files already open in the workspace, simple calculations, chit-chat, or prompts that clearly do not require remembered context. The tool returns a ranked, token-budgeted <openviking-context> block with inline memory snippets and viking:// URIs that can be expanded with the OpenViking read tool when more detail is needed. Pass a concise search query containing the user's key nouns, repository names, decisions, preferences, errors, or feature names; avoid copying the entire prompt when a shorter query captures the recall need.",
+      "relevantAutoInvokeRate": 0.95,
+      "irrelevantFalsePositiveRate": 0.0
+    }
+  ],
+  "prompts": [
+    { "id": "relevant-01", "label": "relevant", "prompt": "What did we decide last time about storing OpenViking session IDs per workspace?" },
+    { "id": "relevant-02", "label": "relevant", "prompt": "Before I touch the Copilot extension, recall any repo-specific conventions for Language Model Tools." },
+    { "id": "relevant-03", "label": "relevant", "prompt": "Do I prefer abstract snippets or full memory body when formatting recall context?" },
+    { "id": "relevant-04", "label": "relevant", "prompt": "Find previous notes about the CLI MCP server stdio shutdown bug." },
+    { "id": "relevant-05", "label": "relevant", "prompt": "What OpenViking memory mentions the token budget we chose for Copilot recall?" },
+    { "id": "relevant-06", "label": "relevant", "prompt": "Was there a past decision about not implementing capture tools in phase two?" },
+    { "id": "relevant-07", "label": "relevant", "prompt": "Recall our project history around issue #21 before planning the next step." },
+    { "id": "relevant-08", "label": "relevant", "prompt": "Search my remembered preference for how PR descriptions should summarize A/B prompt results." },
+    { "id": "relevant-09", "label": "relevant", "prompt": "What did we previously learn about MCP SDK registerTool schemas?" },
+    { "id": "relevant-10", "label": "relevant", "prompt": "Look up saved context about the OpenViking viking:// URI format before answering." },
+    { "id": "relevant-11", "label": "relevant", "prompt": "Did we save any memory about a race between participant recall and LM tool recall?" },
+    { "id": "relevant-12", "label": "relevant", "prompt": "What repo convention did we store for TypeScript import extensions in this Copilot workspace?" },
+    { "id": "relevant-13", "label": "relevant", "prompt": "Find memories about the scoring threshold used for recall ranking." },
+    { "id": "relevant-14", "label": "relevant", "prompt": "Use remembered context to explain why openviking_capture is deferred." },
+    { "id": "relevant-15", "label": "relevant", "prompt": "Was there a previous note about bypass mode behavior for the CLI MCP tools?" },
+    { "id": "relevant-16", "label": "relevant", "prompt": "Recall the test account or local setup notes for the Copilot plugin workspace." },
+    { "id": "relevant-17", "label": "relevant", "prompt": "Do we have saved history about issue #24 seed prompts and description variants?" },
+    { "id": "relevant-18", "label": "relevant", "prompt": "What memory exists for rankRecallHits preference and temporal boosts?" },
+    { "id": "relevant-19", "label": "relevant", "prompt": "Before answering, check if OpenViking remembers the extension setting names." },
+    { "id": "relevant-20", "label": "relevant", "prompt": "What did I decide earlier about handling dead viking:// resources in recall formatting?" },
+    { "id": "irrelevant-01", "label": "irrelevant", "prompt": "What is the TypeScript syntax for declaring an interface?" },
+    { "id": "irrelevant-02", "label": "irrelevant", "prompt": "Summarize the selected lines in the file I currently have open." },
+    { "id": "irrelevant-03", "label": "irrelevant", "prompt": "Calculate 17 times 23." },
+    { "id": "irrelevant-04", "label": "irrelevant", "prompt": "Write a generic hello world program in Python." },
+    { "id": "irrelevant-05", "label": "irrelevant", "prompt": "Explain what an HTTP 404 status code means." },
+    { "id": "irrelevant-06", "label": "irrelevant", "prompt": "Rename this local variable to be clearer in the current function." },
+    { "id": "irrelevant-07", "label": "irrelevant", "prompt": "Tell me a short joke about databases." },
+    { "id": "irrelevant-08", "label": "irrelevant", "prompt": "Format this JSON object alphabetically." },
+    { "id": "irrelevant-09", "label": "irrelevant", "prompt": "What does Array.prototype.map do in JavaScript?" },
+    { "id": "irrelevant-10", "label": "irrelevant", "prompt": "List the imports at the top of the current file." }
+  ]
+}

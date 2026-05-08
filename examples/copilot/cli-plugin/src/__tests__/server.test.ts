@@ -87,7 +87,7 @@ function textOf(result: CallToolResult): string {
 }
 
 describe("OpenViking MCP tools", () => {
-  it("registers the #21 tool set without recall/capture creep", async () => {
+  it("registers the Phase 2 recall tool set without capture creep", async () => {
     const fake = new FakeOVClient();
     await withMcpClient(fake, async (client) => {
       const list = await client.listTools();
@@ -95,6 +95,7 @@ describe("OpenViking MCP tools", () => {
         "openviking_forget",
         "openviking_health",
         "openviking_read",
+        "openviking_recall",
         "openviking_search",
         "openviking_store",
       ]);
@@ -139,6 +140,25 @@ describe("OpenViking MCP tools", () => {
         scoreThreshold: 0.7,
       },
     });
+  });
+
+  it("returns ranked and formatted context for openviking_recall", async () => {
+    const fake = new FakeOVClient();
+    fake.recallResult = {
+      ok: true,
+      value: [
+        { uri: "viking://m/low", score: 0.1, type: "memory", abstract: "low score" },
+        { uri: "viking://m/high", score: 0.9, type: "memory", abstract: "matched memory" },
+      ],
+    };
+    await withMcpClient(fake, async (client) => {
+      const result = await callTool(client, "openviking_recall", { query: "auth migration", sessionId: "cp-123" });
+      const text = textOf(result);
+      expect(text).toContain("<openviking-context>");
+      expect(text).toContain("matched memory");
+      expect(text).not.toContain("low score");
+    });
+    expect(fake.recallCalls).toEqual([{ query: "auth migration", opts: { limit: 8, sessionId: "cp-123", scoreThreshold: 0 } }]);
   });
 
   it("reads URI content as plain text", async () => {
@@ -207,7 +227,7 @@ describe("openviking-copilot-mcp stdio", () => {
     await client.connect(transport);
     try {
       const list = await client.listTools();
-      expect(list.tools.map((tool) => tool.name)).toContain("openviking_health");
+      expect(list.tools.map((tool) => tool.name)).toContain("openviking_recall");
       const result = await callTool(client, "openviking_health");
       expect(JSON.parse(textOf(result))).toEqual({ bypassed: true });
     } finally {

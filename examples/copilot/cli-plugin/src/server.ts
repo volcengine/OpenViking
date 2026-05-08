@@ -3,17 +3,20 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  OPENVIKING_RECALL_TOOL_DESCRIPTION,
+  buildRecallContextBlock,
   createDebugLogger,
   loadConfig as defaultLoadConfig,
   OVClient,
+  type CommitOptions,
   type LoadConfigOptions,
   type OVResult,
   type OVTurn,
   type PluginConfig,
+  type RecallContextConfig,
   type RecallHit,
   type RecallOptions,
   type ReadOptions,
-  type CommitOptions,
 } from "@openviking/copilot-shared";
 import { z } from "zod/v4";
 
@@ -31,7 +34,16 @@ export interface OpenVikingToolClient {
 
 export interface OpenVikingToolDeps {
   client: OpenVikingToolClient;
-  config?: Pick<PluginConfig, "recallLimit" | "scoreThreshold">;
+  config?: Partial<Pick<
+    PluginConfig,
+    | "autoRecall"
+    | "recallLimit"
+    | "scoreThreshold"
+    | "minQueryLength"
+    | "recallMaxContentChars"
+    | "recallTokenBudget"
+    | "recallPreferAbstract"
+  >>;
 }
 
 export interface CreateOpenVikingMcpServerOptions extends OpenVikingToolDeps {
@@ -83,6 +95,27 @@ export function registerOpenVikingTools(server: McpServer, deps: OpenVikingToolD
         scoreThreshold: args.scoreThreshold ?? deps.config?.scoreThreshold ?? 0.35,
       });
       return fromOVResult(res);
+    }),
+  );
+
+  server.registerTool(
+    "openviking_recall",
+    {
+      title: "OpenViking recall",
+      description: OPENVIKING_RECALL_TOOL_DESCRIPTION,
+      inputSchema: {
+        query: z.string().min(1),
+        sessionId: z.string().min(1).optional(),
+        targetUri: z.string().min(1).optional(),
+      },
+    },
+    async (args) => runTool(async () => {
+      const recall = await buildRecallContextBlock({
+        cfg: recallConfig(deps.config),
+        client: deps.client,
+        sessionId: args.sessionId ?? "",
+      }, args.query, { targetUri: args.targetUri });
+      return { content: [{ type: "text", text: recall.block ?? emptyRecallBlock("No relevant OpenViking context found.") }] };
     }),
   );
 
@@ -169,6 +202,22 @@ async function runTool(cb: () => Promise<CallToolResult>): Promise<CallToolResul
 function fromOVResult<T>(res: OVResult<T>, format: (value: T) => string = jsonString): CallToolResult {
   if (!res.ok) return toolError(`${res.error.status ? `HTTP ${res.error.status}: ` : ""}${res.error.message}`);
   return { content: [{ type: "text", text: format(res.value) }] };
+}
+
+function recallConfig(cfg: OpenVikingToolDeps["config"]): RecallContextConfig {
+  return {
+    autoRecall: cfg?.autoRecall ?? true,
+    recallLimit: cfg?.recallLimit ?? 6,
+    scoreThreshold: cfg?.scoreThreshold ?? 0.35,
+    minQueryLength: cfg?.minQueryLength ?? 3,
+    recallMaxContentChars: cfg?.recallMaxContentChars ?? 500,
+    recallTokenBudget: cfg?.recallTokenBudget ?? 2000,
+    recallPreferAbstract: cfg?.recallPreferAbstract ?? true,
+  };
+}
+
+function emptyRecallBlock(message: string): string {
+  return `<openviking-context>\n${message}\n</openviking-context>`;
 }
 
 function textJson(value: unknown): CallToolResult {

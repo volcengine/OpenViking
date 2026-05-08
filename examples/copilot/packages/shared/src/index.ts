@@ -80,10 +80,27 @@ export {
 } from "./recall/rank.js";
 
 export {
+  buildRecallContextBlock,
+  type BuildRecallContextOptions,
+  type BuildRecallContextResult,
+  type RecallContextClient,
+  type RecallContextConfig,
+  type RecallContextState,
+} from "./recall/context.js";
+
+export {
   formatRecallBlock,
   type FormatRecallBlockOptions,
   type FormatRecallBlockResult,
 } from "./recall/format.js";
+
+export {
+  OPENVIKING_RECALL_TOOL_DESCRIPTION,
+  OPENVIKING_RECALL_TOOL_DISPLAY_NAME,
+  OPENVIKING_RECALL_TOOL_NAME,
+  OPENVIKING_RECALL_TOOL_REFERENCE_NAME,
+  OPENVIKING_RECALL_TOOL_USER_DESCRIPTION,
+} from "./recall/tool-description.js";
 
 export {
   DEFAULT_MAX_ENTRIES as RECALL_CACHE_DEFAULT_MAX_ENTRIES,
