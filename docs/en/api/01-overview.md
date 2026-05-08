@@ -132,7 +132,9 @@ client.initialize()
 #### HTTP Call Examples
 
 - CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files or directories before calling the server API.
+- Python HTTP client and CLI can also opt into shared temporary uploads via client config (`ovcli.conf` -> `upload.mode = "shared"`).
 - Raw HTTP calls don't get this convenience layer. When using `curl` or other HTTP clients, you need to first call `POST /api/v1/resources/temp_upload`, then pass the returned `temp_file_id` to the target API.
+- `temp_upload` defaults to `upload_mode=local`. Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
 - For raw HTTP imports of local directories, you need to first zip them into a `.zip` file and upload using the above method; the server does not accept direct host directory paths.
 - `POST /api/v1/resources` can directly accept remote URLs, but does not accept host local paths like `./doc.md` or `/tmp/doc.md`.
 
@@ -476,6 +478,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete workspace (cascade data cleanup) | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register user | ROOT/ADMIN |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users | ROOT/ADMIN |
+| GET | `/api/v1/admin/accounts/{account_id}/agents` | List agent namespaces | ROOT/ADMIN |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove user | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change user role | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate user key | ROOT/ADMIN |

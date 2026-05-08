@@ -21,6 +21,10 @@ type CommandBuilder = {
   action: (fn: (...args: unknown[]) => void | Promise<void>) => CommandBuilder;
 };
 
+type RegisterCliArgs = {
+  program: CommandProgram;
+};
+
 function tr(langZh: boolean, en: string, zh: string): string {
   return langZh ? zh : en;
 }
@@ -182,8 +186,7 @@ export function registerSetupCli(api: any): void {
   }
 
   api.registerCli(
-    ({ program: rawProgram }) => {
-      const program = rawProgram as CommandProgram;
+    ({ program }: RegisterCliArgs) => {
       const ovCmd = program.command("openviking").description("OpenViking plugin commands");
 
       ovCmd
@@ -191,7 +194,8 @@ export function registerSetupCli(api: any): void {
         .description("Interactive setup wizard for OpenViking plugin configuration")
         .option("--reconfigure", "Force re-entry of all configuration values")
         .option("--zh", "Chinese prompts")
-        .action(async (options: { reconfigure?: boolean; zh?: boolean }) => {
+        .action(async (rawOptions: unknown) => {
+          const options = (rawOptions ?? {}) as { reconfigure?: boolean; zh?: boolean };
           const zh = detectLangZh(options as Record<string, unknown>);
           const configDir = OPENCLAW_DIR;
           const configPath = path.join(configDir, "openclaw.json");

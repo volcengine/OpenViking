@@ -35,6 +35,15 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallTokenBudget).toBe(4000);
   });
 
+  it("honors explicit recallPreferAbstract=false without changing the default", () => {
+    const cfgDefault = memoryOpenVikingConfigSchema.parse({});
+    const cfgFalse = memoryOpenVikingConfigSchema.parse({ recallPreferAbstract: false });
+    const cfgTrue = memoryOpenVikingConfigSchema.parse({ recallPreferAbstract: true });
+    expect(cfgDefault.recallPreferAbstract).toBe(false);
+    expect(cfgFalse.recallPreferAbstract).toBe(false);
+    expect(cfgTrue.recallPreferAbstract).toBe(true);
+  });
+
   it("uses recallMaxInjectedChars as the canonical auto-recall character budget", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       recallMaxInjectedChars: 1234,

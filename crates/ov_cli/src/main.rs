@@ -1,3 +1,4 @@
+mod base_client;
 mod client;
 mod commands;
 mod config;
@@ -20,6 +21,10 @@ pub struct CliContext {
     pub output_format: OutputFormat,
     pub compact: bool,
     pub sudo: bool,
+    /// Whether to show upload progress (override config)
+    pub show_progress: Option<bool>,
+    /// Whether to enable verbose output (override config)
+    pub verbose: Option<bool>,
 }
 
 impl CliContext {
@@ -30,6 +35,8 @@ impl CliContext {
         user: Option<String>,
         agent_id: Option<String>,
         sudo: bool,
+        show_progress: Option<bool>,
+        verbose: Option<bool>,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -40,6 +47,8 @@ impl CliContext {
             user,
             agent_id,
             sudo,
+            show_progress,
+            verbose,
         ))
     }
 
@@ -51,6 +60,8 @@ impl CliContext {
         user: Option<String>,
         agent_id: Option<String>,
         sudo: bool,
+        show_progress: Option<bool>,
+        verbose: Option<bool>,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -66,7 +77,19 @@ impl CliContext {
             output_format,
             compact,
             sudo,
+            show_progress,
+            verbose,
         }
+    }
+
+    /// Check if progress should be shown
+    pub fn should_show_progress(&self) -> bool {
+        self.show_progress.unwrap_or(self.config.show_progress)
+    }
+
+    /// Check if verbose output is enabled
+    pub fn is_verbose(&self) -> bool {
+        self.verbose.unwrap_or(self.config.verbose)
     }
 
     pub fn get_client(&self) -> client::HttpClient {
@@ -121,6 +144,18 @@ struct Cli {
     #[arg(long, global = true)]
     sudo: bool,
 
+    /// Show upload progress (overrides config file)
+    #[arg(long, global = true)]
+    progress: bool,
+
+    /// Disable upload progress (overrides config file)
+    #[arg(long = "no-progress", global = true, conflicts_with = "progress")]
+    no_progress: bool,
+
+    /// Enable verbose output (overrides config file)
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -150,6 +185,9 @@ enum Commands {
         /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
         #[arg(long)]
         parent: Option<String>,
+        /// Target parent URI (create parent directory if it does not exist) (cannot be used with --to or --parent)
+        #[arg(short = 'p', long = "parent-auto-create")]
+        parent_auto_create: Option<String>,
         /// Reason for import
         #[arg(long, default_value = "")]
         reason: String,
@@ -505,6 +543,11 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
+    /// [Status] Track async resource processing tasks
+    Task {
+        #[command(subcommand)]
+        action: TaskCommands,
+    },
     /// [Status] All OpenViking Server components status
     Status,
     /// [Status] Observe OpenViking Server components status
@@ -556,6 +599,24 @@ impl Commands {
             _ => false,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum TaskCommands {
+    /// Show status of a specific task
+    Status {
+        /// Task ID returned by add-resource/add-skill
+        task_id: String,
+    },
+    /// List all tracked tasks
+    List {
+        /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
+        #[arg(long)]
+        task_type: Option<String>,
+        /// Filter by status (pending, running, completed, failed)
+        #[arg(long)]
+        status: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -794,7 +855,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
             "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
                 i += 2;
             }
-            "--sudo" => {
+            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
                 i += 1;
             }
             _ if token.starts_with('-') => {
@@ -904,6 +965,17 @@ async fn main() {
     let output_format = cli.output;
     let compact = cli.compact;
 
+    // Determine show_progress override:
+    let show_progress = if cli.progress {
+        Some(true)
+    } else if cli.no_progress {
+        Some(false)
+    } else {
+        None
+    };
+    // Determine verbose override:
+    let verbose = if cli.verbose { Some(true) } else { None };
+
     let ctx = match CliContext::new(
         output_format,
         compact,
@@ -911,6 +983,8 @@ async fn main() {
         cli.user.clone(),
         cli.agent_id.clone(),
         cli.sudo,
+        show_progress,
+        verbose,
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -936,6 +1010,7 @@ async fn main() {
             path,
             to,
             parent,
+            parent_auto_create,
             reason,
             instruction,
             wait,
@@ -951,6 +1026,7 @@ async fn main() {
                 path,
                 to,
                 parent,
+                parent_auto_create,
                 reason,
                 instruction,
                 wait,
@@ -988,6 +1064,23 @@ async fn main() {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
         }
+        Commands::Task { action } => match action {
+            TaskCommands::Status { task_id } => {
+                let client = ctx.get_client();
+                commands::task::status(&client, &task_id, ctx.output_format, ctx.compact).await
+            }
+            TaskCommands::List { task_type, status } => {
+                let client = ctx.get_client();
+                commands::task::list(
+                    &client,
+                    task_type.as_deref(),
+                    status.as_deref(),
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+        },
         Commands::Status => {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
@@ -1192,6 +1285,8 @@ mod tests {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: Default::default(),
             extra_headers: None,
         };
@@ -1204,6 +1299,8 @@ mod tests {
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
             false,
+            None,
+            None,
         );
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
@@ -1223,6 +1320,8 @@ mod tests {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: Default::default(),
             extra_headers: None,
         };
@@ -1236,6 +1335,8 @@ mod tests {
             None,
             None,
             false,
+            None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
@@ -1249,6 +1350,8 @@ mod tests {
             None,
             None,
             true,
+            None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("root-key"));

@@ -45,7 +45,7 @@ openclaw --version
 Requirements:
 
 - Node.js >= 22
-- OpenClaw >= 2026.3.7
+- OpenClaw >= 2026.4.24
 
 ### 3. Detect or start OpenViking server
 

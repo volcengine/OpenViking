@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
@@ -13,6 +13,11 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.providers.registry import find_by_name
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_dir, ensure_non_empty_assistant_content
+
+T = TypeVar("T")
+
+
+_SESSION_LOCKS: dict[Path, asyncio.Lock] = {}
 
 
 @dataclass
@@ -30,7 +35,12 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def add_message(
-        self, role: str, content: str, sender_id: str | None = None, token_usage: dict[str, Any] = None, **kwargs: Any
+        self,
+        role: str,
+        content: str,
+        sender_id: str | None = None,
+        token_usage: dict[str, Any] = None,
+        **kwargs: Any,
     ) -> None:
         """Add a message to the session."""
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
@@ -133,6 +143,14 @@ class SessionManager:
         self._cache: dict[SessionKey, Session] = {}
         self.sandbox_manager = sandbox_manager
 
+    def _get_lock(self, session_key: SessionKey) -> asyncio.Lock:
+        path = self._get_session_path(session_key)
+        lock = _SESSION_LOCKS.get(path)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SESSION_LOCKS[path] = lock
+        return lock
+
     def _get_session_path(self, session_key: SessionKey) -> Path:
         return self.sessions_dir / f"{session_key.safe_name()}.jsonl"
 
@@ -232,6 +250,15 @@ class SessionManager:
 
     async def save(self, session: Session) -> None:
         """Save a session to disk."""
+        async with self._get_lock(session.key):
+            latest = self._load(session.key)
+            if latest is not None:
+                session.created_at = latest.created_at
+                session.metadata = self._merge_metadata(latest.metadata, session.metadata)
+            self._save_unlocked(session)
+
+    def _save_unlocked(self, session: Session) -> None:
+        """Persist a session while holding the per-session lock."""
         path = self._get_session_path(session.key)
 
         with open(path, "w") as f:
@@ -250,6 +277,39 @@ class SessionManager:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
         self._cache[session.key] = session
+
+    async def update_session(
+        self,
+        session_key: SessionKey,
+        updater: Callable[[Session], T],
+        *,
+        skip_heartbeat: bool = False,
+    ) -> tuple[Session, T]:
+        """Reload, mutate, and persist a session under a shared lock."""
+        async with self._get_lock(session_key):
+            self._cache.pop(session_key, None)
+            session = self.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+            result = updater(session)
+            self._save_unlocked(session)
+            return session, result
+
+    @classmethod
+    def _merge_metadata(cls, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        """Merge nested metadata dictionaries without dropping persisted keys."""
+        merged = dict(base)
+        for key, value in override.items():
+            if key not in merged:
+                merged[key] = value
+                continue
+
+            current = merged[key]
+            if isinstance(current, dict) and isinstance(value, dict):
+                merged[key] = cls._merge_metadata(current, value)
+            elif isinstance(current, list) and isinstance(value, list):
+                merged[key] = current + [item for item in value if item not in current]
+            else:
+                merged[key] = value
+        return merged
 
     def delete(self, key: SessionKey) -> bool:
         """

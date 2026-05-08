@@ -16,7 +16,7 @@
     "test:watch": "vitest"
   },
   "engines": {
-    "openclaw": ">=2026.3.7"
+    "openclaw": ">=2026.4.24"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
@@ -27,12 +27,12 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.3.7",
-      "minGatewayVersion": "2026.3.7"
+      "pluginApi": ">=2026.4.24",
+      "minGatewayVersion": "2026.4.24"
     },
     "build": {
-      "openclawVersion": "2026.3.7",
-      "pluginSdkVersion": "2026.3.7"
+      "openclawVersion": "2026.4.24",
+      "pluginSdkVersion": "2026.4.24"
     }
   },
   "devDependencies": {

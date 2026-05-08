@@ -3,6 +3,24 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "ov_import",
+      "memory_search",
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand"
+    ]
+  },
   "uiHints": {
     "baseUrl": {
       "label": "OpenViking Base URL",
@@ -126,9 +144,15 @@
     },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
+    },
+    "commitKeepRecentCount": {
+      "label": "Commit Keep Recent Count",
+      "placeholder": "10",
+      "advanced": true,
+      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
@@ -218,6 +242,11 @@
       },
       "commitTokenThreshold": {
         "type": "number"
+      },
+      "commitKeepRecentCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000
       },
       "bypassSessionPatterns": {
         "type": "array",

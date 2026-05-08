@@ -946,6 +946,15 @@ class PersistCollection(LocalCollection):
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
     def _recover(self):
+        index_count = 0
+        for f in os.listdir(self.index_dir):
+            try:
+                if safe_join(self.index_dir, f).is_dir():
+                    index_count += 1
+            except ValueError:
+                pass
+        if index_count > 0:
+            logger.info("Recovering %d index(es) from %s", index_count, self.index_dir)
         for folder in os.listdir(self.index_dir):
             try:
                 index_dir = safe_join(self.index_dir, folder)
@@ -983,23 +992,44 @@ class PersistCollection(LocalCollection):
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             delta_list = self.store_mgr.get_delta_data_after_ts(newest_version)
+            logger.info(
+                "Index '%s': replaying %d delta records to recover from last persistent snapshot",
+                index_name,
+                len(delta_list),
+            )
             upsert_list: List[DeltaRecord] = []
             delete_list: List[DeltaRecord] = []
+            _processed = 0
+            _last_log = 0.0
             for data in delta_list:
                 if data.type == OpType.PUT.value:
                     if delete_list:
                         index.delete_data(delete_list)
+                        _processed += len(delete_list)
                         delete_list = []
                     upsert_list.append(data)
                 elif data.type == OpType.DEL.value:
                     if upsert_list:
                         index.upsert_data(upsert_list)
+                        _processed += len(upsert_list)
                         upsert_list = []
                     delete_list.append(data)
+                now = time.time()
+                if now - _last_log >= 5.0 and _processed > 0:
+                    logger.info(
+                        "Delta replay progress: %d/%d records for index '%s'",
+                        _processed,
+                        len(delta_list),
+                        index_name,
+                    )
+                    _last_log = now
             if upsert_list:
                 index.upsert_data(upsert_list)
+                _processed += len(upsert_list)
             if delete_list:
                 index.delete_data(delete_list)
+                _processed += len(delete_list)
+            logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             self.indexes.set(index_name, index)
 
     def _persist_all_indexes(self):

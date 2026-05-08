@@ -140,9 +140,13 @@ def canonical_user_root(ctx: RequestContext) -> str:
 
 
 def user_space_fragment(ctx: RequestContext) -> str:
-    if ctx.namespace_policy.isolate_user_scope_by_agent:
-        return f"{ctx.user.user_id}/agent/{ctx.user.agent_id}"
-    return ctx.user.user_id
+    return to_user_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+
+
+def to_user_space(namespace_policy, user_id, agent_id) -> str:
+    if namespace_policy.isolate_user_scope_by_agent:
+        return f"{user_id}/agent/{agent_id}"
+    return user_id
 
 
 def canonical_agent_root(ctx: RequestContext) -> str:
@@ -150,9 +154,13 @@ def canonical_agent_root(ctx: RequestContext) -> str:
 
 
 def agent_space_fragment(ctx: RequestContext) -> str:
-    if ctx.namespace_policy.isolate_agent_scope_by_user:
-        return f"{ctx.user.agent_id}/user/{ctx.user.user_id}"
-    return ctx.user.agent_id
+    return to_agent_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+
+
+def to_agent_space(namespace_policy, user_id, agent_id) -> str:
+    if namespace_policy.isolate_agent_scope_by_user:
+        return f"{agent_id}/user/{user_id}"
+    return agent_id
 
 
 def canonical_session_uri(session_id: Optional[str] = None) -> str:
@@ -189,7 +197,7 @@ def resolve_uri(
         return _resolve_agent_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope == "session":
         return _resolve_session_uri(parts)
-    if scope in {"resources", "temp", "queue"}:
+    if scope in {"resources", "temp", "queue", "upload"}:
         return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
 
@@ -209,6 +217,8 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
 
     if target.scope in {"", "resources", "temp", "queue", "session"}:
         return True
+    if target.scope == "upload":
+        return False
     if target.scope == "user":
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
             return False

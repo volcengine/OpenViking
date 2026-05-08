@@ -8,6 +8,8 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import (
     get_request_context,
@@ -48,6 +50,13 @@ class ReindexRequest(BaseModel):
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
+def _validate_reindex_uri(uri: str) -> str:
+    raw_uri = uri.strip() if isinstance(uri, str) else ""
+    if raw_uri.startswith("viking://"):
+        return raw_uri
+    return validate_viking_uri(raw_uri)
+
+
 @router.get("/read")
 async def read(
     uri: str = Query(..., description="Viking URI"),
@@ -57,6 +66,7 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
@@ -91,6 +101,7 @@ async def abstract(
 ):
     """Read L0 abstract."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.abstract(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -111,6 +122,7 @@ async def overview(
 ):
     """Read L1 overview."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.overview(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -131,6 +143,7 @@ async def download(
 ):
     """Download file as raw bytes (for images, binaries, etc.)."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -165,11 +178,12 @@ async def write(
 ):
     """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
     service = get_service()
+    uri = resolve_path_variables(request.uri)
     execution = await run_operation(
         operation="content.write",
         telemetry=request.telemetry,
         fn=lambda: service.fs.write(
-            uri=request.uri,
+            uri=uri,
             content=request.content,
             ctx=_ctx,
             mode=request.mode,
@@ -190,9 +204,11 @@ async def reindex(
     ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
+    uri = resolve_path_variables(body.uri)
+    uri = _validate_reindex_uri(uri)
     service = get_service()
     result = await service.reindex(
-        uri=body.uri,
+        uri=uri,
         mode=body.mode,
         wait=body.wait,
         ctx=ctx,

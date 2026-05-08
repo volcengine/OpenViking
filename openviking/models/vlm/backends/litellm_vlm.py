@@ -220,8 +220,8 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
             "timeout": self.timeout,
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
 
         if self.api_key:
             kwargs["api_key"] = self.api_key

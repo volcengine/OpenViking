@@ -19,7 +19,7 @@ This document is not an installation guide. It is an implementation-focused desi
 In the current implementation, the plugin plays four roles at once:
 
 - `context-engine`: implements `assemble`, `afterTurn`, and `compact`
-- hook layer: handles `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
+- hook layer: handles `session_start`, `session_end`, and `before_reset`
 - tool provider: registers memory/archive tools plus OpenViking resource and skill import tools
 - runtime manager: connects to and monitors a remote OpenViking service
 
@@ -79,18 +79,23 @@ For OpenViking servers that include PR #1356, the plugin no longer treats agent 
 
 The plugin cannot auto-discover this policy today because `/api/v1/system/status` does not expose it. Configure the two booleans explicitly so they stay aligned with the server-side account policy.
 
-## Prompt-Front Recall Flow
+## assemble Recall Flow
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-Today the main recall path still lives in `before_prompt_build`:
+Auto-recall now runs through `assemble()`. OpenClaw calls the same context engine method in two shapes, and the plugin assigns different responsibilities to each shape:
 
-1. Extract the latest user text from `messages` or `prompt`.
-2. Resolve the agent routing for the current `sessionId/sessionKey`.
-3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
-4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
-5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
-6. Prepend the selected memories as a `<relevant-memories>` block.
+1. Preflight assemble: params include `prompt`; `messages` is still old history. The plugin reads archive/session context back from OpenViking and rebuilds history.
+2. transformContext assemble: params do not include `prompt`; the latest `messages` entry is already the current user turn. The plugin only runs long-term recall and prepends the memory block to that user message content.
+
+During recall, the plugin:
+
+1. Extracts query text from the latest user message.
+2. Resolves the agent routing for the current `sessionId/sessionKey`.
+3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
+4. Queries both `viking://user/memories` and `viking://agent/memories` in parallel.
+5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
+6. Prepends the selected memories as a `<relevant-memories>` block to the current user message; it does not append a standalone synthetic user message.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -107,7 +112,7 @@ Session handling is the main axis of this design. In the current implementation 
 
 ### What `assemble()` does
 
-`assemble()` is not just replaying old chat history. It reads session context back from OpenViking under a token budget, then rebuilds OpenClaw-facing messages:
+During preflight, `assemble()` is not just replaying old chat history. It reads session context back from OpenViking under a token budget, then rebuilds OpenClaw-facing messages:
 
 - `latest_archive_overview` becomes `[Session History Summary]`
 - `pre_archive_abstracts` becomes `[Archive Index]`
@@ -154,7 +159,7 @@ Beyond automatic behavior, the plugin exposes six tools directly:
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `ov_import`: import a resource or skill; defaults to resource and uses `kind: "skill"` for skills
-- `ov_search`: search OpenViking resources and skills, especially after importing them
+- `memory_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
 
@@ -163,7 +168,7 @@ They serve different roles:
 - `memory_store` is for immediately persisting clearly important information
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
 - `ov_import` lets the agent complete explicit import requests without asking the user to remember slash commands
-- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `memory_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -179,8 +184,8 @@ The plugin also registers explicit slash commands for manual imports:
 ```text
 /ov-import ./README.md --to viking://resources/openviking-readme --wait
 /ov-import ./skills/install-openviking-memory --kind skill --wait
-/ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://agent/skills
+/memory-search "OpenViking install" --uri viking://resources/openviking-readme
+/memory-search "memory install skill" --uri viking://agent/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.
@@ -195,7 +200,7 @@ The plugin operates exclusively in remote mode as a pure HTTP client:
 
 - `baseUrl` and optional `apiKey` come from plugin config
 - no local subprocess is started or managed
-- session context, memory find/read, commit, and archive expansion behavior stays the same
+- session context, memory search/read, commit, and archive expansion behavior stays the same
 
 The OpenViking service must be deployed and running independently before the plugin can connect to it.
 
@@ -205,7 +210,7 @@ The repo also contains a more future-looking design draft at `docs/design/opencl
 
 - this README describes current implemented behavior
 - the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- in the current version, the main automatic recall path lives in `assemble()`: preflight rebuilds history, transformContext injects long-term memories
 - in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
 - in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 

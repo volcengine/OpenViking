@@ -108,6 +108,7 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-1",
       messages: liveMessages,
       tokenBudget: 4096,
@@ -123,10 +124,6 @@ describe("context-engine assemble()", () => {
       {
         role: "user",
         content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
-      },
-      {
-        role: "user",
-        content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
       },
       {
         role: "assistant",
@@ -180,6 +177,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-running",
       messages: [],
     });
@@ -240,6 +238,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-missing-id",
       messages: [],
     });
@@ -268,6 +267,7 @@ describe("context-engine assemble()", () => {
     });
 
     await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-with-sender",
       messages: [{ role: "user", content: "hello" }],
       runtimeContext: { senderId: "telegram:12345" },
@@ -306,6 +306,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-fallback",
       messages: liveMessages,
       tokenBudget: 1024,
@@ -347,6 +348,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-budgeted",
       messages: [],
       tokenBudget: 1024,

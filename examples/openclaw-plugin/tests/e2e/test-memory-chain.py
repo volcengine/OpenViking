@@ -201,18 +201,60 @@ ASSEMBLE_FOLLOWUP_MESSAGES = [
 # 新用户记忆召回
 RECALL_QUESTIONS = [
     {
-        "question": "我是做什么工作的？用什么技术栈？请简洁回答",
-        "expected_keywords": ["软件工程师", "Python", "Go"],
+        "question": "请根据本轮测试标记 {marker} 回答：张明是做什么工作的？用什么技术栈？请简洁回答",
+        "expected_keywords": ["张明", "软件工程师", "Python", "Go"],
     },
     {
-        "question": "我最近在做什么项目？遇到了什么技术挑战？请简洁回答",
+        "question": "请根据本轮测试标记 {marker} 回答：张明最近在做什么项目？遇到了什么技术挑战？请简洁回答",
         "expected_keywords": ["订单系统", "性能瓶颈", "缓存"],
     },
     {
-        "question": "我们团队有多少人？团队里谁经验最丰富？请简洁回答",
+        "question": "请根据本轮测试标记 {marker} 回答：张明团队有多少人？团队里谁经验最丰富？请简洁回答",
         "expected_keywords": ["8", "老王"],
     },
 ]
+
+
+def test_marker(user_id: str) -> str:
+    return f"OV-E2E-MARKER:{user_id}"
+
+
+def chat_message_for_turn(user_id: str, index: int, message: str) -> str:
+    if index == 1:
+        return f"{message}\n\n本轮 OpenViking e2e 测试标记：{test_marker(user_id)}。"
+    return message
+
+
+def flatten_message_text(value: Any) -> str:
+    chunks: list[str] = []
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            chunks.append(flatten_message_text(item))
+        return "\n".join(part for part in chunks if part)
+    if isinstance(value, dict):
+        for key in ("text", "content", "summary", "latest_archive_overview"):
+            raw = value.get(key)
+            if isinstance(raw, str):
+                chunks.append(raw)
+        for key in ("parts", "messages", "content"):
+            raw = value.get(key)
+            if isinstance(raw, list):
+                chunks.append(flatten_message_text(raw))
+        return "\n".join(part for part in chunks if part)
+    return ""
+
+
+def flatten_context_text(ctx: dict | None) -> str:
+    if not isinstance(ctx, dict):
+        return ""
+    chunks = [
+        str(ctx.get("latest_archive_overview") or ""),
+        flatten_message_text(ctx.get("pre_archive_abstracts")),
+        flatten_message_text(ctx.get("messages")),
+    ]
+    return "\n".join(part for part in chunks if part)
 
 
 # ── Token 自动发现 ────────────────────────────────────────────────────────
@@ -386,32 +428,43 @@ class OpenVikingInspector:
     def find_session_for_user(self, user_hint: str) -> str | None:
         """通过遍历 OV session 列表找到与当前测试关联的 session。
         Gateway 可能使用内部 UUID 而非 user_id 作为 OV session_id，
-        因此需要检查 session 内容或选择最近更新的 session。"""
+        因此必须检查本轮唯一 marker，不能回退到历史 session。"""
         sessions = self.list_sessions()
         real_sessions = [
-            s for s in sessions
+            s
+            for s in sessions
             if isinstance(s, dict) and not s.get("session_id", "").startswith("memory-store-")
         ]
         if not real_sessions:
             return None
 
-        best_id = None
-        best_time = ""
+        marker = test_marker(user_hint)
+        best_id: str | None = None
+        best_score = 0
         for s in real_sessions:
             sid = s.get("session_id", "")
             if not sid:
                 continue
             if sid == user_hint:
                 return sid
-            detail = self.get_session(sid)
-            if not detail:
-                continue
-            updated = detail.get("updated_at", "")
-            if updated > best_time:
-                best_time = updated
+            ctx = self.get_session_context(sid)
+            text = flatten_context_text(ctx)
+            messages = self.get_session_messages(sid)
+            text += "\n" + flatten_message_text(messages)
+            score = 0
+            if marker in text:
+                score += 100
+            if user_hint in text:
+                score += 20
+            if "张明" in text:
+                score += 5
+            if "PostgreSQL" in text:
+                score += 5
+            if score > best_score:
+                best_score = score
                 best_id = sid
 
-        return best_id or (real_sessions[-1].get("session_id") if real_sessions else None)
+        return best_id if best_score >= 100 else None
 
     def list_fs(self, uri: str) -> list:
         result = self._get(f"/api/v1/fs/ls?uri={uri}&output=original")
@@ -468,7 +521,8 @@ def run_phase_chat(gateway_url: str, user_id: str, delay: float, verbose: bool) 
     total = len(CHAT_MESSAGES)
     ok = fail = 0
 
-    for i, msg in enumerate(CHAT_MESSAGES, 1):
+    for i, base_msg in enumerate(CHAT_MESSAGES, 1):
+        msg = chat_message_for_turn(user_id, i, base_msg)
         console.rule(f"[dim]Turn {i}/{total}[/dim]", style="dim")
         console.print(
             Panel(
@@ -528,9 +582,7 @@ def run_phase_after_turn(openviking_url: str, user_id: str, verbose: bool) -> tu
     resolved_id = inspector.find_session_for_user(user_id)
 
     if resolved_id and resolved_id != user_id:
-        console.print(
-            f"  [yellow]Gateway 使用内部 session_id: {resolved_id} (非 user_id)[/yellow]"
-        )
+        console.print(f"  [yellow]Gateway 使用内部 session_id: {resolved_id} (非 user_id)[/yellow]")
 
     check("Session 存在", resolved_id is not None, f"resolved_id={resolved_id}")
 
@@ -578,7 +630,7 @@ def run_phase_after_turn(openviking_url: str, user_id: str, verbose: bool) -> tu
     if ctx:
         ctx_messages = ctx.get("messages", [])
         overview = ctx.get("latest_archive_overview", "")
-        all_text = json.dumps(ctx_messages, ensure_ascii=False) + "\n" + overview
+        all_text = flatten_context_text(ctx)
 
         check(
             "context 返回内容 (messages 或 overview)",
@@ -601,6 +653,13 @@ def run_phase_after_turn(openviking_url: str, user_id: str, verbose: bool) -> tu
             "验证多轮消息写入",
         )
 
+        marker = test_marker(user_id)
+        check(
+            f"内容包含本轮唯一标记「{marker}」",
+            marker in all_text,
+            "确保未误选历史 session",
+        )
+
         if verbose and ctx.get("stats"):
             console.print(f"  [dim]stats: {ctx['stats']}[/dim]")
     else:
@@ -618,7 +677,10 @@ def run_phase_after_turn(openviking_url: str, user_id: str, verbose: bool) -> tu
 
 
 def run_phase_commit(
-    openviking_url: str, session_id: str, verbose: bool, auto_committed: bool = False,
+    openviking_url: str,
+    session_id: str,
+    verbose: bool,
+    auto_committed: bool = False,
 ) -> bool:
     """Phase 3: Commit 验证 — 触发 commit, 检查归档结构和记忆提取。"""
     console.print()
@@ -754,8 +816,12 @@ def run_phase_commit(
 
 
 def run_phase_assemble(
-    gateway_url: str, openviking_url: str, user_id: str, session_id: str,
-    delay: float, verbose: bool,
+    gateway_url: str,
+    openviking_url: str,
+    user_id: str,
+    session_id: str,
+    delay: float,
+    verbose: bool,
 ) -> bool:
     """Phase 4: Assemble 验证 — 同用户继续对话，验证上下文从 latest archive overview 重组。"""
     console.print()
@@ -812,7 +878,7 @@ def run_phase_assemble(
 
     total = len(ASSEMBLE_FOLLOWUP_MESSAGES)
     for i, item in enumerate(ASSEMBLE_FOLLOWUP_MESSAGES, 1):
-        q = item["question"]
+        q = item["question"].format(marker=test_marker(user_id))
         keywords = item["anchor_keywords"]
 
         console.rule(f"[dim]Assemble 验证 {i}/{total}[/dim]", style="dim")
@@ -862,7 +928,10 @@ def run_phase_assemble(
 
 
 def run_phase_session_id(
-    openviking_url: str, user_id: str, session_id: str, verbose: bool,
+    openviking_url: str,
+    user_id: str,
+    session_id: str,
+    verbose: bool,
 ) -> bool:
     """Phase 5: SessionId 一致性验证 — 确认整条链路使用统一的 sessionId。"""
     console.print()
@@ -950,7 +1019,7 @@ def run_phase_recall(gateway_url: str, user_id: str, delay: float, verbose: bool
     total = len(RECALL_QUESTIONS)
 
     for i, item in enumerate(RECALL_QUESTIONS, 1):
-        q = item["question"]
+        q = item["question"].format(marker=test_marker(user_id))
         expected = item["expected_keywords"]
 
         console.rule(f"[dim]Recall {i}/{total}[/dim]", style="dim")
@@ -1166,8 +1235,11 @@ def main():
     # 打印最终断言统计
     if assertions:
         passed = sum(1 for a in assertions if a["ok"])
+        failed = sum(1 for a in assertions if not a["ok"])
         total = len(assertions)
         console.print(f"\n[yellow]断言统计: {passed}/{total} 通过[/yellow]")
+        if failed:
+            sys.exit(1)
 
     console.print("\n[yellow]测试结束。[/yellow]")
 

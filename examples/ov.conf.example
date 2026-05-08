@@ -1,288 +1,265 @@
 {
-  "server": {
-    "host": "0.0.0.0",
-    "port": 1933,
-    "root_api_key": null,
-    "cors_origins": ["*"],
-    "observability": {
-        "metrics": {
-            "enabled": true,
-            "account_dimension": {
+    "server": {
+        "host": "0.0.0.0",
+        "port": 1933,
+        "root_api_key": null,
+        "cors_origins": ["*"],
+        "observability": {
+            "metrics": {
                 "enabled": true,
-                "max_active_accounts": 100,
-                "metric_allowlist": [
-                    "openviking_*"
-                ]
-            },
-            "exporters": {
-                "prometheus": {
-                    "enabled": true
+                "account_dimension": {
+                    "enabled": true,
+                    "max_active_accounts": 100,
+                    "metric_allowlist": ["openviking_*"],
                 },
-                "otel": {
-                    "enabled": false,
-                    "protocol": "grpc",
-                    "tls": {
-                        "insecure": false
+                "exporters": {
+                    "prometheus": {"enabled": true},
+                    "otel": {
+                        "enabled": false,
+                        "protocol": "grpc",
+                        "tls": {"insecure": false},
+                        "endpoint": "localhost:4317",
+                        "service_name": "openviking-server",
+                        "export_interval_ms": 10000,
+                        "headers": {},
                     },
-                    "endpoint": "localhost:4317",
-                    "service_name": "openviking-server",
-                    "export_interval_ms": 10000,
-                    "headers": {}
-                }
-            }
-        },
-        "traces": {
-            "enabled": false,
-            "protocol": "grpc",
-            "tls": {
-                "insecure": false
+                },
             },
-            "endpoint": "localhost:4317",
-            "service_name": "openviking-server",
-            "headers": {}
-        },
-        "logs": {
-            "enabled": false,
-            "protocol": "grpc",
-            "tls": {
-                "insecure": false
+            "traces": {
+                "enabled": false,
+                "protocol": "grpc",
+                "tls": {"insecure": false},
+                "endpoint": "localhost:4317",
+                "service_name": "openviking-server",
+                "headers": {},
             },
-            "endpoint": "localhost:4317",
-            "service_name": "openviking-server",
-            "headers": {}
-        }
-    }
-  },
-  "storage": {
-    "workspace": "./data",
-    "vectordb": {
-      "name": "context",
-      "backend": "local",
-      "project": "default",
-      "volcengine": {
-        "region": "cn-beijing",
-        "ak": null,
-        "sk": null,
-        "api_key": null,
-        "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
-        "session_token": null
-      }
+            "logs": {
+                "enabled": false,
+                "protocol": "grpc",
+                "tls": {"insecure": false},
+                "endpoint": "localhost:4317",
+                "service_name": "openviking-server",
+                "headers": {},
+            },
+        },
     },
-    "agfs": {
-      "backend": "local",
-      "timeout": 10,
-      "s3": {
-        "bucket": null,
-        "region": null,
-        "access_key": null,
-        "secret_key": null,
-        "endpoint": null,
-        "prefix": "",
-        "use_ssl": true,
-        "disable_batch_delete": false
-      }
-    }
-  },
-  "embedding": {
-    "dense": {
-        "model": "doubao-embedding-vision-251215",
+    "storage": {
+        "workspace": "./data",
+        "vectordb": {
+            "name": "context",
+            "backend": "local",
+            "project": "default",
+            "volcengine": {
+                "region": "cn-beijing",
+                "ak": null,
+                "sk": null,
+                "api_key": null,
+                "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+                "session_token": null,
+            },
+        },
+        "agfs": {
+            "backend": "local",
+            "timeout": 10,
+            "s3": {
+                "bucket": null,
+                "region": null,
+                "access_key": null,
+                "secret_key": null,
+                "endpoint": null,
+                "prefix": "",
+                "use_ssl": true,
+                "disable_batch_delete": false,
+            },
+        },
+    },
+    "embedding": {
+        "dense": {
+            "model": "doubao-embedding-vision-251215",
+            "api_key": "{your-api-key}",
+            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+            "dimension": 1024,
+            "provider": "volcengine",
+            "input": "multimodal",
+        },
+        "text_source": "content_only",
+        "max_input_tokens": 4096,
+        "circuit_breaker": {"failure_threshold": 5, "reset_timeout": 60, "max_reset_timeout": 600},
+    },
+    "embedding_ollama_example": {
+        "_comment": "For local deployment with Ollama (no API key required):",
+        "dense": {
+            "provider": "ollama",
+            "model": "nomic-embed-text",
+            "api_base": "http://localhost:11434/v1",
+            "dimension": 768,
+            "input": "text",
+        },
+    },
+    "vlm": {
+        "model": "doubao-seed-2-0-pro-260215",
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-        "dimension": 1024,
+        "temperature": 0.0,
+        "max_retries": 2,
         "provider": "volcengine",
-        "input": "multimodal"
+        "thinking": false,
     },
-    "text_source": "content_only",
-    "max_input_tokens": 4096,
-    "circuit_breaker": {
-        "failure_threshold": 5,
-        "reset_timeout": 60,
-        "max_reset_timeout": 600
-    }
-  },
-  "embedding_ollama_example": {
-    "_comment": "For local deployment with Ollama (no API key required):",
-    "dense": {
-        "provider": "ollama",
-        "model": "nomic-embed-text",
-        "api_base": "http://localhost:11434/v1",
-        "dimension": 768,
-        "input": "text"
-    }
-  },
-  "vlm": {
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_key": "{your-api-key}",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "temperature": 0.0,
-    "max_retries": 2,
-    "provider": "volcengine",
-    "thinking": false
-  },
-  "vlm_codex_example": {
-    "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
-    "provider": "openai-codex",
-    "model": "gpt-5.3-codex",
-    "api_base": "https://chatgpt.com/backend-api/codex",
-    "temperature": 0.0,
-    "max_retries": 2
-  },
-  "vlm_kimi_example": {
-    "_comment": "For Kimi Coding subscription. OpenViking applies the recommended provider defaults automatically.",
-    "provider": "kimi",
-    "model": "kimi-code",
-    "api_key": "{your-kimi-subscription-api-key}",
-    "api_base": "https://api.kimi.com/coding",
-    "temperature": 0.0,
-    "max_retries": 2
-  },
-  "vlm_glm_example": {
-    "_comment": "For GLM Coding Plan via Z.AI subscription API key. Use a vision-capable model for multimodal parsing.",
-    "provider": "glm",
-    "model": "glm-4.6v",
-    "api_key": "{your-zai-api-key}",
-    "api_base": "https://api.z.ai/api/coding/paas/v4",
-    "temperature": 0.0,
-    "max_retries": 2
-  },
-  "rerank": {
-    "provider": "vikingdb",
-    "ak": "{your-ak}",
-    "sk": "{your-sk}",
-    "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
-    "model_name": "doubao-seed-rerank",
-    "model_version": "251028",
-    "threshold": 0.1
-  },
-  "rerank_openai_example": {
-    "_comment": "For OpenAI-compatible rerank providers (e.g. DashScope qwen3-rerank):",
-    "provider": "openai",
-    "api_key": "{your-api-key}",
-    "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-    "model": "qwen3-rerank",
-    "threshold": 0.1
-  },
-  "retrieval": {
-    "hotness_alpha": 0.0,
-    "score_propagation_alpha": 0.5
-  },
-  "auto_generate_l0": true,
-  "auto_generate_l1": true,
-  "default_search_mode": "thinking",
-  "default_search_limit": 3,
-  "enable_memory_decay": true,
-  "memory_decay_check_interval": 3600,
-  "memory": {
-    "version": "v1"
-  },
-  "log": {
-    "level": "INFO",
-    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "output": "stdout",
-    "rotation": true,
-    "rotation_days": 3,
-    "rotation_interval": "midnight"
-  },
-  "parsers": {
-    "pdf": {
-      "strategy": "auto",
-      "max_content_length": 100000,
-      "max_section_size": 4000,
-      "section_size_flexibility": 0.3,
-      "max_section_chars": 6000,
-      "mineru_endpoint": "https://mineru.example.com/api/v1",
-      "mineru_api_key": "{your-mineru-api-key}",
-      "mineru_timeout": 300.0
+    "vlm_codex_example": {
+        "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
+        "provider": "openai-codex",
+        "model": "gpt-5.3-codex",
+        "api_base": "https://chatgpt.com/backend-api/codex",
+        "temperature": 0.0,
+        "max_retries": 2,
     },
-    "code": {
-      "code_summary_mode": "ast",
-      "extract_functions": true,
-      "extract_classes": true,
-      "extract_imports": true,
-      "include_comments": true,
-      "max_line_length": 1000,
-      "max_token_limit": 50000,
-      "truncation_strategy": "head",
-      "warn_on_truncation": true,
-      "github_raw_domain": "raw.githubusercontent.com",
-      "code_hosting_domains": ["github.com", "gitlab.com"],
-      "github_domains": ["github.com", "www.github.com"],
-      "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
+    "vlm_kimi_example": {
+        "_comment": "For Kimi Coding subscription. OpenViking applies the recommended provider defaults automatically.",
+        "provider": "kimi",
+        "model": "kimi-code",
+        "api_key": "{your-kimi-subscription-api-key}",
+        "api_base": "https://api.kimi.com/coding",
+        "temperature": 0.0,
+        "max_retries": 2,
     },
-    "image": {
-      "enable_ocr": false,
-      "enable_vlm": true,
-      "ocr_lang": "eng",
-      "vlm_model": "gpt-4-vision",
-      "max_dimension": 2048
+    "vlm_glm_example": {
+        "_comment": "For GLM Coding Plan via Z.AI subscription API key. Use a vision-capable model for multimodal parsing.",
+        "provider": "glm",
+        "model": "glm-4.6v",
+        "api_key": "{your-zai-api-key}",
+        "api_base": "https://api.z.ai/api/coding/paas/v4",
+        "temperature": 0.0,
+        "max_retries": 2,
     },
-    "audio": {
-      "enable_transcription": true,
-      "transcription_model": "whisper-large-v3",
-      "language": null,
-      "extract_metadata": true
+    "rerank": {
+        "provider": "vikingdb",
+        "ak": "{your-ak}",
+        "sk": "{your-sk}",
+        "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+        "model_name": "doubao-seed-rerank",
+        "model_version": "251028",
+        "threshold": 0.1,
     },
-    "video": {
-      "extract_frames": true,
-      "frame_interval": 10.0,
-      "enable_transcription": true,
-      "enable_vlm_description": false,
-      "max_duration": 3600.0
+    "rerank_openai_example": {
+        "_comment": "For OpenAI-compatible rerank providers (e.g. DashScope qwen3-rerank):",
+        "provider": "openai",
+        "api_key": "{your-api-key}",
+        "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+        "model": "qwen3-rerank",
+        "threshold": 0.1,
     },
-    "markdown": {
-      "preserve_links": true,
-      "extract_frontmatter": true,
-      "include_metadata": true,
-      "max_heading_depth": 3
+    "retrieval": {"hotness_alpha": 0.0, "score_propagation_alpha": 0.5},
+    "auto_generate_l0": true,
+    "auto_generate_l1": true,
+    "default_search_mode": "thinking",
+    "default_search_limit": 3,
+    "enable_memory_decay": true,
+    "memory_decay_check_interval": 3600,
+    "memory": {"version": "v2", "extraction_enabled": true, "enable_role_id_memory_isolate": false},
+    "log": {
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "output": "stdout",
+        "rotation": true,
+        "rotation_days": 3,
+        "rotation_interval": "midnight",
     },
-    "html": {
-      "extract_text_only": false,
-      "preserve_structure": true,
-      "clean_html": true,
-      "extract_metadata": true
+    "parsers": {
+        "pdf": {
+            "strategy": "auto",
+            "max_content_length": 100000,
+            "max_section_size": 4000,
+            "section_size_flexibility": 0.3,
+            "max_section_chars": 6000,
+            "mineru_endpoint": "https://mineru.example.com/api/v1",
+            "mineru_api_key": "{your-mineru-api-key}",
+            "mineru_timeout": 300.0,
+        },
+        "code": {
+            "code_summary_mode": "ast",
+            "extract_functions": true,
+            "extract_classes": true,
+            "extract_imports": true,
+            "include_comments": true,
+            "max_line_length": 1000,
+            "max_token_limit": 50000,
+            "truncation_strategy": "head",
+            "warn_on_truncation": true,
+            "github_raw_domain": "raw.githubusercontent.com",
+            "code_hosting_domains": ["github.com", "gitlab.com"],
+            "github_domains": ["github.com", "www.github.com"],
+            "gitlab_domains": ["gitlab.com", "www.gitlab.com"],
+        },
+        "image": {
+            "enable_ocr": false,
+            "enable_vlm": true,
+            "ocr_lang": "eng",
+            "vlm_model": "gpt-4-vision",
+            "max_dimension": 2048,
+        },
+        "audio": {
+            "enable_transcription": true,
+            "transcription_model": "whisper-large-v3",
+            "language": null,
+            "extract_metadata": true,
+        },
+        "video": {
+            "extract_frames": true,
+            "frame_interval": 10.0,
+            "enable_transcription": true,
+            "enable_vlm_description": false,
+            "max_duration": 3600.0,
+        },
+        "markdown": {
+            "preserve_links": true,
+            "extract_frontmatter": true,
+            "include_metadata": true,
+            "max_heading_depth": 3,
+        },
+        "html": {
+            "extract_text_only": false,
+            "preserve_structure": true,
+            "clean_html": true,
+            "extract_metadata": true,
+        },
+        "text": {
+            "detect_language": true,
+            "split_by_paragraphs": true,
+            "max_paragraph_length": 1000,
+            "preserve_line_breaks": false,
+        },
     },
-    "text": {
-      "detect_language": true,
-      "split_by_paragraphs": true,
-      "max_paragraph_length": 1000,
-      "preserve_line_breaks": false
-    }
-  },
-  "encryption": {
-    "enabled": true,
-    "provider": "local",
-    "local": {
-      "key_file": "~/.openviking/master.key"
+    "encryption": {
+        "enabled": true,
+        "provider": "local",
+        "local": {"key_file": "~/.openviking/master.key"},
+        "api_key_hashing": {"enabled": false},
     },
-    "api_key_hashing": {
-      "enabled": false
-    }
-  },
-  "encryption_vault_example": {
-    "_comment": "For HashiCorp Vault integration:",
-    "enabled": true,
-    "provider": "vault",
-    "vault": {
-      "address": "http://127.0.0.1:8200",
-      "token": "hvs.your-vault-token",
-      "mount_point": "transit",
-      "kv_mount_point": "secret",
-      "kv_version": 1,
-      "root_key_name": "openviking-root-key",
-      "encrypted_root_key_key": "openviking-encrypted-root-key"
-    }
-  },
-  "encryption_volcengine_kms_example": {
-    "_comment": "For Volcengine KMS integration:",
-    "enabled": true,
-    "provider": "volcengine_kms",
-    "volcengine_kms": {
-      "region": "cn-beijing",
-      "access_key": "AKLTyour-access-key",
-      "secret_key": "your-secret-key",
-      "key_id": "your-kms-key-id",
-      "endpoint": null,
-      "key_file": "~/.openviking/openviking-volcengine-root-key.enc"
-    }
-  }
+    "encryption_vault_example": {
+        "_comment": "For HashiCorp Vault integration:",
+        "enabled": true,
+        "provider": "vault",
+        "vault": {
+            "address": "http://127.0.0.1:8200",
+            "token": "hvs.your-vault-token",
+            "mount_point": "transit",
+            "kv_mount_point": "secret",
+            "kv_version": 1,
+            "root_key_name": "openviking-root-key",
+            "encrypted_root_key_key": "openviking-encrypted-root-key",
+        },
+    },
+    "encryption_volcengine_kms_example": {
+        "_comment": "For Volcengine KMS integration:",
+        "enabled": true,
+        "provider": "volcengine_kms",
+        "volcengine_kms": {
+            "region": "cn-beijing",
+            "access_key": "AKLTyour-access-key",
+            "secret_key": "your-secret-key",
+            "key_id": "your-kms-key-id",
+            "endpoint": null,
+            "key_file": "~/.openviking/openviking-volcengine-root-key.enc",
+        },
+    },
 }

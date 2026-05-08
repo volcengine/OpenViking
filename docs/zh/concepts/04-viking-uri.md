@@ -107,6 +107,81 @@ viking://session/{session_id}/tools/          # 工具执行
 viking://session/{session_id}/history/        # 归档历史
 ```
 
+## 路径变量
+
+Viking URI 支持路径变量用于动态路径生成。这对于按时间序列组织数据（如邮件、日志、日报等）特别有用。
+
+### 变量语法
+
+```
+{namespace:key}
+```
+
+- **namespace**: 变量提供者命名空间（如 `calendar`、`env`、`user`）
+- **key**: 命名空间内的变量名
+
+### 日历变量
+
+`calendar` 命名空间提供日期相关变量：
+
+| 变量 | 说明 | 示例（2026-05-07） |
+|------|------|----------------------|
+| `{calendar:today}` | 完整日期路径 | `2026/05/07` |
+| `{calendar:yesterday}` | 昨天的日期路径 | `2026/05/06` |
+| `{calendar:tomorrow}` | 明天的日期路径 | `2026/05/08` |
+| `{calendar:year}` | 年份 | `2026` |
+| `{calendar:month}` | 月份（带前导零） | `05` |
+| `{calendar:day}` | 日期（带前导零） | `07` |
+| `{calendar:ym}` | 年/月 | `2026/05` |
+| `{calendar:quarter}` | 季度（Q1-Q4） | `Q2` |
+| `{calendar:yq}` | 年/季度 | `2026/Q2` |
+| `{calendar:week}` | ISO 周数（带前导零） | `18` |
+| `{calendar:yw}` | 年/ISO 周 | `2026/w18` |
+
+### 使用示例
+
+```python
+# 按日期组织邮件
+viking://resources/emails/{calendar:today}/inbox
+# 渲染为：viking://resources/emails/2026/05/07/inbox
+
+# 查看昨天的日志
+viking://resources/logs/{calendar:yesterday}/app.log
+# 渲染为：viking://resources/logs/2026/05/06/app.log
+
+# 预上传明天的任务
+viking://resources/tasks/{calendar:tomorrow}/todo.md
+# 渲染为：viking://resources/tasks/2026/05/08/todo.md
+
+# 月度日志
+viking://resources/logs/{calendar:year}/{calendar:month}/app.log
+# 渲染为：viking://resources/logs/2026/05/app.log
+
+# 每日快照
+viking://resources/snapshots/{calendar:today}/
+# 渲染为：viking://resources/snapshots/2026/05/07/
+```
+
+### 解析过程
+
+路径变量在 API 执行时**服务器端**进行解析。CLI/SDK 原样传递 URI 模板，服务器根据当前上下文（时间、认证用户等）渲染为具体路径。
+
+### CLI 使用
+
+```bash
+# 添加今天的邮件 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+
+# 读取昨天的日志
+ov read "viking://resources/logs/{calendar:yesterday}/app.log"
+
+# 准备明天的任务
+ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "规划一天"
+
+# 上传月度报告 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf
+```
+
 ## 目录结构
 
 ```

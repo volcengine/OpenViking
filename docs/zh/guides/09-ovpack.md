@@ -80,6 +80,9 @@ async def import_example():
 **HTTP API**
 ```bash
 # 第一步：上传本地 ovpack 文件
+# 默认使用本地临时存储。
+# 只有在明确需要分布式共享临时上传时，才额外传：-F "upload_mode=shared"
+# Python HTTP client / CLI 也可以改为在 ovcli.conf 中设置：upload.mode = "shared"
 TEMP_FILE_ID=$(
   curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
     -H "X-API-Key: your-key" \

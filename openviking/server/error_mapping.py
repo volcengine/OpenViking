@@ -440,6 +440,9 @@ def map_exception(
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)
         lowered = message.lower()
+        if "not a directory" in lowered:
+            details = {"resource": resource} if resource else None
+            return FailedPreconditionError(message, details=details)
         if "permission denied" in lowered:
             return PermissionDeniedError(message, resource=resource)
         if "already exists" in lowered:
