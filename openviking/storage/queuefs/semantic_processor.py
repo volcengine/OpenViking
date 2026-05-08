@@ -28,7 +28,6 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.queuefs.overview import parse_overview_md
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
@@ -479,7 +478,7 @@ class SemanticProcessor(DequeueHandlerBase):
             try:
                 old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                 if old_overview:
-                    existing_summaries = parse_overview_md(old_overview)
+                    existing_summaries = self._parse_overview_md(old_overview)
                     logger.info(
                         f"Parsed {len(existing_summaries)} existing summaries from overview.md"
                     )
@@ -991,6 +990,59 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(abstract) > semantic.abstract_max_chars:
             abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
         return overview, abstract
+
+    def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
+        """Parse overview.md and extract file summaries.
+
+        Args:
+            overview_content: Content of the overview.md file
+
+        Returns:
+            Dictionary mapping file names to their summaries
+        """
+        import re
+
+        summaries: Dict[str, str] = {}
+
+        if not overview_content or not overview_content.strip():
+            return summaries
+
+        lines = overview_content.split("\n")
+        current_file = None
+        current_summary_lines: List[str] = []
+
+        for line in lines:
+            header_match = re.match(r"^###\s+(.+?)\s*$", line)
+            if header_match:
+                if current_file and current_summary_lines:
+                    summaries[current_file] = " ".join(current_summary_lines).strip()
+
+                file_name = header_match.group(1).strip()
+                parts = file_name.split()
+                if len(parts) >= 2 and parts[0] == parts[1]:
+                    file_name = parts[0]
+
+                current_file = file_name
+                current_summary_lines = []
+                continue
+
+            numbered_match = re.match(r"^\[(\d+)\]\s+(.+?):\s*(.+)$", line)
+            if numbered_match:
+                if current_file and current_summary_lines:
+                    summaries[current_file] = " ".join(current_summary_lines).strip()
+                current_file = numbered_match.group(2).strip()
+                current_summary_lines = [numbered_match.group(3).strip()]
+                continue
+
+            if current_file:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    current_summary_lines.append(stripped)
+
+        if current_file and current_summary_lines:
+            summaries[current_file] = " ".join(current_summary_lines).strip()
+
+        return summaries
 
     async def _generate_overview(
         self,

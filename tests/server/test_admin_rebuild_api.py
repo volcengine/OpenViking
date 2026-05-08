@@ -777,19 +777,26 @@ async def test_reindex_resource_vectors_only_continues_after_single_record_failu
     async def fake_best_file_summary(self, uri, *, ctx):
         return f"summary:{uri.rsplit('/', 1)[-1]}"
 
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return summary
+
     seen = []
 
-    async def fake_submit_embedding_msg(self, msg):
-        uri = msg.context_data["uri"]
-        seen.append(uri)
-        if uri.endswith("bad.txt"):
+    async def fake_upsert_context(self, **kwargs):
+        seen.append(kwargs["uri"])
+        if kwargs["uri"].endswith("bad.txt"):
             raise OpenVikingError("boom", code="PROCESSING_ERROR")
 
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
     monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_submit_embedding_msg", fake_submit_embedding_msg)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -846,7 +853,7 @@ async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_reindex_resource_l2_reuses_file_vectorization_when_summary_missing(monkeypatch):
+async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missing(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 
     class FakeVikingFS:
@@ -869,9 +876,6 @@ async def test_reindex_resource_l2_reuses_file_vectorization_when_summary_missin
             assert level_limit is None
             return [{"uri": "viking://resources/demo/file.txt", "isDir": False}]
 
-        async def read_file(self, uri, ctx=None):
-            return "raw file body"
-
     seen = {}
 
     async def fake_read_directory_abstract(self, uri, *, ctx):
@@ -883,19 +887,22 @@ async def test_reindex_resource_l2_reuses_file_vectorization_when_summary_missin
     async def fake_best_file_summary(self, uri, *, ctx):
         return ""
 
-    async def fake_submit_embedding_msg(self, msg):
-        seen[msg.context_data["uri"]] = {
-            "context": msg.context_data,
-            "message": msg.message,
-        }
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return "raw file body"
 
-    fake_fs = FakeVikingFS()
-    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: fake_fs)
-    monkeypatch.setattr("openviking.utils.embedding_utils.get_viking_fs", lambda: fake_fs)
+    async def fake_upsert_context(self, **kwargs):
+        seen[kwargs["uri"]] = kwargs
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
     monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_submit_embedding_msg", fake_submit_embedding_msg)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -910,8 +917,7 @@ async def test_reindex_resource_l2_reuses_file_vectorization_when_summary_missin
         ctx=ctx,
     )
 
-    assert seen["viking://resources/demo/file.txt"]["message"] == "raw file body"
-    assert seen["viking://resources/demo/file.txt"]["context"]["abstract"] == ""
+    assert seen["viking://resources/demo/file.txt"]["abstract"] == "raw file body"
 
 
 @pytest.mark.asyncio
@@ -933,12 +939,20 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
     async def fake_best_file_summary(self, uri, *, ctx):
         return "file summary"
 
-    async def fake_submit_embedding_msg(self, msg):
-        seen[msg.context_data["uri"]] = msg
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return summary
+
+    async def fake_upsert_context(self, **kwargs):
+        seen[kwargs["uri"]] = kwargs
 
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_submit_embedding_msg", fake_submit_embedding_msg)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -987,6 +1001,7 @@ async def test_reindex_memory_l2_falls_back_to_body_when_abstract_missing(monkey
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1038,6 +1053,7 @@ async def test_reindex_memory_l2_strips_memory_fields_from_abstract(monkeypatch)
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1113,6 +1129,7 @@ async def test_reindex_memory_vectors_walks_deep_subtree(monkeypatch):
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1200,6 +1217,7 @@ async def test_reindex_memory_vectors_rebuilds_directory_levels_without_regenera
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()

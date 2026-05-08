@@ -65,6 +65,15 @@ class _FakeProcessor:
         self.summarized_files = []
         self.sync_calls = []
 
+    def _parse_overview_md(self, overview_content):
+        results = {}
+        for line in overview_content.splitlines():
+            m = re.match(r"^-\s*(?P<name>[^:]+):\s*(?P<summary>.*)$", line.strip())
+            if not m:
+                continue
+            results[m.group("name").strip()] = m.group("summary").strip()
+        return results
+
     async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}

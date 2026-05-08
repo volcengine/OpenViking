@@ -14,7 +14,6 @@ from openviking.core.context import Context, Vectorize
 from openviking.message import Message
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext
-from openviking.session.memory.chunking import chunk_text
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -174,7 +173,7 @@ class SessionCompressor:
 
         if vectorize_text and len(vectorize_text) > semantic.memory_chunk_chars:
             # Chunk long memory into multiple vector records
-            chunks = chunk_text(
+            chunks = self._chunk_text(
                 vectorize_text,
                 semantic.memory_chunk_chars,
                 semantic.memory_chunk_overlap,
@@ -209,6 +208,30 @@ class SessionCompressor:
 
         self._record_semantic_change(memory.uri, change_type, parent_uri=memory.parent_uri)
         return True
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int, overlap: int) -> list:
+        """Split text into overlapping chunks, preferring paragraph boundaries."""
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+
+            # Try to break at paragraph boundary
+            if end < len(text):
+                boundary = text.rfind("\n\n", start, end)
+                if boundary > start + chunk_size // 2:
+                    end = boundary + 2  # Include the double newline
+
+            chunks.append(text[start:end].strip())
+            start = end - overlap
+            if start >= len(text):
+                break
+
+        return [c for c in chunks if c]
 
     async def _merge_into_existing(
         self,
