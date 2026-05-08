@@ -45,3 +45,16 @@ export {
   sanitize,
   stripInjectedBlocks,
 } from "./capture/sanitize.js";
+
+export {
+  buildQueryProfile,
+  clampScore,
+  dedupeItems,
+  estimateTokens,
+  isEventOrCaseItem,
+  lexicalOverlapBoost,
+  rankItem,
+  rankRecallHits,
+  type QueryProfile,
+  type RankRecallOptions,
+} from "./recall/rank.js";
