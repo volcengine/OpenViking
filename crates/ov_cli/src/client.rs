@@ -410,12 +410,25 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
-        // Determine effective parent and create_parent flag
+        // Determine effective parent and create_parent flag.
+        // Only send create_parent when the user explicitly selected
+        // --parent-auto-create, so older servers that do not support the
+        // field still accept the request.
         let (effective_parent, create_parent) = match (parent, parent_auto_create) {
             (Some(p), None) => (Some(p), false),
             (None, Some(p)) => (Some(p), true),
             (None, None) => (None, false),
             (Some(_), Some(_)) => unreachable!("handled in cli"),
+        };
+
+        let build_body = |base: serde_json::Value| {
+            let mut body = base;
+            if create_parent {
+                body.as_object_mut()
+                    .expect("add_resource request body must be an object")
+                    .insert("create_parent".to_string(), serde_json::Value::Bool(true));
+            }
+            body
         };
 
         if path_obj.exists() {
@@ -435,12 +448,11 @@ impl HttpClient {
                     self.upload_temp_file(zip_file.path()).await?
                 };
 
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
                     "parent": effective_parent,
-                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -451,7 +463,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
                 let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
                 self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
@@ -466,12 +478,11 @@ impl HttpClient {
                     self.upload_temp_file(path_obj).await?
                 };
 
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
                     "parent": effective_parent,
-                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -482,16 +493,15 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
                 let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
                 self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
             } else {
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "path": path,
                     "to": to,
                     "parent": effective_parent,
-                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -502,16 +512,15 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
                 self.post("/api/v1/resources", &body).await
             }
         } else {
-            let body = serde_json::json!({
+            let body = build_body(serde_json::json!({
                 "path": path,
                 "to": to,
                 "parent": effective_parent,
-                "create_parent": create_parent,
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,
@@ -522,7 +531,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
-            });
+            }));
 
             self.post("/api/v1/resources", &body).await
         }

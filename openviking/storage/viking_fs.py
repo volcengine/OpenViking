@@ -1123,16 +1123,17 @@ class VikingFS:
                 if name in [".", ".."]:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
+                is_dir = entry.get("isDir", False)
                 new_entry = {
                     "uri": self._path_to_uri(f"{current_path}/{name}", ctx=ctx),
-                    "size": entry.get("size", 0),
-                    "isDir": entry.get("isDir", False),
+                    "size": 0 if is_dir else entry.get("size", 0),
+                    "isDir": is_dir,
                     "modTime": format_simplified(parse_iso_datetime(entry.get("modTime", "")), now),
                 }
                 new_entry["rel_path"] = rel_path
                 if not self._is_accessible(new_entry["uri"], real_ctx):
                     continue
-                if entry.get("isDir"):
+                if is_dir:
                     all_entries.append(new_entry)
                     await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
                 elif not name.startswith("."):
@@ -2212,15 +2213,16 @@ class VikingFS:
                 parsed_time = parse_iso_datetime(raw_time)
             elif isinstance(entry.get("mtime"), (int, float)):
                 parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
+            is_dir = entry.get("isDir", False)
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
-                "size": entry.get("size", 0),
-                "isDir": entry.get("isDir", False),
+                "size": 0 if is_dir else entry.get("size", 0),
+                "isDir": is_dir,
                 "modTime": format_simplified(parsed_time, now),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
-            if entry.get("isDir"):
+            if is_dir:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
