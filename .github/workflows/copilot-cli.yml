@@ -1,0 +1,76 @@
+name: Copilot plugin (cli-plugin)
+
+on:
+  push:
+    branches: ["main", "feature/copilot-memory-plugin-plan"]
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-cli.yml"
+  pull_request:
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-cli.yml"
+  # Manual / nightly when a real Copilot CLI fixture is wired up. The
+  # current suite uses a mock OVClient + the SDK's InMemoryTransport
+  # plus a real-stdio smoke that spawns our own bin, so this runs
+  # without needing any Copilot-CLI license.
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: cli (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: examples/copilot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: examples/copilot/package-lock.json
+
+      - name: Install workspace deps
+        run: npm ci
+
+      - name: Build shared (so consumers can resolve types)
+        run: npm run build:shared
+
+      - name: Typecheck cli-plugin
+        run: npm run typecheck -w @openviking/copilot-cli-memory
+
+      - name: Build cli-plugin (so the stdio smoke test can spawn dist/mcp-server.js)
+        run: npm run build -w @openviking/copilot-cli-memory
+
+      - name: Test cli-plugin
+        run: npm run test -w @openviking/copilot-cli-memory
+
+      - name: Smoke-run --help on the built bin
+        run: node cli-plugin/dist/mcp-server.js --help
+
+      - name: Smoke-run --version on the built bin
+        run: node cli-plugin/dist/mcp-server.js --version
+
+      - name: npm pack (linux only — produces the publishable tarball)
+        if: matrix.os == 'ubuntu-latest'
+        run: npm pack -w @openviking/copilot-cli-memory
+
+      - name: Upload tarball artefact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-cli-tgz
+          path: examples/copilot/cli-plugin/openviking-copilot-cli-memory-*.tgz
+          if-no-files-found: ignore
+          retention-days: 7

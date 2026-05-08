@@ -1,0 +1,52 @@
+name: Copilot plugin (shared)
+
+on:
+  push:
+    branches: ["main", "feature/copilot-memory-plugin-plan"]
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-shared.yml"
+  pull_request:
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-shared.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: shared (linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/copilot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: examples/copilot/package-lock.json
+
+      - name: Install workspace deps
+        run: npm ci
+
+      - name: Build shared (so consumers can resolve types)
+        run: npm run build:shared
+
+      - name: Typecheck shared
+        run: npm run typecheck -w @openviking/copilot-shared
+
+      - name: Test shared with coverage gate (>= 80% lines)
+        run: npm run test:coverage -w @openviking/copilot-shared
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-shared-coverage
+          path: examples/copilot/packages/shared/coverage/
+          if-no-files-found: ignore
+          retention-days: 7

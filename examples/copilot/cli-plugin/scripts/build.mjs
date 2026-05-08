@@ -30,5 +30,15 @@ await build({
     __OV_CLI_VERSION__: JSON.stringify(pkg.version),
   },
 });
-chmodSync(outfile, 0o755);
+// chmod is meaningless on Windows (NTFS doesn't track POSIX mode bits)
+// and Node logs an EPERM warning when the file's owner ACL doesn't
+// match. Best-effort + swallow so CI on windows-latest stays green.
+if (process.platform !== "win32") {
+  try {
+    chmodSync(outfile, 0o755);
+  } catch {
+    // Build artefact is still usable; just won't be directly
+    // executable. Silent failure is fine for CI.
+  }
+}
 console.log(`built ${outfile} (v${pkg.version})`);

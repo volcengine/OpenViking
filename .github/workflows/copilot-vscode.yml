@@ -1,0 +1,54 @@
+name: Copilot plugin (vscode-extension)
+
+on:
+  push:
+    branches: ["main", "feature/copilot-memory-plugin-plan"]
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-vscode.yml"
+  pull_request:
+    paths:
+      - "examples/copilot/**"
+      - ".github/workflows/copilot-vscode.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: vscode (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: examples/copilot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: examples/copilot/package-lock.json
+
+      - name: Install workspace deps
+        run: npm ci
+
+      - name: Build shared (so consumers can resolve types)
+        run: npm run build:shared
+
+      - name: Typecheck vscode-extension
+        run: npm run typecheck -w openviking-copilot
+
+      - name: Test vscode-extension
+        run: npm run test -w openviking-copilot
+
+      - name: Build extension bundle (esbuild → dist/extension.cjs)
+        run: npm run build -w openviking-copilot
+
+      - name: Package .vsix (linux only — vsce here is a smoke check)
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run package -w openviking-copilot
