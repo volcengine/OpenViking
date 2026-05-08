@@ -1,0 +1,31 @@
+:root {
+  --va-c-primary: #0f766e;
+  --va-c-primary-light: #14b8a6;
+  --va-c-primary-dark: #115e59;
+  --va-c-bg: #fbf8ef;
+  --va-c-bg-light: #fffdf7;
+  --va-c-text: #17211f;
+  --va-c-text-light: #47534f;
+  --va-font-family-base: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+  --va-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+html.dark {
+  --va-c-primary: #5eead4;
+  --va-c-primary-light: #2dd4bf;
+  --va-c-primary-dark: #0f766e;
+  --va-c-bg: #0f0f0f;
+  --va-c-bg-light: #1a1a1a;
+  --va-c-text: #edf7f3;
+  --va-c-text-light: #bbcac5;
+}
+
+body {
+  background: var(--va-c-bg);
+}
+
+.va-main,
+.va-card,
+.va-post-card {
+  border-radius: 8px;
+}
