@@ -17,6 +17,21 @@ export {
 } from "./debug/logger.js";
 
 export {
+  runDebugRecall,
+  type DebugRecallArgs,
+  type DebugRecallDeps,
+  type DebugRecallResult,
+  type RecallDebuggerClient,
+} from "./debug/recall-debugger.js";
+
+export {
+  runDebugCapture,
+  type DebugCaptureArgs,
+  type DebugCaptureDeps,
+  type DebugCaptureResult,
+} from "./debug/capture-debugger.js";
+
+export {
   runWriteTask,
   spawnDetached,
   type DetachedSpawnOptions,

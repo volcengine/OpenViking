@@ -263,3 +263,97 @@ describe("runMain — --commit-flush", () => {
     expect(commitFlush).not.toHaveBeenCalled();
   });
 });
+
+describe("runMain — --debug-recall", () => {
+  it("rejects when no query is supplied with exit 2", async () => {
+    const s = makeStreams();
+    const debugRecallRunner = vi.fn();
+    const code = await runMain(["--debug-recall"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig: vi.fn(() => fakeCfg()),
+      debugRecallRunner,
+    });
+    expect(code).toBe(2);
+    expect(s.stderr).toContain("requires a query");
+    expect(debugRecallRunner).not.toHaveBeenCalled();
+  });
+
+  it("rejects --debug-recall= (empty value) with exit 2", async () => {
+    const s = makeStreams();
+    const debugRecallRunner = vi.fn();
+    const code = await runMain(["--debug-recall="], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig: vi.fn(() => fakeCfg()),
+      debugRecallRunner,
+    });
+    expect(code).toBe(2);
+    expect(debugRecallRunner).not.toHaveBeenCalled();
+  });
+
+  it("invokes the runner with cfg + trimmed query and writes its output", async () => {
+    const s = makeStreams();
+    const debugRecallRunner = vi.fn(async () => ({ exitCode: 0, output: "<<recall report>>" }));
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg({ apiKey: "k" }));
+    const code = await runMain(["--debug-recall=  auth migration  "], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, debugRecallRunner,
+    });
+    expect(code).toBe(0);
+    expect(debugRecallRunner).toHaveBeenCalledTimes(1);
+    expect(debugRecallRunner.mock.calls[0]![0]!.apiKey).toBe("k");
+    expect(debugRecallRunner.mock.calls[0]![1]).toBe("auth migration");
+    expect(s.stdout).toBe("<<recall report>>");
+  });
+
+  it("propagates the runner's exit code on failure", async () => {
+    const s = makeStreams();
+    const debugRecallRunner = vi.fn(async () => ({ exitCode: 2, output: "Cannot continue" }));
+    const code = await runMain(["--debug-recall=q"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig: vi.fn(() => fakeCfg()),
+      debugRecallRunner,
+    });
+    expect(code).toBe(2);
+    expect(s.stdout).toContain("Cannot continue");
+  });
+});
+
+describe("runMain — --debug-capture", () => {
+  it("rejects when no path is supplied with exit 2", async () => {
+    const s = makeStreams();
+    const debugCaptureRunner = vi.fn();
+    const code = await runMain(["--debug-capture"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig: vi.fn(() => fakeCfg()),
+      debugCaptureRunner,
+    });
+    expect(code).toBe(2);
+    expect(s.stderr).toContain("requires a transcript file path");
+    expect(debugCaptureRunner).not.toHaveBeenCalled();
+  });
+
+  it("invokes the runner with cfg + trimmed path", async () => {
+    const s = makeStreams();
+    const debugCaptureRunner = vi.fn(async () => ({ exitCode: 0, output: "<<capture report>>" }));
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const code = await runMain(["--debug-capture=  ./transcript.json  "], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, debugCaptureRunner,
+    });
+    expect(code).toBe(0);
+    expect(debugCaptureRunner.mock.calls[0]![1]).toBe("./transcript.json");
+    expect(s.stdout).toBe("<<capture report>>");
+  });
+
+  it("propagates the runner's exit code on failure", async () => {
+    const s = makeStreams();
+    const debugCaptureRunner = vi.fn(async () => ({ exitCode: 2, output: "ENOENT" }));
+    const code = await runMain(["--debug-capture=/nope"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig: vi.fn(() => fakeCfg()),
+      debugCaptureRunner,
+    });
+    expect(code).toBe(2);
+    expect(s.stdout).toContain("ENOENT");
+  });
+});

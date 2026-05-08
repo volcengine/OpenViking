@@ -26,12 +26,18 @@
  */
 
 import {
+  createDebugLogger,
   isPluginEnabled as defaultIsEnabled,
   loadConfig as defaultLoadConfig,
   OVClient,
+  runDebugCapture,
+  runDebugRecall,
+  type DebugCaptureResult,
+  type DebugRecallResult,
   type LoadConfigOptions,
   type OVResult,
   type PluginConfig,
+  type RecallDebuggerClient,
 } from "@openviking/copilot-shared";
 import { runStdioMcpServer as defaultRunStdioMcpServer } from "./server.js";
 
@@ -58,6 +64,14 @@ Options:
   --commit-flush --session=ID  Force-commit the given OpenViking
                                session (used by the copilot() shell-
                                wrapper fallback at end-of-session)
+  --debug-recall=QUERY         Run the recall pipeline against QUERY
+                               and print a verbose diagnostic report
+                               (config snapshot, health, ranking,
+                               final block + telemetry)
+  --debug-capture=PATH         Load a transcript JSON file (an array
+                               of {role,text} objects) and print the
+                               sanitise + canonicalise + token-
+                               threshold projection
 
 Configuration files (read-only):
   ~/.openviking/ovcli.conf   url, api_key, account, user, agent_id
@@ -87,6 +101,12 @@ export interface RunMainDeps {
    * caller can map success/error to exit codes.
    */
   commitFlush?: (cfg: PluginConfig, sessionId: string) => Promise<OVResult<unknown>>;
+  /**
+   * Inject for tests — overrides the recall/capture diagnostic
+   * runners so they don't open real network/file handles.
+   */
+  debugRecallRunner?: (cfg: PluginConfig, query: string) => Promise<DebugRecallResult>;
+  debugCaptureRunner?: (cfg: PluginConfig, path: string) => Promise<DebugCaptureResult>;
 }
 
 export interface RunMainOptions extends RunMainStreams, RunMainDeps {}
@@ -106,16 +126,26 @@ export async function runMain(
   const isEnabled = opts.isPluginEnabled ?? defaultIsEnabled;
   const runStdioMcpServer = opts.runStdioMcpServer ?? defaultRunStdioMcpServer;
   const commitFlush = opts.commitFlush ?? defaultCommitFlush;
+  const debugRecallRunner = opts.debugRecallRunner ?? defaultDebugRecallRunner;
+  const debugCaptureRunner = opts.debugCaptureRunner ?? defaultDebugCaptureRunner;
 
   // Single-pass argv parser — handles --flag and --key=value forms.
   const flags = new Set<string>();
   let sessionArg: string | undefined;
+  let debugRecallArg: string | undefined;
+  let debugCaptureArg: string | undefined;
   for (const a of argv) {
     if (a === "-h") flags.add("--help");
     else if (a === "-v") flags.add("--version");
     else if (a.startsWith("--session=")) {
       sessionArg = a.slice("--session=".length);
       flags.add("--session");
+    } else if (a.startsWith("--debug-recall=")) {
+      debugRecallArg = a.slice("--debug-recall=".length);
+      flags.add("--debug-recall");
+    } else if (a.startsWith("--debug-capture=")) {
+      debugCaptureArg = a.slice("--debug-capture=".length);
+      flags.add("--debug-capture");
     } else if (a.startsWith("--")) {
       flags.add(a);
     } else {
@@ -141,6 +171,24 @@ export async function runMain(
       loadConfig,
       commitFlush,
       sessionId: sessionArg,
+      out,
+      err,
+    });
+  }
+  if (flags.has("--debug-recall")) {
+    return runDebugRecallCommand({
+      loadConfig,
+      runner: debugRecallRunner,
+      query: debugRecallArg,
+      out,
+      err,
+    });
+  }
+  if (flags.has("--debug-capture")) {
+    return runDebugCaptureCommand({
+      loadConfig,
+      runner: debugCaptureRunner,
+      path: debugCaptureArg,
       out,
       err,
     });
@@ -211,4 +259,50 @@ async function runCommitFlushCommand(args: {
 async function defaultCommitFlush(cfg: PluginConfig, sessionId: string): Promise<OVResult<unknown>> {
   const client = new OVClient(cfg);
   return client.commit(sessionId, { force: true });
+}
+
+async function runDebugRecallCommand(args: {
+  loadConfig: (opts: LoadConfigOptions) => PluginConfig;
+  runner: (cfg: PluginConfig, query: string) => Promise<DebugRecallResult>;
+  query: string | undefined;
+  out: (c: string) => void;
+  err: (c: string) => void;
+}): Promise<number> {
+  const query = args.query?.trim();
+  if (!query) {
+    args.err("--debug-recall requires a query: --debug-recall=<prompt>\n");
+    return 2;
+  }
+  const cfg = args.loadConfig({ agentIdDefault: "copilot-cli" });
+  const res = await args.runner(cfg, query);
+  args.out(res.output);
+  return res.exitCode;
+}
+
+async function runDebugCaptureCommand(args: {
+  loadConfig: (opts: LoadConfigOptions) => PluginConfig;
+  runner: (cfg: PluginConfig, path: string) => Promise<DebugCaptureResult>;
+  path: string | undefined;
+  out: (c: string) => void;
+  err: (c: string) => void;
+}): Promise<number> {
+  const path = args.path?.trim();
+  if (!path) {
+    args.err("--debug-capture requires a transcript file path: --debug-capture=<path>\n");
+    return 2;
+  }
+  const cfg = args.loadConfig({ agentIdDefault: "copilot-cli" });
+  const res = await args.runner(cfg, path);
+  args.out(res.output);
+  return res.exitCode;
+}
+
+async function defaultDebugRecallRunner(cfg: PluginConfig, query: string): Promise<DebugRecallResult> {
+  const logger = createDebugLogger(cfg, { scope: "debug-recall" });
+  const client: RecallDebuggerClient = new OVClient(cfg, { logger });
+  return runDebugRecall({ query }, { cfg, client });
+}
+
+async function defaultDebugCaptureRunner(cfg: PluginConfig, path: string): Promise<DebugCaptureResult> {
+  return runDebugCapture({ path }, { cfg });
 }
