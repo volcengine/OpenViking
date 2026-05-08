@@ -68,6 +68,10 @@ class PatchOp(MergeOpBase):
 
         # Case 1: StrPatch object - apply patch
         if isinstance(patch_value, StrPatch):
+            # If any block has empty search, treat as full replacement
+            # (LLM sometimes generates search='' to mean "replace the whole field")
+            if any(not block.search for block in patch_value.blocks):
+                return self._extract_replace_when_no_original(patch_value)
             return apply_str_patch(current_str, patch_value)
 
         # Case 2: dict form of StrPatch (from JSON parsing)
@@ -81,6 +85,8 @@ class PatchOp(MergeOpBase):
                         else:
                             blocks.append(block_dict)
                     patch_value = StrPatch(blocks=blocks)
+                    if any(not block.search for block in patch_value.blocks):
+                        return self._extract_replace_when_no_original(patch_value)
                     return apply_str_patch(current_str, patch_value)
             except Exception:
                 # If conversion fails, treat as simple replacement
