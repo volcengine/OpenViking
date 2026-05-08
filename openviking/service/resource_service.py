@@ -253,24 +253,6 @@ class ResourceService:
                     root_uri=result.get("root_uri"),
                 )
                 telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
-            else:
-                from openviking.service.task_tracker import get_task_tracker
-
-                task_tracker = get_task_tracker()
-                root_uri = result.get("root_uri", "")
-                task = task_tracker.create(
-                    "add_resource",
-                    resource_id=root_uri,
-                    owner_account_id=ctx.account_id,
-                    owner_user_id=ctx.user.user_id,
-                )
-                result["task_id"] = task.task_id
-                if telemetry_id:
-                    monitor_started = True
-                    asyncio.create_task(self._monitor_queue_processing(task.task_id, telemetry_id))
-                else:
-                    task_tracker.start(task.task_id)
-                    task_tracker.complete(task.task_id, {"root_uri": root_uri})
             if watch_manager and to and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
@@ -301,6 +283,24 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                             )
+            if not wait:
+                from openviking.service.task_tracker import get_task_tracker
+
+                task_tracker = get_task_tracker()
+                root_uri = result.get("root_uri", "")
+                task = task_tracker.create(
+                    "add_resource",
+                    resource_id=root_uri,
+                    owner_account_id=ctx.account_id,
+                    owner_user_id=ctx.user.user_id,
+                )
+                result["task_id"] = task.task_id
+                if telemetry_id:
+                    monitor_started = True
+                    asyncio.create_task(self._monitor_queue_processing(task.task_id, telemetry_id))
+                else:
+                    task_tracker.start(task.task_id)
+                    task_tracker.complete(task.task_id, {"root_uri": root_uri})
             return result
         except Exception as exc:
             telemetry.set_error(
