@@ -233,7 +233,7 @@
     "build": "esbuild src/extension.ts --bundle --platform=node --target=node22 --format=cjs --external:vscode --outfile=dist/extension.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "package": "npm run build && vsce package --out openviking-copilot.vsix --no-dependencies"
+    "package": "npm run build && vsce package --out openviking-copilot.vsix --no-dependencies --skip-license"
   },
   "dependencies": {
     "@openviking/copilot-shared": "*"

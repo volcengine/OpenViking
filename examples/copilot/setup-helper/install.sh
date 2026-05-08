@@ -9,8 +9,8 @@
 #   1. Check OS (macOS / Linux only) and required baseline tools.
 #   2. Set up ~/.openviking/ovcli.conf — reuse if present, prompt otherwise.
 #   3. Clone (or refresh) the OpenViking repo to ~/.openviking/openviking-repo.
-#   4. Optionally install the VS Code extension from a .vsix.
-#   5. Install the Copilot CLI MCP server npm package and merge mcp-config.json.
+#   4. Optionally install the VS Code extension from a local .vsix.
+#   5. Install the Copilot CLI MCP server from a local .tgz and merge mcp-config.json.
 #   6. Optionally append the copilot() shell-wrapper fallback.
 #
 # Env overrides:
@@ -19,6 +19,9 @@
 #   OPENVIKING_REPO_URL    default: https://github.com/volcengine/OpenViking.git
 #   OPENVIKING_REPO_BRANCH default: main
 #   OPENVIKING_COPILOT_VSIX path to a prebuilt openviking-copilot .vsix
+#   OPENVIKING_COPILOT_CLI_TGZ path to a prebuilt @openviking/copilot-cli-memory .tgz
+#   OPENVIKING_COPILOT_ARTIFACT_DIR default: $OPENVIKING_HOME/copilot-artifacts
+#   OPENVIKING_INSTALL_SOURCE local or registry (default: local)
 #   COPILOT_MCP_JSON       path to the Copilot CLI mcp-config.json to merge
 #
 # Targets bash 3.2+ (macOS /bin/bash) and Linux.
@@ -32,7 +35,10 @@ REPO_BRANCH="${OPENVIKING_REPO_BRANCH:-main}"
 OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 COPILOT_DIR="$REPO_DIR/examples/copilot"
 VSCODE_EXT_DIR="$COPILOT_DIR/vscode-extension"
-WRAPPER_SRC="$COPILOT_DIR/cli-plugin/wrapper/copilot.sh"
+CLI_PLUGIN_DIR="$COPILOT_DIR/cli-plugin"
+ARTIFACT_DIR="${OPENVIKING_COPILOT_ARTIFACT_DIR:-$OV_HOME/copilot-artifacts}"
+INSTALL_SOURCE="${OPENVIKING_INSTALL_SOURCE:-local}"
+WRAPPER_SRC="$CLI_PLUGIN_DIR/wrapper/copilot.sh"
 MARKER_BEGIN='# >>> openviking copilot memory plugin >>>'
 MARKER_END='# <<< openviking copilot memory plugin <<<'
 
@@ -234,7 +240,7 @@ build_or_find_vsix() {
     return 1
   fi
 
-  found=$(ls "$VSCODE_EXT_DIR"/*.vsix 2>/dev/null | tail -n 1 || true)
+  found=$(ls "$ARTIFACT_DIR"/*.vsix "$VSCODE_EXT_DIR"/*.vsix 2>/dev/null | tail -n 1 || true)
   if [ -n "$found" ]; then
     VSIX_PATH="$found"
     return 0
@@ -245,9 +251,10 @@ build_or_find_vsix() {
     return 1
   fi
 
-  info 'No .vsix found; packaging from source.'
-  ( cd "$COPILOT_DIR" && npm install && npm run package -w openviking-copilot )
-  found=$(ls "$VSCODE_EXT_DIR"/*.vsix 2>/dev/null | tail -n 1 || true)
+  info 'No .vsix found; packaging local artifact from source.'
+  mkdir -p "$ARTIFACT_DIR"
+  ( cd "$COPILOT_DIR" && npm install && npm run build -w openviking-copilot && cd "$VSCODE_EXT_DIR" && npx vsce package --out "$ARTIFACT_DIR/openviking-copilot.vsix" --no-dependencies --skip-license )
+  found=$(ls "$ARTIFACT_DIR"/openviking-copilot*.vsix "$VSCODE_EXT_DIR"/*.vsix 2>/dev/null | tail -n 1 || true)
   if [ -z "$found" ]; then
     err 'VS Code package command completed but no .vsix was found.'
     return 1
@@ -274,14 +281,68 @@ fi
 
 heading '5. Copilot CLI MCP server'
 
-if [ "$NPM_AVAILABLE" -eq 1 ]; then
-  if prompt_yes_no 'Install / update @openviking/copilot-cli-memory globally with npm?' 1; then
-    npm i -g @openviking/copilot-cli-memory
-  else
-    info 'Skipped npm global install.'
+CLI_PACKAGE_TGZ=""
+pack_or_find_cli_package() {
+  local found="${OPENVIKING_COPILOT_CLI_TGZ:-}"
+  if [ -n "$found" ]; then
+    if [ -f "$found" ]; then
+      CLI_PACKAGE_TGZ="$found"
+      return 0
+    fi
+    err "OPENVIKING_COPILOT_CLI_TGZ does not exist: $found"
+    return 1
   fi
+
+  found=$(ls "$ARTIFACT_DIR"/openviking-copilot-cli-memory-*.tgz 2>/dev/null | tail -n 1 || true)
+  if [ -n "$found" ]; then
+    CLI_PACKAGE_TGZ="$found"
+    return 0
+  fi
+
+  if [ "$NPM_AVAILABLE" -ne 1 ]; then
+    warn 'Cannot pack CLI package because npm is not available.'
+    return 1
+  fi
+
+  info 'No CLI .tgz found; packing local artifact from source.'
+  mkdir -p "$ARTIFACT_DIR"
+  ( cd "$COPILOT_DIR" && npm install && npm pack -w @openviking/copilot-cli-memory --pack-destination "$ARTIFACT_DIR" >/dev/null )
+  found=$(ls "$ARTIFACT_DIR"/openviking-copilot-cli-memory-*.tgz 2>/dev/null | tail -n 1 || true)
+  if [ -z "$found" ]; then
+    err 'npm pack completed but no CLI .tgz was found.'
+    return 1
+  fi
+  CLI_PACKAGE_TGZ="$found"
+}
+
+if [ "$NPM_AVAILABLE" -eq 1 ]; then
+  case "$INSTALL_SOURCE" in
+    local)
+      if prompt_yes_no 'Install / update openviking-copilot-mcp globally from local .tgz?' 1; then
+        if pack_or_find_cli_package; then
+          info "Installing CLI MCP package: $CLI_PACKAGE_TGZ"
+          npm i -g "$CLI_PACKAGE_TGZ"
+        else
+          warn 'Skipped local CLI MCP package install.'
+        fi
+      else
+        info 'Skipped local CLI MCP package install.'
+      fi
+      ;;
+    registry)
+      if prompt_yes_no 'Install / update @openviking/copilot-cli-memory globally from npm registry?' 1; then
+        npm i -g @openviking/copilot-cli-memory
+      else
+        info 'Skipped npm registry install.'
+      fi
+      ;;
+    *)
+      err "Unsupported OPENVIKING_INSTALL_SOURCE: $INSTALL_SOURCE (expected local or registry)."
+      exit 1
+      ;;
+  esac
 else
-  warn 'Skipped npm global install because npm is unavailable.'
+  warn 'Skipped CLI MCP package install because npm is unavailable.'
 fi
 
 COPILOT_HOME_DEFAULT="${COPILOT_HOME:-$HOME/.copilot}"

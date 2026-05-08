@@ -27,12 +27,10 @@
     "test": "vitest run",
     "prepack": "npm run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
     "@openviking/copilot-shared": "*",
+    "esbuild": "^0.24.0",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "esbuild": "^0.24.0"
   }
 }
