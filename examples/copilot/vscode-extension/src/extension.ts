@@ -20,6 +20,7 @@ import {
   type ActivationHandle,
   type PluginConfig,
 } from "./extension-core";
+import { registerOpenVikingMcpProvider } from "./mcp/register";
 import { registerOpenVikingParticipant } from "./participant";
 
 let handle: ActivationHandle | null = null;
@@ -37,6 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   context.subscriptions.push(registerOpenVikingParticipant(context, handle));
+  context.subscriptions.push(registerOpenVikingMcpProvider(handle));
 
   context.subscriptions.push(
     new vscode.Disposable(() => {

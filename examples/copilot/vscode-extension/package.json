@@ -46,6 +46,12 @@
       }
     ],
     "languageModelTools": [],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "openviking",
+        "label": "OpenViking"
+      }
+    ],
     "configuration": {
       "title": "OpenViking",
       "properties": {
