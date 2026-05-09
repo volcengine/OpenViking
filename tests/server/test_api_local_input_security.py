@@ -3,9 +3,7 @@
 
 """Security tests for HTTP server local input handling."""
 
-import io
 import threading
-import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -14,6 +12,7 @@ import pytest
 from openviking.parse.parsers.html import URLTypeDetector
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
+from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
 def _allow_admin_api_in_dev_mode(client: httpx.AsyncClient) -> None:
@@ -62,7 +61,9 @@ async def test_add_skill_rejects_legacy_temp_path_field(client: httpx.AsyncClien
         "/api/v1/skills",
         json={"temp_path": "upload_skill.md"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_add_skill_accepts_raw_skill_content(client: httpx.AsyncClient):
@@ -82,14 +83,6 @@ description: inline
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["uri"].startswith("viking://agent/default/skills/")
-
-
-def _build_ovpack_bytes() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zf:
-        zf.writestr("pkg/_._meta.json", '{"uri": "viking://resources/pkg"}')
-        zf.writestr("pkg/content.md", "# Demo\n")
-    return buffer.getvalue()
 
 
 @pytest.fixture
@@ -132,7 +125,7 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
 ):
     _allow_admin_api_in_dev_mode(client)
     ovpack_file = upload_temp_dir / "demo.ovpack"
-    ovpack_file.write_bytes(_build_ovpack_bytes())
+    ovpack_file.write_bytes(build_ovpack_bytes())
 
     resp = await client.post(
         "/api/v1/pack/import",
@@ -153,7 +146,7 @@ async def test_import_ovpack_conflict_returns_structured_conflict(
 ):
     _allow_admin_api_in_dev_mode(client)
     ovpack_file = upload_temp_dir / "demo_conflict.ovpack"
-    ovpack_file.write_bytes(_build_ovpack_bytes())
+    ovpack_file.write_bytes(build_ovpack_bytes())
 
     first = await client.post(
         "/api/v1/pack/import",
@@ -164,7 +157,7 @@ async def test_import_ovpack_conflict_returns_structured_conflict(
     )
     assert first.status_code == 200
 
-    ovpack_file.write_bytes(_build_ovpack_bytes())
+    ovpack_file.write_bytes(build_ovpack_bytes())
     resp = await client.post(
         "/api/v1/pack/import",
         json={
@@ -189,7 +182,9 @@ async def test_import_ovpack_rejects_direct_file_path_field(client: httpx.AsyncC
             "parent": "viking://resources/imported",
         },
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_import_ovpack_rejects_legacy_temp_path_field(client: httpx.AsyncClient):
@@ -200,31 +195,18 @@ async def test_import_ovpack_rejects_legacy_temp_path_field(client: httpx.AsyncC
             "parent": "viking://resources/imported",
         },
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_import_ovpack_rejects_removed_vectorize_field(client: httpx.AsyncClient):
+async def test_import_ovpack_rejects_removed_fields(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/pack/import",
         json={
             "temp_file_id": "demo.ovpack",
             "parent": "viking://resources/imported",
             "vectorize": False,
-        },
-    )
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    validation_errors = body["error"]["details"]["validation_errors"]
-    assert any("vectorize" in error["loc"] for error in validation_errors)
-
-
-async def test_import_ovpack_rejects_removed_force_field(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/pack/import",
-        json={
-            "temp_file_id": "demo.ovpack",
-            "parent": "viking://resources/imported",
             "force": True,
         },
     )
@@ -232,6 +214,7 @@ async def test_import_ovpack_rejects_removed_force_field(client: httpx.AsyncClie
     body = resp.json()
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     validation_errors = body["error"]["details"]["validation_errors"]
+    assert any("vectorize" in error["loc"] for error in validation_errors)
     assert any("force" in error["loc"] for error in validation_errors)
 
 
@@ -240,7 +223,7 @@ async def test_import_ovpack_rejects_forged_temp_file_id(
     upload_temp_dir,
 ):
     outside_file = upload_temp_dir.parent / "outside.ovpack"
-    outside_file.write_bytes(_build_ovpack_bytes())
+    outside_file.write_bytes(build_ovpack_bytes())
 
     resp = await client.post(
         "/api/v1/pack/import",
@@ -260,7 +243,9 @@ async def test_add_resource_rejects_legacy_temp_path_field(client: httpx.AsyncCl
         "/api/v1/resources",
         json={"temp_path": "upload_resource.md", "reason": "legacy field"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_add_resource_rejects_loopback_remote_url(client: httpx.AsyncClient):

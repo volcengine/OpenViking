@@ -1091,8 +1091,8 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 - 导入后总是在目标环境重建向量。API 已不再接受 `vectorize` 或 `force`。
 - `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
 - `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。
+- 默认拒绝没有 manifest 的包，因为这类包无法提供内容完整性校验。
 - 带 manifest entries 的包如果缺少内容文件、混入额外文件、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
-- 没有 manifest 的旧包仍可导入，但没有 manifest checksum 校验。
 
 #### 3. 使用示例
 

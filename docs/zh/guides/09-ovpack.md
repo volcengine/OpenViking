@@ -1,95 +1,105 @@
 # OVPack 导入导出
 
-OVPack 是 OpenViking 的打包格式，用于导出/导入任意上下文子树（例如资源、记忆），以便备份、迁移和分享。
+OVPack 是 OpenViking 的上下文打包格式，用来把一个 `viking://` 子树导出成
+`.ovpack` 文件，再导入到另一个 OpenViking 环境。它适合备份、迁移、分享资源或记忆
+目录；它不是长期归档格式，也不是带签名的安全发布格式。
+
+## 适用边界
+
+OVPack 可以处理这些公开作用域：
+
+- `viking://resources/...`
+- `viking://user/...`
+- `viking://agent/...`
+
+OVPack 不支持导入导出根 URI、`session`、`temp`、`queue` 等作用域，也不会把内部派生
+文件当作普通内容迁移，例如 `.abstract.md`、`.overview.md`、`.relations.json`。
+
+导入后 OpenViking 会在目标环境重新生成语义和向量。导入接口不再提供 `vectorize` 或
+`force` 参数；冲突处理统一使用 `on_conflict`。
 
 ## 快速开始
 
-### 导出资源
+### CLI
 
-将 OpenViking 中的资源导出为 `.ovpack` 文件。
-
-**CLI**
 ```bash
-openviking export viking://resources/my-project/ ./exports/my-project.ovpack
+# 导出资源目录
+ov export viking://resources/my-project/ ./exports/my-project.ovpack
+
+# 导入到目标父目录
+ov import ./exports/my-project.ovpack viking://resources/imported/
+
+# 目标 root 已存在时覆盖
+ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
 ```
 
-**Python SDK**
+导入的第二个参数是“父目录”，不是最终 root。假设包内 root 名是 `my-project`：
+
+```text
+ov import ./exports/my-project.ovpack viking://resources/imported/
+```
+
+导入结果是：
+
+```text
+viking://resources/imported/my-project
+```
+
+### Python SDK
+
 ```python
 from openviking import AsyncOpenViking
 
-async def export_example():
+
+async def export_and_import():
     client = AsyncOpenViking()
     await client.initialize()
     try:
-        exported_path = await client.export_ovpack(
+        await client.export_ovpack(
             uri="viking://resources/my-project/",
-            to="./exports/my-project.ovpack"
+            to="./exports/my-project.ovpack",
         )
-        print(f"导出成功: {exported_path}")
-    finally:
-        await client.close()
-```
 
-**HTTP API**
-```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://resources/my-project/",
-    "to": "./exports/my-project.ovpack"
-  }'
-```
-
-### 导入资源
-
-将 `.ovpack` 文件导入到 OpenViking 中。
-
-**CLI**
-```bash
-# 基本导入
-openviking import ./exports/my-project.ovpack viking://resources/imported/
-
-# 显式冲突策略
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-```
-
-**Python SDK**
-```python
-from openviking import AsyncOpenViking
-
-async def import_example():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite"
+            on_conflict="overwrite",
         )
-        print(f"导入成功: {imported_uri}")
+        print(imported_uri)
+
+        # 导入会触发目标环境重新向量化；需要检索前可等待后台任务完成。
         await client.wait_processed()
     finally:
         await client.close()
 ```
 
-**HTTP API**
+### HTTP API
+
+HTTP 导出接口直接返回文件流；HTTP 导入必须先上传本地 `.ovpack` 文件，再用
+`temp_file_id` 导入。
+
+```bash
+# 导出
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri": "viking://resources/my-project/"}' \
+  --output my-project.ovpack
+```
+
 ```bash
 # 第一步：上传本地 ovpack 文件
-# 默认使用本地临时存储。
-# 只有在明确需要分布式共享临时上传时，才额外传：-F "upload_mode=shared"
-# Python HTTP client / CLI 也可以改为在 ovcli.conf 中设置：upload.mode = "shared"
 TEMP_FILE_ID=$(
   curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/my-project.ovpack' \
-  | jq -r '.result.temp_file_id'
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./exports/my-project.ovpack" \
+  | jq -r ".result.temp_file_id"
 )
 
-# 第二步：使用 temp_file_id 导入
+# 第二步：导入
 curl -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
+  -H "X-API-Key: your-admin-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
@@ -97,25 +107,56 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   }"
 ```
 
-## 格式说明
+HTTP 接口不接受本机路径字段，例如 `file_path`、`temp_path`。本地文件读取和上传由 CLI 或
+SDK 客户端完成，服务端只消费 `temp_file_id`。
 
-OVPack v2 仍然是标准 ZIP 文件。每个包会在
-`<root>/_._ovpack_manifest.json` 中保存 OpenViking manifest；这是隐藏文件名
-`.ovpack_manifest.json` 在 ZIP 内的转义形式。
+## 冲突策略
 
-manifest 会记录 `kind`、`format_version`、导出的 root、内容条目以及可迁移的向量
-标量元数据。`entries` 里的 `path` 是相对导出 root 的路径；空字符串 `""` 表示
-root 目录本身，例如 `my-project/`。
+`on_conflict` 只在导入 root 已存在时生效。
 
-例如，从 `viking://resources/demo/` 导出的包可以包含下面这样的 manifest：
+| 值 | 行为 |
+| --- | --- |
+| `fail` | 默认值。目标 root 已存在时返回 `409 CONFLICT`。 |
+| `overwrite` | 删除已有 root，再写入包内容。 |
+| `skip` | 保留已有 root，直接返回该 URI，不写入包内容。 |
+
+示例错误：
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "CONFLICT",
+    "message": "Resource already exists at viking://resources/imported/my-project. Use on_conflict='overwrite' to replace it.",
+    "details": {
+      "resource": "viking://resources/imported/my-project"
+    }
+  }
+}
+```
+
+## 包结构
+
+OVPack v2 是标准 ZIP 文件。ZIP 内部以一个 root 目录包住所有内容，并包含一个 manifest：
+
+```text
+my-project/
+my-project/notes.txt
+my-project/_._ovpack_manifest.json
+```
+
+`_._ovpack_manifest.json` 是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。OpenViking 会把
+普通内容里的点文件名也按同一规则转义，避免与内部派生文件混淆。
+
+一个最小 manifest 示例：
 
 ```json
 {
   "kind": "openviking.ovpack",
   "format_version": 2,
   "root": {
-    "name": "demo",
-    "uri": "viking://resources/demo",
+    "name": "my-project",
+    "uri": "viking://resources/my-project",
     "scope": "resources"
   },
   "entries": [
@@ -131,158 +172,164 @@ root 目录本身，例如 `my-project/`。
     }
   ],
   "content_sha256": "b2a6e9582119c7510d68e3446de3e71a486934bf450d68f65596259ed1cf7997",
-  "vectors": {}
+  "vectors": {
+    "": [
+      {
+        "level": 0,
+        "text": "Project summary",
+        "scalars": {
+          "context_type": "resource",
+          "level": 0,
+          "abstract": "Project summary"
+        }
+      }
+    ]
+  }
 }
 ```
 
-对于带 manifest entries 的包，导入会在写入资源前校验 ZIP 内文件集合、每个文件的
-`size`、每个文件的 `sha256`，以及整体 `content_sha256`。缺少文件、混入额外文件、
-或文件内容被修改，以及 v2 `content_sha256` 缺失/不匹配都会被拒绝。这个校验用于
-确认包内容完整性；如果 manifest 和内容都可以被同时重写，它并不等价于签名或身份认证。
+字段说明：
 
-原始 embedding 向量不会被导出。`created_at`、`updated_at`、`active_count`
-等运行态字段也不会被导出；导入后会在目标环境重新向量化并生成运行态状态。
-旧版本没有 manifest 的 OVPack 仍可导入，但没有 manifest checksum 校验。带
-manifest 的包会校验 `kind` 和 `format_version`，高于当前支持版本的包会被拒绝。
-`.abstract.md`、`.overview.md`、`.relations.json` 等派生语义文件不会作为普通内容
-导入。
+- `kind` 固定为 `openviking.ovpack`。
+- `format_version` 当前为 `2`。高于当前支持版本的包会被拒绝。
+- `root.name` 是导入时创建的 root 名称。
+- `entries[].path` 是相对 root 的路径。`""` 表示 root 目录本身。
+- 文件条目包含 `size` 和 `sha256`。
+- `content_sha256` 覆盖按路径排序后的文件列表，元素只包含 `path`、`size`、`sha256`。
+- `vectors` 只保存可迁移的标量和目录摘要文本，不保存原始 embedding 向量。
 
-## 记忆导入导出
+当前会导出的向量标量字段是：
 
-OpenViking 的记忆会写入固定的目录结构中：
-
-- 用户记忆：`viking://user/{user_space}/memories/`
-- Agent 记忆：`viking://agent/{agent_id}/memories/` 或 `viking://agent/{agent_id}/user/{user_id}/memories/`
-
-使用 OVPack 迁移记忆时，必须把 `.ovpack` 导入到对应 space 的父目录（而不是随便一个目录），否则会变成例如 `.../memories/memories/...` 的路径，OpenViking 将无法按“记忆”语义访问和使用这些文件。
-
-### 导出/导入用户记忆（CLI）
-
-```bash
-# 导出：整个用户 memories 子树
-openviking export viking://user/default/memories/ ./exports/user-memories.ovpack
-
-# 导入：注意 parent 需要是 user space 根目录（导入后会生成 viking://user/default/memories/）
-openviking import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
+```text
+type, context_type, level, name, description, tags, abstract
 ```
 
-### 导出/导入 Agent 记忆（CLI）
+这些运行态字段不会导出，会在目标环境重新生成：
+
+```text
+created_at, updated_at, active_count
+```
+
+## 导入校验
+
+导入会先校验包，再写入目标目录。核心规则如下：
+
+1. ZIP 路径必须在同一个 root 下，不能包含绝对路径、反斜杠、盘符或 `..`。
+2. 必须存在 `<root>/_._ovpack_manifest.json`。
+3. manifest 必须是合法 JSON，`kind` 和 `format_version` 必须可识别。
+4. `entries` 中声明的文件集合必须和 ZIP 内容文件一致。
+5. 每个文件的 `size` 和 `sha256` 必须匹配实际内容。
+6. v2 包必须带 `content_sha256`，并且整体 checksum 必须匹配。
+7. 派生语义文件不会作为普通内容导入。
+
+如果旧包没有 manifest，会被拒绝：
+
+```text
+INVALID_ARGUMENT: Missing ovpack manifest
+```
+
+如果内容被改动，例如 manifest 里声明 `notes.txt` 的 sha256 是 `hello`，但 ZIP 里实际内容
+变成 `jello`，会被拒绝：
+
+```text
+INVALID_ARGUMENT: ovpack file sha256 does not match manifest
+```
+
+这个校验保证的是“包内容没有偏离 manifest”。如果攻击者能同时改 manifest 和文件内容，
+它不能替代签名、可信发布链或访问控制。
+
+## 旧包和未来版本
+
+默认导入只接受带 manifest 的 OVPack。旧版无 manifest 包没有文件集合和 checksum 信息，
+无法判断是否混入或删改内容，因此默认拒绝。需要迁移旧包时，应先在可信环境中用旧版本导入，
+再用当前版本重新导出。
+
+开发期间生成过的 v2 预览包如果缺少 `content_sha256`，也会被拒绝。处理方式同样是重新导出。
+
+未来版本包如果 `format_version` 高于当前实现支持版本，会返回不支持的版本错误。此时应升级
+OpenViking，或由支持该版本的环境重新导出成当前支持的格式。
+
+## 记忆迁移
+
+记忆目录有固定结构。导入时要把包导入到“对应目录的父目录”，避免产生重复路径。
+
+### 用户记忆
+
+```bash
+# 导出整个用户 memories 子树
+ov export viking://user/default/memories/ ./exports/user-memories.ovpack
+
+# 导入到 user space 根目录，结果是 viking://user/default/memories/
+ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
+```
+
+不要导入到 `viking://user/default/memories/`，否则会得到：
+
+```text
+viking://user/default/memories/memories
+```
+
+### Agent 记忆
 
 ```bash
 # isolate_agent_scope_by_user = false
-openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
+ov export viking://agent/default/memories/ ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
 
 # isolate_agent_scope_by_user = true
-openviking export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --on-conflict overwrite
+ov export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --on-conflict overwrite
 ```
 
-### 导出/导入记忆（Python SDK）
+## 常见场景
 
-```python
-from openviking import AsyncOpenViking
+### 备份资源
 
-async def export_import_user_memories():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
-        await client.export_ovpack(
-            uri="viking://user/default/memories/",
-            to="./exports/user-memories.ovpack",
-        )
-
-        await client.import_ovpack(
-            file_path="./exports/user-memories.ovpack",
-            parent="viking://user/default/",
-            on_conflict="overwrite",
-        )
-    finally:
-        await client.close()
-
-async def export_import_agent_memories():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
-        await client.export_ovpack(
-            uri="viking://agent/default/memories/",
-            to="./exports/agent-memories.ovpack",
-        )
-        await client.import_ovpack(
-            file_path="./exports/agent-memories.ovpack",
-            parent="viking://agent/default/",
-            on_conflict="overwrite",
-        )
-    finally:
-        await client.close()
-```
-
-### 导出/导入记忆（HTTP API）
-
-```bash
-# 导出用户记忆
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://user/default/memories/",
-    "to": "./exports/user-memories.ovpack"
-  }'
-
-# 导入用户记忆（先上传，再用 temp_file_id 导入）
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/user-memories.ovpack' \
-  | jq -r '.result.temp_file_id'
-)
-curl -X POST http://localhost:1933/api/v1/pack/import \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://user/default/\",
-    \"on_conflict\": \"overwrite\"
-  }"
-```
-
-### 导入后是否向量化
-
-导入后会在目标环境重新向量化，便于 `find/search` 检索。OVPack 不再提供关闭向量化的导入参数。
-
-## 使用场景
-
-### 资源备份
 ```bash
 DATE=$(date +%Y%m%d)
-openviking export viking://resources/ ./backups/backup_${DATE}.ovpack
+ov export viking://resources/ ./backups/resources_${DATE}.ovpack
 ```
 
-### 资源迁移
+### 跨环境迁移
+
 ```bash
-# 机器 A 导出
-openviking export viking://resources/my-project/ ./migration.ovpack
+# 机器 A
+ov export viking://resources/my-project/ ./migration.ovpack
 
-# 机器 B 导入
-openviking import ./migration.ovpack viking://resources/ --on-conflict overwrite
+# 机器 B
+ov import ./migration.ovpack viking://resources/ --on-conflict overwrite
 ```
 
-### 资源分享
+### 分享一组资源
+
 ```bash
-# 导出
-openviking export viking://resources/shared-docs/ ./shared-docs.ovpack
-
-# 接收者导入
-openviking import ./shared-docs.ovpack viking://resources/team-shared/
+ov export viking://resources/shared-docs/ ./shared-docs.ovpack
+ov import ./shared-docs.ovpack viking://resources/team-shared/
 ```
+
+## 常见错误
+
+| 错误 | 常见原因 | 处理方式 |
+| --- | --- | --- |
+| `Missing ovpack manifest` | 旧版无 manifest 包 | 在可信环境重新导出。 |
+| `Missing ovpack manifest content_sha256` | 开发期 v2 预览包缺少整体 checksum | 重新导出。 |
+| `sha256 does not match manifest` | 文件内容和 manifest 不一致 | 丢弃该包，或从可信源重新导出。 |
+| `file entries do not match manifest` | ZIP 中缺文件或混入额外文件 | 丢弃该包，或重新导出。 |
+| `Unsupported ovpack format_version` | 包由未来版本生成 | 升级 OpenViking 或重新导出为当前支持版本。 |
+| `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |
 
 ## 常见问题
 
-**Q: OVPack 文件可以手动解压查看吗？**
-A: 可以！OVPack 是标准的 ZIP 格式，可以用任何解压工具打开。
+**OVPack 可以手动解压查看吗？**
 
-**Q: 大体积 OVPack 导入很慢怎么办？**
-A: 当前导入会固定重建向量；如果导入耗时过长，建议拆分为更小的 OVPack 分批导入。
+可以。OVPack 是 ZIP 文件，可以用普通解压工具查看。不要手动改包后再导入；修改内容会破坏
+manifest 校验。
 
-**Q: 导入时如何处理重名资源？**
-A: 使用 `--on-conflict overwrite` 覆盖已有资源，或用 `--on-conflict skip` 保留已有资源。
+**大包导入很慢怎么办？**
+
+导入会重建目标环境的语义和向量。大包迁移建议按目录拆成多个 OVPack 分批导入。
+
+**为什么不兼容旧版无 manifest 包？**
+
+旧包没有可验证的文件列表，也没有 checksum。默认兼容会让被删改或混入文件的包直接写入目标
+环境，风险高于收益。

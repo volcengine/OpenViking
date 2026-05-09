@@ -134,9 +134,9 @@ content can be rewritten.
 
 Raw embedding vectors are not exported. Runtime fields such as `created_at`,
 `updated_at`, and `active_count` are also not exported; imports rebuild vectors
-and runtime state in the target environment. Legacy OVPack files without a
-manifest can still be imported, but they do not have manifest checksum
-validation. Packages with a manifest validate `kind` and `format_version`, and
+and runtime state in the target environment. Packages without a manifest are
+rejected by default because OpenViking cannot verify their file set or content
+checksums. Packages with a manifest validate `kind` and `format_version`, and
 packages newer than this implementation are rejected. Derived semantic files such
 as `.abstract.md`, `.overview.md`, and `.relations.json` are not imported as
 normal content.

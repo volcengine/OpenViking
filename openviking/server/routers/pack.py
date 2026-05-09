@@ -14,6 +14,7 @@ from starlette.background import BackgroundTask
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.temp_upload_store import TempUploadStore
@@ -82,10 +83,13 @@ async def export_ovpack(
             filename=filename,
             background=BackgroundTask(cleanup),
         )
-    except Exception:
+    except Exception as exc:
         # Clean up temp file on error
         if os.path.exists(temp_file):
             os.unlink(temp_file)
+        mapped = map_exception(exc, resource=uri, resource_type="resource")
+        if mapped is not None:
+            raise mapped from exc
         raise
 
 

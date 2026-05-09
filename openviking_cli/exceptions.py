@@ -55,10 +55,13 @@ class NotFoundError(OpenVikingError):
     """Resource not found."""
 
     def __init__(self, resource: str, resource_type: str = "resource"):
-        message = f"{resource_type.capitalize()} not found: {resource}"
-        super().__init__(
-            message, code="NOT_FOUND", details={"resource": resource, "type": resource_type}
-        )
+        details = {"type": resource_type}
+        if resource:
+            details["resource"] = resource
+            message = f"{resource_type.capitalize()} not found: {resource}"
+        else:
+            message = f"{resource_type.capitalize()} not found"
+        super().__init__(message, code="NOT_FOUND", details=details)
 
 
 class AlreadyExistsError(OpenVikingError):

@@ -1091,8 +1091,8 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - Imports always rebuild vectors in the target environment. The API no longer accepts `vectorize` or `force`.
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
 - `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents.
+- Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
 - Packages with manifest entries are rejected if content files are missing, extra files are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
-- Legacy packages without a manifest can still be imported, but they do not have manifest checksum validation.
 
 #### 3. Usage Examples
 

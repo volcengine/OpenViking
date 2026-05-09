@@ -327,36 +327,77 @@ async def _build_manifest(
     }
 
 
+def _invalid_manifest(message: str, manifest_path: str, **details: Any) -> InvalidArgumentError:
+    return InvalidArgumentError(
+        message,
+        details={"manifest_path": manifest_path, **details},
+    )
+
+
 def _read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
     manifest_path = f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}"
     try:
         raw = zf.read(manifest_path)
     except KeyError:
-        return {}
+        raise _invalid_manifest(
+            "Missing ovpack manifest",
+            manifest_path,
+            hint="Re-export this package with OVPack v2 checksum support before importing.",
+        )
 
     try:
         manifest = json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {manifest_path}") from exc
+        raise _invalid_manifest(
+            "Invalid JSON in ovpack manifest",
+            manifest_path,
+            reason=str(exc),
+        ) from exc
     if not isinstance(manifest, dict):
-        raise ValueError(f"Invalid ovpack manifest in {manifest_path}")
+        raise _invalid_manifest(
+            "Invalid ovpack manifest",
+            manifest_path,
+            actual_type=type(manifest).__name__,
+        )
 
     version = manifest.get("format_version")
     if version is None:
-        raise ValueError(f"Missing ovpack format_version in {manifest_path}")
+        raise _invalid_manifest(
+            "Missing ovpack format_version",
+            manifest_path,
+            field="format_version",
+        )
     try:
         version_int = int(version)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid ovpack format_version {version!r}") from exc
+        raise _invalid_manifest(
+            f"Invalid ovpack format_version {version!r}",
+            manifest_path,
+            field="format_version",
+            value=version,
+        ) from exc
     if version_int < 1:
-        raise ValueError(f"Invalid ovpack format_version {version!r}")
+        raise _invalid_manifest(
+            f"Invalid ovpack format_version {version!r}",
+            manifest_path,
+            field="format_version",
+            value=version,
+        )
     if version_int > OVPACK_FORMAT_VERSION:
-        raise ValueError(
+        raise _invalid_manifest(
             f"Unsupported ovpack format_version {version}; "
-            f"this OpenViking supports up to {OVPACK_FORMAT_VERSION}"
+            f"this OpenViking supports up to {OVPACK_FORMAT_VERSION}",
+            manifest_path,
+            format_version=version_int,
+            supported_format_version=OVPACK_FORMAT_VERSION,
         )
     if manifest.get("kind") != OVPACK_KIND:
-        raise ValueError(f"Invalid ovpack manifest kind: {manifest.get('kind')}")
+        raise _invalid_manifest(
+            "Invalid ovpack manifest kind",
+            manifest_path,
+            expected=OVPACK_KIND,
+            actual=manifest.get("kind"),
+        )
     return manifest
 
 
@@ -499,8 +540,11 @@ def _validate_manifest_content(
     infolist: list[zipfile.ZipInfo],
     base_name: str,
 ) -> None:
-    if not manifest or "entries" not in manifest:
-        return
+    if "entries" not in manifest:
+        raise InvalidArgumentError(
+            "Missing ovpack manifest entries",
+            details={"field": "entries"},
+        )
 
     manifest_entries = _manifest_entries_by_path(manifest)
     manifest_files = {
