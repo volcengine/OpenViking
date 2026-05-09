@@ -15,9 +15,14 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import resolve_uploaded_temp_file_id
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute, URIRef
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
-router = APIRouter(prefix="/api/v1/pack", tags=["pack"])
+router = APIRouter(
+    prefix="/api/v1/pack",
+    tags=["pack"],
+    route_class=ExcludeNoneRoute,
+)
 
 
 class ExportRequest(BaseModel):
@@ -85,11 +90,11 @@ async def export_ovpack(
         raise
 
 
-@router.post("/import")
+@router.post("/import", response_model=Response[URIRef])
 async def import_ovpack(
     request: ImportRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[URIRef]:
     """Import .ovpack file."""
     service = get_service()
 
@@ -103,4 +108,4 @@ async def import_ovpack(
         force=request.force,
         vectorize=request.vectorize,
     )
-    return Response(status="ok", result={"uri": result})
+    return Response(status="ok", result=URIRef(uri=result))

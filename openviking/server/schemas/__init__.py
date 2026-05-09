@@ -11,10 +11,12 @@ from openviking.server.schemas.common import (
     ExcludeNoneRoute,
     PaginatedResult,
     Pagination,
+    URIRef,
 )
 
 __all__ = [
     "ExcludeNoneRoute",
     "PaginatedResult",
     "Pagination",
+    "URIRef",
 ]

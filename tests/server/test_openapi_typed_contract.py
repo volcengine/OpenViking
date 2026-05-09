@@ -22,17 +22,25 @@ from fastapi import FastAPI
 
 from openviking.server.routers.bot import router as bot_router
 from openviking.server.routers.content import router as content_router
+from openviking.server.routers.filesystem import router as filesystem_router
+from openviking.server.routers.pack import router as pack_router
+from openviking.server.routers.relations import router as relations_router
+from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
 
 
 def _openapi_spec() -> Dict[str, Any]:
-    """Build a minimal FastAPI app with the PR#1 routers and return its spec."""
+    """Build a minimal FastAPI app with the typed routers and return its spec."""
     app = FastAPI()
     app.include_router(sessions_router)
     app.include_router(content_router)
     app.include_router(search_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.include_router(resources_router)
+    app.include_router(filesystem_router)
+    app.include_router(relations_router)
+    app.include_router(pack_router)
     return app.openapi()
 
 
@@ -42,6 +50,7 @@ def _response_schema_200(spec: Dict[str, Any], method: str, path: str) -> Dict[s
 
 
 ENVELOPE_ENDPOINTS = [
+    # PR #1 — sessions
     ("post", "/api/v1/sessions"),
     ("get", "/api/v1/sessions"),
     ("get", "/api/v1/sessions/{session_id}"),
@@ -52,15 +61,34 @@ ENVELOPE_ENDPOINTS = [
     ("post", "/api/v1/sessions/{session_id}/extract"),
     ("post", "/api/v1/sessions/{session_id}/messages"),
     ("post", "/api/v1/sessions/{session_id}/used"),
+    # PR #1 — content
     ("get", "/api/v1/content/read"),
     ("get", "/api/v1/content/abstract"),
     ("get", "/api/v1/content/overview"),
     ("post", "/api/v1/content/write"),
     ("post", "/api/v1/content/reindex"),
+    # PR #1 — search
     ("post", "/api/v1/search/find"),
     ("post", "/api/v1/search/search"),
     ("post", "/api/v1/search/grep"),
     ("post", "/api/v1/search/glob"),
+    # PR #2 — resources
+    ("post", "/api/v1/resources/temp_upload"),
+    ("post", "/api/v1/resources"),
+    ("post", "/api/v1/skills"),
+    # PR #2 — filesystem
+    ("get", "/api/v1/fs/ls"),
+    ("get", "/api/v1/fs/tree"),
+    ("get", "/api/v1/fs/stat"),
+    ("post", "/api/v1/fs/mkdir"),
+    ("delete", "/api/v1/fs"),
+    ("post", "/api/v1/fs/mv"),
+    # PR #2 — relations
+    ("get", "/api/v1/relations"),
+    ("post", "/api/v1/relations/link"),
+    ("delete", "/api/v1/relations/link"),
+    # PR #2 — pack
+    ("post", "/api/v1/pack/import"),
 ]
 
 BOT_MIRROR_ENDPOINTS = [
@@ -121,6 +149,7 @@ def test_whitelisted_non_json_endpoints_remain_unmodeled() -> None:
     non_json_paths = [
         ("/api/v1/content/download", "get"),
         ("/bot/v1/chat/stream", "post"),
+        ("/api/v1/pack/export", "post"),
     ]
     for path, method in non_json_paths:
         resp_200 = spec["paths"][path][method]["responses"]["200"]
@@ -131,12 +160,12 @@ def test_whitelisted_non_json_endpoints_remain_unmodeled() -> None:
         )
 
 
-def test_openapi_component_schemas_include_pr1_models() -> None:
+def test_openapi_component_schemas_include_typed_models() -> None:
     """Typed models must be emitted as reusable components so codegen can name them."""
     spec = _openapi_spec()
     components = spec.get("components", {}).get("schemas", {})
     required = {
-        # sessions
+        # PR #1 — sessions
         "SessionCreatedResult",
         "SessionListItem",
         "SessionDetail",
@@ -147,17 +176,29 @@ def test_openapi_component_schemas_include_pr1_models() -> None:
         "ContextItem",
         "MessageAddedResult",
         "UsageRecordedResult",
-        # content
+        # PR #1 — content
         "ContentWriteResult",
         "ReindexResult",
-        # search
+        # PR #1 — search
         "SearchResult",
         "SearchHit",
         "GrepResult",
         "GlobResult",
-        # bot (mirror)
+        # PR #1 — bot mirror
         "BotHealthResponse",
         "BotChatResponse",
+        # PR #2 — resources
+        "TempUploadResult",
+        "AddResourceResult",
+        "AddSkillResult",
+        # PR #2 — filesystem
+        "FileStat",
+        "FromTo",
+        # PR #2 — relations
+        "RelationEntry",
+        "LinkResult",
+        # PR #2 — common
+        "URIRef",
     }
     missing = required - set(components.keys())
     assert not missing, f"OpenAPI components missing typed models: {sorted(missing)}"

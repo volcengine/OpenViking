@@ -32,6 +32,18 @@ class PaginatedResult(BaseModel, Generic[T]):
     )
 
 
+class URIRef(BaseModel):
+    """Trivial ``{"uri": str}`` payload.
+
+    Used by endpoints whose success response is a bare reference to the
+    resource that was just created / deleted / imported (mkdir, rm,
+    pack import, etc.). Kept in ``common`` because multiple routers share
+    the exact same shape.
+    """
+
+    uri: str
+
+
 class ExcludeNoneRoute(APIRoute):
     """APIRoute variant that forces ``response_model_exclude_none=True``.
 

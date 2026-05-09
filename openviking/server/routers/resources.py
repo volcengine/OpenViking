@@ -18,12 +18,22 @@ from openviking.server.local_input_guard import (
     resolve_uploaded_temp_file_id,
 )
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.resources import (
+    AddResourceResult,
+    AddSkillResult,
+    TempUploadResult,
+)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
-router = APIRouter(prefix="/api/v1", tags=["resources"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["resources"],
+    route_class=ExcludeNoneRoute,
+)
 
 
 class AddResourceRequest(BaseModel):
@@ -132,12 +142,12 @@ def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
                 file_path.unlink(missing_ok=True)
 
 
-@router.post("/resources/temp_upload")
+@router.post("/resources/temp_upload", response_model=Response[TempUploadResult])
 async def temp_upload(
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[TempUploadResult]:
     """Upload a temporary file for add_resource or import_ovpack."""
 
     async def _upload() -> dict[str, str]:
@@ -164,16 +174,16 @@ async def temp_upload(
     )
     return Response(
         status="ok",
-        result=execution.result,
+        result=TempUploadResult.model_validate(execution.result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )
 
 
-@router.post("/resources")
+@router.post("/resources", response_model=Response[AddResourceResult])
 async def add_resource(
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[AddResourceResult]:
     """Add resource to OpenViking."""
     service = get_service()
     if request.to and request.parent:
@@ -223,16 +233,16 @@ async def add_resource(
     )
     return Response(
         status="ok",
-        result=execution.result,
+        result=AddResourceResult.model_validate(execution.result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )
 
 
-@router.post("/skills")
+@router.post("/skills", response_model=Response[AddSkillResult])
 async def add_skill(
     request: AddSkillRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[AddSkillResult]:
     """Add skill to OpenViking."""
     service = get_service()
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
@@ -255,6 +265,6 @@ async def add_skill(
     )
     return Response(
         status="ok",
-        result=execution.result,
+        result=AddSkillResult.model_validate(execution.result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )

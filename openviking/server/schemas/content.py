@@ -6,24 +6,6 @@ from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
-
-class FileStat(BaseModel):
-    """Shape of ``service.fs.stat()`` output.
-
-    ``extra='allow'`` preserves file-metadata fields that differ across
-    resource types (e.g. resource-specific tags).
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str
-    size: Optional[int] = None
-    mode: Optional[str] = None
-    modTime: Optional[str] = None
-    isDir: Optional[bool] = None
-    meta: Optional[Dict[str, Any]] = None
-
-
 # GET /read returns the deserialized content which can be either:
 # - a plain text string (the file contents)
 # - a dict (parsed memory JSON from ``deserialize_content``)
