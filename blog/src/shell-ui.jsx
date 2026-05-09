@@ -16,7 +16,7 @@ function Topbar({ lang, theme, onLang, onToggleTheme, onHome, S }) {
     <header className="b-topbar">
       <div className="b-topbar__inner">
         <div className="b-brand" onClick={onHome} role="button" tabIndex={0}>
-          <img className="b-brand__mark" src="assets/logo-v3.png" alt="OpenViking" />
+          <img className="b-brand__mark" src="assets/logo.png" alt="OpenViking" />
           <span className="b-brand__name">{S.siteName}</span>
           <span className="b-brand__sub">// {S.siteSub}</span>
         </div>
