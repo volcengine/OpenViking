@@ -192,7 +192,7 @@ function TaskStatusDot({ status }: { status: string }) {
     <div className="flex items-center gap-2">
       <span
         className="inline-block size-2 rounded-full"
-        style={{ backgroundColor: STATUS_COLORS[status] ?? '#b0aaa2' }}
+        style={{ backgroundColor: STATUS_COLORS[status] ?? 'oklch(0.56 0.021 213.5)' }}
       />
       <span className="text-sm capitalize">{status}</span>
     </div>
@@ -317,7 +317,7 @@ function StatCard({
         <span className="text-sm tracking-wide text-muted-foreground">{title}</span>
         <span
           className="flex size-8 items-center justify-center rounded-full"
-          style={{ backgroundColor: `${accentColor}20` }}
+          style={{ backgroundColor: `color-mix(in oklch, ${accentColor} 12%, transparent)` }}
         >
           <Icon className="size-4" style={{ color: accentColor }} />
         </span>
@@ -720,7 +720,7 @@ function MemoryStatsCard({
                 stroke={isDark ? 'oklch(0.26 0.005 243)' : 'oklch(1 0 0)'}
               >
                 {chartData.map((entry) => (
-                  <Cell key={entry.name} fill={colors[entry.name] ?? '#94a3b8'} />
+                  <Cell key={entry.name} fill={colors[entry.name] ?? 'oklch(0.56 0.021 213.5)'} />
                 ))}
                 <Label
                   value={String(total)}
