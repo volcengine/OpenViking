@@ -44,9 +44,6 @@ openviking import ./exports/my-project.ovpack viking://resources/imported/ --for
 
 # Explicit conflict policy
 openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-
-# Skip vectorization (faster)
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
 ```
 
 **Python SDK**
@@ -60,8 +57,7 @@ async def import_example():
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite",
-            vectorize=True
+            on_conflict="overwrite"
         )
         print(f"Import successful: {imported_uri}")
         await client.wait_processed()
@@ -89,8 +85,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
-    \"vectorize\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -99,9 +94,11 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 OVPack v2 files are standard ZIP archives with an OpenViking manifest at
 `<root>/_._ovpack_manifest.json`. The manifest records `format_version`,
 content entries, and portable vector scalar metadata. Raw embedding vectors are
-not exported; imports rebuild vectors in the target environment. Derived
-semantic files such as `.abstract.md`, `.overview.md`, and `.relations.json` are
-not imported as normal content.
+not exported; imports rebuild vectors in the target environment. Legacy OVPack
+files without a manifest can still be imported; packages with a manifest validate
+`kind` and `format_version`, and packages newer than this implementation are
+rejected. Derived semantic files such as `.abstract.md`, `.overview.md`, and
+`.relations.json` are not imported as normal content.
 
 ## Memory Import and Export
 
@@ -152,7 +149,6 @@ async def export_import_user_memories():
             file_path="./exports/user-memories.ovpack",
             parent="viking://user/default/",
             on_conflict="overwrite",
-            vectorize=True,
         )
     finally:
         await client.close()
@@ -169,7 +165,6 @@ async def export_import_agent_memories():
             file_path="./exports/agent-memories.ovpack",
             parent="viking://agent/default/",
             on_conflict="overwrite",
-            vectorize=True,
         )
     finally:
         await client.close()
@@ -200,19 +195,14 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://user/default/\",
-    \"force\": true,
-    \"vectorize\": true
+    \"force\": true
   }"
 ```
 
 ### Vectorization on Import
 
-- Vectorization is enabled by default (useful for `find/search`).
-- For faster restore, you can disable it and process later with `--no-vectorize`:
-
-```bash
-openviking import ./exports/user-memories.ovpack viking://user/default/ --force --no-vectorize
-```
+Imports always rebuild vectors in the target environment for `find/search`.
+OVPack no longer exposes an import option to disable vectorization.
 
 ## Use Cases
 
@@ -246,7 +236,7 @@ openviking import ./shared-docs.ovpack viking://resources/team-shared/
 A: Yes! OVPack is a standard ZIP format and can be opened with any compression tool.
 
 **Q: What if large OVPack imports are slow?**
-A: Use `--no-vectorize` for fast import, then vectorize later.
+A: Imports now always rebuild vectors. If import time is too high, split the content into smaller OVPack files and import them in batches.
 
 **Q: How to handle duplicate resources during import?**
 A: Use `--on-conflict overwrite` to replace existing resources, or `--on-conflict skip` to keep them. `--force` remains as a shorthand for overwrite.

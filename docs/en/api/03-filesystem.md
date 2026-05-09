@@ -1134,9 +1134,6 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --force
 
 # Explicit conflict policy
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-
-# Skip vectorization
-ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
 ```
 
 **Response Example**

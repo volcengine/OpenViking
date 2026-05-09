@@ -67,7 +67,6 @@ class PackService:
         parent: str,
         ctx: RequestContext,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import local .ovpack file to specified parent path.
@@ -76,7 +75,6 @@ class PackService:
             file_path: Local .ovpack file path
             parent: Target parent URI (e.g., viking://user/alice/resources/references/)
             force: Legacy alias for on_conflict="overwrite"
-            vectorize: Whether to trigger vectorization
             on_conflict: One of "fail", "overwrite", or "skip"
 
         Returns:
@@ -89,7 +87,6 @@ class PackService:
             file_path,
             parent,
             force=force,
-            vectorize=vectorize,
             on_conflict=on_conflict,
             ctx=ctx,
         )

@@ -413,7 +413,6 @@ class SyncHTTPClient:
         file_path: str,
         target: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
@@ -422,7 +421,6 @@ class SyncHTTPClient:
                 file_path,
                 target,
                 force=force,
-                vectorize=vectorize,
                 on_conflict=on_conflict,
             )
         )

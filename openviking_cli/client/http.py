@@ -927,7 +927,6 @@ class AsyncHTTPClient(BaseClient):
         file_path: str,
         parent: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
@@ -935,7 +934,6 @@ class AsyncHTTPClient(BaseClient):
         request_data = {
             "parent": parent,
             "force": force,
-            "vectorize": vectorize,
         }
         if on_conflict is not None:
             request_data["on_conflict"] = on_conflict

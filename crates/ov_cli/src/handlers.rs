@@ -170,7 +170,6 @@ pub async fn handle_import(
     target_uri: String,
     force: bool,
     on_conflict: Option<String>,
-    no_vectorize: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -180,7 +179,6 @@ pub async fn handle_import(
         &target_uri,
         force,
         on_conflict.as_deref(),
-        no_vectorize,
         ctx.output_format,
         ctx.compact,
     )

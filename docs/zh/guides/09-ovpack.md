@@ -55,9 +55,6 @@ openviking import ./exports/my-project.ovpack viking://resources/imported/ --for
 
 # 显式冲突策略
 openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-
-# 跳过向量化（更快）
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
 ```
 
 **Python SDK**
@@ -71,8 +68,7 @@ async def import_example():
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite",
-            vectorize=True
+            on_conflict="overwrite"
         )
         print(f"导入成功: {imported_uri}")
         await client.wait_processed()
@@ -100,8 +96,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
-    \"vectorize\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -110,7 +105,9 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 OVPack v2 仍然是标准 ZIP 文件，并在 `<root>/_._ovpack_manifest.json` 中保存
 OpenViking manifest。manifest 记录 `format_version`、内容条目和可迁移的向量标量
 元数据。原始 embedding 向量不会被导出；导入后会在目标环境重新向量化。
-`.abstract.md`、`.overview.md`、`.relations.json` 等派生语义文件不会作为普通内容导入。
+旧版本没有 manifest 的 OVPack 仍可导入；带 manifest 的包会校验 `kind` 和
+`format_version`，高于当前支持版本的包会被拒绝。`.abstract.md`、`.overview.md`、
+`.relations.json` 等派生语义文件不会作为普通内容导入。
 
 ## 记忆导入导出
 
@@ -161,7 +158,6 @@ async def export_import_user_memories():
             file_path="./exports/user-memories.ovpack",
             parent="viking://user/default/",
             on_conflict="overwrite",
-            vectorize=True,
         )
     finally:
         await client.close()
@@ -178,7 +174,6 @@ async def export_import_agent_memories():
             file_path="./exports/agent-memories.ovpack",
             parent="viking://agent/default/",
             on_conflict="overwrite",
-            vectorize=True,
         )
     finally:
         await client.close()
@@ -209,19 +204,13 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://user/default/\",
-    \"force\": true,
-    \"vectorize\": true
+    \"force\": true
   }"
 ```
 
 ### 导入后是否向量化
 
-- 默认会向量化（便于 `find/search` 检索）。
-- 如果只做快速恢复、稍后再统一处理，可使用 `--no-vectorize`：
-
-```bash
-openviking import ./exports/user-memories.ovpack viking://user/default/ --force --no-vectorize
-```
+导入后会在目标环境重新向量化，便于 `find/search` 检索。OVPack 不再提供关闭向量化的导入参数。
 
 ## 使用场景
 
@@ -255,7 +244,7 @@ openviking import ./shared-docs.ovpack viking://resources/team-shared/
 A: 可以！OVPack 是标准的 ZIP 格式，可以用任何解压工具打开。
 
 **Q: 大体积 OVPack 导入很慢怎么办？**
-A: 使用 `--no-vectorize` 先快速导入，之后再统一向量化。
+A: 当前导入会固定重建向量；如果导入耗时过长，建议拆分为更小的 OVPack 分批导入。
 
 **Q: 导入时如何处理重名资源？**
 A: 使用 `--on-conflict overwrite` 覆盖已有资源，或用 `--on-conflict skip` 保留已有资源。`--force` 仍然是覆盖的简写。

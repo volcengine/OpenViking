@@ -564,7 +564,6 @@ class AsyncOpenViking:
         file_path: str,
         parent: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """
@@ -574,7 +573,6 @@ class AsyncOpenViking:
             file_path: Local .ovpack file path
             parent: Target parent URI (e.g., viking://user/alice/resources/references/)
             force: Legacy alias for on_conflict="overwrite" (default: False)
-            vectorize: Whether to trigger vectorization (default: True)
             on_conflict: One of "fail", "overwrite", or "skip"
 
         Returns:
@@ -585,7 +583,6 @@ class AsyncOpenViking:
             file_path,
             parent,
             force=force,
-            vectorize=vectorize,
             on_conflict=on_conflict,
         )
 

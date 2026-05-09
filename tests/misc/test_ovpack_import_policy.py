@@ -185,7 +185,6 @@ async def test_import_ovpack_on_conflict_skip_does_not_write(
         str(temp_ovpack_path),
         "viking://resources",
         request_ctx,
-        vectorize=False,
         on_conflict="skip",
     )
 
@@ -194,7 +193,7 @@ async def test_import_ovpack_on_conflict_skip_does_not_write(
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_derived_semantic_files(
+async def test_import_legacy_ovpack_skips_derived_semantic_files(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     _write_ovpack(
@@ -206,13 +205,37 @@ async def test_import_ovpack_rejects_derived_semantic_files(
     )
     fake_fs = FakeVikingFS()
 
-    with pytest.raises(
-        InvalidArgumentError,
-        match=r"cannot import derived semantic file: viking://resources/demo/\.overview\.md",
-    ):
-        await import_ovpack(
-            fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx, vectorize=False
-        )
+    imported_uri = await import_ovpack(
+        fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx
+    )
+
+    assert imported_uri == "viking://resources/demo"
+    assert fake_fs.written_files == ["viking://resources/demo/notes.txt"]
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_unsupported_manifest_version(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/_._ovpack_manifest.json": json.dumps(
+                {
+                    "kind": "openviking.ovpack",
+                    "format_version": 999,
+                    "root": {"name": "demo"},
+                    "entries": [],
+                    "vectors": {},
+                }
+            ),
+            "demo/notes.txt": "hello",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(ValueError, match=r"Unsupported ovpack format_version 999"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
 
     assert fake_fs.written_files == []
 
@@ -234,8 +257,6 @@ async def test_import_ovpack_rejects_session_scope_targets(
         InvalidArgumentError,
         match=r"ovpack import is not supported for scope: session",
     ):
-        await import_ovpack(
-            fake_fs, str(temp_ovpack_path), "viking://session/default", request_ctx, vectorize=False
-        )
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session/default", request_ctx)
 
     assert fake_fs.written_files == []

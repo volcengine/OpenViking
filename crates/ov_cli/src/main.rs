@@ -506,9 +506,6 @@ enum Commands {
         /// Conflict policy: fail, overwrite, or skip
         #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
         on_conflict: Option<String>,
-        /// Disable vectorization after import
-        #[arg(long)]
-        no_vectorize: bool,
     },
     // --- Interactive Tools ---
     /// [Interactive] Interactive TUI file explorer
@@ -1066,10 +1063,8 @@ async fn main() {
             target_uri,
             force,
             on_conflict,
-            no_vectorize,
         } => {
-            handlers::handle_import(file_path, target_uri, force, on_conflict, no_vectorize, ctx)
-                .await
+            handlers::handle_import(file_path, target_uri, force, on_conflict, ctx).await
         }
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
@@ -1381,6 +1376,19 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn cli_import_rejects_removed_vectorize_flag() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "import",
+            "./exports/demo.ovpack",
+            "viking://resources/imported/",
+            "--no-vectorize",
+        ]);
+
+        assert!(result.is_err(), "removed import vectorize flag should not parse");
     }
 
     #[test]

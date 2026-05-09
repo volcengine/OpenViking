@@ -133,7 +133,6 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
         json={
             "temp_file_id": ovpack_file.name,
             "parent": "viking://resources/imported",
-            "vectorize": False,
         },
     )
     assert resp.status_code == 200
@@ -148,7 +147,6 @@ async def test_import_ovpack_rejects_direct_file_path_field(client: httpx.AsyncC
         json={
             "file_path": "/tmp/demo.ovpack",
             "parent": "viking://resources/imported",
-            "vectorize": False,
         },
     )
     assert resp.status_code == 422
@@ -160,10 +158,25 @@ async def test_import_ovpack_rejects_legacy_temp_path_field(client: httpx.AsyncC
         json={
             "temp_path": "upload_pack.ovpack",
             "parent": "viking://resources/imported",
-            "vectorize": False,
         },
     )
     assert resp.status_code == 422
+
+
+async def test_import_ovpack_rejects_removed_vectorize_field(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/pack/import",
+        json={
+            "temp_file_id": "demo.ovpack",
+            "parent": "viking://resources/imported",
+            "vectorize": False,
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    validation_errors = body["error"]["details"]["validation_errors"]
+    assert any("vectorize" in error["loc"] for error in validation_errors)
 
 
 async def test_import_ovpack_rejects_forged_temp_file_id(
@@ -178,7 +191,6 @@ async def test_import_ovpack_rejects_forged_temp_file_id(
         json={
             "temp_file_id": "../outside.ovpack",
             "parent": "viking://resources/imported",
-            "vectorize": False,
         },
     )
     assert resp.status_code == 403

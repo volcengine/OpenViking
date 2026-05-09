@@ -343,12 +343,20 @@ def _read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
         raise ValueError(f"Invalid ovpack manifest in {manifest_path}")
 
     version = manifest.get("format_version")
-    if version and int(version) > OVPACK_FORMAT_VERSION:
+    if version is None:
+        raise ValueError(f"Missing ovpack format_version in {manifest_path}")
+    try:
+        version_int = int(version)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid ovpack format_version {version!r}") from exc
+    if version_int < 1:
+        raise ValueError(f"Invalid ovpack format_version {version!r}")
+    if version_int > OVPACK_FORMAT_VERSION:
         raise ValueError(
             f"Unsupported ovpack format_version {version}; "
             f"this OpenViking supports up to {OVPACK_FORMAT_VERSION}"
         )
-    if manifest.get("kind") and manifest.get("kind") != OVPACK_KIND:
+    if manifest.get("kind") != OVPACK_KIND:
         raise ValueError(f"Invalid ovpack manifest kind: {manifest.get('kind')}")
     return manifest
 
@@ -402,6 +410,9 @@ def _validated_import_members(
         rel_path = get_viking_rel_path_from_zip(
             safe_zip_path.rstrip("/") if kind == "directory" else safe_zip_path
         )
+        if _is_derived_rel_path(rel_path):
+            logger.info(f"[local_fs] Skipping derived ovpack entry: {safe_zip_path}")
+            continue
         target_uri = _join_uri(root_uri, rel_path)
         _validate_import_target_uri(target_uri)
         members.append((info, safe_zip_path, kind, rel_path))
@@ -519,7 +530,6 @@ async def import_ovpack(
     parent: str,
     ctx: RequestContext,
     force: bool = False,
-    vectorize: bool = True,
     on_conflict: Optional[str] = None,
 ) -> str:
     """
@@ -530,7 +540,6 @@ async def import_ovpack(
         file_path: Local .ovpack file path
         parent: Target parent URI (e.g., viking://resources/...)
         force: Legacy alias for on_conflict="overwrite"
-        vectorize: Whether to trigger vectorization (default: True)
         on_conflict: One of "fail", "overwrite", or "skip"
 
     Returns:
@@ -588,9 +597,8 @@ async def import_ovpack(
 
     logger.info(f"[local_fs] Successfully imported {file_path} to {root_uri}")
 
-    if vectorize:
-        await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx, manifest=manifest)
-        logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
+    await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx, manifest=manifest)
+    logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
 
     return root_uri
 

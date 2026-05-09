@@ -35,7 +35,6 @@ class ImportRequest(BaseModel):
         parent: Parent URI under which the imported pack will be placed.
         force: Legacy alias for on_conflict="overwrite".
         on_conflict: Conflict policy: fail, overwrite, or skip.
-        vectorize: Whether to build vectors for imported content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -44,7 +43,6 @@ class ImportRequest(BaseModel):
     parent: str
     force: bool = False
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
-    vectorize: bool = True
 
 
 @router.post("/export")
@@ -114,7 +112,6 @@ async def import_ovpack(
             parent,
             ctx=ctx,
             force=body.force,
-            vectorize=body.vectorize,
             on_conflict=body.on_conflict,
         )
     except Exception:

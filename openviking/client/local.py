@@ -518,7 +518,6 @@ class LocalClient(BaseClient):
         file_path: str,
         parent: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
@@ -527,7 +526,6 @@ class LocalClient(BaseClient):
             parent,
             ctx=self._ctx,
             force=force,
-            vectorize=vectorize,
             on_conflict=on_conflict,
         )
 

@@ -303,7 +303,6 @@ class BaseClient(ABC):
         file_path: str,
         parent: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""

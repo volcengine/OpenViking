@@ -291,7 +291,6 @@ class SyncOpenViking:
         file_path: str,
         target: str,
         force: bool = False,
-        vectorize: bool = True,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file (triggers vectorization by default)"""
@@ -300,7 +299,6 @@ class SyncOpenViking:
                 file_path,
                 target,
                 force=force,
-                vectorize=vectorize,
                 on_conflict=on_conflict,
             )
         )

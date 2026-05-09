@@ -1134,9 +1134,6 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --force
 
 # 显式冲突策略
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-
-# 不进行向量化
-ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
 ```
 
 **响应示例**

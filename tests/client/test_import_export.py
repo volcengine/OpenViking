@@ -53,9 +53,7 @@ class TestImportOvpack:
         await client.export_ovpack(uri, str(export_path))
 
         # Import to new location
-        import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/imported/", vectorize=False
-        )
+        import_uri = await client.import_ovpack(str(export_path), "viking://resources/imported/")
 
         assert isinstance(import_uri, str)
         assert "imported" in import_uri
@@ -69,13 +67,11 @@ class TestImportOvpack:
         await client.export_ovpack(uri, str(export_path))
 
         # First import
-        await client.import_ovpack(
-            str(export_path), "viking://resources/force_test/", vectorize=False
-        )
+        await client.import_ovpack(str(export_path), "viking://resources/force_test/")
 
         # Second force import (overwrite)
         import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/force_test/", force=True, vectorize=False
+            str(export_path), "viking://resources/force_test/", force=True
         )
 
         assert isinstance(import_uri, str)
@@ -104,9 +100,7 @@ class TestImportOvpack:
         await client.rm(original_uri, recursive=True)
 
         # Import
-        import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/roundtrip/", vectorize=False
-        )
+        import_uri = await client.import_ovpack(str(export_path), "viking://resources/roundtrip/")
 
         # Read imported content
         imported_content = ""
@@ -173,6 +167,4 @@ class TestImportOvpack:
         self._build_ovpack(ovpack_path, entries)
 
         with pytest.raises(ValueError, match=error_pattern):
-            await client.import_ovpack(
-                str(ovpack_path), "viking://resources/security/", vectorize=False
-            )
+            await client.import_ovpack(str(ovpack_path), "viking://resources/security/")

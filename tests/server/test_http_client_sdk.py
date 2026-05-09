@@ -132,7 +132,6 @@ async def test_sdk_import_ovpack_from_local_file(http_client):
         str(f),
         parent="viking://resources/imported/",
         force=True,
-        vectorize=False,
     )
     assert uri.startswith("viking://resources/imported/")
 
