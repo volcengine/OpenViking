@@ -11,6 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from openviking.core.namespace import to_user_space, to_agent_space
+from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.utils.uri import render_template
@@ -165,10 +166,25 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         conversation_sections: List[str] = []
 
         def format_message_with_parts(msg: Message) -> str:
-            """Format message with text parts only, skipping tool call details."""
+            """Format message with text parts and ToolCall details."""
             parts = getattr(msg, "parts", [])
-            text_lines = [part.text for part in parts if hasattr(part, "text") and part.text]
-            return "\n".join(text_lines) if text_lines else msg.content
+            formatted_parts: List[str] = []
+            for part in parts:
+                if hasattr(part, "text") and part.text:
+                    formatted_parts.append(part.text)
+                elif isinstance(part, ToolPart):
+                    tool_info = {
+                        "type": "tool_call",
+                        "tool_name": part.tool_name,
+                        "tool_input": part.tool_input,
+                        "tool_output": part.tool_output[:500] if part.tool_output else "",
+                        "tool_status": part.tool_status,
+                        "duration_ms": part.duration_ms,
+                    }
+                    if part.skill_uri:
+                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
+                    formatted_parts.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+            return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
             """Format message header with role and role_id."""
