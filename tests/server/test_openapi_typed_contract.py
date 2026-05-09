@@ -20,7 +20,9 @@ from typing import Any, Dict
 import pytest
 from fastapi import FastAPI
 
+from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.bot import router as bot_router
+from openviking.server.routers.config import router as config_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.filesystem import router as filesystem_router
 from openviking.server.routers.pack import router as pack_router
@@ -28,19 +30,30 @@ from openviking.server.routers.relations import router as relations_router
 from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
+from openviking.server.routers.stats import router as stats_router
+from openviking.server.routers.system import router as system_router
+from openviking.server.routers.tasks import router as tasks_router
 
 
 def _openapi_spec() -> Dict[str, Any]:
     """Build a minimal FastAPI app with the typed routers and return its spec."""
     app = FastAPI()
+    # PR #1
     app.include_router(sessions_router)
     app.include_router(content_router)
     app.include_router(search_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    # PR #2
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(relations_router)
     app.include_router(pack_router)
+    # PR #3
+    app.include_router(admin_router)
+    app.include_router(config_router)
+    app.include_router(system_router)
+    app.include_router(stats_router)
+    app.include_router(tasks_router)
     return app.openapi()
 
 
@@ -89,11 +102,38 @@ ENVELOPE_ENDPOINTS = [
     ("delete", "/api/v1/relations/link"),
     # PR #2 — pack
     ("post", "/api/v1/pack/import"),
+    # PR #3 — admin
+    ("post", "/api/v1/admin/accounts"),
+    ("get", "/api/v1/admin/accounts"),
+    ("delete", "/api/v1/admin/accounts/{account_id}"),
+    ("post", "/api/v1/admin/accounts/{account_id}/users"),
+    ("get", "/api/v1/admin/accounts/{account_id}/users"),
+    ("delete", "/api/v1/admin/accounts/{account_id}/users/{user_id}"),
+    ("put", "/api/v1/admin/accounts/{account_id}/users/{user_id}/role"),
+    ("post", "/api/v1/admin/accounts/{account_id}/users/{user_id}/key"),
+    # PR #3 — config
+    ("get", "/api/v1/config"),
+    ("put", "/api/v1/config"),
+    # PR #3 — system (envelope endpoints only; /health and /ready are mirrors)
+    ("get", "/api/v1/system/status"),
+    ("post", "/api/v1/system/wait"),
+    # PR #3 — stats
+    ("get", "/api/v1/stats/memories"),
+    ("get", "/api/v1/stats/sessions/{session_id}"),
+    ("get", "/api/v1/stats/tokens"),
+    # PR #3 — tasks
+    ("get", "/api/v1/tasks/{task_id}"),
+    ("get", "/api/v1/tasks"),
 ]
 
 BOT_MIRROR_ENDPOINTS = [
     ("get", "/bot/v1/health", "BotHealthResponse"),
     ("post", "/bot/v1/chat", "BotChatResponse"),
+]
+
+SYSTEM_MIRROR_ENDPOINTS = [
+    ("get", "/health", "SystemHealthResponse"),
+    ("get", "/ready", "SystemReadyResponse"),
 ]
 
 
@@ -131,6 +171,23 @@ def test_bot_endpoints_use_mirror_models_not_envelope(
     )
 
 
+@pytest.mark.parametrize("method,path,expected_model", SYSTEM_MIRROR_ENDPOINTS)
+def test_system_probe_endpoints_use_mirror_models_not_envelope(
+    method: str, path: str, expected_model: str
+) -> None:
+    """/health and /ready must return mirror models directly (K8s probe contract)."""
+    spec = _openapi_spec()
+    schema = _response_schema_200(spec, method, path)
+    as_text = str(schema)
+    assert expected_model in as_text, (
+        f"{method.upper()} {path}: expected schema reference to {expected_model!r}. Got: {schema}"
+    )
+    assert "Response_" not in as_text, (
+        f"{method.upper()} {path}: probe endpoint must not wrap body in "
+        f"Response[T] envelope. Got: {schema}"
+    )
+
+
 def test_whitelisted_non_json_endpoints_remain_unmodeled() -> None:
     """Binary/stream endpoints are intentionally exempt from response_model.
 
@@ -150,6 +207,7 @@ def test_whitelisted_non_json_endpoints_remain_unmodeled() -> None:
         ("/api/v1/content/download", "get"),
         ("/bot/v1/chat/stream", "post"),
         ("/api/v1/pack/export", "post"),
+        ("/metrics", "get"),
     ]
     for path, method in non_json_paths:
         resp_200 = spec["paths"][path][method]["responses"]["200"]
@@ -199,6 +257,26 @@ def test_openapi_component_schemas_include_typed_models() -> None:
         "LinkResult",
         # PR #2 — common
         "URIRef",
+        # PR #3 — admin
+        "AccountListItem",
+        "UserListItem",
+        "CreateAccountResult",
+        "RegisterUserResult",
+        "SetUserRoleResult",
+        "RegeneratedKeyResult",
+        "DeletedFlagResult",
+        # PR #3 — config
+        "ServerConfigView",
+        # PR #3 — system (mirror models)
+        "SystemHealthResponse",
+        "SystemReadyResponse",
+        "SystemStatusResult",
+        # PR #3 — stats
+        "MemoryStats",
+        "SessionExtractionStats",
+        "TokenStats",
+        # PR #3 — tasks
+        "TaskRecord",
     }
     missing = required - set(components.keys())
     assert not missing, f"OpenAPI components missing typed models: {sorted(missing)}"

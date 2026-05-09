@@ -8,7 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserInfo(BaseModel):
-    """User identifier tuple emitted by ``UserIdentifier.to_dict()``."""
+    """User identifier tuple emitted by ``UserIdentifier.to_dict()``.
+
+    ``extra='allow'`` preserves any future field added to
+    ``UserIdentifier.to_dict()`` without requiring a schema update.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     account_id: str
     user_id: str
@@ -67,7 +73,13 @@ class SessionCreatedResult(BaseModel):
 
 
 class SessionListItem(BaseModel):
-    """Item shape of ``GET /api/v1/sessions`` list entries."""
+    """Item shape of ``GET /api/v1/sessions`` list entries.
+
+    ``extra='allow'`` preserves any field added to the service-layer
+    listing dict without requiring a schema update.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     session_id: str
     uri: str

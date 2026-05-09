@@ -96,7 +96,49 @@ pack-import; `FromTo` for mv / unlink; `LinkResult` for link.
 
 ---
 
-## Convention for future PRs (PR #3+)
+## PR #3 — admin / config / system / stats / tasks (19 JSON endpoints + 1 text whitelist)
+
+**Null field omission**:
+
+| Endpoint | Fields that may disappear |
+|----------|---------------------------|
+| `GET /api/v1/stats/memories` | `hotness_distribution`, `staleness` when the aggregator cannot produce them (e.g. empty memory set) |
+| `GET /api/v1/stats/tokens` | `llm`, `embedding` when no usage recorded |
+| `GET /api/v1/tasks/{id}`, `GET /api/v1/tasks` | `resource_id`, `result`, `error` — each populated only for the task states that produce them |
+| `GET /api/v1/config`, `PUT /api/v1/config` | Any Optional ServerConfig field left unset in `ov.conf` (e.g. `bot_api_url` when `with_bot=False`) |
+
+**Mirror-model endpoints** (no `Response[T]` envelope — same decision as
+bot proxy, body matches upstream K8s probe contract):
+
+- `GET /health` → `SystemHealthResponse` direct
+- `GET /ready` → `SystemReadyResponse` direct (body shape same for 200
+  and 503)
+
+**Already-trivial shapes** — no null fields, no behavior change:
+
+- `POST /api/v1/admin/accounts`, `POST /api/v1/admin/accounts/{}/users`,
+  `PUT /api/v1/admin/accounts/{}/users/{}/role`,
+  `POST /api/v1/admin/accounts/{}/users/{}/key`
+- `DELETE /api/v1/admin/accounts/{account_id}` and
+  `DELETE /api/v1/admin/accounts/{}/users/{}` return
+  `{"deleted": true}` via the shared `DeletedFlagResult` model.
+- `GET /api/v1/system/status`, `GET /api/v1/stats/sessions/{session_id}`
+
+**Non-JSON whitelist** (new):
+
+- `GET /metrics` — Prometheus text exposition format via
+  `PlainTextResponse`. Exempt from typed response_model; never wrapped
+  in `Response[T]`.
+
+**Forward-compat safeguard**: every aggregator result model
+(`MemoryStats`, `SessionExtractionStats`, `TokenStats`, `TaskRecord`,
+`AccountListItem`, `UserListItem`, `ServerConfigView`) sets
+`extra='allow'` because the server-side producers grow fields
+independent of the HTTP schema version.
+
+---
+
+## Convention for future PRs
 
 Each follow-up PR that enables `ExcludeNoneRoute` on a router must add
 an entry here with:
@@ -107,3 +149,6 @@ an entry here with:
    explicitly so SDK maintainers know the invariant.
 3. A note on whether the endpoint was already-idempotent (no
    observable change) or newly-affected.
+4. A note on any mirror-model endpoint (bypasses the `Response[T]`
+   envelope) and the reason — typically upstream contract or probe
+   tooling requirement.

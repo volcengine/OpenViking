@@ -11,9 +11,19 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.stats import (
+    MemoryStats,
+    SessionExtractionStats,
+    TokenStats,
+)
 from openviking.storage.stats_aggregator import MEMORY_CATEGORIES, StatsAggregator
 
-router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
+router = APIRouter(
+    prefix="/api/v1/stats",
+    tags=["stats"],
+    route_class=ExcludeNoneRoute,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -23,14 +33,14 @@ def _get_aggregator() -> StatsAggregator:
     return StatsAggregator(service.vikingdb_manager)
 
 
-@router.get("/memories")
+@router.get("/memories", response_model=Response[MemoryStats])
 async def get_memory_stats(
     category: Optional[str] = Query(
         None,
         description="Filter by memory category (e.g. cases, patterns, tools)",
     ),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[MemoryStats]:
     """Get aggregate memory health statistics.
 
     Returns counts by category, hotness distribution, and staleness metrics.
@@ -47,20 +57,23 @@ async def get_memory_stats(
 
     aggregator = _get_aggregator()
     result = await aggregator.get_memory_stats(_ctx, category=category)
-    return Response(status="ok", result=result)
+    return Response(status="ok", result=MemoryStats.model_validate(result))
 
 
-@router.get("/sessions/{session_id}")
+@router.get("/sessions/{session_id}", response_model=Response[SessionExtractionStats])
 async def get_session_stats(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionExtractionStats]:
     """Get extraction statistics for a specific session."""
     service = get_service()
     aggregator = _get_aggregator()
     try:
         result = await aggregator.get_session_extraction_stats(session_id, service, _ctx)
-        return Response(status="ok", result=result)
+        return Response(
+            status="ok",
+            result=SessionExtractionStats.model_validate(result),
+        )
     except KeyError:
         return Response(
             status="error",
@@ -80,10 +93,10 @@ async def get_session_stats(
         )
 
 
-@router.get("/tokens")
+@router.get("/tokens", response_model=Response[TokenStats])
 async def get_token_stats(
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[TokenStats]:
     """Get aggregate token usage statistics.
 
     Returns total token usage across all sessions, broken down by LLM
@@ -93,7 +106,7 @@ async def get_token_stats(
     aggregator = _get_aggregator()
     try:
         result = await aggregator.get_token_stats(service, _ctx)
-        return Response(status="ok", result=result)
+        return Response(status="ok", result=TokenStats.model_validate(result))
     except Exception as e:
         logger.error("Failed to get token stats: %s", e)
         return Response(

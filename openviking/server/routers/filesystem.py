@@ -118,6 +118,8 @@ async def ls(
         show_all_hidden=show_all_hidden,
         node_limit=actual_node_limit,
     )
+    if not simple and isinstance(result, list):
+        result = [FileStat.model_validate(item) for item in result]
     return Response(status="ok", result=result)
 
 
@@ -153,6 +155,8 @@ async def tree(
         node_limit=actual_node_limit,
         level_limit=level_limit,
     )
+    if isinstance(result, list):
+        result = [FileStat.model_validate(item) for item in result]
     return Response(status="ok", result=result)
 
 

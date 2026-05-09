@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
+from typing import List
+
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel
 
@@ -9,6 +11,16 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.admin import (
+    AccountListItem,
+    CreateAccountResult,
+    DeletedFlagResult,
+    RegeneratedKeyResult,
+    RegisterUserResult,
+    SetUserRoleResult,
+    UserListItem,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -16,7 +28,11 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/v1/admin",
+    tags=["admin"],
+    route_class=ExcludeNoneRoute,
+)
 
 _TRUSTED_MODE_ADMIN_API_MESSAGE = (
     "Admin API is unavailable in trusted mode. In trusted mode, each request is resolved as USER "
@@ -86,12 +102,12 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
 # ---- Account endpoints ----
 
 
-@router.post("/accounts")
+@router.post("/accounts", response_model=Response[CreateAccountResult])
 async def create_account(
     body: CreateAccountRequest,
     request: Request,
     ctx: RequestContext = require_admin_role(Role.ROOT),
-):
+) -> Response[CreateAccountResult]:
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(body.account_id, body.admin_user_id)
@@ -104,31 +120,34 @@ async def create_account(
     await service.initialize_user_directories(account_ctx)
     return Response(
         status="ok",
-        result={
-            "account_id": body.account_id,
-            "admin_user_id": body.admin_user_id,
-            "user_key": user_key,
-        },
+        result=CreateAccountResult(
+            account_id=body.account_id,
+            admin_user_id=body.admin_user_id,
+            user_key=user_key,
+        ),
     )
 
 
-@router.get("/accounts")
+@router.get("/accounts", response_model=Response[List[AccountListItem]])
 async def list_accounts(
     request: Request,
     ctx: RequestContext = require_admin_role(Role.ROOT),
-):
+) -> Response[List[AccountListItem]]:
     """List all accounts."""
     manager = _get_api_key_manager(request)
     accounts = manager.get_accounts()
-    return Response(status="ok", result=accounts)
+    return Response(
+        status="ok",
+        result=[AccountListItem.model_validate(item) for item in accounts],
+    )
 
 
-@router.delete("/accounts/{account_id}")
+@router.delete("/accounts/{account_id}", response_model=Response[DeletedFlagResult])
 async def delete_account(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT),
-):
+) -> Response[DeletedFlagResult]:
     """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
     manager = _get_api_key_manager(request)
 
@@ -163,19 +182,22 @@ async def delete_account(
 
     # Finally delete the account metadata
     await manager.delete_account(account_id)
-    return Response(status="ok", result={"deleted": True})
+    return Response(status="ok", result=DeletedFlagResult(deleted=True))
 
 
 # ---- User endpoints ----
 
 
-@router.post("/accounts/{account_id}/users")
+@router.post(
+    "/accounts/{account_id}/users",
+    response_model=Response[RegisterUserResult],
+)
 async def register_user(
     body: RegisterUserRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
-):
+) -> Response[RegisterUserResult]:
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
@@ -188,71 +210,86 @@ async def register_user(
     await service.initialize_user_directories(user_ctx)
     return Response(
         status="ok",
-        result={
-            "account_id": account_id,
-            "user_id": body.user_id,
-            "user_key": user_key,
-        },
+        result=RegisterUserResult(
+            account_id=account_id,
+            user_id=body.user_id,
+            user_key=user_key,
+        ),
     )
 
 
-@router.get("/accounts/{account_id}/users")
+@router.get(
+    "/accounts/{account_id}/users",
+    response_model=Response[List[UserListItem]],
+)
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
-):
+) -> Response[List[UserListItem]]:
     """List all users in an account."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     users = manager.get_users(account_id)
-    return Response(status="ok", result=users)
+    return Response(
+        status="ok",
+        result=[UserListItem.model_validate(item) for item in users],
+    )
 
 
-@router.delete("/accounts/{account_id}/users/{user_id}")
+@router.delete(
+    "/accounts/{account_id}/users/{user_id}",
+    response_model=Response[DeletedFlagResult],
+)
 async def remove_user(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
-):
+) -> Response[DeletedFlagResult]:
     """Remove a user from an account."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     await manager.remove_user(account_id, user_id)
-    return Response(status="ok", result={"deleted": True})
+    return Response(status="ok", result=DeletedFlagResult(deleted=True))
 
 
-@router.put("/accounts/{account_id}/users/{user_id}/role")
+@router.put(
+    "/accounts/{account_id}/users/{user_id}/role",
+    response_model=Response[SetUserRoleResult],
+)
 async def set_user_role(
     body: SetRoleRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT),
-):
+) -> Response[SetUserRoleResult]:
     """Change a user's role (ROOT only)."""
     manager = _get_api_key_manager(request)
     await manager.set_role(account_id, user_id, body.role)
     return Response(
         status="ok",
-        result={
-            "account_id": account_id,
-            "user_id": user_id,
-            "role": body.role,
-        },
+        result=SetUserRoleResult(
+            account_id=account_id,
+            user_id=user_id,
+            role=body.role,
+        ),
     )
 
 
-@router.post("/accounts/{account_id}/users/{user_id}/key")
+@router.post(
+    "/accounts/{account_id}/users/{user_id}/key",
+    response_model=Response[RegeneratedKeyResult],
+)
 async def regenerate_key(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
-):
+) -> Response[RegeneratedKeyResult]:
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     new_key = await manager.regenerate_key(account_id, user_id)
-    return Response(status="ok", result={"user_key": new_key})
+    return Response(status="ok", result=RegeneratedKeyResult(user_key=new_key))

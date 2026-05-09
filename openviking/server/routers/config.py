@@ -13,22 +13,27 @@ try:
 except ImportError:
     fcntl = None  # type: ignore[assignment]
 
-from pydantic import ValidationError
-
 from fastapi import APIRouter, Request
+from pydantic import ValidationError
 
 from openviking.server.auth import require_role
 from openviking.server.config import ServerConfig, load_server_config
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.config import ServerConfigView
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
-from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/config", tags=["config"])
+router = APIRouter(
+    prefix="/api/v1/config",
+    tags=["config"],
+    route_class=ExcludeNoneRoute,
+)
 
 
 @contextlib.contextmanager
@@ -53,25 +58,28 @@ def _sanitize_config(config: ServerConfig) -> dict:
     return data
 
 
-@router.get("")
+@router.get("", response_model=Response[ServerConfigView])
 async def get_config(
     request: Request,
     _ctx: RequestContext = require_role(Role.ROOT),
-):
+) -> Response[ServerConfigView]:
     """Return the persisted server configuration from ov.conf (sanitized)."""
     config = load_server_config()
-    return Response(status="ok", result=_sanitize_config(config))
+    return Response(
+        status="ok",
+        result=ServerConfigView.model_validate(_sanitize_config(config)),
+    )
 
 
 _IMMUTABLE_FIELDS = {"root_api_key", "encryption_enabled"}
 
 
-@router.put("")
+@router.put("", response_model=Response[ServerConfigView])
 async def update_config(
     request: Request,
     body: dict,
     ctx: RequestContext = require_role(Role.ROOT),
-):
+) -> Response[ServerConfigView]:
     """Validate and persist server configuration to ov.conf.
 
     Changes are written to disk only. A server restart is required
@@ -110,6 +118,13 @@ async def update_config(
         except BaseException:
             os.unlink(tmp)
             raise
-    logger.info("Configuration updated by %s, fields changed: %s, path: %s",
-                ctx.user, sorted(body.keys()), path)
-    return Response(status="ok", result=_sanitize_config(load_server_config()))
+    logger.info(
+        "Configuration updated by %s, fields changed: %s, path: %s",
+        ctx.user,
+        sorted(body.keys()),
+        path,
+    )
+    return Response(
+        status="ok",
+        result=ServerConfigView.model_validate(_sanitize_config(load_server_config())),
+    )

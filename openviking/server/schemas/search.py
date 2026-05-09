@@ -71,6 +71,14 @@ class GrepResult(BaseModel):
     The grep payload shape is defined by AGFS and carries nested match
     entries with line context / byte offsets. Kept loose to avoid
     over-specifying the AGFS contract from the Python side.
+
+    Typical AGFS shape (subject to server version)::
+
+        {"matches": [{"path": str, "line": int, "content": str, ...}],
+         "count": int, ...}
+
+    Narrowing to concrete fields is deferred until the AGFS grep API is
+    declared stable (tracked as a follow-up).
     """
 
     model_config = ConfigDict(extra="allow")

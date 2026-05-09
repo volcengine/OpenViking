@@ -12,20 +12,33 @@ from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.system import (
+    SystemHealthResponse,
+    SystemReadyResponse,
+    SystemStatusResult,
+    WaitProcessedResult,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+router = APIRouter(route_class=ExcludeNoneRoute)
 
 
-@router.get("/health", tags=["system"])
-async def health_check(request: Request):
-    """Health check endpoint (no authentication required)."""
+@router.get("/health", tags=["system"], response_model=SystemHealthResponse)
+async def health_check(request: Request) -> SystemHealthResponse:
+    """Health check endpoint (no authentication required).
+
+    Returns the ``SystemHealthResponse`` mirror model directly (no
+    ``Response[T]`` envelope) because probe consumers (K8s liveness,
+    curl /health) expect a simple status payload. Same design decision
+    as the bot-proxy endpoints.
+    """
     from openviking import __version__
 
-    result = {"status": "ok", "healthy": True, "version": __version__}
+    result: dict = {"status": "ok", "healthy": True, "version": __version__}
 
     # Try to get user identity if auth headers are present
     try:
@@ -57,15 +70,29 @@ async def health_check(request: Request):
     except Exception:
         pass
 
-    return result
+    return SystemHealthResponse.model_validate(result)
 
 
-@router.get("/ready", tags=["system"])
-async def readiness_check(request: Request):
+@router.get(
+    "/ready",
+    tags=["system"],
+    responses={
+        200: {
+            "model": SystemReadyResponse,
+            "description": "All subsystems operational.",
+        },
+        503: {
+            "model": SystemReadyResponse,
+            "description": "At least one subsystem is unhealthy.",
+        },
+    },
+)
+async def readiness_check(request: Request) -> JSONResponse:
     """Readiness probe — checks AGFS, VectorDB, and APIKeyManager.
 
     Returns 200 when all subsystems are operational, 503 otherwise.
-    No authentication required (designed for K8s probes).
+    No authentication required (designed for K8s probes). Body conforms
+    to :class:`SystemReadyResponse` in both status codes.
     """
     checks = {}
 
@@ -101,16 +128,26 @@ async def readiness_check(request: Request):
 
     all_ok = all(v in ("ok", "not_configured") for v in checks.values())
     status_code = 200 if all_ok else 503
+    # Validate through the model so the runtime body matches the OpenAPI
+    # declaration — without this, responses= is documentation-only.
+    body = SystemReadyResponse(
+        status="ready" if all_ok else "not_ready",
+        checks=checks,
+    )
     return JSONResponse(
         status_code=status_code,
-        content={"status": "ready" if all_ok else "not_ready", "checks": checks},
+        content=body.model_dump(exclude_none=True),
     )
 
 
-@router.get("/api/v1/system/status", tags=["system"])
+@router.get(
+    "/api/v1/system/status",
+    tags=["system"],
+    response_model=Response[SystemStatusResult],
+)
 async def system_status(
     ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SystemStatusResult]:
     """Get system status.
 
     ``result.user`` is the authenticated request's ``user_id`` (from API key or
@@ -120,10 +157,10 @@ async def system_status(
     service = get_service()
     return Response(
         status="ok",
-        result={
-            "initialized": service._initialized,
-            "user": ctx.user.user_id,
-        },
+        result=SystemStatusResult(
+            initialized=service._initialized,
+            user=ctx.user.user_id,
+        ),
     )
 
 
@@ -133,11 +170,15 @@ class WaitRequest(BaseModel):
     timeout: Optional[float] = None
 
 
-@router.post("/api/v1/system/wait", tags=["system"])
+@router.post(
+    "/api/v1/system/wait",
+    tags=["system"],
+    response_model=Response[WaitProcessedResult],
+)
 async def wait_processed(
     request: WaitRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[WaitProcessedResult]:
     """Wait for all processing to complete."""
     service = get_service()
     result = await service.resources.wait_processed(timeout=request.timeout)

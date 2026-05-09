@@ -28,6 +28,10 @@ class FileStat(BaseModel):
     uri: Optional[str] = None
     rel_path: Optional[str] = None
     abstract: Optional[str] = None
+    # AGFS stat returns ``tags`` as a comma-separated string; this differs
+    # from ``SearchHit.tags`` and ``ContextItem.tags`` (both ``List[str]``)
+    # because the retriever post-processes them into lists. The type here
+    # mirrors the raw AGFS wire shape.
     tags: Optional[str] = None
 
 

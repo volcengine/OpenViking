@@ -97,9 +97,10 @@ that does not use `ExcludeNoneRoute`.
 The following endpoints return raw bytes / streams and MUST keep their current
 `StreamingResponse` / `FileResponse` implementation without a `response_model`:
 
-- `openviking/server/routers/bot.py`: SSE streaming (`/chat`)
-- `openviking/server/routers/content.py`: blob download
-- `openviking/server/routers/pack.py`: zip download
+- `openviking/server/routers/bot.py`: SSE streaming (`/chat/stream`)
+- `openviking/server/routers/content.py`: blob download (`/download`)
+- `openviking/server/routers/pack.py`: zip download (`/export`)
+- `openviking/server/routers/metrics.py`: Prometheus text (`/metrics`)
 
 New non-JSON endpoints must be added to this list and the reviewer should
 confirm the response is genuinely non-JSON (not just "dict-shaped bytes").
