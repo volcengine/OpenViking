@@ -295,8 +295,8 @@ class ResourceService:
                 task = task_tracker.create(
                     "add_resource",
                     resource_id=root_uri,
-                    owner_account_id=ctx.account_id,
-                    owner_user_id=ctx.user.user_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
                 )
                 result["task_id"] = task.task_id
                 if telemetry_id:
@@ -309,11 +309,14 @@ class ResourceService:
                         )
                     )
                 else:
-                    task_tracker.start(task.task_id, owner_account_id=ctx.account_id)
+                    task_tracker.start(
+                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
                     task_tracker.complete(
                         task.task_id,
                         {"root_uri": root_uri},
-                        owner_account_id=ctx.account_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
                     )
             return result
         except Exception as exc:
@@ -333,13 +336,17 @@ class ResourceService:
                 unregister_wait_telemetry(telemetry_id)
 
     async def _monitor_queue_processing(
-        self, task_id: str, telemetry_id: str, owner_account_id: str
+        self,
+        task_id: str,
+        telemetry_id: str,
+        account_id: str,
+        user_id: str,
     ) -> None:
         from openviking.service.task_tracker import get_task_tracker
 
         task_tracker = get_task_tracker()
         request_wait_tracker = get_request_wait_tracker()
-        task_tracker.start(task_id, owner_account_id=owner_account_id)
+        task_tracker.start(task_id, account_id=account_id, user_id=user_id)
         try:
             await request_wait_tracker.wait_for_request(telemetry_id)
             status = request_wait_tracker.build_queue_status(telemetry_id)
@@ -348,16 +355,18 @@ class ResourceService:
                 task_tracker.fail(
                     task_id,
                     f"queue processing failed: {status}",
-                    owner_account_id=owner_account_id,
+                    account_id=account_id,
+                    user_id=user_id,
                 )
             else:
                 task_tracker.complete(
                     task_id,
                     {"queue_status": status},
-                    owner_account_id=owner_account_id,
+                    account_id=account_id,
+                    user_id=user_id,
                 )
         except Exception as exc:
-            task_tracker.fail(task_id, str(exc), owner_account_id=owner_account_id)
+            task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
@@ -538,8 +547,8 @@ class ResourceService:
                 task_tracker = get_task_tracker()
                 task = task_tracker.create(
                     "add_skill",
-                    owner_account_id=ctx.account_id,
-                    owner_user_id=ctx.user.user_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
                 )
                 result["task_id"] = task.task_id
                 if telemetry_id:
@@ -549,11 +558,19 @@ class ResourceService:
                             task.task_id,
                             telemetry_id,
                             ctx.account_id,
+                            ctx.user.user_id,
                         )
                     )
                 else:
-                    task_tracker.start(task.task_id, owner_account_id=ctx.account_id)
-                    task_tracker.complete(task.task_id, {}, owner_account_id=ctx.account_id)
+                    task_tracker.start(
+                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
+                    task_tracker.complete(
+                        task.task_id,
+                        {},
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
 
             return result
         finally:

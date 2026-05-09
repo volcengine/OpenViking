@@ -17,12 +17,16 @@ class TaskStore(Protocol):
     def update(self, task: Any) -> None: ...
 
     def get(
-        self, task_id: str, *, owner_account_id: Optional[str] = None
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]: ...
 
-    def list(self, owner_account_id: str) -> List[Dict[str, Any]]: ...
+    def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
 
-    def delete(self, task_id: str, *, owner_account_id: str) -> None: ...
+    def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None: ...
 
 
 class InMemoryTaskStore:
@@ -38,25 +42,36 @@ class InMemoryTaskStore:
         self._tasks[task.task_id] = _task_to_payload(task)
 
     def get(
-        self, task_id: str, *, owner_account_id: Optional[str] = None
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         payload = self._tasks.get(task_id)
         if payload is None:
             return None
-        if owner_account_id is not None and payload.get("owner_account_id") != owner_account_id:
+        if account_id is not None and payload.get("account_id") != account_id:
+            return None
+        if user_id is not None and payload.get("user_id") != user_id:
             return None
         return deepcopy(payload)
 
-    def list(self, owner_account_id: str) -> List[Dict[str, Any]]:
+    def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return [
             deepcopy(payload)
             for payload in self._tasks.values()
-            if payload.get("owner_account_id") == owner_account_id
+            if payload.get("account_id") == account_id
+            and (user_id is None or payload.get("user_id") == user_id)
         ]
 
-    def delete(self, task_id: str, *, owner_account_id: str) -> None:
+    def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
         payload = self._tasks.get(task_id)
-        if payload and payload.get("owner_account_id") == owner_account_id:
+        if (
+            payload
+            and payload.get("account_id") == account_id
+            and (user_id is None or payload.get("user_id") == user_id)
+        ):
             del self._tasks[task_id]
 
 
@@ -76,19 +91,25 @@ class PersistentTaskStore:
         self._write_task(task)
 
     def get(
-        self, task_id: str, *, owner_account_id: Optional[str] = None
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        if not owner_account_id:
+        if not account_id or not user_id:
             return None
-        path = self._task_path(owner_account_id, task_id)
+        path = self._task_path(account_id, user_id, task_id)
         try:
             raw = self._agfs.read(path)
         except Exception:
             return None
         return json.loads(_decode_bytes(raw))
 
-    def list(self, owner_account_id: str) -> List[Dict[str, Any]]:
-        directory = self._task_dir(owner_account_id)
+    def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not user_id:
+            return []
+        directory = self._task_dir(account_id, user_id)
         try:
             items = self._agfs.ls(directory)
         except Exception:
@@ -105,22 +126,26 @@ class PersistentTaskStore:
                 continue
         return tasks
 
-    def delete(self, task_id: str, *, owner_account_id: str) -> None:
-        self._agfs.rm(self._task_path(owner_account_id, task_id), force=True)
+    def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
+        if not user_id:
+            return
+        self._agfs.rm(self._task_path(account_id, user_id, task_id), force=True)
 
     def _write_task(self, task: Any) -> None:
-        account_id = getattr(task, "owner_account_id", None)
-        if not account_id:
-            raise ValueError("PersistentTaskStore requires owner_account_id")
-        self._ensure_task_dir(account_id)
+        account_id = getattr(task, "account_id", None)
+        user_id = getattr(task, "user_id", None)
+        if not account_id or not user_id:
+            raise ValueError("PersistentTaskStore requires account_id and user_id")
+        self._ensure_task_dir(account_id, user_id)
         self._agfs.write(
-            self._task_path(account_id, task.task_id),
+            self._task_path(account_id, user_id, task.task_id),
             json.dumps(_task_to_payload(task), ensure_ascii=False).encode("utf-8"),
         )
 
-    def _ensure_task_dir(self, account_id: str) -> None:
+    def _ensure_task_dir(self, account_id: str, user_id: str) -> None:
         self._mkdir_if_missing(self._account_dir(account_id))
-        self._mkdir_if_missing(self._task_dir(account_id))
+        self._mkdir_if_missing(self._task_root_dir(account_id))
+        self._mkdir_if_missing(self._task_dir(account_id, user_id))
 
     def _mkdir_if_missing(self, path: str) -> None:
         try:
@@ -135,11 +160,14 @@ class PersistentTaskStore:
     def _account_dir(self, account_id: str) -> str:
         return f"{self.ROOT_PREFIX}/{account_id}"
 
-    def _task_dir(self, account_id: str) -> str:
+    def _task_root_dir(self, account_id: str) -> str:
         return f"{self._account_dir(account_id)}/{self.RESERVED_DIRNAME}"
 
-    def _task_path(self, account_id: str, task_id: str) -> str:
-        return f"{self._task_dir(account_id)}/{task_id}.json"
+    def _task_dir(self, account_id: str, user_id: str) -> str:
+        return f"{self._task_root_dir(account_id)}/{user_id}"
+
+    def _task_path(self, account_id: str, user_id: str, task_id: str) -> str:
+        return f"{self._task_dir(account_id, user_id)}/{task_id}.json"
 
 
 def _task_to_payload(task: Any) -> Dict[str, Any]:
@@ -151,8 +179,8 @@ def _task_to_payload(task: Any) -> Dict[str, Any]:
         "created_at": task.created_at,
         "updated_at": task.updated_at,
         "resource_id": task.resource_id,
-        "owner_account_id": task.owner_account_id,
-        "owner_user_id": task.owner_user_id,
+        "account_id": task.account_id,
+        "user_id": task.user_id,
         "result": deepcopy(task.result),
         "error": task.error,
     }

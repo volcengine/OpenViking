@@ -49,8 +49,8 @@ class TaskRecord:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     resource_id: Optional[str] = None  # e.g. session_id
-    owner_account_id: Optional[str] = None
-    owner_user_id: Optional[str] = None
+    account_id: Optional[str] = None
+    user_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -60,8 +60,8 @@ class TaskRecord:
         d["status"] = self.status.value
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
-        d.pop("owner_account_id", None)
-        d.pop("owner_user_id", None)
+        d.pop("account_id", None)
+        d.pop("user_id", None)
         return d
 
 
@@ -178,8 +178,8 @@ class TaskTracker:
                     to_delete.append(tid)
             for tid in to_delete:
                 task = self._tasks[tid]
-                if isinstance(self._store, InMemoryTaskStore) and task.owner_account_id:
-                    self._store.delete(tid, owner_account_id=task.owner_account_id)
+                if isinstance(self._store, InMemoryTaskStore) and task.account_id:
+                    self._store.delete(tid, account_id=task.account_id, user_id=task.user_id)
                 del self._tasks[tid]
 
             # FIFO eviction if still over limit
@@ -188,8 +188,8 @@ class TaskTracker:
                 excess = len(self._tasks) - self.MAX_TASKS
                 for tid, _ in sorted_tasks[:excess]:
                     task = self._tasks[tid]
-                    if isinstance(self._store, InMemoryTaskStore) and task.owner_account_id:
-                        self._store.delete(tid, owner_account_id=task.owner_account_id)
+                    if isinstance(self._store, InMemoryTaskStore) and task.account_id:
+                        self._store.delete(tid, account_id=task.account_id, user_id=task.user_id)
                     del self._tasks[tid]
 
             if to_delete:
@@ -198,21 +198,21 @@ class TaskTracker:
     @staticmethod
     def _matches_owner(
         task: TaskRecord,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
         """Return True when a task belongs to the requested owner filter."""
-        if owner_account_id is not None and task.owner_account_id != owner_account_id:
+        if account_id is not None and task.account_id != account_id:
             return False
-        if owner_user_id is not None and task.owner_user_id != owner_user_id:
+        if user_id is not None and task.user_id != user_id:
             return False
         return True
 
     @staticmethod
-    def _validate_owner(owner_account_id: str, owner_user_id: str) -> None:
+    def _validate_owner(account_id: str, user_id: str) -> None:
         """Reject ownerless task creation for user-originated background work."""
-        if not owner_account_id or not owner_user_id:
-            raise ValueError("Task ownership requires non-empty owner_account_id and owner_user_id")
+        if not account_id or not user_id:
+            raise ValueError("Task ownership requires non-empty account_id and user_id")
 
     # ── CRUD ──
 
@@ -221,17 +221,17 @@ class TaskTracker:
         task_type: str,
         resource_id: Optional[str] = None,
         *,
-        owner_account_id: str,
-        owner_user_id: str,
+        account_id: str,
+        user_id: str,
     ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
-        self._validate_owner(owner_account_id, owner_user_id)
+        self._validate_owner(account_id, user_id)
         task = TaskRecord(
             task_id=str(uuid4()),
             task_type=task_type,
             resource_id=resource_id,
-            owner_account_id=owner_account_id,
-            owner_user_id=owner_user_id,
+            account_id=account_id,
+            user_id=user_id,
         )
         with self._lock:
             self._tasks[task.task_id] = task
@@ -249,21 +249,21 @@ class TaskTracker:
         task_type: str,
         resource_id: str,
         *,
-        owner_account_id: str,
-        owner_user_id: str,
+        account_id: str,
+        user_id: str,
     ) -> Optional[TaskRecord]:
         """Atomically check for running tasks and create a new one if none exist.
 
         Returns TaskRecord on success, None if a running task already exists.
         This eliminates the race condition between has_running() and create().
         """
-        self._validate_owner(owner_account_id, owner_user_id)
+        self._validate_owner(account_id, user_id)
         with self._lock:
             # Check for existing running tasks
             has_active = any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
-                and self._matches_owner(t, owner_account_id, owner_user_id)
+                and self._matches_owner(t, account_id, user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in self._tasks.values()
             )
@@ -274,8 +274,8 @@ class TaskTracker:
                 task_id=str(uuid4()),
                 task_type=task_type,
                 resource_id=resource_id,
-                owner_account_id=owner_account_id,
-                owner_user_id=owner_user_id,
+                account_id=account_id,
+                user_id=user_id,
             )
             self._tasks[task.task_id] = task
             self._store.create(task)
@@ -287,10 +287,15 @@ class TaskTracker:
         )
         return self._copy(task)
 
-    def start(self, task_id: str, owner_account_id: Optional[str] = None) -> None:
+    def start(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         """Transition task to RUNNING."""
         with self._lock:
-            task = self._load_for_update(task_id, owner_account_id)
+            task = self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.RUNNING
                 task.updated_at = time.time()
@@ -301,11 +306,12 @@ class TaskTracker:
         self,
         task_id: str,
         result: Optional[Dict[str, Any]] = None,
-        owner_account_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         """Transition task to COMPLETED with optional result."""
         with self._lock:
-            task = self._load_for_update(task_id, owner_account_id)
+            task = self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.COMPLETED
                 task.result = result
@@ -314,10 +320,16 @@ class TaskTracker:
                 self._store.update(task)
         logger.info("[TaskTracker] Task %s completed", task_id)
 
-    def fail(self, task_id: str, error: str, owner_account_id: Optional[str] = None) -> None:
+    def fail(
+        self,
+        task_id: str,
+        error: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         """Transition task to FAILED with sanitized error."""
         with self._lock:
-            task = self._load_for_update(task_id, owner_account_id)
+            task = self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.FAILED
                 task.error = _sanitize_error(error)
@@ -329,17 +341,17 @@ class TaskTracker:
     def get(
         self,
         task_id: str,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[TaskRecord]:
         """Look up a single task. Returns a snapshot copy (None if not found)."""
         with self._lock:
             task = self._tasks.get(task_id)
-            if task is None and owner_account_id is not None:
-                task = self._load_from_store(task_id, owner_account_id)
+            if task is None and account_id is not None:
+                task = self._load_from_store(task_id, account_id, user_id)
                 if task is not None:
                     self._tasks[task.task_id] = task
-            if task is None or not self._matches_owner(task, owner_account_id, owner_user_id):
+            if task is None or not self._matches_owner(task, account_id, user_id):
                 return None
             return self._copy(task)
 
@@ -349,18 +361,18 @@ class TaskTracker:
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[TaskRecord]:
         """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
         with self._lock:
-            if owner_account_id is not None:
-                for task in self._load_all_from_store(owner_account_id):
+            if account_id is not None:
+                for task in self._load_all_from_store(account_id, user_id):
                     self._tasks[task.task_id] = task
             tasks = [
                 self._copy(t)
                 for t in self._tasks.values()
-                if self._matches_owner(t, owner_account_id, owner_user_id)
+                if self._matches_owner(t, account_id, user_id)
             ]
         if task_type:
             tasks = [t for t in tasks if t.task_type == task_type]
@@ -375,31 +387,34 @@ class TaskTracker:
         self,
         task_type: str,
         resource_id: str,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
         """Check if there is already a running task for the given type+resource."""
         with self._lock:
-            if owner_account_id is not None:
-                for task in self._load_all_from_store(owner_account_id):
+            if account_id is not None:
+                for task in self._load_all_from_store(account_id, user_id):
                     self._tasks[task.task_id] = task
             return any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
-                and self._matches_owner(t, owner_account_id, owner_user_id)
+                and self._matches_owner(t, account_id, user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in self._tasks.values()
             )
 
     def _load_for_update(
-        self, task_id: str, owner_account_id: Optional[str]
+        self,
+        task_id: str,
+        account_id: Optional[str],
+        user_id: Optional[str],
     ) -> Optional[TaskRecord]:
         task = self._tasks.get(task_id)
         if task is not None:
             return task
-        if owner_account_id is None:
+        if account_id is None or user_id is None:
             return None
-        return self._load_from_store(task_id, owner_account_id)
+        return self._load_from_store(task_id, account_id, user_id)
 
     @staticmethod
     def _record_from_payload(payload: Dict[str, Any]) -> TaskRecord:
@@ -407,15 +422,21 @@ class TaskTracker:
         data["status"] = TaskStatus(data["status"])
         return TaskRecord(**data)
 
-    def _load_from_store(self, task_id: str, owner_account_id: str) -> Optional[TaskRecord]:
-        payload = self._store.get(task_id, owner_account_id=owner_account_id)
+    def _load_from_store(
+        self,
+        task_id: str,
+        account_id: str,
+        user_id: Optional[str],
+    ) -> Optional[TaskRecord]:
+        payload = self._store.get(task_id, account_id=account_id, user_id=user_id)
         if payload is None:
             return None
         return self._record_from_payload(payload)
 
-    def _load_all_from_store(self, owner_account_id: str) -> List[TaskRecord]:
+    def _load_all_from_store(self, account_id: str, user_id: Optional[str]) -> List[TaskRecord]:
         return [
-            self._record_from_payload(payload) for payload in self._store.list(owner_account_id)
+            self._record_from_payload(payload)
+            for payload in self._store.list(account_id, user_id=user_id)
         ]
 
     @staticmethod
