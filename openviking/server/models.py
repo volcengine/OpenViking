@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Response models and error codes for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
 
 
 class ErrorInfo(BaseModel):
@@ -15,11 +17,16 @@ class ErrorInfo(BaseModel):
     details: Optional[dict] = None
 
 
-class Response(BaseModel):
-    """Standard API response."""
+class Response(BaseModel, Generic[T]):
+    """Standard API response.
+
+    Use ``Response[SomeModel]`` in route signatures to get a fully typed
+    OpenAPI schema. When the generic parameter is omitted the model is
+    equivalent to ``Response[Any]`` (preserves historical behavior).
+    """
 
     status: str  # "ok" | "error"
-    result: Optional[Any] = None
+    result: Optional[T] = None
     error: Optional[ErrorInfo] = None
     telemetry: Optional[Dict[str, Any]] = None
 
