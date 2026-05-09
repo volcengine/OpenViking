@@ -58,7 +58,10 @@ class WikiLink(BaseModel):
     )
     link_type: LinkType = Field(LinkType.RELATED_TO, description="Relationship type")
     weight: float = Field(1.0, description="Association weight 0~1")
-    match_text: Optional[str] = Field(None, description="Text in from page to be linkified")
+    match_text: Optional[str] = Field(
+        None,
+        description="A word or short phrase in the from page to be linkified (must exist verbatim)",
+    )
     description: str = Field("", description="Why this link exists")
 
 
@@ -72,7 +75,9 @@ class StoredLink(BaseModel):
     weight: float = 1.0
     t_field: str = "content"
     t_line_ranges: Optional[str] = None
-    match_text: Optional[str] = None
+    match_text: Optional[str] = (
+        None  # word or short phrase, must exist verbatim in from_uri content
+    )
     description: str = ""
     created_at: str = ""
 

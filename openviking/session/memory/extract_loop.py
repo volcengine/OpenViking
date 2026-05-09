@@ -350,12 +350,52 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     self._page_id_map.register_new(uri)
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
-        resolved_links = self._resolve_links(operations)
+        resolved_links = self._resolve_links(operations, upsert_operations)
 
         resolved.resolved_links = resolved_links
         return resolved
 
-    def _resolve_links(self, operations) -> List[StoredLink]:
+    def _get_page_text(self, uri: str, upsert_operations: List[ResolvedOperation]) -> Optional[str]:
+        """Get the text content of a page by URI for match_text validation."""
+        # Existing pages: look in read_file_contents
+        file_content = self.context_provider.read_file_contents.get(uri)
+        if file_content:
+            return file_content.plain_content
+        # New pages: look in upsert_operations
+        for op in upsert_operations:
+            if uri in op.uris:
+                content = op.memory_fields.get("content", "")
+                if content:
+                    return content
+        return None
+
+    @staticmethod
+    def _validate_match_text(match_text: Optional[str], page_text: Optional[str]) -> bool:
+        """Validate match_text: must be a word/short phrase and exist verbatim in page content."""
+        if not match_text:
+            return True  # None/empty is allowed
+        if not page_text:
+            return False
+        # Must exist verbatim in page content
+        if match_text not in page_text:
+            return False
+        # Must be a word or short phrase (not a sentence/long text)
+        # A phrase is a few words without sentence-ending punctuation
+        stripped = match_text.strip()
+        if len(stripped) > 50:
+            return False
+        # Reject if it contains sentence-ending punctuation (period, exclamation, question mark)
+        if any(p in stripped for p in ("。", "！", "？", ".", "!", "?")):
+            # Allow trailing punctuation only if it's a single word
+            if stripped.count(".") > 0 and not stripped.endswith("."):
+                return False
+            if any(p in stripped[:-1] for p in ("。", "！", "？", ".", "!", "?")):
+                return False
+        return True
+
+    def _resolve_links(
+        self, operations, upsert_operations: List[ResolvedOperation]
+    ) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs."""
         from datetime import datetime, timezone
 
@@ -372,6 +412,16 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if not from_uri or not to_uri:
                 logger.warning(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
                 continue
+
+            # Validate match_text: must be a word/short phrase and exist verbatim in from page
+            if link.match_text:
+                from_page_text = self._get_page_text(from_uri, upsert_operations)
+                if not self._validate_match_text(link.match_text, from_page_text):
+                    logger.warning(
+                        f"Skipping link: match_text '{link.match_text}' is invalid"
+                        f" (not found in from page or not a word/phrase)"
+                    )
+                    continue
 
             # Forward link (direction="links") - stored in from_uri's MEMORY_FIELDS
             forward_link = StoredLink(

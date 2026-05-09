@@ -137,7 +137,7 @@ For each link:
 - For NEW items you create, assign a unique page_id >= 100 and set it in the item's "page_id" field.
 - "t_field": which field in the target page (usually "content")
 - "t_line_ranges": 1-based line range(s) within the t_field of the target page, using the line numbers shown in read results. Single range: "3-5", multiple ranges: "3-5,8-10". Required when the link points to a specific passage.
-- "match_text": exact text in the from page's content that should become a link (must exist verbatim in the from page)
+- "match_text": a single word or short phrase from the from page's content that should become a link. Rules: (1) must exist verbatim in the from page's content; (2) must be a word or short phrase only, NOT a sentence or long text; (3) pick the most specific/identifying term
 - "description": brief explanation of the relationship
 - "weight": 0.0-1.0, how strong the relationship is (default 1.0)
 
