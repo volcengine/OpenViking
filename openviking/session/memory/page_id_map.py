@@ -6,11 +6,19 @@ PageIdMap - Temporary page_id to URI mapping for one ExtractLoop lifecycle.
 Existing pages (from prefetch/read): IDs 1-99
 New pages (from LLM output): IDs 100+
 
+A URI can have multiple page_ids pointing to it (e.g. existing page_id=1 from
+prefetch, plus LLM-declared page_id=100 when editing the same page).
+Both IDs resolve to the same URI.
+
 page_id information is injected into LLM context by annotating read results
 with [page_id: N], not by generating a separate mapping table.
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Set
+
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class PageIdMap:
@@ -21,18 +29,20 @@ class PageIdMap:
     def __init__(self):
         self._next_id: int = 1
         self._id_to_uri: Dict[int, str] = {}
-        self._uri_to_id: Dict[str, int] = {}
+        # A URI can map to multiple page_ids (existing + LLM-declared aliases)
+        self._uri_to_ids: Dict[str, Set[int]] = {}
 
     def register_existing(self, uri: str) -> int:
         """Register an existing page (from prefetch/read). Returns page_id in 1-99 range."""
-        if uri in self._uri_to_id:
-            return self._uri_to_id[uri]
+        if uri in self._uri_to_ids:
+            # Return the smallest (original) page_id for this URI
+            return min(self._uri_to_ids[uri])
         if self._next_id > self.MAX_EXISTING_ID:
             raise ValueError(f"Too many existing pages for PageIdMap (max {self.MAX_EXISTING_ID})")
         page_id = self._next_id
         self._next_id += 1
         self._id_to_uri[page_id] = uri
-        self._uri_to_id[uri] = page_id
+        self._uri_to_ids[uri] = {page_id}
         return page_id
 
     def register_new(self, uri: str, page_id: Optional[int] = None) -> int:
@@ -43,20 +53,33 @@ class PageIdMap:
             page_id: The page_id declared by the LLM (must be >= 100).
                      If None, auto-assigns the next available ID.
         """
-        if uri in self._uri_to_id:
-            return self._uri_to_id[uri]
+        # Even if URI already exists, still register the LLM-declared page_id
+        # as an alias so links using it can resolve correctly.
         if page_id is not None and page_id >= 100:
-            # Use the LLM-declared page_id
-            if page_id in self._id_to_uri:
-                # Collision: LLM declared same page_id for different URIs, auto-assign
+            if page_id not in self._id_to_uri:
+                self._id_to_uri[page_id] = uri
+                self._uri_to_ids.setdefault(uri, set()).add(page_id)
+                logger.debug(f"PageIdMap: registered LLM page_id={page_id} -> {uri}")
+                return page_id
+            else:
+                # Collision: LLM declared same page_id for different URIs
+                existing_uri = self._id_to_uri[page_id]
+                if existing_uri == uri:
+                    # Same URI, same page_id - already registered
+                    return page_id
+                # Different URI claims same page_id - auto-assign
                 page_id = self._next_available_new_id()
-            self._id_to_uri[page_id] = uri
-            self._uri_to_id[uri] = page_id
-            return page_id
-        # Auto-assign
+                self._id_to_uri[page_id] = uri
+                self._uri_to_ids.setdefault(uri, set()).add(page_id)
+                logger.warning(f"PageIdMap: page_id collision, auto-assigned {page_id} -> {uri}")
+                return page_id
+
+        # Auto-assign (no LLM-declared page_id)
+        if uri in self._uri_to_ids:
+            return min(self._uri_to_ids[uri])
         page_id = self._next_available_new_id()
         self._id_to_uri[page_id] = uri
-        self._uri_to_id[uri] = page_id
+        self._uri_to_ids.setdefault(uri, set()).add(page_id)
         return page_id
 
     def _next_available_new_id(self) -> int:
@@ -71,8 +94,10 @@ class PageIdMap:
         return self._id_to_uri.get(page_id)
 
     def get_id(self, uri: str) -> Optional[int]:
-        """Get page_id for a URI."""
-        return self._uri_to_id.get(uri)
+        """Get the primary page_id for a URI."""
+        if uri in self._uri_to_ids:
+            return min(self._uri_to_ids[uri])
+        return None
 
     @property
     def has_links_enabled(self) -> bool:

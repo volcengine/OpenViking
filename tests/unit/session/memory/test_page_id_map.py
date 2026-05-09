@@ -66,30 +66,50 @@ class TestPageIdMap:
 
     def test_register_new_with_declared_page_id(self):
         pim = PageIdMap()
-        # LLM declares page_id=105 for a new item
         returned_id = pim.register_new("viking://new-item", page_id=105)
         assert returned_id == 105
         assert pim.resolve(105) == "viking://new-item"
 
     def test_register_new_with_declared_page_id_collision(self):
         pim = PageIdMap()
-        # First registration with page_id=100
         pim.register_new("viking://first", page_id=100)
-        # Second registration with same page_id=100 but different URI -> auto-assign
         returned_id = pim.register_new("viking://second", page_id=100)
-        assert returned_id != 100  # Should get a different ID
+        assert returned_id != 100
         assert returned_id >= 100
-        # Both should be resolvable
         assert pim.resolve(100) == "viking://first"
         assert pim.resolve(returned_id) == "viking://second"
 
     def test_register_new_declared_page_id_links_resolve_correctly(self):
-        """Simulate the full flow: LLM outputs page_id=100, link uses f=100."""
         pim = PageIdMap()
-        # Register an existing page
         existing_id = pim.register_existing("viking://existing-page")
-        # LLM creates a new item with page_id=100
         new_id = pim.register_new("viking://new-item", page_id=100)
-        # Link from existing page to new page should resolve correctly
         assert pim.resolve(existing_id) == "viking://existing-page"
         assert pim.resolve(100) == "viking://new-item"
+
+    def test_existing_page_alias_with_llm_page_id(self):
+        """LLM edits an existing page: URI already registered as page_id=1,
+        LLM declares page_id=100. Both IDs should resolve to the same URI."""
+        pim = PageIdMap()
+        existing_id = pim.register_existing("viking://profile.md")
+        assert existing_id == 1
+
+        # LLM edits profile.md, declares page_id=100
+        returned_id = pim.register_new("viking://profile.md", page_id=100)
+        assert returned_id == 100
+
+        # Both page_id=1 and page_id=100 resolve to the same URI
+        assert pim.resolve(1) == "viking://profile.md"
+        assert pim.resolve(100) == "viking://profile.md"
+
+    def test_link_from_llm_page_id_to_existing(self):
+        """Simulate: LLM declares page_id=100 for an existing page,
+        then creates a link with f=100 -> t=1."""
+        pim = PageIdMap()
+        # Prefetch registers existing pages
+        id_a = pim.register_existing("viking://a")
+        id_b = pim.register_existing("viking://b")
+        # LLM edits page_a, declares page_id=100
+        pim.register_new("viking://a", page_id=100)
+        # Link from edited page (f=100) to existing page (t=2)
+        assert pim.resolve(100) == "viking://a"
+        assert pim.resolve(id_b) == "viking://b"

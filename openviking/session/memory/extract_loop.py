@@ -349,6 +349,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 for uri in op.uris:
                     self._page_id_map.register_new(uri, page_id=op.page_id)
 
+        # Debug: log page_id map state before resolving links
+        tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")
+
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
         resolved_links = self._resolve_links(operations, upsert_operations)
 
