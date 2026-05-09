@@ -5,52 +5,19 @@ import pytest
 
 from openviking.session.memory.merge_op.link_merge import (
     _dedup_key,
-    _format_ranges,
-    _parse_ranges,
     merge_links,
 )
 
 
-class TestParseRanges:
-    def test_single_range(self):
-        assert _parse_ranges("3-5") == [(3, 5)]
-
-    def test_multiple_ranges(self):
-        assert _parse_ranges("3-5,8-10") == [(3, 5), (8, 10)]
-
-    def test_empty_string(self):
-        assert _parse_ranges("") == []
-
-    def test_none(self):
-        assert _parse_ranges(None) == []
-
-
-class TestFormatRanges:
-    def test_single_range(self):
-        assert _format_ranges([(3, 5)]) == "3-5"
-
-    def test_multiple_ranges(self):
-        assert _format_ranges([(3, 5), (8, 10)]) == "3-5,8-10"
-
-    def test_empty(self):
-        assert _format_ranges([]) == ""
-
-    def test_overlapping_merged(self):
-        assert _format_ranges([(3, 5), (4, 7)]) == "3-7"
-
-    def test_adjacent_merged(self):
-        assert _format_ranges([(3, 5), (6, 8)]) == "3-8"
-
-
 class TestDedupKey:
     def test_same_links_same_key(self):
-        link1 = {"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "foo"}
-        link2 = {"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "foo"}
+        link1 = {"from_uri": "a", "to_uri": "b", "match_text": "foo"}
+        link2 = {"from_uri": "a", "to_uri": "b", "match_text": "foo"}
         assert _dedup_key(link1) == _dedup_key(link2)
 
     def test_different_match_text_different_key(self):
-        link1 = {"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "foo"}
-        link2 = {"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "bar"}
+        link1 = {"from_uri": "a", "to_uri": "b", "match_text": "foo"}
+        link2 = {"from_uri": "a", "to_uri": "b", "match_text": "bar"}
         assert _dedup_key(link1) != _dedup_key(link2)
 
 
@@ -70,7 +37,6 @@ class TestMergeLinks:
             {
                 "from_uri": "a",
                 "to_uri": "b",
-                "t_field": "content",
                 "match_text": "x",
                 "weight": 0.5,
                 "link_type": "related_to",
@@ -80,7 +46,6 @@ class TestMergeLinks:
             {
                 "from_uri": "a",
                 "to_uri": "b",
-                "t_field": "content",
                 "match_text": "x",
                 "weight": 0.9,
                 "link_type": "belongs_to",
@@ -97,7 +62,6 @@ class TestMergeLinks:
             {
                 "from_uri": "a",
                 "to_uri": "b",
-                "t_field": "content",
                 "match_text": "x",
                 "description": "old",
             }
@@ -106,7 +70,6 @@ class TestMergeLinks:
             {
                 "from_uri": "a",
                 "to_uri": "b",
-                "t_field": "content",
                 "match_text": "x",
                 "description": "new",
             }
@@ -114,30 +77,8 @@ class TestMergeLinks:
         result = merge_links(existing, new)
         assert result[0]["description"] == "new"
 
-    def test_t_line_ranges_union(self):
-        existing = [
-            {
-                "from_uri": "a",
-                "to_uri": "b",
-                "t_field": "content",
-                "match_text": "x",
-                "t_line_ranges": "3-5",
-            }
-        ]
-        new = [
-            {
-                "from_uri": "a",
-                "to_uri": "b",
-                "t_field": "content",
-                "match_text": "x",
-                "t_line_ranges": "8-10",
-            }
-        ]
-        result = merge_links(existing, new)
-        assert result[0]["t_line_ranges"] == "3-5,8-10"
-
     def test_different_match_text_not_deduped(self):
-        existing = [{"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "foo"}]
-        new = [{"from_uri": "a", "to_uri": "b", "t_field": "content", "match_text": "bar"}]
+        existing = [{"from_uri": "a", "to_uri": "b", "match_text": "foo"}]
+        new = [{"from_uri": "a", "to_uri": "b", "match_text": "bar"}]
         result = merge_links(existing, new)
         assert len(result) == 2

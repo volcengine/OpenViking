@@ -30,14 +30,11 @@ class TestWikiLink:
         assert link.t == 2
         assert link.link_type == LinkType.RELATED_TO
         assert link.weight == 1.0
-        assert link.t_field == "content"
 
     def test_full_fields(self):
         link = WikiLink(
             f=1,
             t=3,
-            t_field="content",
-            t_line_ranges="3-5",
             link_type=LinkType.BELONGS_TO,
             weight=0.9,
             match_text="Caroline",

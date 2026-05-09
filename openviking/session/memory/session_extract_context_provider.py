@@ -146,8 +146,6 @@ For each link:
 - "f": from page_id (the page containing the match_text). Use the page_id shown in read results (e.g., [page_id: 1]).
 - "t": to page_id (the target page being linked to). Use the page_id shown in read results.
 - For NEW items you create, assign a unique page_id >= 100 and set it in the item's "page_id" field.
-- "t_field": which field in the target page (usually "content")
-- "t_line_ranges": 1-based line range(s) within the t_field of the target page, using the line numbers shown in read results. Single range: "3-5", multiple ranges: "3-5,8-10". Required when the link points to a specific passage.
 - "match_text": a single WORD from the original conversation that should become a link. Rules: (1) must be a single word only (NOT a phrase, sentence, or multi-word text); (2) must exist verbatim in the original conversation messages; (3) pick the most specific/identifying word
 - "description": brief explanation of the relationship
 - "weight": 0.0-1.0, how strong the relationship is (default 1.0)

@@ -403,10 +403,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 conversation_text = self.context_provider.get_conversation_text()
                 if not self._validate_match_text(link.match_text, conversation_text):
                     logger.warning(
-                        f"Skipping link: match_text '{link.match_text}' is invalid"
+                        f"match_text '{link.match_text}' is invalid"
                         f" (not a single word or not found in conversation)"
                     )
-                    continue
 
             # Forward link (direction="links") - stored in from_uri's MEMORY_FIELDS
             forward_link = StoredLink(
@@ -415,8 +414,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 direction="links",
                 link_type=link.link_type,
                 weight=link.weight,
-                t_field=link.t_field,
-                t_line_ranges=link.t_line_ranges,
                 match_text=link.match_text,
                 description=link.description,
                 created_at=now,
@@ -428,8 +425,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 direction="backlinks",
                 link_type=link.link_type,
                 weight=link.weight,
-                t_field=link.t_field,
-                t_line_ranges=link.t_line_ranges,
                 match_text=link.match_text,
                 description=link.description,
                 created_at=now,
