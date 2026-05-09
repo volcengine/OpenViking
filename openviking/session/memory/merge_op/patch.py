@@ -68,11 +68,14 @@ class PatchOp(MergeOpBase):
 
         # Case 1: StrPatch object - apply patch
         if isinstance(patch_value, StrPatch):
-            # If any block has empty search, treat as full replacement
-            # (LLM sometimes generates search='' to mean "replace the whole field")
-            if any(not block.search for block in patch_value.blocks):
-                return self._extract_replace_when_no_original(patch_value)
-            return apply_str_patch(current_str, patch_value)
+            # Filter out empty-search blocks when there's existing content.
+            # Empty search with existing content is invalid (can't match empty string
+            # against non-empty content), so skip those blocks.
+            valid_blocks = [b for b in patch_value.blocks if b.search]
+            if valid_blocks:
+                return apply_str_patch(current_str, StrPatch(blocks=valid_blocks))
+            # All blocks have empty search → no valid patches, keep original
+            return current_value
 
         # Case 2: dict form of StrPatch (from JSON parsing)
         if isinstance(patch_value, dict):
@@ -84,10 +87,12 @@ class PatchOp(MergeOpBase):
                             blocks.append(SearchReplaceBlock(**block_dict))
                         else:
                             blocks.append(block_dict)
-                    patch_value = StrPatch(blocks=blocks)
-                    if any(not block.search for block in patch_value.blocks):
-                        return self._extract_replace_when_no_original(patch_value)
-                    return apply_str_patch(current_str, patch_value)
+                    # Filter out empty-search blocks when there's existing content
+                    valid_blocks = [b for b in blocks if b.search]
+                    if valid_blocks:
+                        return apply_str_patch(current_str, StrPatch(blocks=valid_blocks))
+                    # All blocks have empty search → keep original
+                    return current_value
             except Exception:
                 # If conversion fails, treat as simple replacement
                 return str(patch_value) if patch_value is not None else ""
