@@ -7,7 +7,6 @@ import { toast } from 'sonner'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
-import { Card, CardContent } from '#/components/ui/card'
 import { Checkbox } from '#/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#/components/ui/collapsible'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
@@ -56,7 +55,7 @@ function isBlockedFile(name: string): boolean {
   return BLOCKED_EXTENSIONS.has(name.slice(dot).toLowerCase())
 }
 
-export function AddResourcePage() {
+export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = {}) {
   const { t } = useTranslation('addResource')
   const { state: uploadState, startUpload, startRemote, reset, isActive } = useResourceUpload()
 
@@ -152,10 +151,12 @@ export function AddResourcePage() {
     if (mode === 'upload') {
       if (!selectedFile) return
       startUpload({ file: selectedFile, fileType: detectedType, commonBody: buildCommonBody() })
+      onSubmitted?.()
     } else {
       const url = remoteUrl.trim()
       if (!url) return
       startRemote({ url, commonBody: buildCommonBody() })
+      onSubmitted?.()
     }
   }
 
@@ -176,9 +177,7 @@ export function AddResourcePage() {
   return (
     <div className="flex flex-col gap-6">
 
-      <div className="max-w-4xl">
-        <Card>
-          <CardContent className="space-y-5 pt-6">
+      <div className="space-y-5">
             {/* Mode Switch */}
             <div className="flex gap-1 rounded-lg bg-muted p-1">
               <button
@@ -472,8 +471,6 @@ export function AddResourcePage() {
                     : t('submit')}
               </Button>
             )}
-          </CardContent>
-        </Card>
       </div>
 
       <DirectoryPickerDialog

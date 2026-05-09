@@ -2,6 +2,8 @@ const zhCN = {
   appShell: {
     footer: {
       connection: '连接与身份',
+      docs: '文档站',
+      github: 'GitHub',
     },
     header: {
       defaultTitle: 'OpenViking Studio',
@@ -10,24 +12,24 @@ const zhCN = {
       home: {
         title: '首页',
       },
-      addResource: {
-        title: '添加资源',
-      },
-      fileSystem: {
-        title: '文件系统',
-      },
       operations: {
         title: '运维',
       },
+      requestLogs: {
+        title: '请求日志',
+      },
       resources: {
-        title: '资源',
+        title: '上下文管理',
+      },
+      retrieval: {
+        title: '检索',
       },
       sessions: {
         title: '会话',
       },
     },
     sidebar: {
-      workspaceGroupLabel: '工作区',
+      workspaceGroupLabel: 'OpenViking',
     },
   },
   common: {
@@ -89,6 +91,20 @@ const zhCN = {
     },
   },
   home: {
+    contributionHeatmap: {
+      activeDays: '活跃天数',
+      currentStreak: '当前连续',
+      days: '天',
+      inPastYear: '次贡献（近一年）',
+      less: '少',
+      longestStreak: '最长连续',
+      more: '多',
+      nCommits: '次提交',
+      noActivity: '无提交',
+      oneCommit: '次提交',
+      subtitle: '按天展示提交活跃度',
+      title: '提交日历',
+    },
     memoryStats: {
       category: {
         cases: '案例',
@@ -115,12 +131,38 @@ const zhCN = {
       title: '会话',
     },
     statCard: {
+      agentVisits: '今日 Agent 访问数（实时）',
+      agentVisitsSub: '活跃会话占位',
+      contextMagnitude: '上下文数据量级（实时）',
+      contextMagnitudeSub: '已索引向量',
       memoryTotal: '记忆总数',
+      retrievalCount: '今日检索次数（实时）',
+      retrievalCountSub: '记忆统计占位',
       tokenUsage: 'Token 用量',
       vectorCount: '向量数量',
       vectorCountSub: '已索引向量',
       memoryTotalSub: '跨全部分类',
       tokenUsageSub: '累计使用',
+    },
+    timeFilter: {
+      current: '当前区间',
+      end: '结束日期',
+      reset: '重置',
+      start: '开始日期',
+      title: '横轴时间筛选',
+    },
+    tokenTrend: {
+      input: '大模型输入',
+      output: '大模型输出',
+      title: 'Tokens 消耗统计',
+      vector: '向量化',
+    },
+    onboarding: {
+      cta: '开始添加您的第一个上下文',
+      subtitle: 'A context DataBase for AI Agents',
+      sloganEn: 'Memory, Resource, Skill. Everything is a File.',
+      sloganZh: '记忆、资源、技能，万物皆文件。',
+      title: '为 Agent 而生的上下文数据库',
     },
     systemHealth: {
       allOperational: '所有系统正常运行',
@@ -149,6 +191,45 @@ const zhCN = {
     page: {
       placeholder: '运维面板能力尚未接入。',
     },
+  },
+  requestLogs: {
+    clear: '清空',
+    description: '查看当前 Studio 会话发出的 API 请求，包括状态、耗时和请求标识。',
+    empty: {
+      description: '当前无日志信息，先开始您的第一次调用吧！',
+      filteredDescription: '调整搜索内容或状态筛选，扩大可见日志范围。',
+      filteredTitle: '没有匹配的请求',
+      title: '当前无日志信息，先开始您的第一次调用吧！',
+    },
+    eyebrow: 'Studio 遥测',
+    filters: {
+      all: '全部',
+      error: '错误',
+      pending: '进行中',
+      success: '成功',
+    },
+    metrics: {
+      average: '平均耗时',
+      errors: '错误',
+      pending: '进行中',
+      total: '已捕获',
+    },
+    searchPlaceholder: '筛选方法、路径或状态码',
+    status: {
+      error: 'ERR',
+      pending: 'PENDING',
+      success: 'OK',
+    },
+    table: {
+      duration: '耗时',
+      method: '方法',
+      path: '路径',
+      requestId: 'Request ID',
+      status: '状态',
+      time: '时间',
+      title: '捕获的请求',
+    },
+    title: '请求日志',
   },
   addResource: {
     title: '添加资源',
@@ -220,8 +301,22 @@ const zhCN = {
     page: {
       placeholder: '资源工作区能力尚未接入。',
     },
+    toolbar: {
+      parent: '返回父级',
+      refresh: '刷新目录',
+      search: '搜索 ⌘K',
+      upload: '上传',
+    },
+    emptyState: {
+      title: '您的上下文空间还是空的',
+      upload: '上传文件',
+    },
+    uploadDialog: {
+      title: '上传',
+      description: '添加本地文件或远程资源到当前上下文资源库。',
+    },
     searchPalette: {
-      placeholder: '搜索... 输入 / 浏览目录',
+      placeholder: '搜索文件和目录...',
       scope: {
         global: '搜索范围: 全局',
         current: '搜索范围: {{name}}',
@@ -238,7 +333,7 @@ const zhCN = {
         invalidSuffix: '无法访问，不能切换',
       },
       empty: {
-        title: '语义搜索知识库',
+        title: '搜索文件和目录',
       },
       browseDirHint: {
         before: '输入',
@@ -250,7 +345,7 @@ const zhCN = {
       },
       error: '搜索出错',
       emptyResults: {
-        title: '没有找到匹配的内容',
+        title: '没有找到匹配的文件或目录',
         subtitle: '试试换个关键词？',
       },
       footer: {
@@ -276,6 +371,29 @@ const zhCN = {
         title: '空目录',
         subtitle: '这一层目前没有可继续展开的子目录',
       },
+    },
+  },
+  retrieval: {
+    title: '检索',
+    searchPlaceholder: '请输入检索内容，例如：cat memory / resources filesystem',
+    send: '检索',
+    controls: {
+      function: 'find()',
+      resultCount: '返回数量',
+      path: '路径',
+      pathPlaceholder: '/',
+    },
+    results: {
+      title: '检索结果',
+      topN: '检索结果（Top{{count}}）',
+    },
+    empty: {
+      title: '当前无日志信息，先开始您的第一次调用吧！',
+    },
+    error: '检索出错',
+    noResults: {
+      title: '没有找到匹配的内容',
+      subtitle: '试试换个关键词或调整路径范围',
     },
   },
   sessions: {
