@@ -262,7 +262,7 @@ export default {
       en: 'How we removed the proxy and let ChatGPT, Claude, and Cursor connect to OpenViking directly.',
       zh: '我们如何去掉代理，让 ChatGPT、Claude 和 Cursor 直连 OpenViking。',
     },
-    cover: 'assets/covers/oauth.svg',
+    cover: 'assets/covers/oauth.png',
     publishedAt: '2026-05-09',
     readingTime: 8,
     category: { en: 'Engineering', zh: '工程' },

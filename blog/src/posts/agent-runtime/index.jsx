@@ -298,7 +298,7 @@ export default {
       en: 'Four steps to pull a CLI agent out of the terminal and turn it into a controllable, networked service.',
       zh: '四步把 CLI agent 从终端里拉出来，变成可控的、联网的服务。',
     },
-    cover: 'assets/covers/runtime.svg',
+    cover: 'assets/covers/runtime.png',
     publishedAt: '2026-05-08',
     readingTime: 10,
     category: { en: 'Engineering', zh: '工程' },
