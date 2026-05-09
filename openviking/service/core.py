@@ -21,6 +21,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
+from openviking.service.task_tracker import set_task_tracker
 from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
@@ -149,6 +150,7 @@ class OpenVikingService:
             lock_expire=tx_cfg.lock_expire,
             redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
         )
+        set_task_tracker(config.build_task_tracker(self._agfs_client))
 
     @property
     def _agfs(self) -> Any:

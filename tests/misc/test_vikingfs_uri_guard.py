@@ -194,3 +194,15 @@ class TestVikingFSURITraversalGuard:
         assert result["matches"][0]["uri"] == "viking://resources/test-root"
         assert result["matches"][0]["line"] == 1
         assert result["matches"][0]["content"] == "act"
+
+    def test_ls_entries_hides_reserved_tasks_dir_under_account_root(self) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.ls.return_value = [
+            {"name": "resources", "isDir": True},
+            {"name": "tasks", "isDir": True},
+            {"name": "_system", "isDir": True},
+        ]
+
+        entries = fs._ls_entries("/local/default")
+
+        assert [entry["name"] for entry in entries] == ["resources"]
