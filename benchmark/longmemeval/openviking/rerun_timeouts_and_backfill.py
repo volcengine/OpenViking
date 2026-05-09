@@ -206,7 +206,7 @@ def process_one_csv(
         run_cmd(
             [
                 sys.executable,
-                "benchmark/longmemeval/vikingbot/run_eval.py",
+                "benchmark/longmemeval/openviking/run_eval.py",
                 str(subset_json),
                 "--output",
                 str(rerun_csv),
@@ -221,7 +221,7 @@ def process_one_csv(
         run_cmd(
             [
                 sys.executable,
-                "benchmark/longmemeval/vikingbot/judge.py",
+                "benchmark/longmemeval/openviking/judge.py",
                 "--input",
                 str(rerun_csv),
                 "--parallel",
@@ -255,7 +255,7 @@ def process_one_csv(
     run_cmd(
         [
             sys.executable,
-            "benchmark/longmemeval/vikingbot/stat_judge_result.py",
+            "benchmark/longmemeval/openviking/stat_judge_result.py",
             "--input",
             str(csv_path),
         ]

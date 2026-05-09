@@ -13,7 +13,7 @@ from typing import Any
 from openviking_cli.client.sync_http import SyncHTTPClient
 
 try:
-    from benchmark.longmemeval.vikingbot.longmemeval_prompts import (
+    from benchmark.longmemeval.openviking.longmemeval_prompts import (
         get_answer_generation_prompt,
     )
 except ModuleNotFoundError:

@@ -51,7 +51,7 @@ LongMemEval sample 默认按 `question_id` 派生独立 user/agent：
 先导入一条，确认 ingest 能跑通：
 
 ```bash
-python benchmark/longmemeval/vikingbot/import_to_ov.py \
+python benchmark/longmemeval/openviking/import_to_ov.py \
   --input <LONGMEMEVAL_JSON> \
   --sample 0 \
   --openviking-url http://127.0.0.1:1933 \
@@ -64,7 +64,7 @@ python benchmark/longmemeval/vikingbot/import_to_ov.py \
 如果需要只导入某几个 session：
 
 ```bash
-python benchmark/longmemeval/vikingbot/import_to_ov.py \
+python benchmark/longmemeval/openviking/import_to_ov.py \
   --input <LONGMEMEVAL_JSON> \
   --sample 0 \
   --sessions 1-3 \
@@ -76,7 +76,7 @@ python benchmark/longmemeval/vikingbot/import_to_ov.py \
 评测单条并打印给模型的输入，适合检查 prompt、召回 URI、memory token 口径：
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --sample 0 \
   --output result/longmemeval_sample0_debug.csv \
@@ -88,11 +88,11 @@ python benchmark/longmemeval/vikingbot/run_eval.py \
 然后 judge 和统计：
 
 ```bash
-python benchmark/longmemeval/vikingbot/judge.py \
+python benchmark/longmemeval/openviking/judge.py \
   --input result/longmemeval_sample0_debug.csv \
   --parallel 1
 
-python benchmark/longmemeval/vikingbot/stat_judge_result.py \
+python benchmark/longmemeval/openviking/stat_judge_result.py \
   --input result/longmemeval_sample0_debug.csv
 ```
 
@@ -101,7 +101,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 推荐用单进程内并行，不要再用 `xargs -P` 同时启动多个 `import_to_ov.py` 进程。多进程会竞争写 `result/.longmemeval_ingest_record.json`，容易丢记录。
 
 ```bash
-python benchmark/longmemeval/vikingbot/import_to_ov.py \
+python benchmark/longmemeval/openviking/import_to_ov.py \
   --input <LONGMEMEVAL_JSON> \
   --openviking-url http://127.0.0.1:1933 \
   --wait-mode deferred \
@@ -122,18 +122,18 @@ python benchmark/longmemeval/vikingbot/import_to_ov.py \
 当前推荐回答模式是 `single-search-context`：每题只做一次 OpenViking find，读取 top-k memory 文件，把内容拼到 LongMemEval answer prompt 中单轮回答。
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --output result/longmemeval_single_search_context.csv \
   --threads 4 \
   --timeout 300 \
   --single-search-context-limit 10
 
-python benchmark/longmemeval/vikingbot/judge.py \
+python benchmark/longmemeval/openviking/judge.py \
   --input result/longmemeval_single_search_context.csv \
   --parallel 8
 
-python benchmark/longmemeval/vikingbot/stat_judge_result.py \
+python benchmark/longmemeval/openviking/stat_judge_result.py \
   --input result/longmemeval_single_search_context.csv
 ```
 
@@ -150,7 +150,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 
 ## 文件说明
 
-### `vikingbot/import_to_ov.py`
+### `openviking/import_to_ov.py`
 
 把 LongMemEval 的 `haystack_sessions` 导入 OpenViking memory。
 
@@ -171,7 +171,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 
 注意：`result/.longmemeval_ingest_record.json` 是导入去重记录。单进程并发是安全的；不要对同一个 record 用多个 `import_to_ov.py` 进程并发写。
 
-### `vikingbot/run_eval.py`
+### `openviking/run_eval.py`
 
 对已导入 OpenViking 的 LongMemEval question 做回答。
 
@@ -197,7 +197,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 - `--single-search-context-limit`: 初始 search 召回的候选 memory 文件数；配置 rerank 时，最终进入 prompt 的是 rerank 后 top10。
 - `--debug-print-model-input`: 打印完整模型输入和 memory token，用于单题调试。
 
-### `vikingbot/judge.py`
+### `openviking/judge.py`
 
 对 `run_eval.py` 输出的 CSV 做自动判分，并把 `result` / `reasoning` 回写到同一个 CSV。
 
@@ -215,7 +215,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 Azure 示例：
 
 ```bash
-python benchmark/longmemeval/vikingbot/judge.py \
+python benchmark/longmemeval/openviking/judge.py \
   --input result/longmemeval_single_search_context.csv \
   --provider azure \
   --base-url https://search.bytedance.net/gpt/openapi/online/v2/crawl/openai/deployments/gpt_openapi \
@@ -225,12 +225,12 @@ python benchmark/longmemeval/vikingbot/judge.py \
   --parallel 8
 ```
 
-### `vikingbot/stat_judge_result.py`
+### `openviking/stat_judge_result.py`
 
 统计一份 judge 后 CSV 的总体准确率、分类型准确率、平均耗时、平均 iteration 和 token 用量。
 
 ```bash
-python benchmark/longmemeval/vikingbot/stat_judge_result.py \
+python benchmark/longmemeval/openviking/stat_judge_result.py \
   --input result/longmemeval_single_search_context.csv
 ```
 
@@ -240,12 +240,12 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 longmemeval_summary.txt
 ```
 
-### `vikingbot/repeat_eval.py`
+### `openviking/repeat_eval.py`
 
 连续跑多次 eval + judge + stat，用于观察稳定性和平均 token/准确率。
 
 ```bash
-python benchmark/longmemeval/vikingbot/repeat_eval.py \
+python benchmark/longmemeval/openviking/repeat_eval.py \
   --input <LONGMEMEVAL_JSON> \
   --output-prefix result/longmemeval_single_search_context_repeat10 \
   --runs 10 \
@@ -264,12 +264,12 @@ result/longmemeval_single_search_context_repeat10.run2.csv
 
 每次 run 后会打印单次准确率、平均耗时、平均 token。最后打印多次平均统计。
 
-### `vikingbot/stat_stability.py`
+### `openviking/stat_stability.py`
 
 读取多份已经 judge 过的 repeat CSV，统计每道题的稳定性。
 
 ```bash
-python benchmark/longmemeval/vikingbot/stat_stability.py \
+python benchmark/longmemeval/openviking/stat_stability.py \
   --inputs result/longmemeval_single_search_context_repeat10.run*.csv \
   --output result/longmemeval_single_search_context_stability.csv \
   --output-json result/longmemeval_single_search_context_stability.json
@@ -285,12 +285,12 @@ python benchmark/longmemeval/vikingbot/stat_stability.py \
 
 如果只是跑完 `repeat_eval.py` 后立刻统计，后续可以把这段逻辑接到 `repeat_eval.py` 末尾；但保留独立脚本有价值，因为它可以分析历史 CSV，不需要重新跑评测。
 
-### `vikingbot/rerun_timeouts_and_backfill.py`
+### `openviking/rerun_timeouts_and_backfill.py`
 
 补跑已有结果 CSV 中 timeout、命令错误、parse error 或空 response 的行，并把新结果回填回原 CSV。
 
 ```bash
-python benchmark/longmemeval/vikingbot/rerun_timeouts_and_backfill.py \
+python benchmark/longmemeval/openviking/rerun_timeouts_and_backfill.py \
   --inputs result/longmemeval_single_search_context.csv \
   --dataset <LONGMEMEVAL_JSON> \
   --threads 4 \
@@ -307,14 +307,14 @@ python benchmark/longmemeval/vikingbot/rerun_timeouts_and_backfill.py \
 
 `--include-missing` 会把 CSV 中缺失的 dataset sample 也补跑。
 
-### `vikingbot/judge_retrieved_evidence.py`
+### `openviking/judge_retrieved_evidence.py`
 
 判断 `run_eval.py` 召回的 URI 内容是否足够支撑标准答案，并估计证据首次出现在 top-k 的哪个位置。
 
 用途：区分错题原因是检索没召回证据，还是证据已召回但回答模型没用好。
 
 ```bash
-python benchmark/longmemeval/vikingbot/judge_retrieved_evidence.py \
+python benchmark/longmemeval/openviking/judge_retrieved_evidence.py \
   --input result/longmemeval_single_search_context.csv \
   --output result/longmemeval_single_search_context_evidence.csv \
   --data-root <OPENVIKING_DATA_ROOT> \
@@ -336,12 +336,12 @@ python benchmark/longmemeval/vikingbot/judge_retrieved_evidence.py \
 - `evidence_supporting_uris`: judge 认为真正支撑答案的 URI。
 - `evidence_reason`: 判断理由。
 
-### `vikingbot/import_and_eval_one.py`
+### `openviking/import_and_eval_one.py`
 
 导入一个 sample 并立刻跑该 sample 的一条评测。适合非常早期的冒烟测试。
 
 ```bash
-python benchmark/longmemeval/vikingbot/import_and_eval_one.py 0 \
+python benchmark/longmemeval/openviking/import_and_eval_one.py 0 \
   --input <LONGMEMEVAL_JSON> \
   --wait-seconds 3 \
   --force-ingest
@@ -349,7 +349,7 @@ python benchmark/longmemeval/vikingbot/import_and_eval_one.py 0 \
 
 注意：这个脚本封装较薄，输出文件使用 `run_eval.py` 默认路径。需要精细控制输出文件、debug prompt 或 context limit 时，建议直接分别调用 `import_to_ov.py` 和 `run_eval.py`。
 
-### `vikingbot/longmemeval_prompts.py`
+### `openviking/longmemeval_prompts.py`
 
 集中存放 LongMemEval answer generation prompt 和 judge prompt。
 
@@ -365,18 +365,18 @@ python benchmark/longmemeval/vikingbot/import_and_eval_one.py 0 \
 ### 只跑前 10 条检查全链路
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --output result/longmemeval_first10.csv \
   --count 10 \
   --threads 2 \
   --timeout 300
 
-python benchmark/longmemeval/vikingbot/judge.py \
+python benchmark/longmemeval/openviking/judge.py \
   --input result/longmemeval_first10.csv \
   --parallel 2
 
-python benchmark/longmemeval/vikingbot/stat_judge_result.py \
+python benchmark/longmemeval/openviking/stat_judge_result.py \
   --input result/longmemeval_first10.csv
 ```
 
@@ -385,7 +385,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 limit 10：
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --output result/longmemeval_single_search_context_limit10.csv \
   --threads 4 \
@@ -396,7 +396,7 @@ python benchmark/longmemeval/vikingbot/run_eval.py \
 limit 20：
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --output result/longmemeval_single_search_context_limit20.csv \
   --threads 4 \
@@ -407,7 +407,7 @@ python benchmark/longmemeval/vikingbot/run_eval.py \
 limit 30：
 
 ```bash
-python benchmark/longmemeval/vikingbot/run_eval.py \
+python benchmark/longmemeval/openviking/run_eval.py \
   <LONGMEMEVAL_JSON> \
   --output result/longmemeval_single_search_context_limit30.csv \
   --threads 4 \
@@ -418,14 +418,14 @@ python benchmark/longmemeval/vikingbot/run_eval.py \
 每个结果都需要继续跑：
 
 ```bash
-python benchmark/longmemeval/vikingbot/judge.py --input <csv> --parallel 8
-python benchmark/longmemeval/vikingbot/stat_judge_result.py --input <csv>
+python benchmark/longmemeval/openviking/judge.py --input <csv> --parallel 8
+python benchmark/longmemeval/openviking/stat_judge_result.py --input <csv>
 ```
 
 ### 后台跑长实验
 
 ```bash
-nohup python benchmark/longmemeval/vikingbot/repeat_eval.py \
+nohup python benchmark/longmemeval/openviking/repeat_eval.py \
   --input <LONGMEMEVAL_JSON> \
   --output-prefix result/longmemeval_single_search_context_repeat10 \
   --runs 10 \
@@ -471,7 +471,7 @@ tail -f result/longmemeval_single_search_context_repeat10.out
 4. 单 sample 导入：
 
    ```bash
-   python benchmark/longmemeval/vikingbot/import_to_ov.py \
+   python benchmark/longmemeval/openviking/import_to_ov.py \
      --input /path/to/longmemeval.json \
      --sample 0 \
      --openviking-url http://127.0.0.1:1933 \
@@ -482,7 +482,7 @@ tail -f result/longmemeval_single_search_context_repeat10.out
 5. 单 sample 评测并打印 prompt：
 
    ```bash
-   python benchmark/longmemeval/vikingbot/run_eval.py \
+   python benchmark/longmemeval/openviking/run_eval.py \
      /path/to/longmemeval.json \
      --sample 0 \
      --output result/longmemeval_new_sample0.csv \
@@ -493,7 +493,7 @@ tail -f result/longmemeval_single_search_context_repeat10.out
 6. judge 单 sample：
 
    ```bash
-   python benchmark/longmemeval/vikingbot/judge.py \
+   python benchmark/longmemeval/openviking/judge.py \
      --input result/longmemeval_new_sample0.csv \
      --parallel 1
    ```

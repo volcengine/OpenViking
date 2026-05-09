@@ -220,7 +220,7 @@ def main() -> int:
         run_cmd(
             [
                 sys.executable,
-                "benchmark/longmemeval/vikingbot/run_eval.py",
+                "benchmark/longmemeval/openviking/run_eval.py",
                 input_path,
                 "--output",
                 output_csv,
@@ -235,7 +235,7 @@ def main() -> int:
         run_cmd(
             [
                 sys.executable,
-                "benchmark/longmemeval/vikingbot/judge.py",
+                "benchmark/longmemeval/openviking/judge.py",
                 "--input",
                 output_csv,
                 "--parallel",
@@ -245,7 +245,7 @@ def main() -> int:
         run_cmd(
             [
                 sys.executable,
-                "benchmark/longmemeval/vikingbot/stat_judge_result.py",
+                "benchmark/longmemeval/openviking/stat_judge_result.py",
                 "--input",
                 output_csv,
             ]

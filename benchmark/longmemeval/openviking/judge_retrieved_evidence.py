@@ -13,7 +13,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 try:
-    from benchmark.longmemeval.vikingbot.judge import create_llm_client
+    from benchmark.longmemeval.openviking.judge import create_llm_client
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from judge import create_llm_client

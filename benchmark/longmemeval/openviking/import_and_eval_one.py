@@ -53,7 +53,7 @@ def main() -> int:
 
     import_cmd = [
         sys.executable,
-        "benchmark/longmemeval/vikingbot/import_to_ov.py",
+        "benchmark/longmemeval/openviking/import_to_ov.py",
         "--input",
         str(input_file),
         "--sample",
@@ -72,7 +72,7 @@ def main() -> int:
     run_command(
         [
             sys.executable,
-            "benchmark/longmemeval/vikingbot/run_eval.py",
+            "benchmark/longmemeval/openviking/run_eval.py",
             str(input_file),
             "--sample",
             str(args.sample),

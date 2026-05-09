@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 try:
-    from benchmark.longmemeval.vikingbot.longmemeval_prompts import get_judge_prompt
+    from benchmark.longmemeval.openviking.longmemeval_prompts import get_judge_prompt
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from longmemeval_prompts import get_judge_prompt
