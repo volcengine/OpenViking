@@ -52,8 +52,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bad-response-prefixes",
         nargs="*",
-        default=["[TIMEOUT]", "[CMD ERROR]", "[PARSE ERROR]"],
-        help="Response prefixes considered failed rows, default: [TIMEOUT] [CMD ERROR] [PARSE ERROR]",
+        default=["[TIMEOUT]", "[CMD ERROR]", "[PARSE ERROR]", "[SINGLE SEARCH ERROR]"],
+        help=(
+            "Response prefixes considered failed rows, default: "
+            "[TIMEOUT] [CMD ERROR] [PARSE ERROR] [SINGLE SEARCH ERROR]"
+        ),
+    )
+    parser.add_argument(
+        "--bad-reasoning-prefixes",
+        nargs="*",
+        default=["[API ERROR]", "[JUDGE ERROR]"],
+        help=(
+            "Judge reasoning prefixes considered failed rows, default: "
+            "[API ERROR] [JUDGE ERROR]"
+        ),
+    )
+    parser.add_argument(
+        "--single-search-context-limit",
+        type=int,
+        default=10,
+        help="Number of retrieved memory files to read before rerank, default: 10",
     )
     return parser.parse_args()
 
@@ -72,13 +90,26 @@ def load_rows(csv_path: Path) -> tuple[list[dict], list[str]]:
     return rows, fieldnames
 
 
-def failed_sample_ids(rows: list[dict], bad_response_prefixes: list[str]) -> list[str]:
+def failed_sample_ids(
+    rows: list[dict],
+    bad_response_prefixes: list[str],
+    bad_reasoning_prefixes: list[str],
+) -> list[str]:
     ids: list[str] = []
     for row in rows:
         response = row.get("response", "")
+        reasoning = row.get("reasoning", "")
         result = row.get("result", "")
         is_bad_response = any(response.startswith(prefix) for prefix in bad_response_prefixes)
-        if is_bad_response or response == "" or result.strip().upper() == "ERROR":
+        is_bad_reasoning = any(
+            reasoning.startswith(prefix) for prefix in bad_reasoning_prefixes
+        )
+        if (
+            is_bad_response
+            or is_bad_reasoning
+            or response == ""
+            or result.strip().upper() == "ERROR"
+        ):
             sample_id = row.get("sample_id", "")
             if sample_id and sample_id not in ids:
                 ids.append(sample_id)
@@ -100,15 +131,25 @@ def backfill_rows(
     rerun_rows: list[dict],
     fieldnames: list[str],
     bad_response_prefixes: list[str],
+    bad_reasoning_prefixes: list[str],
 ) -> list[dict]:
     rerun_by_sample_id = {row.get("sample_id", ""): row for row in rerun_rows}
     merged_rows: list[dict] = []
     for row in original_rows:
         sample_id = row.get("sample_id", "")
         response = row.get("response", "")
+        reasoning = row.get("reasoning", "")
         result = row.get("result", "")
         is_bad_response = any(response.startswith(prefix) for prefix in bad_response_prefixes)
-        should_patch = is_bad_response or response == "" or result.strip().upper() == "ERROR"
+        is_bad_reasoning = any(
+            reasoning.startswith(prefix) for prefix in bad_reasoning_prefixes
+        )
+        should_patch = (
+            is_bad_response
+            or is_bad_reasoning
+            or response == ""
+            or result.strip().upper() == "ERROR"
+        )
         if should_patch and sample_id in rerun_by_sample_id:
             patched = dict(row)
             for key in fieldnames:
@@ -136,9 +177,11 @@ def process_one_csv(
     judge_parallel: int,
     include_missing: bool,
     bad_response_prefixes: list[str],
+    bad_reasoning_prefixes: list[str],
+    single_search_context_limit: int,
 ) -> None:
     rows, fieldnames = load_rows(csv_path)
-    sample_ids = failed_sample_ids(rows, bad_response_prefixes)
+    sample_ids = failed_sample_ids(rows, bad_response_prefixes, bad_reasoning_prefixes)
     if include_missing:
         existing_ids = {row.get("sample_id", "") for row in rows}
         missing_ids = [sample_id for sample_id in dataset_by_qid if sample_id and sample_id not in existing_ids]
@@ -171,6 +214,8 @@ def process_one_csv(
                 str(threads),
                 "--timeout",
                 str(timeout),
+                "--single-search-context-limit",
+                str(single_search_context_limit),
             ]
         )
         run_cmd(
@@ -192,7 +237,13 @@ def process_one_csv(
                 f"missing={missing_original_fields}, original={fieldnames}, rerun={rerun_fieldnames}"
             )
 
-        merged_rows = backfill_rows(rows, rerun_rows, fieldnames, bad_response_prefixes)
+        merged_rows = backfill_rows(
+            rows,
+            rerun_rows,
+            fieldnames,
+            bad_response_prefixes,
+            bad_reasoning_prefixes,
+        )
         existing_after_patch = {row.get("sample_id", "") for row in merged_rows}
         for rerun_row in rerun_rows:
             sample_id = rerun_row.get("sample_id", "")
@@ -224,6 +275,8 @@ def main() -> int:
             judge_parallel=args.judge_parallel,
             include_missing=args.include_missing,
             bad_response_prefixes=args.bad_response_prefixes,
+            bad_reasoning_prefixes=args.bad_reasoning_prefixes,
+            single_search_context_limit=args.single_search_context_limit,
         )
     return 0
 

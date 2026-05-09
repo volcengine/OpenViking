@@ -145,7 +145,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 - `time_cost`: 单题耗时。
 - `iteration`: `single-search-context` 固定为 1。
 - `tools_used_names`: 固定包含 `single_search/read/context_answer`。
-- `retrieved_uris_by_iteration`: 记录本题召回、尝试读取、成功读取的 URI。
+- `retrieved_uris_by_iteration`: 记录单轮检索 trace。`retrieved_uris` 是 rerank 前候选，`context_uris` 是最终进入 prompt 的 URI；如果配置了 rerank，还会记录 `rerank_enabled`、`rerank_limit`、`rerank_scores`。
 - `result`: judge 后写入 `CORRECT` 或 `WRONG`。
 
 ## 文件说明
@@ -179,10 +179,10 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 
 1. 用 question 作为 query。
 2. 在 `viking://user/<sample_user_id>/memories` 下 search。
-3. 直接按 `--single-search-context-limit` 召回 URI，默认 10。
-4. 取召回 URI 作为 context。
-5. 逐个 `read` 文件内容。
-6. 把 memory 内容拼入 LongMemEval answer prompt。
+3. 直接按 `--single-search-context-limit` 召回候选 URI，默认 10。
+4. 逐个 `read` 文件内容。
+5. 如果 OpenViking 配置了 `rerank`，用 memory 正文做 rerank，并固定保留 rerank 后 top10 的 memory 进入 prompt。
+6. 把最终 context memory 内容拼入 LongMemEval answer prompt。
 7. 单轮调用回答模型。
 8. 记录 `retrieved_uris_by_iteration` 和 `memory_prompt_tokens`。
 
@@ -194,7 +194,7 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 - `--count`: 只跑前 N 条。
 - `--threads`: 并发题目数。
 - `--timeout`: OpenViking client timeout。
-- `--single-search-context-limit`: 读取进 prompt 的 memory 文件数。
+- `--single-search-context-limit`: 初始 search 召回的候选 memory 文件数；配置 rerank 时，最终进入 prompt 的是 rerank 后 top10。
 - `--debug-print-model-input`: 打印完整模型输入和 memory token，用于单题调试。
 
 ### `vikingbot/judge.py`
@@ -517,4 +517,4 @@ tail -f result/longmemeval_single_search_context_repeat10.out
 - CSV 里有 timeout/error/parse error：用 `rerun_timeouts_and_backfill.py` 补跑。
 - judge 不跑：确认 API key、provider、base URL、model 参数。
 - `memory_prompt_tokens` 异常：用 `--debug-print-model-input` 单条检查，它只应统计检索后读取的 memory 正文 token。
-- 多次实验结果不一致：先比较 `retrieved_uris_by_iteration`，再用 `judge_retrieved_evidence.py` 判断证据是否已被召回。
+- 多次实验结果不一致：先比较 `retrieved_uris_by_iteration` 里的 `retrieved_uris` 和 `context_uris`，再用 `judge_retrieved_evidence.py` 判断证据是否已进入 prompt；加 `--include-unread` 可检查 rerank 前候选。

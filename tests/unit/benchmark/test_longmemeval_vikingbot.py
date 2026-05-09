@@ -98,7 +98,7 @@ def test_parse_longmemeval_datetime_returns_iso_date():
     assert parsed.strftime("%Y-%m-%d") == "2023-05-30"
 
 
-def test_single_search_context_selects_top_30_results():
+def test_single_search_context_selects_top_10_results():
     module = _load_module(
         "longmemeval_run_eval_single_search_helpers",
         "benchmark/longmemeval/vikingbot/run_eval.py",
@@ -113,9 +113,9 @@ def test_single_search_context_selects_top_30_results():
     ]
     selected = module.select_single_search_contexts(contexts)
 
-    assert len(selected) == 30
+    assert len(selected) == 10
     assert selected[0]["uri"] == "viking://user/u/memories/entities/person/alice.md"
-    assert selected[-1]["uri"] == "viking://user/u/memories/events/event_28.md"
+    assert selected[-1]["uri"] == "viking://user/u/memories/events/event_8.md"
 
 
 def test_single_search_context_prompt_uses_longmemeval_answer_template():
@@ -165,12 +165,19 @@ def test_single_search_context_answer_reads_selected_files_and_builds_trace(monk
         def find(self, query, target_uri="", limit=10):
             assert query == "What project did I mention?"
             assert target_uri == "viking://user/lm_user_abc/memories"
-            assert limit == 100
+            assert limit == 10
             return SimpleNamespace(
                 memories=[
                     SimpleNamespace(
                         uri="viking://user/lm_user_abc/memories/entities/project/foo.md",
                         score=0.99,
+                    ),
+                    SimpleNamespace(
+                        uri=(
+                            "viking://user/lm_user_abc/memories/preferences/"
+                            "lm_user_abc/project_preferences.md"
+                        ),
+                        score=0.985,
                     ),
                     SimpleNamespace(
                         uri="viking://user/lm_user_abc/memories/events/project.md",
@@ -194,6 +201,7 @@ def test_single_search_context_answer_reads_selected_files_and_builds_trace(monk
             self.prompt = prompt
             assert "viking://user/lm_user_abc/memories/events/project.md" not in prompt
             assert "entities/project/foo.md" not in prompt
+            assert "project_preferences.md" not in prompt
             assert "customer purchase analysis project" in prompt
             return "customer purchase analysis project"
 
@@ -207,6 +215,7 @@ def test_single_search_context_answer_reads_selected_files_and_builds_trace(monk
     fake_vlm = FakeVLM()
     monkeypatch.setattr(module, "SyncHTTPClient", FakeClient)
     monkeypatch.setattr(module, "build_single_search_vlm", lambda: fake_vlm)
+    monkeypatch.setattr(module, "build_single_search_reranker", lambda: None)
 
     response, token_usage, time_cost, iteration, tools, retrieved = (
         module.run_single_search_context_answer(
@@ -232,18 +241,17 @@ def test_single_search_context_answer_reads_selected_files_and_builds_trace(monk
     assert retrieved == [
         {
             "iteration": 1,
-            "search_result_uris": [
+            "retrieved_uris": [
                 "viking://user/lm_user_abc/memories/entities/project/foo.md",
                 "viking://user/lm_user_abc/memories/events/project.md",
             ],
-            "attempted_read_uris": [
+            "context_uris": [
                 "viking://user/lm_user_abc/memories/entities/project/foo.md",
                 "viking://user/lm_user_abc/memories/events/project.md",
             ],
-            "read_success_uris": [
-                "viking://user/lm_user_abc/memories/entities/project/foo.md",
-                "viking://user/lm_user_abc/memories/events/project.md",
-            ],
+            "rerank_enabled": False,
+            "rerank_limit": 0,
+            "rerank_scores": [],
         }
     ]
 

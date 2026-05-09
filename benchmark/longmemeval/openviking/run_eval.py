@@ -24,6 +24,7 @@ except ModuleNotFoundError:
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
 DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
 DEFAULT_SINGLE_SEARCH_RERANK_LIMIT = 10
+SINGLE_SEARCH_EXCLUDED_BASENAMES = {".abstract.md", ".overview.md"}
 
 
 def get_token_encoding_name(model_name: str | None = None) -> str:
@@ -157,14 +158,25 @@ def _iter_search_contexts(search_result: Any) -> list[Any]:
         return []
 
 
+def is_single_search_excluded_uri(uri: str) -> bool:
+    basename = str(uri or "").rstrip("/").rsplit("/", 1)[-1]
+    return basename in SINGLE_SEARCH_EXCLUDED_BASENAMES
+
+
+def is_single_search_excluded_before_rerank_uri(uri: str) -> bool:
+    return "/preferences/" in str(uri or "")
+
+
 def select_single_search_contexts(
     search_result: Any,
     limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
 ) -> list[dict[str, Any]]:
     selected = []
     for raw_rank, context in enumerate(_iter_search_contexts(search_result), start=1):
+        if raw_rank > limit:
+            break
         uri = getattr(context, "uri", "")
-        if not uri:
+        if not uri or is_single_search_excluded_uri(uri):
             continue
         selected.append(
             {
@@ -174,8 +186,6 @@ def select_single_search_contexts(
                 "abstract": getattr(context, "abstract", ""),
             }
         )
-        if len(selected) >= limit:
-            break
     return selected
 
 
@@ -326,7 +336,7 @@ def run_single_search_context_answer(
     timeout: int = 300,
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
     debug_print_model_input: bool = False,
-) -> tuple[str, dict, float, int, list, list]:
+) -> tuple[str, dict, float, int, list, list, str]:
     start_time = time.time()
     client = SyncHTTPClient(
         agent_id=session_id,
@@ -345,6 +355,11 @@ def run_single_search_context_answer(
             search_result,
             limit=single_search_context_limit,
         )
+        contexts = [
+            context
+            for context in contexts
+            if not is_single_search_excluded_before_rerank_uri(context.get("uri", ""))
+        ]
         retrieved_uris = [context["uri"] for context in contexts]
 
         for context in contexts:
@@ -435,6 +450,7 @@ def run_single_search_context_answer(
                     "rerank_scores": rerank_scores,
                 }
             ],
+            prompt if debug_print_model_input else "",
         )
     except Exception as exc:
         elapsed = time.time() - start_time
@@ -454,6 +470,7 @@ def run_single_search_context_answer(
                     "rerank_scores": [],
                 }
             ],
+            "",
         )
     finally:
         try:
@@ -528,6 +545,7 @@ def main():
         "question_type",
         "question_time",
         "response",
+        "model_input_prompt",
         "token_usage",
         "time_cost",
         "iteration",
@@ -565,6 +583,7 @@ def main():
                 iteration,
                 tools_used_names,
                 retrieved_uris_by_iteration,
+                model_input_prompt,
             ) = run_single_search_context_answer(
                 question,
                 qa_item.get("question_type"),
@@ -582,6 +601,7 @@ def main():
                 "question_type": qa_item.get("question_type", ""),
                 "question_time": question_time or "",
                 "response": response,
+                "model_input_prompt": model_input_prompt,
                 "token_usage": json.dumps(token_usage, ensure_ascii=False),
                 "time_cost": round(time_cost, 2),
                 "iteration": iteration,

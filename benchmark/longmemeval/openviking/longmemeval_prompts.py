@@ -49,6 +49,8 @@ Rules:
 
 2. Most recent wins: For conflicting values of the same fact, use the most recent memory. Memories about different people/contexts are not conflicting; historical event dates should use the memory recorded closest to the event; current counts/scores/status use the latest value and do not get summed or averaged.
 
+Similarly, when memories give two numbers for the same metric on the same date, treat the higher or updated value as current. For example, "has 1,250 followers" and "close to 1,300 followers" on the same date means the count has grown to approximately 1,300.
+
 3. Time-bounded questions: Compute the date window from {question_date}. Show date arithmetic in <mem_thinking>. Scan EVERY memory for events in range. "Last weekend" and "last month" can be imprecise; if the literal window yields nothing, check the immediately preceding period.
 
 4. Temporal reference points: "How many days ago did X when Y happened" means compute interval between X and Y, NOT between X and today.
@@ -59,9 +61,13 @@ Rules:
 
 7. When to abstain: Say "The information provided is not enough" when the topic is genuinely unmentioned, the question asks about a specific event that doesn't exist, a specific wrong role/title/entity is used, or a comparison/ordering question lacks one of the required completed events. Before abstaining, scan all retrieved memories.
 
+If the question contains a specific qualifier such as undergrad course project, cultural festival, first order, or an exact role/title/entity, you must verify that qualifier explicitly. Do not answer using a nearby or broader event unless the qualifier clearly matches.
+
 8. Yes/no and comparison: "Did I ever do X?" with no matching memory = "No." For comparisons, find both values across all memories and compare directly.
 
 9. Actions vs intentions: Use the date of actual execution, not the plan date. A plan with a specified date and no update can be assumed completed on that date; a later confirmation supersedes the plan.
+
+For current-state questions about where something is kept, stored, switched to, or currently used, if a later memory explicitly describes moving, storing, switching, or reorganizing the item into a new location/state, prefer that later state unless a newer memory contradicts it.
 
 10. User facts vs assistant advice: "User..." means actual experience. "Assistant..." means advice. Prefer user-stated facts for personal questions. Don't convert currencies unless user stated the conversion.
 
@@ -73,10 +79,21 @@ Rules:
 
 14. Contradictions: If two memories directly contradict each other, trust the one created later. If on the same day, trust the later one.
 
+15. Temporal alignment: For questions like "two weeks ago", "last Saturday", or "the day before X", date alignment is mandatory. Do not answer with the nearest similar event if the date does not align.
+
+16. Deduplication for counting: Aggressively deduplicate memories that may describe the same real-world event with overlapping date, participants, and description. Do not count two memories separately unless they clearly refer to different events.
+
+
 Memory grouping rules: Memories under the same date or URI heading are from the same retrieved source.
 - A count plus "added X items" on the SAME date usually means the count already includes them.
 - Events described as just completed ("attended", "went to", "just got back from", "completed") happened on or near that memory's date.
 - Undated actions can be assumed to have happened on the memory's date/source context.
+
+# Misc Rules
+- Potlucks, feasts, and birthday parties count as dinner parties. BBQ does not.
+- Volunteering at a charity event counts as participating in that charity event.
+- Day hikes, road trips, camping trips, and similar outings count as trips when the question asks about trips.
+- Do not treat loosely related categories as equivalent unless explicitly supported by the memories. For example, a film festival is not automatically the same as a cultural festival.
 
 Memories (sorted newest-first when dates are available, otherwise retrieval order):
 {memories}
