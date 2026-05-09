@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Brain, FileText, FolderOpen, Loader2, Search, Wrench, X } from 'lucide-react'
+import { FileIcon, FolderIcon, FolderOpen, Loader2, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 
 import { fileNameFromUri, normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
-import { useVikingFind, useVikingFsList, useVikingFsStat } from '../-hooks/viking-fm'
-import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
+import { useVikingFsList, useVikingFsStat } from '../-hooks/viking-fm'
+import type { VikingFsEntry } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
 
@@ -19,27 +19,8 @@ interface FindPaletteProps {
   scopeUri?: string
 }
 
-interface FlatItem {
-  type: FindContextType
-  item: FindResultItem
-  flatIndex: number
-}
-
-const TYPE_META: Record<FindContextType, { label: string; icon: typeof Brain; color: string; bgColor: string }> = {
-  resource: { label: 'Resources', icon: FileText, color: 'text-blue-500', bgColor: 'bg-blue-500/15' },
-  memory: { label: 'Memories', icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/15' },
-  skill: { label: 'Skills', icon: Wrench, color: 'text-emerald-500', bgColor: 'bg-emerald-500/15' },
-}
-
-const COLUMNS: Array<{ key: keyof Pick<GroupedFindResult, 'resources' | 'memories' | 'skills'>; type: FindContextType }> = [
-  { key: 'resources', type: 'resource' },
-  { key: 'memories', type: 'memory' },
-  { key: 'skills', type: 'skill' },
-]
-
 const findPaletteSession = {
   inputQuery: '',
-  submittedQuery: '',
   targetUri: undefined as string | undefined,
 }
 
@@ -61,15 +42,6 @@ function parseScopeCommand(query: string): string | null {
   return normalizeDirUri(`viking://${normalizedPath}`)
 }
 
-function flattenResults(data: GroupedFindResult): FlatItem[] {
-  const items: FlatItem[] = []
-  let idx = 0
-  for (const r of data.resources) items.push({ type: 'resource', item: r, flatIndex: idx++ })
-  for (const m of data.memories) items.push({ type: 'memory', item: m, flatIndex: idx++ })
-  for (const s of data.skills) items.push({ type: 'skill', item: s, flatIndex: idx++ })
-  return items
-}
-
 function displayName(uri: string): { name: string; parent: string } {
   const name = fileNameFromUri(uri)
   const dir = getParentUri(uri)
@@ -78,23 +50,13 @@ function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
-function toFsEntry(item: FindResultItem): { uri: string; name: string; isDir: boolean; size: string; sizeBytes: null; modTime: string; modTimestamp: null; abstract: string } {
-  return {
-    uri: item.uri,
-    name: fileNameFromUri(item.uri),
-    isDir: item.uri.endsWith('/'),
-    size: '',
-    sizeBytes: null,
-    modTime: '',
-    modTimestamp: null,
-    abstract: item.abstract,
-  }
+function fuzzyMatch(name: string, query: string): boolean {
+  return name.toLowerCase().includes(query.toLowerCase())
 }
 
 export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
   const { t } = useTranslation('resources')
   const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
-  const [submittedQuery, setSubmittedQuery] = useState(() => findPaletteSession.submittedQuery)
   const [findTargetUri, setFindTargetUri] = useState(() =>
     normalizeDirUri(findPaletteSession.targetUri || scopeUri || 'viking://'),
   )
@@ -105,8 +67,10 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
 
   const isDirMode = query === '/'
   const scopeCommandUri = isDirMode ? null : parseScopeCommand(query)
-  const hasQuery = submittedQuery.trim().length > 0
+  const trimmedQuery = query.trim()
+  const hasQuery = trimmedQuery.length > 0 && !scopeCommandUri && !isDirMode
   const isRoot = findTargetUri === 'viking://'
+
   const scopeValidationQuery = useVikingFsList(
     scopeCommandUri || 'viking://',
     { output: 'agent', showAllHidden: true, nodeLimit: 1 },
@@ -115,29 +79,30 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
   const isScopeCommandValid = Boolean(scopeCommandUri) && (
     scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess
   )
-  const findQuery = useVikingFind(submittedQuery, !isRoot ? findTargetUri : undefined)
-  const data = hasQuery && !scopeCommandUri ? findQuery.data : undefined
 
-  const hasResults = data && data.total > 0
-  const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
-  const activeItem = flatItems[activeIndex] ?? null
-  const statQuery = useVikingFsStat(activeItem?.item.uri)
+  const dirListQuery = useVikingFsList(
+    findTargetUri,
+    { output: 'agent', showAllHidden: true, nodeLimit: 500, recursive: true },
+    hasQuery,
+  )
 
+  const filteredEntries = useMemo(() => {
+    if (!hasQuery || !dirListQuery.data?.entries) return []
+    return dirListQuery.data.entries.filter((entry) => fuzzyMatch(entry.name, trimmedQuery))
+  }, [hasQuery, dirListQuery.data?.entries, trimmedQuery])
+
+  const hasResults = filteredEntries.length > 0
+  const activeEntry = filteredEntries[activeIndex] ?? null
+
+  const statQuery = useVikingFsStat(activeEntry?.uri)
   const previewEntry = useMemo(() => {
-    if (!activeItem) return null
-    const base = toFsEntry(activeItem.item)
+    if (!activeEntry) return null
     if (statQuery.data) {
-      return { ...base, size: statQuery.data.size, sizeBytes: statQuery.data.sizeBytes, modTime: statQuery.data.modTime }
+      return { ...activeEntry, size: statQuery.data.size, sizeBytes: statQuery.data.sizeBytes, modTime: statQuery.data.modTime }
     }
-    return base
-  }, [activeItem, statQuery.data])
+    return activeEntry
+  }, [activeEntry, statQuery.data])
 
-  const visibleColumns = useMemo(() => {
-    if (!data) return []
-    return COLUMNS.filter((col) => data[col.key].length > 0)
-  }, [data])
-
-  // Focus input when opened, preserve last query
   useEffect(() => {
     if (open) {
       setActiveIndex(0)
@@ -148,24 +113,18 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     }
   }, [open])
 
-  // Reset index when results change
   useEffect(() => {
     setActiveIndex(0)
-  }, [data])
+  }, [filteredEntries])
 
   useEffect(() => {
     findPaletteSession.inputQuery = query
   }, [query])
 
   useEffect(() => {
-    findPaletteSession.submittedQuery = submittedQuery
-  }, [submittedQuery])
-
-  useEffect(() => {
     findPaletteSession.targetUri = findTargetUri
   }, [findTargetUri])
 
-  // Scroll active item into view
   useEffect(() => {
     if (!resultsRef.current) return
     const el = resultsRef.current.querySelector('[data-active="true"]')
@@ -176,7 +135,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     (e: React.KeyboardEvent) => {
       if (composingRef.current) return
       if (isDirMode) {
-        // Dir mode handles its own keys via DirBrowser
         if (e.key === 'Escape') { e.preventDefault(); onClose() }
         return
       }
@@ -188,7 +146,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             setFindTargetUri(scopeCommandUri)
             setActiveIndex(0)
             setQuery('')
-            setSubmittedQuery('')
             return
           case 'Escape':
             e.preventDefault()
@@ -196,42 +153,25 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             return
         }
       }
-      if (!hasQuery || flatItems.length === 0) {
-        switch (e.key) {
-          case 'Enter':
-            e.preventDefault()
-            if (query.trim().length > 0 && submittedQuery !== query.trim()) {
-              setSubmittedQuery(query.trim())
-              setActiveIndex(0)
-            }
-            return
-          case 'Escape':
-            e.preventDefault()
-            onClose()
-            return
-        }
+      if (!hasQuery || filteredEntries.length === 0) {
+        if (e.key === 'Escape') { e.preventDefault(); onClose() }
         return
       }
       switch (e.key) {
         case 'ArrowDown': {
-          if (!hasQuery || flatItems.length === 0) return
           e.preventDefault()
-          setActiveIndex((i) => Math.min(i + 1, flatItems.length - 1))
+          setActiveIndex((i) => Math.min(i + 1, filteredEntries.length - 1))
           break
         }
         case 'ArrowUp': {
-          if (!hasQuery || flatItems.length === 0) return
           e.preventDefault()
           setActiveIndex((i) => Math.max(i - 1, 0))
           break
         }
         case 'Enter':
           e.preventDefault()
-          if (query.trim().length > 0 && submittedQuery !== query.trim()) {
-            setSubmittedQuery(query.trim())
-            setActiveIndex(0)
-          } else if (activeItem) {
-            onNavigate(activeItem.item.uri)
+          if (activeEntry) {
+            onNavigate(activeEntry.uri)
             onClose()
           }
           break
@@ -241,12 +181,12 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           break
       }
     },
-    [query, submittedQuery, hasQuery, flatItems, activeItem, onNavigate, onClose, isDirMode, scopeCommandUri, isScopeCommandValid],
+    [query, hasQuery, filteredEntries, activeEntry, onNavigate, onClose, isDirMode, scopeCommandUri, isScopeCommandValid],
   )
 
   if (!open) return null
 
-  const showPreview = hasQuery && activeItem !== null
+  const showPreview = hasQuery && activeEntry !== null && !activeEntry.isDir
   const paletteWidth = showPreview
     ? 'w-[min(92vw,67rem)]'
     : 'w-[min(90vw,45rem)]'
@@ -282,7 +222,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
               onClick={() => {
                 setActiveIndex(0)
                 setQuery('')
-                setSubmittedQuery('')
               }}
             >
               <X className="size-3.5" />
@@ -354,7 +293,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                       </div>
                     )}
                   </div>
-                ) : !submittedQuery.trim() ? (
+                ) : !hasQuery ? (
                   <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
                     <Search className="size-6 text-muted-foreground/30" />
                     <div>
@@ -375,9 +314,14 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                       </p>
                     </div>
                   </div>
-                ) : findQuery.isLoading ? (
-                  <LoadingHint />
-                ) : findQuery.error ? (
+                ) : dirListQuery.isLoading ? (
+                  <div className="flex flex-col items-center gap-3 py-12">
+                    <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
+                    <p className="text-xs text-muted-foreground/60">
+                      {t('searchPalette.scopeState.validatingTitle')}
+                    </p>
+                  </div>
+                ) : dirListQuery.error ? (
                   <div className="px-4 py-6 text-center text-xs text-destructive">{t('searchPalette.error')}</div>
                 ) : !hasResults ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
@@ -386,12 +330,12 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                     <p className="text-xs text-muted-foreground/40">{t('searchPalette.emptyResults.subtitle')}</p>
                   </div>
                 ) : (
-                  <ResultList
+                  <DirResultList
                     className="h-full"
-                    items={flatItems}
+                    items={filteredEntries}
                     activeIndex={activeIndex}
-                    onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
-                    onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
+                    onSelect={(entry) => { onNavigate(entry.uri); onClose() }}
+                    onOpenDir={(entry) => { onNavigateDir(getParentUri(entry.uri)); onClose() }}
                   />
                 )}
               </div>
@@ -423,7 +367,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.resultMode.navigate')}</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.resultMode.open')}</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> {t('searchPalette.footer.resultMode.close')}</span>
-            <span className="ml-auto tabular-nums">{t('searchPalette.footer.resultMode.count', { count: data.total })}</span>
+            <span className="ml-auto tabular-nums">{t('searchPalette.footer.resultMode.count', { count: filteredEntries.length })}</span>
           </div>
         )}
       </div>
@@ -431,36 +375,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
   )
 }
 
-/* ---- Loading Hint ---- */
-
-const LOADING_HINTS = [
-  '正在检索向量索引...',
-  '扫描知识库层级结构...',
-  '匹配语义相关内容...',
-  '对结果重排序...',
-]
-
-function LoadingHint() {
-  const [hintIndex, setHintIndex] = useState(0)
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setHintIndex((i) => (i + 1) % LOADING_HINTS.length)
-    }, 1500)
-    return () => clearInterval(timer)
-  }, [])
-
-  return (
-    <div className="flex flex-col items-center gap-3 py-12">
-      <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
-      <p key={hintIndex} className="animate-palette-in text-xs text-muted-foreground/60">
-        {LOADING_HINTS[hintIndex]}
-      </p>
-    </div>
-  )
-}
-
-function ResultList({
+function DirResultList({
   className,
   items,
   activeIndex,
@@ -468,10 +383,10 @@ function ResultList({
   onOpenDir,
 }: {
   className?: string
-  items: FlatItem[]
+  items: VikingFsEntry[]
   activeIndex: number
-  onSelect: (fi: FlatItem) => void
-  onOpenDir: (fi: FlatItem) => void
+  onSelect: (entry: VikingFsEntry) => void
+  onOpenDir: (entry: VikingFsEntry) => void
 }) {
   const { isScrolling, onScroll } = useTransientScrollbar()
 
@@ -481,15 +396,14 @@ function ResultList({
       data-scrolling={isScrolling || undefined}
       onScroll={onScroll}
     >
-      {items.map((fi, i) => {
-        const { name, parent } = displayName(fi.item.uri)
-        const isActive = fi.flatIndex === activeIndex
-        const meta = TYPE_META[fi.type]
-        const Icon = meta.icon
+      {items.map((entry, i) => {
+        const { name, parent } = displayName(entry.uri)
+        const isActive = i === activeIndex
+        const EntryIcon = entry.isDir ? FolderIcon : FileIcon
 
         return (
           <button
-            key={`${fi.item.uri}-${fi.flatIndex}`}
+            key={entry.uri}
             type="button"
             data-active={isActive}
             className={cn(
@@ -497,27 +411,27 @@ function ResultList({
               isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
             )}
             style={{ animationDelay: `${i * 24}ms` }}
-            onClick={() => onSelect(fi)}
+            onClick={() => onSelect(entry)}
           >
             {isActive && (
               <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
             )}
-            <div className={cn('mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide', meta.bgColor, meta.color)}>
-              <Icon className="size-3" />
-              <span>{meta.label}</span>
-            </div>
+            <EntryIcon className={cn('mt-0.5 size-4 shrink-0', entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70')} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{name}</div>
               <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
             </div>
+            {entry.size && (
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">{entry.size}</span>
+            )}
             <span
               role="button"
               tabIndex={-1}
               title="打开所在目录"
               className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
-              onClick={(e) => { e.stopPropagation(); onOpenDir(fi) }}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(fi) } }}
+              onClick={(e) => { e.stopPropagation(); onOpenDir(entry) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(entry) } }}
             >
               <FolderOpen className="size-3.5" />
             </span>

@@ -2,6 +2,8 @@ const en = {
   appShell: {
     footer: {
       connection: 'Connection & Identity',
+      docs: 'Documentation',
+      github: 'GitHub',
     },
     header: {
       defaultTitle: 'OpenViking Studio',
@@ -10,17 +12,17 @@ const en = {
       home: {
         title: 'Home',
       },
-      addResource: {
-        title: 'Add Resource',
-      },
-      fileSystem: {
-        title: 'File System',
-      },
       operations: {
         title: 'Operations',
       },
+      requestLogs: {
+        title: 'Request Logs',
+      },
       resources: {
-        title: 'Resources',
+        title: 'Context Management',
+      },
+      retrieval: {
+        title: 'Retrieval',
       },
       sessions: {
         title: 'Sessions',
@@ -89,6 +91,20 @@ const en = {
     },
   },
   home: {
+    contributionHeatmap: {
+      activeDays: 'Active days',
+      currentStreak: 'Current streak',
+      days: 'days',
+      inPastYear: 'contributions in the past year',
+      less: 'Less',
+      longestStreak: 'Longest streak',
+      more: 'More',
+      nCommits: 'commits',
+      noActivity: 'No contributions',
+      oneCommit: 'commit',
+      subtitle: 'Daily commit activity',
+      title: 'Commit Calendar',
+    },
     memoryStats: {
       category: {
         cases: 'Cases',
@@ -115,12 +131,38 @@ const en = {
       title: 'Sessions',
     },
     statCard: {
+      agentVisits: 'Agent Visits Today (Live)',
+      agentVisitsSub: 'active sessions placeholder',
+      contextMagnitude: 'Context Data Magnitude (Live)',
+      contextMagnitudeSub: 'indexed embeddings',
       memoryTotal: 'Memory Total',
+      retrievalCount: 'Retrievals Today (Live)',
+      retrievalCountSub: 'memory stats placeholder',
       tokenUsage: 'Token Usage',
       vectorCount: 'Vector Count',
       vectorCountSub: 'indexed embeddings',
       memoryTotalSub: 'across all categories',
       tokenUsageSub: 'lifetime total',
+    },
+    timeFilter: {
+      current: 'Current range',
+      end: 'End date',
+      reset: 'Reset',
+      start: 'Start date',
+      title: 'Timeline Filter',
+    },
+    tokenTrend: {
+      input: 'LLM input',
+      output: 'LLM output',
+      title: 'Token Consumption',
+      vector: 'Vectorization',
+    },
+    onboarding: {
+      cta: 'Start adding your first context',
+      subtitle: 'A context DataBase for AI Agents',
+      sloganEn: 'Memory, Resource, Skill. Everything is a File.',
+      sloganZh: '记忆、资源、技能，万物皆文件。',
+      title: '为 Agent 而生的上下文数据库',
     },
     systemHealth: {
       allOperational: 'All systems operational',
@@ -149,6 +191,45 @@ const en = {
     page: {
       placeholder: 'Operations dashboard is under construction.',
     },
+  },
+  requestLogs: {
+    clear: 'Clear',
+    description: 'Inspect API calls made by this Studio session, including status, latency, and request identifiers.',
+    empty: {
+      description: 'No logs yet — start your first API call!',
+      filteredDescription: 'Adjust the query or status filter to broaden the visible log entries.',
+      filteredTitle: 'No matching requests',
+      title: 'No logs yet — start your first API call!',
+    },
+    eyebrow: 'Studio telemetry',
+    filters: {
+      all: 'All',
+      error: 'Errors',
+      pending: 'Pending',
+      success: 'Success',
+    },
+    metrics: {
+      average: 'Avg latency',
+      errors: 'Errors',
+      pending: 'Pending',
+      total: 'Captured',
+    },
+    searchPlaceholder: 'Filter method, path, or status',
+    status: {
+      error: 'ERR',
+      pending: 'PENDING',
+      success: 'OK',
+    },
+    table: {
+      duration: 'Duration',
+      method: 'Method',
+      path: 'Path',
+      requestId: 'Request ID',
+      status: 'Status',
+      time: 'Time',
+      title: 'Captured requests',
+    },
+    title: 'Request Logs',
   },
   addResource: {
     title: 'Add Resource',
@@ -220,8 +301,22 @@ const en = {
     page: {
       placeholder: 'Resources workspace is under construction.',
     },
+    toolbar: {
+      parent: 'Go to Parent',
+      refresh: 'Refresh Directory',
+      search: 'Search ⌘K',
+      upload: 'Upload',
+    },
+    emptyState: {
+      title: 'Your context space is empty',
+      upload: 'Upload File',
+    },
+    uploadDialog: {
+      title: 'Upload',
+      description: 'Add a local file or remote resource to the context resource library.',
+    },
     searchPalette: {
-      placeholder: 'Search... Enter / to browse directories',
+      placeholder: 'Search files and directories...',
       scope: {
         global: 'Search scope: Global',
         current: 'Search scope: {{name}}',
@@ -238,7 +333,7 @@ const en = {
         invalidSuffix: 'is inaccessible and cannot be switched to',
       },
       empty: {
-        title: 'Semantic knowledge search',
+        title: 'Search files and directories',
       },
       browseDirHint: {
         before: 'Enter',
@@ -250,7 +345,7 @@ const en = {
       },
       error: 'Search failed',
       emptyResults: {
-        title: 'No matching content found',
+        title: 'No matching files or directories found',
         subtitle: 'Try another keyword?',
       },
       footer: {
@@ -276,6 +371,29 @@ const en = {
         title: 'Empty directory',
         subtitle: 'There are currently no subdirectories to expand at this level',
       },
+    },
+  },
+  retrieval: {
+    title: 'Retrieval',
+    searchPlaceholder: 'Enter search content, e.g.: cat memory / resources filesystem',
+    send: 'Search',
+    controls: {
+      function: 'find()',
+      resultCount: 'Results',
+      path: 'Path',
+      pathPlaceholder: '/',
+    },
+    results: {
+      title: 'Search Results',
+      topN: 'Search Results (Top{{count}})',
+    },
+    empty: {
+      title: 'No logs yet — start your first retrieval!',
+    },
+    error: 'Search failed',
+    noResults: {
+      title: 'No matching content found',
+      subtitle: 'Try another keyword or adjust the path scope',
     },
   },
   sessions: {
