@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from openviking.storage.expr import PathScope
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+    VolcengineApiKeyCollection,
+)
 from openviking.storage.vectordb.collection.volcengine_collection import (
     VolcengineCollection,
     get_or_create_volcengine_collection,
@@ -22,10 +24,12 @@ class VolcengineCollectionAdapter(CollectionAdapter):
     def __init__(
         self,
         *,
-        ak: str,
-        sk: str,
-        region: str,
+        ak: str | None,
+        sk: str | None,
+        region: str | None,
         session_token: str | None,
+        api_key: str | None,
+        host: str | None,
         project_name: str,
         collection_name: str,
         index_name: str,
@@ -37,22 +41,29 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._sk = sk
         self._region = region
         self._session_token = session_token
+        self._api_key = api_key
+        self._host = host
         self._project_name = project_name
 
     @classmethod
     def from_config(cls, config: Any):
-        if not (
-            config.volcengine
-            and config.volcengine.ak
-            and config.volcengine.sk
-            and config.volcengine.region
-        ):
-            raise ValueError("Volcengine backend requires AK, SK, and Region configuration")
+        cfg = getattr(config, "volcengine", None)
+        if not cfg:
+            raise ValueError("Volcengine backend requires volcengine configuration")
+        if cfg.api_key and not (cfg.host or cfg.region):
+            raise ValueError("Volcengine api_key mode requires host or region configuration")
+        if not cfg.api_key and not (cfg.ak and cfg.sk and cfg.region):
+            raise ValueError(
+                "Volcengine backend requires AK, SK, and Region configuration "
+                "when api_key is not set"
+            )
         return cls(
-            ak=config.volcengine.ak,
-            sk=config.volcengine.sk,
-            region=config.volcengine.region,
-            session_token=config.volcengine.session_token,
+            ak=cfg.ak,
+            sk=cfg.sk,
+            region=cfg.region,
+            session_token=cfg.session_token,
+            api_key=cfg.api_key,
+            host=cfg.host,
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
             index_name=config.index_name or "default",
@@ -64,15 +75,36 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             "CollectionName": self._collection_name,
         }
 
+    def _data_plane_meta(self) -> Dict[str, Any]:
+        meta = self._meta()
+        meta["IndexName"] = self._index_name
+        return meta
+
     def _config(self) -> Dict[str, Any]:
         return {
             "AK": self._ak,
             "SK": self._sk,
             "Region": self._region,
             "SessionToken": self._session_token,
+            "ApiKey": self._api_key,
+            "Host": self._host,
         }
 
+    def _uses_api_key_auth(self) -> bool:
+        return bool(self._api_key)
+
     def _new_collection_handle(self) -> Collection:
+        if self._uses_api_key_auth():
+            return Collection(
+                VolcengineApiKeyCollection(
+                    api_key=self._api_key or "",
+                    host=self._host,
+                    region=self._region,
+                    meta_data=self._data_plane_meta(),
+                )
+            )
+        if self._ak is None or self._sk is None or self._region is None:
+            raise ValueError("AK/SK mode requires ak, sk, and region")
         return Collection(
             VolcengineCollection(
                 ak=self._ak,
@@ -86,12 +118,20 @@ class VolcengineCollectionAdapter(CollectionAdapter):
     def _load_existing_collection_if_needed(self) -> None:
         if self._collection is not None:
             return
+        if self._uses_api_key_auth():
+            self._collection = self._new_collection_handle()
+            return
         candidate = self._new_collection_handle()
         meta = candidate.get_meta_data() or {}
         if meta and meta.get("CollectionName"):
             self._collection = candidate
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
+        if self._uses_api_key_auth():
+            raise NotImplementedError(
+                "volcengine backend with api_key does not support create_collection; "
+                "pre-create collection/index/schema out of band"
+            )
         payload = dict(meta)
         payload.update(self._meta())
         return get_or_create_volcengine_collection(
@@ -132,16 +172,6 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             index_meta["VectorIndex"]["EnableSparse"] = True
             index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = sparse_weight
         return index_meta
-
-    def _compile_filter(self, expr):
-        if isinstance(expr, PathScope):
-            path = (
-                self._encode_uri_field_value(expr.path)
-                if expr.field in self._URI_FIELD_NAMES
-                else expr.path
-            )
-            return {"op": "prefix", "field": expr.field, "prefix": path}
-        return super()._compile_filter(expr)
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)

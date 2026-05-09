@@ -244,7 +244,7 @@ Create `~/.openviking/ov.conf` with storage, embedding, and VLM settings. A mini
 }
 ```
 
-You can also use Volcengine, Azure OpenAI, or LiteLLM-backed providers. For current provider-specific examples, check the main [README](../../README.md) and the [Configuration Guide](../../docs/en/guides/01-configuration.md).
+You can also use Volcengine or Azure OpenAI. For current provider-specific examples, check the main [README](../../README.md) and the [Configuration Guide](../../docs/en/guides/01-configuration.md).
 
 ## Recommended Next Steps
 

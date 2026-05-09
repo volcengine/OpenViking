@@ -107,7 +107,7 @@ while dir_queue:
 
     for r in results:
         # Score propagation
-        final_score = 0.5 * embedding_score + 0.5 * parent_score
+        final_score = score_propagation_alpha * embedding_score + (1 - score_propagation_alpha) * parent_score
 
         if final_score > threshold:
             collected.append(r)
@@ -124,9 +124,9 @@ while dir_queue:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
+| `retrieval.score_propagation_alpha` | 0.5 | Child-score weight in the propagation blend; `0.5` means 50% child score + 50% parent score |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | Convergence detection rounds |
-| `GLOBAL_SEARCH_TOPK` | 3 | Global search candidates |
+| `GLOBAL_SEARCH_TOPK` | 10 | Global search candidates |
 | `MAX_RELATIONS` | 5 | Max relations per resource |
 
 ## Rerank Strategy

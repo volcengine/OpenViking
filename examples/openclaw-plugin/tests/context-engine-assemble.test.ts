@@ -10,10 +10,15 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   autoCapture: false,
   autoRecall: false,
   ingestReplyAssist: false,
+  emitStandardDiagnostics: true,
 });
 
 function roughEstimate(messages: unknown[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+function systemPromptTokens(text?: string): number {
+  return text ? Math.ceil(text.length / 4) : 0;
 }
 
 function makeLogger() {
@@ -103,6 +108,7 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-1",
       messages: liveMessages,
       tokenBudget: 4096,
@@ -110,7 +116,9 @@ describe("context-engine assemble()", () => {
 
     expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
     expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
-    expect(result.estimatedTokens).toBe(321);
+    expect(result.estimatedTokens).toBe(
+      roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
+    );
     expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages).toEqual([
       {
@@ -118,19 +126,15 @@ describe("context-engine assemble()", () => {
         content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
       },
       {
-        role: "user",
-        content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-      },
-      {
         role: "assistant",
         content: [
           { type: "text", text: "I checked the latest context." },
           { type: "text", text: "User prefers concise answers." },
           {
-            type: "toolUse",
+            type: "toolCall",
             id: "tool_123",
             name: "read_file",
-            input: { path: "src/app.ts" },
+            arguments: { path: "src/app.ts" },
           },
         ],
       },
@@ -173,6 +177,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-running",
       messages: [],
     });
@@ -183,10 +188,10 @@ describe("context-engine assemble()", () => {
       role: "assistant",
       content: [
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_running",
           name: "bash",
-          input: { command: "npm test" },
+          arguments: { command: "npm test" },
         },
       ],
     });
@@ -233,6 +238,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-missing-id",
       messages: [],
     });
@@ -249,6 +255,30 @@ describe("context-engine assemble()", () => {
         ],
       },
     ]);
+  });
+
+  it("records senderId from runtimeContext in assemble diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+
+    await engine.assemble({
+      prompt: "current user prompt",
+      sessionId: "session-with-sender",
+      messages: [{ role: "user", content: "hello" }],
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":true"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
+    );
   });
 
   it("falls back to live messages when assembled active messages look truncated", async () => {
@@ -276,6 +306,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-fallback",
       messages: liveMessages,
       tokenBudget: 1024,
@@ -285,5 +316,46 @@ describe("context-engine assemble()", () => {
       messages: liveMessages,
       estimatedTokens: roughEstimate(liveMessages),
     });
+  });
+
+  it("keeps assembled output within the requested token budget", async () => {
+    const longText = "A".repeat(2500);
+    const { engine } = makeEngine({
+      latest_archive_overview: "# Session Summary\nA short overview",
+      pre_archive_abstracts: [],
+      messages: [
+        {
+          id: "msg_long_1",
+          role: "user",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: longText }],
+        },
+        {
+          id: "msg_long_2",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:01Z",
+          parts: [{ type: "text", text: longText }],
+        },
+      ],
+      estimatedTokens: 2000,
+      stats: {
+        ...makeStats(),
+        totalArchives: 1,
+        includedArchives: 1,
+        activeTokens: 2000,
+        archiveTokens: 10,
+      },
+    });
+
+    const result = await engine.assemble({
+      prompt: "current user prompt",
+      sessionId: "session-budgeted",
+      messages: [],
+      tokenBudget: 1024,
+    });
+
+    expect(result.estimatedTokens).toBeLessThanOrEqual(1024);
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
   });
 });

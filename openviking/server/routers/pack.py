@@ -5,17 +5,17 @@
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
-from openviking.server.auth import get_request_context
+from openviking.core.path_variables import resolve_path_variables
+from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import resolve_uploaded_temp_file_id
 from openviking.server.models import Response
-from openviking_cli.utils.config.open_viking_config import get_openviking_config
+from openviking.server.temp_upload_store import TempUploadStore
 
 router = APIRouter(prefix="/api/v1/pack", tags=["pack"])
 
@@ -45,12 +45,17 @@ class ImportRequest(BaseModel):
 
 
 @router.post("/export")
+@require_auth_root_or_admin
 async def export_ovpack(
-    request: ExportRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    body: ExportRequest,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Export context as .ovpack file and stream it to client."""
     service = get_service()
+
+    # Resolve path variables
+    uri = resolve_path_variables(body.uri)
 
     # Create temp file for export
     temp_dir = tempfile.gettempdir()
@@ -58,10 +63,10 @@ async def export_ovpack(
 
     try:
         # Export to temp file
-        await service.pack.export_ovpack(request.uri, temp_file, ctx=_ctx)
+        await service.pack.export_ovpack(uri, temp_file, ctx=ctx)
 
         # Determine filename from URI
-        base_name = request.uri.strip().rstrip("/").split("/")[-1]
+        base_name = uri.strip().rstrip("/").split("/")[-1]
         if not base_name:
             base_name = "export"
         filename = f"{base_name}.ovpack"
@@ -86,21 +91,34 @@ async def export_ovpack(
 
 
 @router.post("/import")
+@require_auth_root_or_admin
 async def import_ovpack(
-    request: ImportRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    body: ImportRequest,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Import .ovpack file."""
     service = get_service()
+    store = TempUploadStore.build(request.app.state.config)
+    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
 
-    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-    file_path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+    # Resolve path variables
+    parent = resolve_path_variables(body.parent)
 
-    result = await service.pack.import_ovpack(
-        file_path,
-        request.parent,
-        ctx=_ctx,
-        force=request.force,
-        vectorize=request.vectorize,
-    )
+    try:
+        result = await service.pack.import_ovpack(
+            resolved.local_path,
+            parent,
+            ctx=ctx,
+            force=body.force,
+            vectorize=body.vectorize,
+        )
+    except Exception:
+        await store.mark_failed(resolved, ctx)
+        raise
+    else:
+        await store.mark_consumed(resolved, ctx)
+    finally:
+        await resolved.cleanup()
+
     return Response(status="ok", result={"uri": result})

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Document parsers for various formats."""
 
+from openviking.core.building_tree import BuildingTree
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.converter import DocumentConverter
 from openviking.parse.custom import CallbackParserWrapper, CustomParserProtocol, CustomParserWrapper
@@ -13,7 +14,6 @@ from openviking.parse.directory_scan import (
     scan_directory,
 )
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code import CodeRepositoryParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
@@ -34,7 +34,6 @@ __all__ = [
     "MarkdownParser",
     "PDFParser",
     "HTMLParser",
-    "CodeRepositoryParser",
     "DocumentConverter",
     # Custom parser support
     "CustomParserProtocol",

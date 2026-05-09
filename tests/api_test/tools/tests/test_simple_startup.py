@@ -9,7 +9,7 @@ try:
     print("Config loaded:")
     print(f"  host: {config.host}")
     print(f"  port: {config.port}")
-    print(f"  root_api_key: {config.root_api_key}")
+    print(f"  root_api_key configured: {bool(config.root_api_key)}")
 
     print("\nCreating app...")
     app = create_app(config)
@@ -27,7 +27,7 @@ try:
 
     manager = APIKeyManager(config.root_api_key, None)
     print("APIKeyManager created successfully!")
-    print(f"  manager.root_api_key: {manager.root_api_key}")
+    print(f"  manager.root_api_key configured: {bool(manager.root_api_key)}")
 
     print("\nTesting manager.get_accounts()...")
     accounts = manager.get_accounts()

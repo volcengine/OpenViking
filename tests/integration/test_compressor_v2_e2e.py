@@ -198,30 +198,25 @@ class TestCompressorV2EndToEnd:
                         except Exception as e:
                             print(f"  Failed to read {uri}: {e}")
 
-        user_space = client._user.user_space_name()
-        agent_space = client._user.agent_space_name()
-
         try:
             # Try to list agent memories
-            agent_memories = await client.ls(
-                f"viking://agent/{agent_space}/memories", recursive=True
-            )
+            agent_memories = await client.ls("viking://agent/memories", recursive=True)
             print(f"Agent memories entries: {len(agent_memories)}")
             for entry in agent_memories[:20]:  # Show first 20
                 print(f"  - {entry['name']} ({'dir' if entry['isDir'] else 'file'})")
             # Read and print memory files
-            await print_memory_files(f"viking://agent/{agent_space}/memories", agent_memories)
+            await print_memory_files("viking://agent/memories", agent_memories)
         except Exception as e:
             print(f"Could not list agent memories: {e}")
 
         try:
             # Try to list user memories
-            user_memories = await client.ls(f"viking://user/{user_space}/memories", recursive=True)
+            user_memories = await client.ls("viking://user/memories", recursive=True)
             print(f"\nUser memories entries: {len(user_memories)}")
             for entry in user_memories[:20]:  # Show first 20
                 print(f"  - {entry['name']} ({'dir' if entry['isDir'] else 'file'})")
             # Read and print memory files
-            await print_memory_files(f"viking://user/{user_space}/memories", user_memories)
+            await print_memory_files("viking://user/memories", user_memories)
         except Exception as e:
             print(f"Could not list user memories: {e}")
 

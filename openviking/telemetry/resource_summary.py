@@ -41,7 +41,7 @@ def _consume_semantic_dag_stats(telemetry_id: str, root_uri: str | None):
 def register_wait_telemetry(wait: bool) -> str:
     """Register current telemetry collector for async queue consumers when needed."""
     handle = get_current_telemetry()
-    if not wait or not handle.telemetry_id:
+    if not handle.telemetry_id:
         return ""
     if handle.enabled:
         register_telemetry(handle)

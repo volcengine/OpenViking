@@ -8,6 +8,7 @@ Provides ovpack export/import operations.
 
 from typing import Optional
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.local_fs import export_ovpack as local_export_ovpack
 from openviking.storage.local_fs import import_ovpack as local_import_ovpack
@@ -45,6 +46,7 @@ class PackService:
             Exported file path
         """
         viking_fs = self._ensure_initialized()
+        uri = validate_viking_uri(uri)
         return await local_export_ovpack(viking_fs, uri, to, ctx=ctx)
 
     async def import_ovpack(
@@ -67,6 +69,7 @@ class PackService:
             Imported root resource URI
         """
         viking_fs = self._ensure_initialized()
+        parent = validate_viking_uri(parent, field_name="parent")
         return await local_import_ovpack(
             viking_fs, file_path, parent, force=force, vectorize=vectorize, ctx=ctx
         )

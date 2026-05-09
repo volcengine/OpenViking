@@ -3,18 +3,20 @@
 """
 ZIP archive parser for OpenViking.
 
-Lists and describes contents of ZIP files.
-Converts to markdown and delegates to MarkdownParser.
+Extracts ZIP archives and delegates to DirectoryParser for recursive processing.
+Supports nested ZIP files via DirectoryParser's recursive parser invocation.
 """
 
+import asyncio
+import shutil
+import tempfile
 import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,200 +29,108 @@ class ZipParser(BaseParser):
     Supports: .zip
 
     Features:
-    - Lists all files in the archive
-    - Shows file sizes and modification dates
-    - Groups files by type/extension
+    - Extracts ZIP archive to temporary directory
+    - Delegates to DirectoryParser for recursive content processing
+    - Supports nested ZIP files (via DirectoryParser recursion)
+    - Preserves temporary directory for TreeBuilder
     """
-
-    def __init__(self, config: Optional[ParserConfig] = None):
-        """Initialize ZIP parser."""
-        from openviking.parse.parsers.markdown import MarkdownParser
-
-        self._md_parser = MarkdownParser(config=config)
-        self.config = config or ParserConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
         return [".zip"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """Parse from file path."""
-        path = Path(source)
+        """Parse a ZIP file by extracting it and delegating to DirectoryParser.
 
-        if path.exists():
-            markdown_content = self._convert_zip_to_markdown(path)
-            result = await self._md_parser.parse_content(
-                markdown_content,
-                source_path=str(path),
-                instruction=instruction,
-                **kwargs,
-            )
-        else:
-            # Treat as raw content string
-            result = await self._md_parser.parse_content(
-                str(source), instruction=instruction, **kwargs
-            )
-        result.source_format = "zip"
-        result.parser_name = "ZipParser"
-        return result
+        Args:
+            source: Path to the .zip file
+            instruction: Processing instruction (forwarded to DirectoryParser)
+            **kwargs: Extra options forwarded to DirectoryParser
+
+        Returns:
+            ParseResult from DirectoryParser, with temp_dir_path preserved
+            for TreeBuilder to use later.
+        """
+
+        path = Path(source)
+        if not path.exists():
+            raise FileNotFoundError(f"ZIP file not found: {path}")
+
+        # Check if it's a valid ZIP file (non-blocking)
+        def _is_zipfile() -> bool:
+            return zipfile.is_zipfile(path)
+
+        if not await asyncio.to_thread(_is_zipfile):
+            raise ValueError(f"Not a valid ZIP file: {path}")
+
+        # Extract ZIP to temporary directory (non-blocking)
+        temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
+        try:
+            # Extract zip (non-blocking)
+            def _extract_zip():
+                with zipfile.ZipFile(path, "r") as zipf:
+                    safe_extract_zip(zipf, temp_dir)
+
+            await asyncio.to_thread(_extract_zip)
+
+            # Check if extracted content has a single root directory (non-blocking)
+            def _list_entries():
+                return [p for p in temp_dir.iterdir() if p.name not in {".", ".."}]
+
+            extracted_entries = await asyncio.to_thread(_list_entries)
+
+            # Prepare kwargs for DirectoryParser
+            dir_kwargs = dict(kwargs)
+            dir_kwargs["instruction"] = instruction
+
+            # Use DirectoryParser to process the extracted content
+            from openviking.parse.parsers.directory import DirectoryParser
+
+            parser = DirectoryParser()
+
+            if len(extracted_entries) == 1 and extracted_entries[0].is_dir():
+                # Single root directory - parse that directly
+                dir_kwargs.pop("source_name", None)
+                result = await parser.parse(str(extracted_entries[0]), **dir_kwargs)
+            else:
+                # Multiple entries at root - parse the temp dir itself
+                # Set source_name from zip filename if not provided
+                if "source_name" not in dir_kwargs or not dir_kwargs["source_name"]:
+                    dir_kwargs["source_name"] = path.stem
+                result = await parser.parse(str(temp_dir), **dir_kwargs)
+
+            # Ensure the temporary directory is preserved for TreeBuilder
+            if not result.temp_dir_path:
+                result.temp_dir_path = str(temp_dir)
+            else:
+                # If DirectoryParser created its own temp, clean up our extraction dir (non-blocking)
+                def _cleanup_temp():
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                await asyncio.to_thread(_cleanup_temp)
+
+            result.source_format = "zip"
+            result.parser_name = "ZipParser"
+            return result
+
+        except Exception:
+            # Clean up on error (non-blocking)
+            def _cleanup_temp_on_error():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+            await asyncio.to_thread(_cleanup_temp_on_error)
+            raise
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        """Parse content - for zip, content should be a file path."""
-        result = await self._md_parser.parse_content(content, source_path, **kwargs)
-        result.source_format = "zip"
-        result.parser_name = "ZipParser"
-        return result
-
-    def _convert_zip_to_markdown(self, path: Path) -> str:
-        """
-        Convert ZIP file information to markdown format.
-
-        Args:
-            path: Path to .zip file
-
-        Returns:
-            Markdown formatted string
-        """
-        try:
-            with zipfile.ZipFile(path, "r") as zf:
-                return self._process_zip_contents(zf, path)
-        except zipfile.BadZipFile:
-            raise ValueError(f"Invalid or corrupted ZIP file: {path}")
-        except Exception as e:
-            raise ValueError(f"Error reading ZIP file: {e}")
-
-    def _process_zip_contents(self, zf: zipfile.ZipFile, path: Path) -> str:
-        """Process ZIP file contents and return markdown."""
-        md_parts = []
-
-        # Title
-        md_parts.append(f"# ZIP Archive: {path.name}")
-        md_parts.append("")
-
-        # Archive info
-        md_parts.append("## Archive Information")
-        md_parts.append("")
-        md_parts.append(f"- **File:** {path.name}")
-        md_parts.append(f"- **Total files:** {len(zf.namelist())}")
-        md_parts.append(
-            f"- **Comment:** {zf.comment.decode('utf-8', errors='ignore') if zf.comment else 'None'}"
+        """Parse content - not applicable for ZIP files (needs a file path)."""
+        raise NotImplementedError(
+            "ZipParser does not support parse_content. Please provide a file path to parse()."
         )
-        md_parts.append("")
-
-        # Group files by extension
-        files_by_ext = self._group_files_by_extension(zf.namelist())
-
-        # File listing by category
-        md_parts.append("## Contents")
-        md_parts.append("")
-
-        # Summary table
-        if files_by_ext:
-            md_parts.append("### File Types Summary")
-            md_parts.append("")
-            md_parts.append("| Extension | Count |")
-            md_parts.append("|-----------|-------|")
-            for ext, files in sorted(files_by_ext.items(), key=lambda x: -len(x[1])):
-                display_ext = ext if ext else "(no extension)"
-                md_parts.append(f"| {display_ext} | {len(files)} |")
-            md_parts.append("")
-
-        # Detailed listing
-        md_parts.append("### File List")
-        md_parts.append("")
-
-        # Create a table with file info
-        md_parts.append("| File | Size | Modified |")
-        md_parts.append("|------|------|----------|")
-
-        for info in zf.infolist():
-            # Skip directories
-            if info.is_dir():
-                continue
-
-            filename = info.filename
-            size = self._format_size(info.file_size)
-            modified = self._format_datetime(info.date_time)
-
-            # Escape pipe characters
-            filename = filename.replace("|", "\\|")
-
-            md_parts.append(f"| {filename} | {size} | {modified} |")
-
-        md_parts.append("")
-
-        # Directory structure
-        md_parts.append("## Directory Structure")
-        md_parts.append("")
-        md_parts.append("```")
-        md_parts.append(self._generate_tree_view(zf.namelist()))
-        md_parts.append("```")
-
-        return "\n".join(md_parts)
-
-    def _group_files_by_extension(self, filenames: List[str]) -> dict:
-        """Group files by their extension."""
-        groups = {}
-        for name in filenames:
-            if name.endswith("/"):  # Skip directories
-                continue
-            ext = Path(name).suffix.lower()
-            if ext not in groups:
-                groups[ext] = []
-            groups[ext].append(name)
-        return groups
-
-    def _format_size(self, size: int) -> str:
-        """Format file size in human-readable format."""
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} PB"
-
-    def _format_datetime(self, dt_tuple) -> str:
-        """Format datetime tuple from ZIP info."""
-        try:
-            dt = datetime(*dt_tuple)
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except:
-            return "Unknown"
-
-    def _generate_tree_view(self, filenames: List[str]) -> str:
-        """Generate a tree-like view of the archive contents."""
-        # Build a simple tree structure
-        lines = []
-
-        # Get unique directories
-        dirs = set()
-        for name in filenames:
-            parts = name.split("/")
-            for i in range(len(parts) - 1):
-                dirs.add("/".join(parts[: i + 1]) + "/")
-
-        # Sort all items
-        all_items = sorted(set(filenames) | dirs)
-
-        for item in all_items:
-            # Calculate depth
-            depth = item.count("/")
-            if item.endswith("/"):
-                depth -= 1
-
-            # Create indentation
-            indent = "    " * depth
-
-            # Get just the name part
-            name = item.rstrip("/").split("/")[-1] if "/" in item else item
-
-            # Add prefix for directories vs files
-            if item.endswith("/"):
-                prefix = "[dir] "
-            else:
-                prefix = ""
-
-            lines.append(f"{indent}{prefix}{name}")
-
-        return "\n".join(lines)

@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV, OPENVIKING_ENABLE_RECORDER_ENV
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -98,11 +100,11 @@ class RAGEvaluator:
 
                 config_path = Path(self.config_path).expanduser()
                 if config_path.exists():
-                    os.environ["OPENVIKING_CONFIG_FILE"] = str(config_path)
+                    os.environ[OPENVIKING_CONFIG_ENV] = str(config_path)
                     logger.info(f"Using config file: {config_path}")
 
                 if self.enable_recorder:
-                    os.environ["OPENVIKING_ENABLE_RECORDER"] = "true"
+                    os.environ[OPENVIKING_ENABLE_RECORDER_ENV] = "true"
 
                 self._client = OpenViking(path=self.data_path)
             except Exception as e:

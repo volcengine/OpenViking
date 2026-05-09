@@ -1,9 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DirectoryMarkerMode(str, Enum):
@@ -67,6 +71,12 @@ class S3Config(BaseModel):
         "for DeleteObjects but AWS SDK v2 does not send it by default. Defaults to False.",
     )
 
+    normalize_encoding_chars: str = Field(
+        default="?#%+@",
+        description="Characters to escape in S3 object keys as !HH hexadecimal bytes. "
+        "Set to an empty string to disable key normalization. Defaults to ?#%+@.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):
@@ -97,11 +107,66 @@ class AGFSConfig(BaseModel):
         description="[Deprecated in favor of `storage.workspace`] RAGFS data storage path. This will be ignored if `storage.workspace` is set.",
     )
 
+    port: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS service port. Ignored by RAGFS.",
+    )
+
+    log_level: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS log level. Ignored by RAGFS.",
+    )
+
+    url: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS service URL. Ignored by RAGFS.",
+    )
+
+    mode: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS client mode. Ignored by RAGFS.",
+    )
+
+    impl: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS binding implementation selector. Ignored by RAGFS.",
+    )
+
     backend: str = Field(
         default="local", description="RAGFS storage backend: 'local' | 's3' | 'memory'"
     )
 
     timeout: int = Field(default=10, description="RAGFS request timeout (seconds)")
+
+    queue_db_path: Optional[str] = Field(
+        default=None,
+        description="Override path of the queuefs sqlite database file. "
+        "Defaults to '{storage.workspace}/_system/queue/queue.db' when not set. "
+        "Useful when the workspace volume does not support sqlite (e.g. some network filesystems).",
+    )
+
+    retry_times: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS retry count. Ignored by RAGFS.",
+    )
+
+    use_ssl: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS SSL switch. Ignored by RAGFS.",
+    )
+
+    lib_path: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS binding library path. Ignored by RAGFS.",
+    )
 
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.
@@ -113,6 +178,23 @@ class AGFSConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
+        deprecated_fields = (
+            "port",
+            "log_level",
+            "url",
+            "mode",
+            "impl",
+            "retry_times",
+            "use_ssl",
+            "lib_path",
+        )
+        for field_name in deprecated_fields:
+            if field_name in self.model_fields_set:
+                logger.warning(
+                    "AGFSConfig: 'storage.agfs.%s' is deprecated and ignored after the RAGFS migration.",
+                    field_name,
+                )
+
         if self.backend not in ["local", "s3", "memory"]:
             raise ValueError(
                 f"Invalid RAGFS backend: '{self.backend}'. Must be one of: 'local', 's3', 'memory'"

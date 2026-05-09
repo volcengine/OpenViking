@@ -7,13 +7,22 @@ sys.path.insert(0, ".")
 
 from api.client import OpenVikingAPIClient
 
+
+def _redact_headers(headers):
+    redacted = dict(headers)
+    for key in list(redacted):
+        if key.lower() in {"x-api-key", "authorization"}:
+            redacted[key] = "<redacted>"
+    return redacted
+
+
 client = OpenVikingAPIClient()
 
 print("Client configuration:")
-print(f"  API Key: {client.api_key}")
+print(f"  API Key configured: {bool(client.api_key)}")
 print(f"  Account: {client.account}")
 print(f"  User: {client.user}")
-print(f"  Session headers: {dict(client.session.headers)}")
+print(f"  Session headers: {_redact_headers(client.session.headers)}")
 
 print("\n" + "=" * 80)
 print("Testing admin list accounts with debug...")
@@ -22,7 +31,7 @@ url = f"{client.server_url}/api/v1/admin/accounts"
 headers = dict(client.session.headers)
 
 print(f"URL: {url}")
-print(f"Headers: {json.dumps(headers, indent=2)}")
+print(f"Headers: {json.dumps(_redact_headers(headers), indent=2)}")
 
 try:
     response = requests.get(url, headers=headers)

@@ -246,7 +246,7 @@ memories = client.find(
 }
 ```
 
-你也可以使用火山引擎、Azure OpenAI、LiteLLM 等提供商。当前配置示例请以主 [README](../../README_CN.md) 和 [配置指南](../../docs/zh/guides/01-configuration.md) 为准。
+你也可以使用火山引擎、Azure OpenAI 等提供商。当前配置示例请以主 [README](../../README_CN.md) 和 [配置指南](../../docs/zh/guides/01-configuration.md) 为准。
 
 ## 推荐下一步
 

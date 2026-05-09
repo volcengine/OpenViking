@@ -23,10 +23,47 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import (
+    CODE_EXTENSIONS,
+    DOCUMENTATION_EXTENSIONS,
+    IGNORE_EXTENSIONS,
+)
 from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
+
+# All known valid extensions - only these should be stripped when getting stem
+KNOWN_EXTENSIONS: set[str] = set()
+for extensions in IANA_MEDIA_TYPE_TO_EXTENSION.values():
+    KNOWN_EXTENSIONS.update(extensions)
+KNOWN_EXTENSIONS.update(CODE_EXTENSIONS)
+KNOWN_EXTENSIONS.update(DOCUMENTATION_EXTENSIONS)
+KNOWN_EXTENSIONS.update(IGNORE_EXTENSIONS)
+
+
+def _smart_stem(path_or_name: str | Path) -> str:
+    """Get the stem of a filename, but only strip known valid extensions.
+
+    For filenames like "2601.00014" where ".00014" is not a valid extension,
+    returns the full name instead of just "2601".
+
+    Args:
+        path_or_name: Path object or string filename
+
+    Returns:
+        Stem with only known extensions stripped
+    """
+    path = Path(path_or_name)
+    suffix = path.suffix.lower()
+
+    if suffix in KNOWN_EXTENSIONS:
+        return path.stem
+
+    # If the suffix is not a known extension, treat the whole name as the stem
+    return path.name
+
 
 logger = get_logger(__name__)
 
@@ -49,7 +86,7 @@ class MarkdownParser(BaseParser):
     """
 
     # Configuration constants
-    DEFAULT_MAX_SECTION_SIZE = 1024  # Maximum tokens per section
+    DEFAULT_MAX_SECTION_SIZE = 2048  # Maximum tokens per section
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
@@ -174,15 +211,17 @@ class MarkdownParser(BaseParser):
             await viking_fs.mkdir(temp_uri)
             logger.debug(f"[MarkdownParser] Created temp directory: {temp_uri}")
 
-            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+            explicit_name = kwargs.get("resource_name")
+            if not explicit_name and kwargs.get("source_name"):
+                explicit_name = _smart_stem(kwargs["source_name"])
 
             # Preserve the original uploaded filename when available instead of
             # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
                 "title",
-                Path(explicit_name).stem
+                explicit_name
                 if explicit_name
-                else Path(source_path).stem
+                else _smart_stem(source_path)
                 if source_path
                 else "Document",
             )
@@ -200,7 +239,7 @@ class MarkdownParser(BaseParser):
                 headings,
                 root_dir,
                 source_path,
-                doc_name=self._sanitize_for_path(Path(doc_title).stem),
+                doc_name=self._sanitize_for_path(doc_title),
             )
 
             parse_time = time.time() - start_time
@@ -333,10 +372,16 @@ class MarkdownParser(BaseParser):
             para_tokens = self._estimate_token_count(para)
             para_len = len(para)
 
-            # Single paragraph too long (by tokens or chars): force split by characters
+            # Single paragraph too long (by tokens or chars): force split by characters.
+            # If the already accumulated prefix is very short, merge it into this
+            # oversized paragraph first so we do not create a low-value tiny chunk
+            # like `section_1.md` that only contains the heading/introduction.
             if para_tokens > max_size or para_len > max_chars:
                 if current:
-                    parts.append(current.strip())
+                    if current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
+                        para = current + "\n\n" + para
+                    else:
+                        parts.append(current.strip())
                     current = ""
                     current_tokens = 0
                 for i in range(0, len(para), max_chars):
@@ -352,18 +397,24 @@ class MarkdownParser(BaseParser):
                 current_tokens += para_tokens
 
         if current.strip():
-            parts.append(current.strip())
+            # Avoid emitting a tiny trailing chunk when all earlier content has
+            # already been split out (for example, a huge paragraph followed by
+            # a short "no data" tail). Fold the tail back into the previous part.
+            if parts and current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
+                parts[-1] = f"{parts[-1]}\n\n{current.strip()}".strip()
+            else:
+                parts.append(current.strip())
 
         return parts if parts else [content]
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(
-            r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s-]",
+            r"[^\w\u0080-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s.-]",
             "",
             text,
         )
         safe = re.sub(r"\s+", "_", safe)
-        safe = safe.strip("_")
+        safe = safe.strip("._")
         if not safe:
             return "section"
         if len(safe) > max_length:
@@ -411,7 +462,7 @@ class MarkdownParser(BaseParser):
 
         # Get document name
         doc_name = doc_name or self._sanitize_for_path(
-            Path(source_path).stem if source_path else "content"
+            _smart_stem(source_path) if source_path else "content"
         )
 
         # Small document: save as single file (check both token and char limits)
@@ -486,34 +537,116 @@ class MarkdownParser(BaseParser):
         ]
 
         pending = []
+        buffered_section = None
+
+        async def flush_buffered() -> None:
+            nonlocal buffered_section
+            if buffered_section is not None:
+                await self._save_section(
+                    content,
+                    headings,
+                    parent_dir,
+                    buffered_section,
+                    max_size,
+                    min_size,
+                )
+                buffered_section = None
+
         for sec in expanded:
             name, tokens, content_text = sec["name"], sec["tokens"], sec["content"]
             has_children = sec["has_children"]
 
             # Handle small sections
             if tokens < min_size:
-                pending = await self._try_add_to_pending(
-                    viking_fs, parent_dir, pending, (name, content_text, tokens), max_size
-                )
+                if pending and sum(t for _, _, t in pending) + tokens > max_size:
+                    await flush_buffered()
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+                pending.append((name, content_text, tokens))
                 continue
 
-            # Try merge with pending
-            if pending and self._can_merge(pending, tokens, max_size, has_children):
-                pending.append((name, content_text, tokens))
+            if pending:
+                await flush_buffered()
+
+                # Try merge with pending
+                if self._can_merge(pending, tokens, max_size, has_children):
+                    pending.append((name, content_text, tokens))
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+                    continue
+
+                # Avoid flushing a single tiny section as a standalone low-value file.
+                if self._should_merge_pending_into_next(pending):
+                    sec = self._merge_pending_into_next_section(pending, sec)
+                    pending = []
+                else:
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+            else:
+                await flush_buffered()
+
+            buffered_section = sec
+
+        if pending:
+            # No next section exists. Fold a single tiny pending section back into
+            # the previous saved candidate instead of emitting a standalone file.
+            if buffered_section is not None and self._should_merge_pending_into_next(pending):
+                buffered_section = self._merge_pending_into_previous_section(
+                    buffered_section, pending
+                )
+                pending = []
+            else:
+                await flush_buffered()
                 await self._save_merged(viking_fs, parent_dir, pending)
                 pending = []
-                continue
 
-            # Save pending and process current section
-            pending = await self._flush_pending(viking_fs, parent_dir, pending)
-            await self._save_section(content, headings, parent_dir, sec, max_size, min_size)
-
-        # Save remaining pending
-        await self._flush_pending(viking_fs, parent_dir, pending)
+        await flush_buffered()
 
     def _can_merge(self, pending: List, tokens: int, max_size: int, has_children: bool) -> bool:
         """Check if section can merge with pending."""
         return sum(t for _, _, t in pending) + tokens <= max_size and not has_children
+
+    def _should_merge_pending_into_next(self, pending: List[Tuple[str, str, int]]) -> bool:
+        """Prefer folding a single tiny pending section into the next section."""
+        return len(pending) == 1 and pending[0][2] <= self.DEFAULT_MIN_SECTION_TOKENS
+
+    def _merge_pending_into_next_section(
+        self, pending: List[Tuple[str, str, int]], section: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach a tiny pending section to the following section."""
+        _, pending_content, _ = pending[0]
+        merged = dict(section)
+        merged["content"] = f"{pending_content}\n\n{section['content']}".strip()
+        merged["tokens"] = self._estimate_token_count(merged["content"])
+
+        if merged.get("has_children"):
+            direct_content = section.get("direct_content", "").strip()
+            merged["direct_content"] = (
+                f"{pending_content}\n\n{direct_content}".strip()
+                if direct_content
+                else pending_content
+            )
+
+        return merged
+
+    def _merge_pending_into_previous_section(
+        self, section: Dict[str, Any], pending: List[Tuple[str, str, int]]
+    ) -> Dict[str, Any]:
+        """Attach a tiny trailing pending section back into the previous section."""
+        _, pending_content, _ = pending[0]
+        merged = dict(section)
+        merged["content"] = f"{section['content']}\n\n{pending_content}".strip()
+        merged["tokens"] = self._estimate_token_count(merged["content"])
+
+        if merged.get("has_children"):
+            direct_content = section.get("direct_content", "").strip()
+            merged["direct_content"] = (
+                f"{direct_content}\n\n{pending_content}".strip()
+                if direct_content
+                else pending_content
+            )
+
+        return merged
 
     async def _try_add_to_pending(
         self, viking_fs, parent_dir: str, pending: List, item: Tuple, max_size: int

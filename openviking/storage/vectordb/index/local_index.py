@@ -13,6 +13,11 @@ from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
+from openviking.storage.vectordb.utils.path_safety import (
+    safe_join,
+    safe_join_name,
+)
+from openviking.storage.vectordb.utils.validation import validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -213,7 +218,6 @@ class LocalIndex(IIndex):
         )
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
-        pass
 
     def update(
         self,
@@ -306,7 +310,7 @@ class LocalIndex(IIndex):
         return agg_data
 
     def close(self):
-        pass
+        return None
 
     def drop(self):
         if self.engine_proxy:
@@ -423,13 +427,7 @@ class VolatileIndex(LocalIndex):
         index_config_dict["UpdateTimeStamp"] = version_int
         index_config_json = json.dumps(index_config_dict)
 
-        # Get the vector normalization flag from meta
-        normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
-
-        # Directly initialize engine_proxy without calling parent __init__
-        self.engine_proxy = IndexEngineProxy(index_config_json, normalize_vector_flag)
-        self.meta = meta
-        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        super().__init__(index_config_json, meta)
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
 
     def need_rebuild(self) -> bool:
@@ -524,9 +522,10 @@ class PersistentIndex(LocalIndex):
         if cands_list is None:
             cands_list = []
 
-        self.index_dir = os.path.join(path, name)
+        validate_name_str(name)
+        self.index_dir = str(safe_join_name(path, name))
         os.makedirs(self.index_dir, exist_ok=True)
-        self.version_dir = os.path.join(self.index_dir, "versions")
+        self.version_dir = str(safe_join(self.index_dir, "versions"))
         os.makedirs(self.version_dir, exist_ok=True)
 
         newest_version = self.get_newest_version()
@@ -537,7 +536,7 @@ class PersistentIndex(LocalIndex):
         else:
             self.now_version = str(newest_version)
 
-        index_path = os.path.join(self.version_dir, self.now_version)
+        index_path = str(safe_join(self.version_dir, self.now_version))
         super().__init__(index_path, meta)
         # Remove scheduling logic, unified scheduling by collection layer
 
@@ -562,13 +561,13 @@ class PersistentIndex(LocalIndex):
         index_config_json = json.dumps(index_config_dict)
 
         builder = IndexEngineProxy(index_config_json, normalize_vector_flag)
-        build_index_path = os.path.join(self.version_dir, version_str)
+        build_index_path = str(safe_join(self.version_dir, version_str))
         builder.add_data(self._convert_candidate_list_for_index(cands_list))
 
         dump_version_int = builder.dump(build_index_path)
         if dump_version_int > 0:
             dump_version_str = str(dump_version_int)
-            new_index_path = os.path.join(self.version_dir, dump_version_str)
+            new_index_path = str(safe_join(self.version_dir, dump_version_str))
             shutil.move(build_index_path, new_index_path)
             Path(new_index_path + IndexFileMarkers.WRITE_DONE.value).touch()
             self.now_version = dump_version_str
@@ -637,13 +636,13 @@ class PersistentIndex(LocalIndex):
             if update_ts <= newest_version:
                 return 0
             now_ns_ts = str(int(time.time_ns()))
-            index_path = os.path.join(self.version_dir, now_ns_ts)
+            index_path = str(safe_join(self.version_dir, now_ns_ts))
             os.makedirs(index_path, exist_ok=True)
             dump_version = self.engine_proxy.dump(index_path)
             if dump_version < 0:
                 return 0
             # todo get dump timestamp
-            dump_index_path = os.path.join(self.version_dir, str(dump_version))
+            dump_index_path = str(safe_join(self.version_dir, str(dump_version)))
             shutil.move(index_path, dump_index_path)
             Path(dump_index_path + ".write_done").touch()
             self._clean_index([self.now_version, str(dump_version)])
@@ -671,8 +670,8 @@ class PersistentIndex(LocalIndex):
             not_clean_set.add(file_name + ".write_done")
         for file_name in os.listdir(self.version_dir):
             if file_name not in not_clean_set:
-                path = os.path.join(self.version_dir, file_name)
-                if os.path.isdir(path):
+                path = safe_join(self.version_dir, file_name)
+                if path.is_dir():
                     shutil.rmtree(path)
                 else:
                     os.remove(path)
@@ -698,9 +697,9 @@ class PersistentIndex(LocalIndex):
 
         valid_versions = []
         for name in os.listdir(self.version_dir):
-            version_path = os.path.join(self.version_dir, name)
+            version_path = safe_join(self.version_dir, name)
             # Must be a directory
-            if not os.path.isdir(version_path):
+            if not version_path.is_dir():
                 continue
 
             # Must be an integer (timestamp)
@@ -708,8 +707,8 @@ class PersistentIndex(LocalIndex):
                 continue
 
             # Must have corresponding .write_done file
-            marker_path = version_path + IndexFileMarkers.WRITE_DONE.value
-            if not os.path.exists(marker_path):
+            marker_path = Path(str(version_path) + IndexFileMarkers.WRITE_DONE.value)
+            if not marker_path.exists():
                 continue
 
             valid_versions.append(int(name))

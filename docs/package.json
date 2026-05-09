@@ -1,0 +1,14 @@
+{
+  "name": "openviking-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev . --host 0.0.0.0",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview . --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}

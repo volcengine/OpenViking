@@ -157,6 +157,24 @@ class TestTree:
         assert isinstance(tree, (list, dict))
 
 
+async def test_local_client_mkdir_forwards_description():
+    client = LocalClient.__new__(LocalClient)
+    client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    client._service = SimpleNamespace(fs=SimpleNamespace(mkdir=AsyncMock()))
+
+    await LocalClient.mkdir(
+        client,
+        "viking://resources/demo-dir/",
+        description="Demo directory",
+    )
+
+    client._service.fs.mkdir.assert_awaited_once_with(
+        "viking://resources/demo-dir/",
+        ctx=client._ctx,
+        description="Demo directory",
+    )
+
+
 async def test_sync_openviking_write_updates_existing_file(test_data_dir, sample_markdown_file):
     """Sync OpenViking exposes write() and delegates to the async client."""
     await AsyncOpenViking.reset()

@@ -41,9 +41,9 @@ With multi-tenancy enabled, you can:
 
 `agent_id` separates agent-level space.
 
-- In the default mode, agent space is derived from `user_id + agent_id`
-- That means different agents for the same user can have different agent memories
-- If `memory.agent_scope_mode = "agent"`, the same `agent_id` can share agent space across users in the same account
+- Agent URI shape is controlled by per-account namespace policy
+- `isolate_agent_scope_by_user = false` means `viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true` means `viking://agent/{agent_id}/user/{user_id}/...`
 
 ### Roles
 
@@ -84,7 +84,7 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 |-----------|------------------------|---------------------------|----------------------------|
 | `resources` | No | Yes | account |
 | `user` | No | No | user |
-| `agent` | No | Depends on `memory.agent_scope_mode` | Default: `user + agent` |
+| `agent` | No | Depends on account namespace policy | Default: `agent` |
 | `session` | No | No | user / session |
 
 ### Storage Layer
@@ -184,7 +184,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 The current OpenClaw plugin follows a "plugin holds one user identity" model:
 
-- Remote mode config is `baseUrl + apiKey + agentId`
+- Remote mode config is `baseUrl + apiKey + agent_prefix`
 - `apiKey` should normally be a user key
 - The server resolves `account_id` and `user_id` from that user key
 - The plugin explicitly passes `X-OpenViking-Agent`
@@ -195,14 +195,14 @@ Typical config:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
+openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefix>"
 ```
 
 Characteristics of this model:
 
 - Simple integration, because the plugin does not manage account/user lifecycle
 - Best for "one OpenClaw instance maps to one OpenViking user identity"
-- `agentId` distinguishes different OpenClaw instances or agent roles
+- `agent_prefix` distinguishes different OpenClaw instances or agent roles
 - `resources` can be shared inside the same account, while `user` and `agent` memory stay identity-scoped
 
 ### Why the OpenClaw plugin usually does not set `account` / `user`
@@ -210,7 +210,7 @@ Characteristics of this model:
 In `api_key` mode, a user key is already enough to express identity:
 
 - `account` and `user` are resolved server-side from the key
-- The plugin only needs to provide `agentId`
+- The plugin only needs to provide `agent_prefix`
 - Internally, the plugin derives default `user` and `agent` memory scopes from the runtime identity
 
 If you give the plugin a root key directly, normal tenant-scoped data APIs will lack `X-OpenViking-Account` and `X-OpenViking-User`, so that is not a good default for day-to-day access.

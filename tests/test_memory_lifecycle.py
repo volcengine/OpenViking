@@ -106,8 +106,8 @@ class TestHotnessBlending:
         # B should overtake A due to hotness
         assert blended_b > blended_a
 
-    def test_default_alpha_preserves_semantic_dominance(self):
-        """With default alpha=0.2, a large semantic gap is not overturned."""
+    def test_small_alpha_preserves_semantic_dominance(self):
+        """With a small alpha, a large semantic gap is not overturned."""
         alpha = 0.2
 
         # Memory A: much higher semantic, cold

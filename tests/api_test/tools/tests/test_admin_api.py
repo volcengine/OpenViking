@@ -3,11 +3,19 @@ import json
 from api.client import OpenVikingAPIClient
 
 
+def _redact_headers(headers):
+    redacted = dict(headers)
+    for key in list(redacted):
+        if key.lower() in {"x-api-key", "authorization"}:
+            redacted[key] = "<redacted>"
+    return redacted
+
+
 def main():
     client = OpenVikingAPIClient()
 
-    print("Current API Key:", client.api_key)
-    print("Current Headers:", client.session.headers)
+    print("Current API Key configured:", bool(client.api_key))
+    print("Current Headers:", _redact_headers(client.session.headers))
     print("\n" + "=" * 80 + "\n")
 
     print("Testing admin_list_accounts...")

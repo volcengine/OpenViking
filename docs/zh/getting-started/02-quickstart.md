@@ -24,10 +24,10 @@ pip install openviking --upgrade --force-reinstall
 
 如果你希望将 OpenViking 作为独立的服务运行，推荐使用 Docker。
 
-1. **准备配置文件与数据目录**
-   在宿主机上创建数据目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）：
+1. **准备配置目录**
+   在宿主机上创建 OpenViking 目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）。所有持久化状态 —— 配置和工作区数据 —— 都放在这一个目录下：
    ```bash
-   mkdir -p ~/.openviking/data
+   mkdir -p ~/.openviking
    touch ~/.openviking/ov.conf
    ```
 
@@ -42,8 +42,7 @@ pip install openviking --upgrade --force-reinstall
          - "1933:1933"
          - "8020:8020"
        volumes:
-         - ~/.openviking/ov.conf:/app/ov.conf
-         - ~/.openviking/data:/app/data
+         - ~/.openviking:/app/.openviking
        restart: unless-stopped
    ```
    然后在同目录下执行启动命令：
@@ -52,6 +51,8 @@ pip install openviking --upgrade --force-reinstall
    ```
 
    默认情况下，容器会同时启动 OpenViking API 服务（`1933`）、Console 界面（`8020`）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
+
+   如果运行平台不支持 bind mount，可以通过 `OPENVIKING_CONF_CONTENT` 环境变量传入完整的配置 JSON，或在容器启动后 `docker exec` 进去执行 `openviking-server init`。详见 [部署指南](../guides/03-deployment.md#无法使用-docker--v-时)。
 
 > **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
 >
@@ -67,8 +68,7 @@ pip install openviking --upgrade --force-reinstall
 >       - "8020:8020"
 >       - "1933:1934" # 将宿主机 1933 映射到容器 1934
 >     volumes:
->       - ~/.openviking/ov.conf:/app/ov.conf
->       - ~/.openviking/data:/app/data
+>       - ~/.openviking:/app/.openviking
 >     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
 > ```
 > 这样即可完美解决 Mac 宿主机的访问问题。
@@ -82,13 +82,21 @@ OpenViking 需要以下模型能力：
 OpenViking 支持多种模型服务：
 - **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
+- **OpenAI Codex**：支持通过 ChatGPT/Codex OAuth 使用 Codex 作为 VLM
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
 ## 配置环境
 
 ### 配置文件模版
 
-创建配置文件 `~/.openviking/ov.conf`：
+推荐首次配置使用：
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -110,7 +118,11 @@ OpenViking 支持多种模型服务：
 }
 ```
 
+`provider`、`model`、`api_base` 和 `api_key` 取决于你选择的 VLM 服务；部分 provider 可能会使用本地 OAuth 状态，而不是手动填写 API key。
+
 各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
+
+首次配置建议优先使用 `openviking-server init`，它会帮助你选择 provider，并生成对应场景可直接使用的配置模板。
 
 ### 设置环境变量
 
@@ -139,6 +151,7 @@ try:
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
+    # Local directory scans respect .gitignore by default.
     add_result = client.add_resource(
         path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
     )

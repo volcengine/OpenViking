@@ -27,7 +27,10 @@ pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
     pub api_key: Option<String>,
+    pub root_api_key: Option<String>,
+    #[serde(alias = "account_id")]
     pub account: Option<String>,
+    #[serde(alias = "user_id")]
     pub user: Option<String>,
     pub agent_id: Option<String>,
     #[serde(default = "default_timeout")]
@@ -36,8 +39,14 @@ pub struct Config {
     pub output: String,
     #[serde(default = "default_echo_command")]
     pub echo_command: bool,
+    #[serde(default = "default_show_progress")]
+    pub show_progress: bool,
+    #[serde(default = "default_verbose")]
+    pub verbose: bool,
     #[serde(default)]
     pub upload: UploadConfig,
+    #[serde(default, alias = "extra_header")]
+    pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 fn default_url() -> String {
@@ -56,18 +65,30 @@ fn default_echo_command() -> bool {
     true
 }
 
+fn default_show_progress() -> bool {
+    false
+}
+
+fn default_verbose() -> bool {
+    false
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             url: "http://localhost:1933".to_string(),
             api_key: None,
+            root_api_key: None,
             account: None,
             user: None,
             agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: UploadConfig::default(),
+            extra_headers: None,
         }
     }
 }
@@ -183,6 +204,36 @@ mod tests {
     }
 
     #[test]
+    fn config_deserializes_root_api_key() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "api_key": "user-key",
+                "root_api_key": "root-key"
+            }"#,
+        )
+        .expect("config should deserialize with root_api_key");
+
+        assert_eq!(config.api_key.as_deref(), Some("user-key"));
+        assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
+    }
+
+    #[test]
+    fn config_deserializes_account_id_and_user_id_aliases() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "account_id": "acme",
+                "user_id": "alice"
+            }"#,
+        )
+        .expect("config should deserialize aliases");
+
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
     fn config_deserializes_upload_fields() {
         let config: Config = serde_json::from_str(
             r#"{
@@ -249,5 +300,53 @@ mod tests {
             None
         );
         assert_eq!(merge_csv_options(None, None), None);
+    }
+
+    #[test]
+    fn config_deserializes_extra_headers() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "extra_headers": {
+                    "X-Custom-Header": "custom-value",
+                    "Authorization": "Bearer token"
+                }
+            }"#,
+        )
+        .expect("config should deserialize with extra_headers");
+
+        let headers = config.extra_headers.expect("extra_headers should be present");
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+    }
+
+    #[test]
+    fn config_deserializes_extra_headers_none_when_missing() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933"
+            }"#,
+        )
+        .expect("config should deserialize");
+
+        assert!(config.extra_headers.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_extra_header_alias() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "extra_header": {
+                    "X-Custom-Header": "custom-value",
+                    "Authorization": "Bearer token"
+                }
+            }"#,
+        )
+        .expect("config should deserialize with alias");
+
+        let headers = config.extra_headers.expect("extra_headers should be present");
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
     }
 }

@@ -9,9 +9,11 @@ Implements Envelope Encryption pattern:
 - Account Key is derived from Root Key
 """
 
+import importlib
 import secrets
 import struct
-from typing import Tuple
+import time
+from typing import TYPE_CHECKING, Any, Tuple
 
 from openviking.crypto.exceptions import (
     AuthenticationFailedError,
@@ -19,13 +21,10 @@ from openviking.crypto.exceptions import (
     InvalidMagicError,
     KeyMismatchError,
 )
-from openviking.crypto.providers import (
-    PROVIDER_LOCAL,
-    PROVIDER_VAULT,
-    PROVIDER_VOLCENGINE,
-    RootKeyProvider,
-)
 from openviking_cli.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from openviking.crypto.providers import RootKeyProvider
 
 logger = get_logger(__name__)
 
@@ -36,11 +35,29 @@ MAGIC_LENGTH = len(MAGIC)
 # Envelope format version
 VERSION = 0x01
 
+PROVIDER_LOCAL = 0x01
+PROVIDER_VAULT = 0x02
+PROVIDER_VOLCENGINE = 0x03
+
+
+def _record_encryption_metrics(
+    *metrics: Tuple[str, dict[str, Any]],
+    debug_message: str,
+) -> None:
+    """Emit encryption metrics without letting observability failures affect crypto flows."""
+    try:
+        encryption_module = importlib.import_module("openviking.metrics.datasources.encryption")
+        datasource = encryption_module.EncryptionEventDataSource
+        for metric_name, metric_kwargs in metrics:
+            getattr(datasource, metric_name)(**metric_kwargs)
+    except Exception:
+        logger.debug(debug_message, exc_info=True)
+
 
 class FileEncryptor:
     """File encryptor."""
 
-    def __init__(self, provider: RootKeyProvider):
+    def __init__(self, provider: "RootKeyProvider"):
         """
         Initialize FileEncryptor.
 
@@ -50,7 +67,7 @@ class FileEncryptor:
         self.provider = provider
         self._provider_type = self._detect_provider_type(provider)
 
-    def _detect_provider_type(self, provider: RootKeyProvider) -> int:
+    def _detect_provider_type(self, provider: "RootKeyProvider") -> int:
         """Detect Provider type."""
         from openviking.crypto.providers import (
             LocalFileProvider,
@@ -78,24 +95,44 @@ class FileEncryptor:
         Returns:
             Encrypted content (Envelope format)
         """
-        # 1. Generate random File Key
-        file_key = secrets.token_bytes(32)
-
-        # 2. Encrypt file content
-        data_iv = secrets.token_bytes(12)
-        encrypted_content = await self._aes_gcm_encrypt(file_key, data_iv, plaintext)
-
-        # 3. Encrypt File Key (all providers now return (encrypted_key, iv)
-        encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
-
-        # 4. Build Envelope
-        return self._build_envelope(
-            self._provider_type,
-            encrypted_file_key,
-            key_iv,
-            data_iv,
-            encrypted_content,
+        start = time.perf_counter()
+        # Metrics must be best-effort: encryption must succeed/fail solely based on crypto logic,
+        # not on observability availability. Therefore all metrics emissions are wrapped in try/except.
+        _record_encryption_metrics(
+            ("record_payload_size", {"operation": "encrypt", "size_bytes": len(plaintext)}),
+            ("record_bytes", {"operation": "encrypt", "size_bytes": len(plaintext)}),
+            debug_message="Failed to record encryption pre-encrypt metrics",
         )
+
+        status = "ok"
+        try:
+            file_key = secrets.token_bytes(32)
+            data_iv = secrets.token_bytes(12)
+            encrypted_content = await self._aes_gcm_encrypt(file_key, data_iv, plaintext)
+            encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
+            return self._build_envelope(
+                self._provider_type,
+                encrypted_file_key,
+                key_iv,
+                data_iv,
+                encrypted_content,
+            )
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_operation",
+                    {
+                        "operation": "encrypt",
+                        "status": status,
+                        "duration_seconds": elapsed,
+                    },
+                ),
+                debug_message="Failed to record encryption operation metrics",
+            )
 
     async def decrypt(self, account_id: str, ciphertext: bytes) -> bytes:
         """
@@ -130,17 +167,45 @@ class FileEncryptor:
         except Exception as e:
             raise CorruptedCiphertextError(f"Failed to parse envelope: {e}")
 
+        start = time.perf_counter()
+        status = "ok"
         try:
-            # 3. Decrypt File Key (all providers now use (encrypted_key, iv, account_id)
             file_key = await self.provider.decrypt_file_key(encrypted_file_key, key_iv, account_id)
         except Exception as e:
+            status = "error"
             raise KeyMismatchError(f"Failed to decrypt file key: {e}")
 
         try:
-            # 4. Decrypt file content
-            return await self._aes_gcm_decrypt(file_key, data_iv, encrypted_content)
-        except Exception as e:
+            plaintext = await self._aes_gcm_decrypt(file_key, data_iv, encrypted_content)
+            _record_encryption_metrics(
+                ("record_payload_size", {"operation": "decrypt", "size_bytes": len(ciphertext)}),
+                ("record_bytes", {"operation": "decrypt", "size_bytes": len(ciphertext)}),
+                debug_message="Failed to record encryption pre-decrypt metrics",
+            )
+            return plaintext
+        except AuthenticationFailedError as e:
+            status = "error"
+            _record_encryption_metrics(
+                ("record_auth_failed", {}),
+                debug_message="Failed to record encryption authentication failure metrics",
+            )
             raise AuthenticationFailedError(f"Authentication failed: {e}")
+        except Exception as e:
+            status = "error"
+            raise AuthenticationFailedError(f"Authentication failed: {e}")
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_operation",
+                    {
+                        "operation": "decrypt",
+                        "status": status,
+                        "duration_seconds": elapsed,
+                    },
+                ),
+                debug_message="Failed to record decryption operation metrics",
+            )
 
     def _build_envelope(
         self,

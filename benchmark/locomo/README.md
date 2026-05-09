@@ -29,6 +29,29 @@ benchmark/locomo/
 
 ## VikingBot 评测流程
 
+### 前置配置说明
+- vikingbot评测须确保 OpenViking 服务端已配置 root_api_key，即开启多租户模式。每个sample数据都会使用sample_id如`conv-26`作为user_id，存储在OpenViking中。
+```json
+{
+  "server": {
+    "root_api_key": "your-key"
+  }
+}
+```
+- OpenViking数据导入account会优先使用`ovcli.conf`中的account值，若未配置默认使用`default`；
+- vikingbot必须配置OpenViking 的root级别API KEY，默认使用上述的server.root_api_key，也可单独配置；
+- vikingbot查询数据account默认为`default`，如更改必须与导入OpenViking的account一致，即`ovcli.conf`中的account值，可通过`ov.conf`如下配置：
+```json
+{
+  "bot": {
+    "ov_server": {
+      "root_api_key": "your-root-key",
+      "account_id": "默认default，必须和ovcli.conf中的account_id一致"
+    }
+  }
+}
+```
+
 ### 完整一键评测
 
 使用 `run_full_eval.sh` 可以一键运行完整评测流程：
@@ -38,8 +61,6 @@ cd benchmark/locomo/vikingbot
 bash run_full_eval.sh        # 完整流程
 bash run_full_eval.sh --skip-import  # 跳过导入，仅评测
 ```
-
-该脚本会依次执行以下四个步骤：
 
 ### 单题/批量测试
 
@@ -80,6 +101,7 @@ python import_to_ov.py --input <数据文件路径> [选项]
 - `--force-ingest`: 强制重新导入，即使已导入过
 - `--clear-ingest-record`: 清除所有导入记录
 - `--openviking-url`: OpenViking 服务地址，默认 `http://localhost:1933`
+- `--account`: 导入时使用的 account，默认 `default`
 
 **示例：**
 ```bash
@@ -404,6 +426,9 @@ A: 使用 `--force-ingest`（导入）或删除结果 CSV 文件。
 ### Q: 评测速度慢怎么办？
 A: 增加 `--threads`（run_eval.py）或 `--parallel`（其他脚本）参数值。
 
+### Q: 评测效果低，怎么排查 OpenViking 导入与评测查询的 account/user 是否一致？
+A: 先核对三处是否对齐：`ovcli.conf.account`（导入 account）、`ov.conf.bot.ov_server.account_id`（Vikingbot 查询 account）、评测脚本使用的 user（Vikingbot 按 `sample_id`，OpenClaw 默认 `eval-1`）。这几项不一致时，常见现象是“导入看起来成功，但评测回答质量明显下降或查不到上下文”。
+
 ---
 
 ## 常见问题排查
@@ -461,7 +486,23 @@ grep -i "error" result/qa_results.csv
 
 **预期结果**：在用户提问（query）之前，应该有从 OpenViking 加载的记忆内容。
 
-### 4. Token 统计异常
+### 4. 评测效果低时，先口语化排查 account/user
+
+如果你感觉“明明导入了，回答还是不对劲”，先按这个顺序看：
+
+1. 打开 `~/.openviking/ovcli.conf`，看 `account` 是不是你这次要用的账号。
+2. 打开 `~/.openviking/ov.conf`，重点看：
+   - `bot.ov_server.account_id`
+   - `server.host` / `server.port`
+3. 跑 Vikingbot 脚本时留意 preflight 日志里打印的 `account` 和 `OpenViking URL`，确认和你配置里看到的一致。
+4. 记住查询侧是谁在查：
+   - Vikingbot 评测默认用 `sample_id` 当 user。
+   - OpenClaw QA 默认是 `--user eval-1 --agent-id locomo-eval`。
+   - 你如果改过 OpenClaw 的 `--user` 或 `--agent-id`，要保证 ingest 和 qa 两边用的是同一套值。
+
+一句话：导入时的 account/user、评测时的 account/user、以及连接的服务地址，这三件事只要有一个没对齐，就很容易出现效果低或“查不到上下文”。
+
+### 5. Token 统计异常
 
 如果 `stat_judge_result.py` 输出的 token 数量异常：
 

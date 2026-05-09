@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeUserTextForCapture,
   getCaptureDecision,
-  isTranscriptLikeIngest,
   extractNewTurnTexts,
   extractLatestUserText,
   pickRecentUniqueTexts,
@@ -132,47 +131,6 @@ describe("getCaptureDecision", () => {
   });
 });
 
-describe("isTranscriptLikeIngest", () => {
-  it("multi-speaker transcript → shouldAssist=true", () => {
-    const text = "张三: 你好，今天项目进展如何？\n李四: 进展不错，基本完成了核心模块的开发工作\n张三: 很好，那我们下周可以开始测试了";
-    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 50 });
-    expect(result.shouldAssist).toBe(true);
-    expect(result.reason).toBe("transcript_like_ingest");
-    expect(result.speakerTurns).toBeGreaterThanOrEqual(2);
-  });
-
-  it("single short text → shouldAssist=false", () => {
-    const result = isTranscriptLikeIngest("hello", { minSpeakerTurns: 2, minChars: 50 });
-    expect(result.shouldAssist).toBe(false);
-  });
-
-  it("empty text → shouldAssist=false", () => {
-    const result = isTranscriptLikeIngest("", { minSpeakerTurns: 2, minChars: 50 });
-    expect(result.shouldAssist).toBe(false);
-    expect(result.reason).toBe("empty_text");
-  });
-
-  it("command text → shouldAssist=false", () => {
-    const result = isTranscriptLikeIngest("/reset all the things and clear memory", { minSpeakerTurns: 2, minChars: 10 });
-    expect(result.shouldAssist).toBe(false);
-    expect(result.reason).toBe("command_text");
-  });
-
-  it("text below minChars → shouldAssist=false", () => {
-    const text = "Alice: hi\nBob: hello";
-    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 200 });
-    expect(result.shouldAssist).toBe(false);
-    expect(result.reason).toBe("chars_below_threshold");
-  });
-
-  it("insufficient speaker turns → shouldAssist=false", () => {
-    const text = "这是一段很长的文本，但只有一个人在说话，没有任何说话人标签，只是纯粹的描述文字，超过了最小字符数要求";
-    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 10 });
-    expect(result.shouldAssist).toBe(false);
-    expect(result.reason).toBe("speaker_turns_below_threshold");
-  });
-});
-
 describe("extractNewTurnTexts", () => {
   it("extracts user + assistant text messages", () => {
     const messages = [
@@ -196,18 +154,25 @@ describe("extractNewTurnTexts", () => {
     expect(texts[0]).toContain("[user]: hello");
   });
 
-  it("preserves toolUse content from assistant", () => {
+  it("preserves assistant text and associates toolUse with toolResult", () => {
     const messages = [
       {
         role: "assistant",
         content: [
           { type: "text", text: "Let me search" },
-          { type: "toolUse", name: "grep", input: { pattern: "TODO" } },
+          { type: "toolUse", id: "call_1", name: "grep", input: { pattern: "TODO" } },
         ],
+      },
+      {
+        role: "toolResult",
+        toolName: "grep",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "found 3 matches" }],
       },
     ];
     const { texts } = extractNewTurnTexts(messages, 0);
-    expect(texts.some((t) => t.includes("[toolUse: grep]"))).toBe(true);
+    expect(texts.some((t) => t.includes("[assistant]: Let me search"))).toBe(true);
+    expect(texts.some((t) => t.includes("[grep result]"))).toBe(true);
     expect(texts.some((t) => t.includes("TODO"))).toBe(true);
   });
 

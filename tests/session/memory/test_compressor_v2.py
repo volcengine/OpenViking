@@ -282,7 +282,6 @@ class TestCompressorV2:
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
         messages = [Message.create_user("Current task")]
-        captured: dict[str, str] = {}
 
         class DummyOrchestrator:
             registry = object()
@@ -302,7 +301,6 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        edit_overview_uris=[],
                         delete_uris=[],
                     ),
                     [],
@@ -447,7 +445,6 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        edit_overview_uris=[],
                         delete_uris=[],
                     ),
                     [],

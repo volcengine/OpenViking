@@ -66,6 +66,84 @@ asyncio.run(test())
 
 完成！现在所有写入的数据都会自动加密。
 
+## API Key 哈希配置
+
+OpenViking 提供两层加密保护：
+
+| 加密层 | 配置项 | 算法 | 可逆性 | 说明 |
+|--------|--------|------|--------|------|
+| **文件层** | `encryption.enabled` | AES-GCM | ✅ 可逆 | 保护整个存储文件 |
+| **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ 不可逆 | 保护 API key 本身 |
+
+### ⚠️ Breaking Change 说明
+
+**版本变更**：OpenViking v0.3.12 → later versions
+
+**行为变化**：
+- **之前**：`encryption.enabled = true` 隐式启用 API key Argon2id 哈希
+- **现在**：需要显式配置 `encryption.api_key_hashing.enabled`
+
+**影响**：
+- 升级后，如果 `encryption.enabled = true` 但 `encryption.api_key_hashing.enabled` 未显式配置为 `true`，会在启动时看到以下警告日志：
+  ```
+  API key hashing is disabled while file encryption is enabled.
+  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
+  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
+  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
+  ```
+
+**迁移选项**：
+
+| 选项 | 配置 | 行为 |
+|------|------|------|
+| **保持原有行为** | `api_key_hashing.enabled = true` | API key 使用 Argon2id 哈希存储 |
+| **推荐新行为** | `api_key_hashing.enabled = false`（默认） | API key 明文存储（文件层仍加密） |
+
+### 默认行为
+
+**默认情况下，`encryption.api_key_hashing.enabled = false`**：
+- API key 以明文存储在 JSON 文件中
+- 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
+- `ov admin list-users` 可以显示完整的 API key
+
+### 启用 Argon2id 哈希
+
+如果需要最高级别的 API key 保护，可以启用 Argon2id 单向哈希：
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "api_key_hashing": {
+      "enabled": true
+    }
+  }
+}
+```
+
+**注意**：启用后：
+- API key 使用 Argon2id 单向哈希存储
+- 无法从哈希值还原出明文 key
+- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key
+- 只有在创建用户或重新生成 key 时才能看到明文 key
+
+### 配置示例
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
+
 ## 密钥提供程序选择
 
 | 提供程序 | 适用场景 | 优点 | 缺点 |

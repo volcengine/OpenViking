@@ -55,7 +55,8 @@ Note 2: Replace the root_api_key with your own root-api-key. Ask the user to set
   },
   "parsers": {
     "code": {
-      "gitlab_domains": ["code.byted.org"]
+      "gitlab_domains": ["code.byted.org"],
+      "azure_devops_domains": ["ssh.dev.azure.com", "vs-ssh.visualstudio.com"]
     }
   },
   "embedding": {

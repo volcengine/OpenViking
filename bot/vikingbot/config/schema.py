@@ -41,8 +41,10 @@ class SandboxMode(str, Enum):
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
 
+
 class AgentMemoryMode(str, Enum):
     """Agent memory mode enumeration."""
+
     PER_SESSION = "per-session"
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
@@ -50,6 +52,7 @@ class AgentMemoryMode(str, Enum):
 
 class BotMode(str, Enum):
     """Bot running mode enumeration."""
+
     NORMAL = "normal"
     READONLY = "readonly"
     DEBUG = "debug"
@@ -61,6 +64,7 @@ class BaseChannelConfig(BaseModel):
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
     ov_tools_enable: bool = True
+    memory_user: list[str] | None = None
 
     def channel_id(self) -> str:
         return "default"
@@ -119,7 +123,10 @@ class FeishuChannelConfig(BaseChannelConfig):
     verification_token: str = ""
     allow_from: list[str] = Field(default_factory=list)
     allow_cmd_from: list[str] = Field(default_factory=list)  ## 允许执行命令的Feishu用户ID列表
-    thread_require_mention: bool = Field(default=True, description="话题群模式下是否需要@才响应：默认True=所有消息必须@才响应；False=新话题首条消息无需@，后续回复必须@")
+    thread_require_mention: bool = Field(
+        default=True,
+        description="群聊是否需要@才响应：默认True=普通群和话题群的所有消息都必须@才响应；False=普通群无需@，话题群仅首条消息无需@，非DEBUG模式下后续回复必须@",
+    )
 
     def channel_id(self) -> str:
         # Use app_id directly as the ID
@@ -266,7 +273,6 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.OPENAPI
     enabled: bool = True
-    api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -280,10 +286,12 @@ class BotChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.BOT_API
     enabled: bool = True
-    api_key: str = ""  # If empty, no auth required
+    api_key: str = ""  # Empty disables privileged HTTP routes until configured
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     need_mention: bool = False
+    profile_user_list: list[str] = Field(default_factory=list)
+    memory_user: str = ""
     id: str = "default"  # Channel identifier for multi-channel support
 
     def channel_id(self) -> str:
@@ -437,7 +445,9 @@ class ProviderConfig(BaseModel):
 
     api_key: str = ""
     api_base: Optional[str] = None
-    extra_headers: Optional[dict[str, str]] = Field(default_factory=dict)  # Custom headers (e.g. APP-Code for AiHubMix)
+    extra_headers: Optional[dict[str, str]] = Field(
+        default_factory=dict
+    )  # Custom headers (e.g. APP-Code for AiHubMix)
 
 
 class ProvidersConfig(BaseModel):
@@ -467,11 +477,25 @@ class HeartbeatConfig(BaseModel):
     interval_seconds: int = 10 * 60  # Default: 5 minutes
 
 
+LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def is_localhost_host(host: str) -> bool:
+    return host in LOCALHOST_HOSTS
+
+
+def requires_gateway_token(host: str, token: str) -> bool:
+    return not is_localhost_host(host) and not token
+
+
 class GatewayConfig(BaseModel):
     """Gateway/server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 18790
+    token: str = ""
+    # 已废弃，使用token替代
+    api_key: str = ""
 
 
 class WebSearchConfig(BaseModel):

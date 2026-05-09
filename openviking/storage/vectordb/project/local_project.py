@@ -7,6 +7,12 @@ from typing import Any, Dict, Optional
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
+from openviking.storage.vectordb.utils.path_safety import (
+    resolve_storage_path,
+    safe_join,
+    safe_join_name,
+)
+from openviking.storage.vectordb.utils.validation import validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -25,8 +31,9 @@ def get_or_create_local_project(path: str = ""):
         return project
     else:
         # Persistent project - persisted to disk
-        os.makedirs(path, exist_ok=True)
-        project = LocalProject(path=path)
+        project_path = str(resolve_storage_path(path))
+        os.makedirs(project_path, exist_ok=True)
+        project = LocalProject(path=project_path)
         return project
 
 
@@ -46,7 +53,7 @@ class LocalProject:
                 - If empty: creates volatile project, collections not persisted
                 - If not empty: creates persistent project, auto-loads all existing collections in that directory
         """
-        self.path = path
+        self.path = str(resolve_storage_path(path)) if path else ""
         self.collections = ThreadSafeDictManager[Collection]()
 
         # If persistent project, load existing collections
@@ -70,15 +77,19 @@ class LocalProject:
             return
 
         for entry in entries:
-            entry_path = os.path.join(self.path, entry)
+            try:
+                entry_path = safe_join(self.path, entry)
+                meta_path = safe_join(entry_path, "collection_meta.json")
+            except ValueError:
+                logger.warning(f"Skipping invalid collection directory under {self.path}: {entry}")
+                continue
 
             # Only process directories
-            if not os.path.isdir(entry_path):
+            if not entry_path.is_dir():
                 continue
 
             # Check if it's a collection directory (should contain collection_meta.json)
-            meta_path = os.path.join(entry_path, "collection_meta.json")
-            if not os.path.exists(meta_path):
+            if not meta_path.exists():
                 logger.warning(f"Directory {entry} does not contain collection_meta.json, skipping")
                 continue
 
@@ -88,10 +99,11 @@ class LocalProject:
                     meta_data = json.load(f)
 
                 collection_name = meta_data.get("CollectionName", entry)
+                validate_name_str(collection_name)
 
                 # Load collection
                 logger.info(f"Loading collection: {collection_name} from {entry_path}")
-                collection = get_or_create_local_collection(path=entry_path)
+                collection = get_or_create_local_collection(path=str(entry_path))
                 self.collections.set(collection_name, collection)
 
                 logger.info(f"Successfully loaded collection: {collection_name}")
@@ -168,10 +180,13 @@ class LocalProject:
         # Decide whether to create volatile or persistent collection based on project path
         if self.path:
             # Persistent collection
-            collection_path = os.path.join(self.path, collection_name)
+            validate_name_str(collection_name)
+            collection_path = safe_join_name(self.path, collection_name)
             os.makedirs(collection_path, exist_ok=True)
             logger.info(f"Creating persistent collection: {collection_name} at {collection_path}")
-            collection = get_or_create_local_collection(meta_data=meta_data, path=collection_path)
+            collection = get_or_create_local_collection(
+                meta_data=meta_data, path=str(collection_path)
+            )
         else:
             # Volatile collection
             logger.info(f"Creating volatile collection: {collection_name}")

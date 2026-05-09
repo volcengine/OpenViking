@@ -1,6 +1,14 @@
 use crate::client::HttpClient;
 
 use super::tree::TreeState;
+use super::image_preview;
+
+use std::{pin::Pin, time::Instant};
+use tempfile::NamedTempFile;
+use std::io::Write;
+
+// Type alias for confirmation callback
+type ConfirmationCallback = Box<dyn for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Panel {
@@ -53,9 +61,17 @@ pub struct App {
     pub content_line_count: u16,
     pub should_quit: bool,
     pub status_message: String,
+    pub status_message_time: Option<Instant>,
+    pub status_message_locked: bool,
+    pub error_message: String,
+    pub error_message_time: Option<Instant>,
+    pub confirmation: Option<(String, ConfirmationCallback)>,
     pub vector_state: VectorRecordsState,
     pub showing_vector_records: bool,
     pub current_uri: String,
+    pub current_preview_image: Option<String>,
+    pub temp_image_file: Option<NamedTempFile>,
+    pub pending_image_uri: Option<(String, String)>, // (uri, filename)
 }
 
 impl App {
@@ -70,9 +86,17 @@ impl App {
             content_line_count: 0,
             should_quit: false,
             status_message: String::new(),
+            status_message_time: None,
+            status_message_locked: false,
+            error_message: String::new(),
+            error_message_time: None,
+            confirmation: None,
             vector_state: VectorRecordsState::new(),
             showing_vector_records: false,
             current_uri: "/".to_string(),
+            current_preview_image: None,
+            temp_image_file: None,
+            pending_image_uri: None,
         }
     }
 
@@ -91,6 +115,9 @@ impl App {
                 self.content = "(nothing selected)".to_string();
                 self.content_title = String::new();
                 self.content_scroll = 0;
+                self.current_preview_image = None;
+                self.temp_image_file = None;
+                self.pending_image_uri = None;
                 return;
             }
         };
@@ -98,6 +125,11 @@ impl App {
         self.current_uri = uri.clone();
         self.content_title = uri.clone();
         self.content_scroll = 0;
+
+        // Clear previous image preview
+        self.current_preview_image = None;
+        self.temp_image_file = None;
+        self.pending_image_uri = None;
 
         if is_dir {
             // For root-level scope URIs (e.g. viking://resources), show a
@@ -159,6 +191,19 @@ impl App {
     }
 
     async fn load_file_content(&mut self, uri: &str) {
+        // Check if this is an image file
+        let filename = uri.split('/').last().unwrap_or("");
+        if image_preview::is_image_file(filename) {
+            // Don't load image automatically - just show prompt
+            self.pending_image_uri = Some((uri.to_string(), filename.to_string()));
+            self.content = format!(
+                "Image: {}\n\nPress '.' to load and preview the image.",
+                filename
+            );
+            return;
+        }
+
+        // Regular text file
         match self.client.read(uri).await {
             Ok(text) if !text.is_empty() => {
                 self.content = text;
@@ -170,6 +215,76 @@ impl App {
                 self.content = format!("(error reading file: {})", e);
             }
         }
+    }
+
+    async fn load_image_preview_content(&mut self, uri: &str, filename: &str) {
+        // Show image info in the content area
+        let mut info_text = format!("Image: {}\n\n", filename);
+
+        info_text.push_str("Image preview is being displayed above.\n\n");
+
+        // Try to get the image and save to temp file for preview
+        match self.client.get_bytes(uri).await {
+            Ok(bytes) if !bytes.is_empty() => {
+                // Get file extension from filename, convert to lowercase
+                let ext = std::path::Path::new(filename)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or("png".to_string());
+
+                // Create temp file with proper extension
+                match tempfile::Builder::new()
+                    .prefix("ov-tui-img-")
+                    .suffix(&format!(".{}", ext))
+                    .tempfile()
+                {
+                    Ok(mut temp_file) => {
+                        match temp_file.write_all(&bytes) {
+                            Ok(_) => {
+                                match temp_file.flush() {
+                                    Ok(_) => {
+                                        let path = temp_file.path().to_str().map(|s| s.to_string());
+                                        if let Some(path) = path {
+                                            self.current_preview_image = Some(path);
+                                            // Keep temp file alive
+                                            self.temp_image_file = Some(temp_file);
+                                            info_text.push_str(&format!("Size: {} bytes", bytes.len()));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info_text.push_str(&format!("(Could not write temp file: {})", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                info_text.push_str(&format!("(Could not write temp file: {})", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        info_text.push_str(&format!("(Could not create temp file for preview: {})", e));
+                    }
+                }
+            }
+            Ok(_) => {
+                info_text.push_str("(empty image)");
+            }
+            Err(e) => {
+                info_text.push_str(&format!("(error reading image: {})", e));
+            }
+        }
+
+        self.content = info_text;
+    }
+
+    /// Load and preview the pending image (if any)
+    pub async fn load_pending_image(&mut self) -> bool {
+        if let Some((uri, filename)) = self.pending_image_uri.take() {
+            self.load_image_preview_content(&uri, &filename).await;
+            return true;
+        }
+        false
     }
 
     pub fn scroll_content_up(&mut self) {
@@ -202,6 +317,64 @@ impl App {
             Panel::Tree => Panel::Content,
             Panel::Content => Panel::Tree,
         };
+    }
+
+    pub fn set_error_message(&mut self, message: String) {
+        self.error_message = message;
+        self.error_message_time = Some(Instant::now());
+    }
+
+    /// Clear the error message immediately
+    pub fn clear_error_message(&mut self) {
+        self.error_message.clear();
+        self.error_message_time = None;
+    }
+
+    pub fn set_status_message(&mut self, message: String) {
+        if self.status_message_locked {
+            let message = format!("Error: Cannot set status message while locked");
+            self.set_error_message(message);
+            return;
+        }
+        self.status_message = message;
+        self.status_message_time = Some(Instant::now());
+    }
+
+    pub fn update_messages(&mut self) {
+        // Don't clear status message if locked
+        if !self.status_message_locked {
+            if let Some(time) = self.status_message_time {
+                if time.elapsed().as_secs() >= 3 {
+                    self.status_message.clear();
+                    self.status_message_time = None;
+                }
+            }
+        }
+
+        if let Some(time) = self.error_message_time {
+            if time.elapsed().as_secs() >= 3 {
+                self.error_message.clear();
+                self.error_message_time = None;
+            }
+        }
+    }
+
+    /// Clear confirmation and unlock status message in a single operation
+    /// This ensures we never leave status_message_locked stuck as true
+    pub fn clear_confirmation(&mut self) {
+        self.confirmation = None;
+        self.status_message_locked = false;
+    }
+
+    pub fn create_confirmation<F>(&mut self, message: String, on_confirmed: F)
+    where
+        F: for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>> + 'static,
+    {
+        self.status_message_locked = true;
+        self.confirmation = Some((
+            message,
+            Box::new(on_confirmed),
+        ));
     }
 
     pub async fn load_vector_records(&mut self, uri_prefix: Option<String>) {
@@ -303,6 +476,147 @@ impl App {
     pub fn scroll_vector_bottom(&mut self) {
         if !self.vector_state.records.is_empty() {
             self.vector_state.cursor = self.vector_state.records.len() - 1;
+        }
+    }
+
+    /// Collect all currently expanded nodes
+    fn collect_expanded_nodes(&self) -> Vec<String> {
+        self.tree.visible
+            .iter()
+            .filter(|r| r.expanded)
+            .map(|r| r.uri.clone())
+            .collect()
+    }
+
+    /// Ensure parent directories of a URI are expanded
+    async fn ensure_parent_directories_expanded(&mut self, client: &HttpClient, uri: &str) {
+        let mut current_path = uri.to_string();
+        while current_path != "viking://" && current_path != "/" {
+            if let Some(last_slash) = current_path.rfind('/') {
+                current_path = current_path[..last_slash].to_string();
+                self.tree.expand_node_by_uri(client, &current_path).await;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Find cursor position for a given URI, fallback to parent if not found
+    fn find_cursor_for_uri(&self, uri: &str) -> usize {
+        self.tree.visible.iter()
+            .position(|r| r.uri == uri)
+            .unwrap_or_else(|| {
+                let mut parent_path = uri.to_string();
+                while parent_path != "viking://" && parent_path != "/" {
+                    if let Some(last_slash) = parent_path.rfind('/') {
+                        parent_path = parent_path[..last_slash].to_string();
+                        if let Some(pos) = self.tree.visible.iter().position(|r| r.uri == parent_path) {
+                            return pos;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                0
+            })
+    }
+
+    /// Reload the entire tree and restore state
+    async fn reload_tree_and_restore_state(&mut self, client: &HttpClient, expanded_nodes: &[String], target_uri: &str) {
+        self.tree.load_root(client, "viking://").await;
+        
+        // Restore expanded state for previously expanded nodes
+        for uri in expanded_nodes {
+            self.tree.expand_node_by_uri(client, uri).await;
+        }
+        
+        // Ensure parent directories of target URI are expanded
+        self.ensure_parent_directories_expanded(client, target_uri).await;
+        
+        // Find and set cursor to target URI
+        let cursor = self.find_cursor_for_uri(target_uri);
+        self.tree.cursor = cursor;
+        
+        // Load content for selected node
+        self.load_content_for_selected().await;
+    }
+
+    pub async fn reload_entire_tree(&mut self) {
+        let client = self.client.clone();
+        let selected_node = self.tree.selected_uri()
+            .map(|uri| uri.to_string())
+            .unwrap_or_else(|| "viking://".to_string());
+        
+        // Collect expanded nodes before refresh
+        let expanded_nodes = self.collect_expanded_nodes();
+        
+        // Reload tree and restore state
+        self.reload_tree_and_restore_state(&client, &expanded_nodes, &selected_node).await;
+        
+        self.set_status_message("Tree refreshed".to_string());
+    }
+
+    /// Delete the currently selected URI
+    /// Returns true if deletion was initiated (not whether it succeeded)
+    pub async fn delete_selected_uri(&mut self) {
+        if let Some(selected_uri) = self.tree.selected_uri() {
+            let is_dir = self.tree.selected_is_dir().unwrap_or(false);
+            self.delete_uri(selected_uri.to_string(), is_dir).await;
+        } else {
+            self.set_status_message("Nothing selected to delete".to_string());
+        }
+    }
+
+    /// Delete a specific URI
+    /// No return value - success/failure is communicated via status messages
+    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) {
+        if !self.tree.allow_deletion(&selected_uri) {
+            self.set_error_message("Cannot delete root and scope directories".to_string());
+            return;
+        }
+
+        let client = self.client.clone();
+
+        // Collect expanded nodes before deletion
+        let expanded_nodes = self.collect_expanded_nodes();
+
+        // Determine target URI: next node if exists, otherwise previous node
+        let current_cursor = self.tree.cursor;
+        let target_uri = if current_cursor + 1 < self.tree.visible.len() {
+            // Use next node if it exists
+            self.tree.visible.get(current_cursor + 1).map(|r| r.uri.clone())
+        } else if current_cursor > 0 {
+            // Use previous node if next doesn't exist
+            self.tree.visible.get(current_cursor - 1).map(|r| r.uri.clone())
+        } else {
+            // Fallback to parent if no siblings
+            if let Some(last_slash) = selected_uri.rfind('/') {
+                if last_slash == 0 {
+                    Some("/".to_string())
+                } else {
+                    Some(selected_uri[..last_slash].to_string())
+                }
+            } else {
+                Some("/".to_string())
+            }
+        };
+
+        match client.rm(&selected_uri, is_dir).await {
+            Ok(_) => {
+                self.set_status_message(format!("Deleted: {}", selected_uri));
+
+                // Remove deleted node from expanded nodes
+                let mut expanded_nodes = expanded_nodes;
+                expanded_nodes.retain(|uri| uri != &selected_uri);
+
+                // Reload tree and restore state
+                if let Some(uri) = &target_uri {
+                    self.reload_tree_and_restore_state(&client, &expanded_nodes, uri).await;
+                }
+            }
+            Err(e) => {
+                self.set_status_message(format!("Delete failed: {}", e));
+            }
         }
     }
 }

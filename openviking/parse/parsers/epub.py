@@ -10,6 +10,7 @@ Inspired by microsoft/markitdown approach.
 import html
 import re
 import zipfile
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -19,6 +20,69 @@ from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class _EPubMarkdownParser(HTMLParser):
+    """Convert HTML fragments to simple markdown without regex tag stripping."""
+
+    _HEADER_PREFIX = {"h1": "# ", "h2": "## ", "h3": "### ", "h4": "#### "}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_tag_stack = 0
+
+    def handle_starttag(self, tag: str, attrs):
+        normalized_tag = tag.lower()
+        if normalized_tag in {"script", "style"}:
+            self._ignored_tag_stack += 1
+            return
+        if self._ignored_tag_stack:
+            return
+        if normalized_tag in self._HEADER_PREFIX:
+            self._ensure_block_break()
+            self._parts.append(self._HEADER_PREFIX[normalized_tag])
+        elif normalized_tag in {"strong", "b"}:
+            self._parts.append("**")
+        elif normalized_tag in {"em", "i"}:
+            self._parts.append("*")
+        elif normalized_tag == "li":
+            self._parts.append("\n- ")
+        elif normalized_tag == "br":
+            self._parts.append("\n")
+        elif normalized_tag in {"p", "div", "section", "article"}:
+            self._ensure_block_break()
+
+    def handle_endtag(self, tag: str):
+        normalized_tag = tag.lower()
+        if normalized_tag in {"script", "style"}:
+            if self._ignored_tag_stack:
+                self._ignored_tag_stack -= 1
+            return
+        if self._ignored_tag_stack:
+            return
+        if normalized_tag in self._HEADER_PREFIX or normalized_tag in {
+            "p",
+            "div",
+            "section",
+            "article",
+        }:
+            self._parts.append("\n\n")
+        elif normalized_tag in {"strong", "b"}:
+            self._parts.append("**")
+        elif normalized_tag in {"em", "i"}:
+            self._parts.append("*")
+
+    def handle_data(self, data: str):
+        if not self._ignored_tag_stack:
+            self._parts.append(data)
+
+    def get_markdown(self) -> str:
+        return "".join(self._parts)
+
+    def _ensure_block_break(self):
+        if self._parts and not self._parts[-1].endswith("\n"):
+            self._parts.append("\n\n")
 
 
 class EPubParser(BaseParser):
@@ -138,36 +202,13 @@ class EPubParser(BaseParser):
 
     def _html_to_markdown(self, html_content: str) -> str:
         """Simple HTML to markdown conversion."""
-        # Remove script and style tags
-        html_content = re.sub(r"<script[^>]*>.*?</script>", "", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<style[^>]*>.*?</style>", "", html_content, flags=re.DOTALL)
-
-        # Convert headers
-        html_content = re.sub(r"<h1[^>]*>(.*?)</h1>", r"# \1", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<h2[^>]*>(.*?)</h2>", r"## \1", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<h3[^>]*>(.*?)</h3>", r"### \1", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<h4[^>]*>(.*?)</h4>", r"#### \1", html_content, flags=re.DOTALL)
-
-        # Convert bold and italic
-        html_content = re.sub(r"<strong>(.*?)</strong>", r"**\1**", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<b>(.*?)</b>", r"**\1**", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<em>(.*?)</em>", r"*\1*", html_content, flags=re.DOTALL)
-        html_content = re.sub(r"<i>(.*?)</i>", r"*\1*", html_content, flags=re.DOTALL)
-
-        # Convert paragraphs
-        html_content = re.sub(r"<p[^>]*>(.*?)</p>", r"\1\n\n", html_content, flags=re.DOTALL)
-
-        # Convert line breaks
-        html_content = re.sub(r"<br\s*/?>", "\n", html_content)
-
-        # Remove remaining HTML tags
-        html_content = re.sub(r"<[^>]+>", "", html_content)
-
-        # Unescape HTML entities
-        html_content = html.unescape(html_content)
+        parser = _EPubMarkdownParser()
+        parser.feed(html_content)
+        parser.close()
+        markdown = html.unescape(parser.get_markdown())
 
         # Normalize whitespace
-        html_content = re.sub(r"\n\s*\n", "\n\n", html_content)
-        html_content = re.sub(r"[ \t]+", " ", html_content)
+        markdown = re.sub(r"\n\s*\n", "\n\n", markdown)
+        markdown = re.sub(r"[ \t]+", " ", markdown)
 
-        return html_content.strip()
+        return markdown.strip()

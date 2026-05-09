@@ -7,13 +7,27 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
-from openviking.server.identity import RequestContext, ResolvedIdentity, Role
+from openviking.server.identity import (
+    AccountNamespacePolicy,
+    AuthMode,
+    RequestContext,
+    ResolvedIdentity,
+    Role,
+)
+from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+
+# Privilege ranking for role-downgrade detection in OAuth bearer auth. Higher
+# rank ⇒ more privilege. Used to compare an OAuth token's embedded role
+# against the user's current role: a token whose role outranks the current
+# role is a stale token from before a `set_role` demotion and must be rejected.
+_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
+
 
 _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
     "/api/v1/system/status",
@@ -24,30 +38,48 @@ _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
 )
+_ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS = {
+    "/api/v1/content/reindex",
+}
+_TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
 
 
-def _auth_mode(request: Request) -> str:
+def _auth_mode(request: Request) -> AuthMode:
     config = getattr(request.app.state, "config", None)
-    return getattr(config, "auth_mode", "api_key")
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
 
 
 def _root_request_requires_explicit_tenant(path: str) -> bool:
     """Return True when a ROOT request targets tenant-scoped data APIs.
 
     Root still needs access to admin and monitoring endpoints without a tenant
-    context. For data APIs, implicit fallback to default/default is misleading,
-    so callers must provide explicit account and user headers.
+    context. For data APIs, implicit fallback to default/default is misleading.
     """
     if path in _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS:
+        return False
+    if path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS:
         return False
     if path.startswith(_ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES):
         return False
     return True
 
 
+def _root_request_requires_explicit_account_only(path: str) -> bool:
+    return path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS
+
+
+def _trusted_request_requires_explicit_identity(path: str) -> bool:
+    if path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES):
+        return False
+    return True
+
+
 def _configured_root_api_key(request: Request) -> Optional[str]:
     config = getattr(request.app.state, "config", None)
-    return getattr(config, "root_api_key", None)
+    key = getattr(config, "root_api_key", None)
+    return key if key != "" else None
 
 
 def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
@@ -62,6 +94,148 @@ def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> 
     return None
 
 
+def _normalize_header_value(value: Optional[str]) -> Optional[str]:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
+
+
+def _normalize_request_value(value: object) -> Optional[str]:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
+
+
+def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
+    path_params = getattr(request, "path_params", {}) or {}
+    query_params = request.query_params
+
+    account_id = _normalize_request_value(path_params.get("account_id"))
+    if account_id is None:
+        account_id = _normalize_request_value(query_params.get("account_id"))
+
+    user_id = _normalize_request_value(path_params.get("user_id"))
+    if user_id is None:
+        user_id = _normalize_request_value(query_params.get("user_id"))
+
+    return account_id, user_id
+
+
+async def _try_resolve_oauth_token(
+    request: Request,
+    api_key: str,
+    *,
+    x_openviking_account: Optional[str],
+    x_openviking_user: Optional[str],
+    x_openviking_agent: Optional[str],
+) -> Optional[ResolvedIdentity]:
+    """Attempt to verify the bearer as an OAuth-issued opaque access token.
+
+    Returns the resolved identity on success. Returns None when the bearer
+    doesn't carry the OAuth access-token prefix or when OAuth isn't enabled
+    (caller falls back to the API-key path). Raises UnauthenticatedError
+    when the bearer IS prefix-tagged but lookup fails — fail-closed.
+    """
+    from openviking.server.oauth.provider import ACCESS_TOKEN_PREFIX
+
+    if not api_key.startswith(ACCESS_TOKEN_PREFIX):
+        return None
+    provider = getattr(request.app.state, "oauth_provider", None)
+    if provider is None:
+        return None
+
+    record = await provider.load_access_token(api_key)
+    if record is None:
+        raise UnauthenticatedError("OAuth access token is invalid, expired, or revoked")
+
+    # Lifecycle binding: every OAuth token carries the SHA-256 fingerprint of
+    # the API key that authorized it. We recompute the user's current key fp
+    # and demand strict equality. If the user removed (no fp) or rotated
+    # (different fp) the authorizing key, the token must die — this is the
+    # invariant "OAuth lifetime ≤ authorizing key lifetime". Tokens missing a
+    # recorded fp also fail closed: there is no way to validate them safely.
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    recorded_fp = record.authorizing_key_fp
+    current_fp: Optional[str] = None
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+        current_fp = api_key_manager.get_user_key_fingerprint(record.account_id, record.user_id)
+    if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
+        raise UnauthenticatedError(
+            "OAuth token's authorizing API key has been rotated or revoked; "
+            "please re-authorize the client."
+        )
+
+    try:
+        role = Role(record.role)
+    except ValueError as exc:
+        raise UnauthenticatedError(f"OAuth token has unknown role: {record.role}") from exc
+
+    # Role downgrade protection: fp binds to the key value, but `set_role`
+    # changes role without rotating the key. Re-fetch the user's current
+    # role and reject the token if its embedded role exceeds it (demotion).
+    # Promotion is harmless — the embedded lower privilege is still valid —
+    # so only downgrades trigger rejection.
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
+        try:
+            current_role = api_key_manager.get_user_role(record.account_id, record.user_id)
+        except Exception:  # noqa: BLE001
+            current_role = role
+        if _ROLE_RANK[role] > _ROLE_RANK[current_role]:
+            raise UnauthenticatedError(
+                "OAuth token's embedded role exceeds the user's current role; "
+                "please re-authorize the client."
+            )
+
+    account_id = record.account_id
+    user_id = record.user_id
+
+    # Header overrides mirror the API-key path: ROOT may override identity;
+    # ADMIN may override user and agent (within its own account); USER may
+    # override only agent. The OAuth claims pin the issuing identity, so any
+    # cross-account/user override beyond what each role can do is a 403.
+    if role == Role.ROOT:
+        effective_account = x_openviking_account or account_id
+        effective_user = x_openviking_user or user_id
+    elif role == Role.ADMIN:
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for ADMIN OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = x_openviking_user or user_id
+    else:  # Role.USER
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for USER OAuth tokens."
+            )
+        if x_openviking_user and x_openviking_user != user_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-User cannot override the user for USER OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = user_id
+
+    effective_agent = x_openviking_agent or "default"
+
+    namespace_policy = AccountNamespacePolicy()
+    if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
+        try:
+            namespace_policy = api_key_manager.get_account_policy(effective_account)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return ResolvedIdentity(
+        role=role,
+        account_id=effective_account,
+        user_id=effective_user,
+        agent_id=effective_agent,
+        namespace_policy=namespace_policy,
+        from_oauth=True,
+    )
+
+
 async def resolve_identity(
     request: Request,
     x_api_key: Optional[str] = Header(None),
@@ -73,33 +247,19 @@ async def resolve_identity(
     """Resolve API key to identity.
 
     Strategy:
-    - trusted mode: trust explicit account/user headers and return USER identity
-    - api_key mode without manager: dev mode, return implicit ROOT/default identity
-    - api_key mode with manager: resolve via APIKeyManager (root key first, then user key index)
+    - dev mode: no authentication, return implicit ROOT/default identity
+    - trusted mode: trust explicit account/user headers, look up role from APIKeyManager
+    - api_key mode: resolve via APIKeyManager (root key first, then user key index)
     """
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    x_openviking_account = _normalize_header_value(x_openviking_account)
+    x_openviking_user = _normalize_header_value(x_openviking_user)
+    x_openviking_agent = _normalize_header_value(x_openviking_agent)
     api_key = _extract_api_key(x_api_key, authorization)
 
-    if auth_mode == "trusted":
-        configured_root_api_key = _configured_root_api_key(request)
-        if configured_root_api_key:
-            if not api_key:
-                raise UnauthenticatedError("Missing API Key")
-            if not hmac.compare_digest(api_key, configured_root_api_key):
-                raise UnauthenticatedError("Invalid API Key")
-        if not x_openviking_account or not x_openviking_user:
-            raise InvalidArgumentError(
-                "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."
-            )
-        return ResolvedIdentity(
-            role=Role.USER,
-            account_id=x_openviking_account,
-            user_id=x_openviking_user,
-            agent_id=x_openviking_agent or "default",
-        )
-
-    if api_key_manager is None:
+    if auth_mode == AuthMode.DEV:
+        # Dev mode: no authentication, always return ROOT
         return ResolvedIdentity(
             role=Role.ROOT,
             account_id=x_openviking_account or "default",
@@ -107,14 +267,114 @@ async def resolve_identity(
             agent_id=x_openviking_agent or "default",
         )
 
+    if auth_mode == AuthMode.TRUSTED:
+        configured_root_api_key = _configured_root_api_key(request)
+        if configured_root_api_key:
+            if not api_key:
+                raise UnauthenticatedError(
+                    "Missing API Key in trusted mode with Root API Key enabled."
+                )
+            if not hmac.compare_digest(api_key, configured_root_api_key):
+                raise UnauthenticatedError(
+                    "Invalid API Key in trusted mode with Root API Key enabled."
+                )
+        explicit_account_id, explicit_user_id = _explicit_identity_from_request(request)
+        if (
+            x_openviking_account
+            and explicit_account_id
+            and x_openviking_account != explicit_account_id
+        ):
+            raise InvalidArgumentError(
+                "Trusted mode X-OpenViking-Account must match explicit account_id in the URL."
+            )
+        if x_openviking_user and explicit_user_id and x_openviking_user != explicit_user_id:
+            raise InvalidArgumentError(
+                "Trusted mode X-OpenViking-User must match explicit user_id in the URL."
+            )
+
+        effective_account_id = explicit_account_id or x_openviking_account
+        effective_user_id = explicit_user_id or x_openviking_user
+
+        # Check if this is an admin path without identity
+        is_admin_path = request.url.path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
+        if is_admin_path:
+            return ResolvedIdentity(
+                role=Role.ROOT,
+                account_id="trusted",
+                user_id="trusted",
+                agent_id=x_openviking_agent or "default",
+            )
+
+        if _trusted_request_requires_explicit_identity(request.url.path):
+            missing_fields = []
+            if not effective_account_id:
+                missing_fields.append("X-OpenViking-Account or explicit account_id in the URL")
+            if not effective_user_id:
+                missing_fields.append("X-OpenViking-User or explicit user_id in the URL")
+            if missing_fields:
+                raise InvalidArgumentError(
+                    "Trusted mode requests must include " + " and ".join(missing_fields) + "."
+                )
+
+        trusted_role = Role.USER
+        if api_key_manager and effective_account_id and effective_user_id:
+            trusted_role = api_key_manager.get_user_role(effective_account_id, effective_user_id)
+
+        return ResolvedIdentity(
+            role=trusted_role,
+            account_id=effective_account_id or "trusted",
+            user_id=effective_user_id or "trusted",
+            agent_id=x_openviking_agent or "default",
+        )
+
+    # AuthMode.API_KEY
+    if api_key_manager is None:
+        # This should not happen due to validate_server_config
+        raise RuntimeError("api_key_manager not initialized in api_key mode")
+
     if not api_key:
-        raise UnauthenticatedError("Missing API Key")
+        raise UnauthenticatedError("Missing API Key when resolving identity.")
+
+    # OAuth 2.1 fast path: bearer tokens minted by our OAuth provider carry
+    # a recognizable prefix; look them up directly and skip the API-key path.
+    # Failure is fail-closed — a forged token claiming the prefix cannot be
+    # retried as a plain key. When OAuth is disabled or the bearer lacks the
+    # prefix, this returns None and the API-key path runs.
+    oauth_identity = await _try_resolve_oauth_token(
+        request,
+        api_key,
+        x_openviking_account=x_openviking_account,
+        x_openviking_user=x_openviking_user,
+        x_openviking_agent=x_openviking_agent,
+    )
+    if oauth_identity is not None:
+        return oauth_identity
 
     identity = api_key_manager.resolve(api_key)
-    identity.agent_id = x_openviking_agent or "default"
     if identity.role == Role.ROOT:
         identity.account_id = x_openviking_account or identity.account_id or "default"
         identity.user_id = x_openviking_user or identity.user_id or "default"
+        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
+        return identity
+
+    identity.account_id = identity.account_id or "default"
+    if x_openviking_account and x_openviking_account != identity.account_id:
+        raise PermissionDeniedError(
+            "X-OpenViking-Account cannot override the account for ADMIN/USER API keys."
+        )
+
+    if identity.role == Role.ADMIN:
+        identity.user_id = x_openviking_user or identity.user_id or "default"
+        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
+        return identity
+
+    identity.user_id = identity.user_id or "default"
+    if x_openviking_user and x_openviking_user != identity.user_id:
+        raise PermissionDeniedError(
+            "USER API keys cannot override X-OpenViking-User; the effective user is derived "
+            "from the key."
+        )
+    identity.agent_id = x_openviking_agent or identity.agent_id or "default"
     return identity
 
 
@@ -127,32 +387,58 @@ async def get_request_context(
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
     if (
-        auth_mode == "api_key"
+        auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
         and identity.role == Role.ROOT
-        and _root_request_requires_explicit_tenant(path)
+        and not identity.from_oauth
     ):
         account_header = request.headers.get("X-OpenViking-Account")
-        user_header = request.headers.get("X-OpenViking-User")
-        if not account_header or not user_header:
-            raise InvalidArgumentError(
-                "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
-                "and X-OpenViking-User headers. Use a user key for regular data access."
-            )
+        if _root_request_requires_explicit_account_only(path):
+            if not account_header:
+                raise InvalidArgumentError(
+                    "ROOT requests to reindex must include X-OpenViking-Account header."
+                )
+        elif _root_request_requires_explicit_tenant(path):
+            user_header = request.headers.get("X-OpenViking-User")
+            if not account_header or not user_header:
+                raise InvalidArgumentError(
+                    "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
+                    "and X-OpenViking-User headers. Use a user key for regular data access."
+                )
 
-    if auth_mode == "trusted" and not identity.account_id:
-        raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-Account.")
-    if auth_mode == "trusted" and not identity.user_id:
-        raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")
+    if auth_mode == AuthMode.TRUSTED:
+        is_admin_path = path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
+        if not is_admin_path:
+            if not identity.account_id:
+                raise InvalidArgumentError(
+                    "Trusted mode requests must include X-OpenViking-Account."
+                )
+            if not identity.user_id:
+                raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")
 
-    return RequestContext(
+    ctx = RequestContext(
         user=UserIdentifier(
             identity.account_id or "default",
             identity.user_id or "default",
             identity.agent_id or "default",
         ),
         role=identity.role,
+        namespace_policy=(
+            api_key_manager.get_account_policy(identity.account_id)
+            if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy")
+            else identity.namespace_policy
+        ),
+        from_oauth=identity.from_oauth,
     )
+    # Update the unified root observability context after authentication succeeds.
+    update_root_span_identity(
+        request_state=request.state,
+        account_id=identity.account_id,
+        user_id=identity.user_id,
+        agent_id=identity.agent_id,
+    )
+
+    return ctx
 
 
 def require_role(*allowed_roles: Role):
@@ -172,3 +458,131 @@ def require_role(*allowed_roles: Role):
         return ctx
 
     return Depends(_check)
+
+
+# Convenience dependency factories for common role requirements
+require_root = require_role(Role.ROOT)
+require_admin = require_role(Role.ADMIN)
+require_user = require_role(Role.USER)
+
+
+_DEV_MODE_ADMIN_API_MESSAGE = (
+    "Admin API requires api_key mode with root_api_key configured. Development mode does not "
+    'support account or user management. You should set server.auth_mode = "api_key" in ov.conf'
+)
+
+
+def require_auth_role(*allowed_roles: Role):
+    """Decorator for Admin API routes with mode-aware errors.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_role(Role.ROOT)
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    from functools import wraps
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Extract request and ctx from kwargs or args
+            request = kwargs.get("request")
+            ctx = kwargs.get("ctx")
+
+            # Find request and ctx in args if not in kwargs
+            if request is None or ctx is None:
+                import inspect
+
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                request = bound_args.arguments.get("request")
+                ctx = bound_args.arguments.get("ctx")
+
+            if request is None:
+                raise RuntimeError("require_auth_role decorator requires 'request' parameter")
+            if ctx is None:
+                raise RuntimeError("require_auth_role decorator requires 'ctx' parameter")
+
+            # Check auth mode
+            auth_mode = _auth_mode(request)
+
+            # In trusted mode, we allow access even without api_key_manager
+            # as long as the role requirement is satisfied
+            manager = getattr(request.app.state, "api_key_manager", None)
+            if manager is None and auth_mode != AuthMode.TRUSTED:
+                raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+
+            if ctx.role not in allowed_roles:
+                raise PermissionDeniedError(
+                    f"Requires role: {', '.join(r.value for r in allowed_roles)}"
+                )
+
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# Convenience decorators for common admin role requirements
+def require_auth_root(func):
+    """Decorator to require ROOT role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_root
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ROOT)(func)
+
+
+def require_auth_admin(func):
+    """Decorator to require ADMIN role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_admin
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ADMIN)(func)
+
+
+def require_auth_user(func):
+    """Decorator to require USER role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_user
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.USER)(func)
+
+
+def require_auth_root_or_admin(func):
+    """Decorator to require ROOT or ADMIN role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_root_or_admin
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ROOT, Role.ADMIN)(func)
+
+
+def get_api_key_manager_or_raise(request: Request):
+    """Get APIKeyManager from app state or raise appropriate error.
+
+    Raises:
+        PermissionDeniedError: In dev mode without API key manager.
+    """
+    manager = getattr(request.app.state, "api_key_manager", None)
+    auth_mode = _auth_mode(request)
+    if manager is None and auth_mode != AuthMode.TRUSTED:
+        raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+    return manager

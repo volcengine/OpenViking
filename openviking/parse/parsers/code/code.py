@@ -13,7 +13,6 @@ import asyncio
 import os
 import shutil
 import stat
-import tempfile
 import time
 import urllib.request
 import zipfile
@@ -39,6 +38,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.parse.parsers.upload_utils import upload_directory
 from openviking.utils import is_github_url, parse_code_hosting_url
+from openviking.utils.code_hosting_utils import _domain_matches
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
@@ -51,9 +51,33 @@ class CodeRepositoryParser(BaseParser):
 
     Features:
     - Shallow clone for Git repositories
-    - Automatic filtering of non-code directories (.git, node_modules, etc.)
+    - Automatic filtering based on .gitignore and of non-code directories (.git, node_modules, etc.)
     - Direct mapping to VikingFS temp directory
     - Preserves directory structure without chunking
+
+    代码仓库入库处理流程
+
+    输入: https://github.com/markwhen/gogetxueqiu
+        ↓
+    [GitAccessor] → LocalResource
+                    - path: /tmp/.../extracted/repo
+                    - source_type: SourceType.GIT
+                    - original_source: "https://github.com/markwhen/gogetxueqiu"
+                    - meta: {repo_name: "markwhen/gogetxueqiu", ...}
+        ↓
+    [media_processor] → 所有目录都用 DirectoryParser！← 简化了！
+        ↓
+    [DirectoryParser.parse()]
+        ├─→ 检测到 (path/.git).exists() ← 新增！
+        ├─→ 收集 git 元数据
+        └─→ 委托给 CodeRepositoryParser.parse()
+        ↓
+    [CodeRepositoryParser.parse()]
+        - source_path = original_source (https://github.com/...)
+        ↓
+    [TreeBuilder.finalize_from_temp()]
+        - 从 source_path 解析出 "markwhen/gogetxueqiu"
+        - root_uri = "viking://resources/markwhen/gogetxueqiu"
     """
 
     # Class constants imported from constants.py
@@ -87,57 +111,54 @@ class CodeRepositoryParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
-        Parse code repository.
+        Parse code repository (only accepts local directories, as network fetching is done in Accessor layer).
 
         Args:
-            source: Repository URL (git/http) or local zip path
+            source: Local directory path (already fetched by DataAccessor)
             instruction: Processing instruction (unused in parser phase)
             **kwargs: Additional arguments
+                _source_meta: Metadata from DataAccessor (must contain repo_name, repo_ref, repo_commit)
+                original_source: Original URL (for repo name extraction if needed)
 
         Returns:
             ParseResult with temp_dir_path pointing to the uploaded content
         """
         start_time = time.time()
-        source_str = str(source)
-        temp_local_dir = None
-        branch = None
-        commit = None
+        source_path = Path(source)
+
+        # Check if source is already a local directory (should always be true)
+        if not source_path.is_dir():
+            raise ValueError(
+                f"CodeRepositoryParser only accepts local directories. "
+                f"Source type: {type(source)}, value: {source}"
+            )
+
+        logger.info(f"[CodeRepositoryParser] Parsing code repository: {source_path}")
 
         try:
-            # 1. Prepare local temp directory
-            temp_local_dir = tempfile.mkdtemp(prefix="ov_repo_")
-            logger.info(f"Created local temp dir: {temp_local_dir}")
+            # Get metadata from DataAccessor
+            # _source_meta comes from GitAccessor and contains:
+            #   - repo_name: in "org/repo" format (e.g. "volcengine/OpenViking")
+            #   - repo_ref: branch name if specified
+            #   - repo_commit: commit hash if specified
+            source_meta = kwargs.get("_source_meta", {})
+            repo_name = source_meta.get("repo_name", "repository")
+            branch = source_meta.get("repo_ref")
+            commit = source_meta.get("repo_commit")
 
-            # 2. Fetch content (Clone or Extract)
-            repo_name = "repository"
-            local_dir = Path(temp_local_dir)
-            if source_str.startswith("git@"):
-                # git@ SSH URL: use git clone directly (no GitHub ZIP optimization)
-                repo_name = await self._git_clone(
-                    source_str,
-                    temp_local_dir,
-                    branch=branch,
-                    commit=commit,
+            # If repo_name is still default, try to extract from original source
+            # original_source is the full GitHub/GitLab URL that the user provided
+            # (e.g. "https://github.com/volcengine/OpenViking")
+            if repo_name == "repository":
+                original_source = kwargs.get("original_source") or source_meta.get(
+                    "original_source"
                 )
-            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
-                repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
-                if self._is_github_url(repo_url):
-                    # Use GitHub ZIP API: supports branch names, tags, and commit SHAs
-                    local_dir, repo_name = await self._github_zip_download(
-                        repo_url, branch or commit, temp_local_dir
-                    )
-                else:
-                    # Non-GitHub URL: use git clone
-                    repo_name = await self._git_clone(
-                        repo_url,
-                        temp_local_dir,
-                        branch=branch,
-                        commit=commit,
-                    )
-            elif str(source).endswith(".zip"):
-                repo_name = await self._extract_zip(source_str, temp_local_dir)
-            else:
-                raise ValueError(f"Unsupported source for CodeRepositoryParser: {source}")
+                if original_source:
+                    parsed_org_repo = parse_code_hosting_url(original_source)
+                    if parsed_org_repo:
+                        repo_name = parsed_org_repo
+
+            local_dir = source_path
 
             # 3. Create VikingFS temp URI
             viking_fs = self._get_viking_fs()
@@ -161,9 +182,21 @@ class CodeRepositoryParser(BaseParser):
                 meta={"name": repo_name, "type": "repository"},
             )
 
+            # Use original URL as source_path instead of local temp dir for proper org/repo parsing in TreeBuilder
+            # source_path is CRITICAL:
+            #   1. TreeBuilder uses source_path to parse org/repo via parse_code_hosting_url()
+            #   2. If source_path is a local path (like /tmp/.../OpenViking), parsing fails
+            #   3. If source_path is the original GitHub URL (https://github.com/volcengine/OpenViking),
+            #      TreeBuilder can correctly extract "volcengine/OpenViking"
+            #
+            # Priority order:
+            #   1. First check kwargs["original_source"] - this is set by media_processor
+            #   2. Then check source_meta (rarely has it)
+            #   3. Fall back to local path only as last resort
+            original_source = kwargs.get("original_source") or source_meta.get("original_source")
             result = create_parse_result(
                 root=root,
-                source_path=source_str,
+                source_path=original_source or str(source),
                 source_format="repository",
                 parser_name="CodeRepositoryParser",
                 parse_time=time.time() - start_time,
@@ -180,23 +213,17 @@ class CodeRepositoryParser(BaseParser):
 
         except Exception as e:
             logger.error(f"Failed to parse repository {source}: {e}", exc_info=True)
+            # Use original URL for error case as well - still important for TreeBuilder
+            # Even on failure, we want TreeBuilder to potentially get org/repo from the URL
+            original_source = kwargs.get("original_source") or source_meta.get("original_source")
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT, content_path=None),
-                source_path=source_str,
+                source_path=original_source or str(source),
                 source_format="repository",
                 parser_name="CodeRepositoryParser",
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to parse repository: {str(e)}"],
             )
-
-        finally:
-            # Cleanup local temp dir
-            if temp_local_dir and os.path.exists(temp_local_dir):
-                try:
-                    shutil.rmtree(temp_local_dir)
-                    logger.debug(f"Cleaned up local temp dir: {temp_local_dir}")
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup local temp dir {temp_local_dir}: {e}")
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
@@ -265,10 +292,7 @@ class CodeRepositoryParser(BaseParser):
                 base_parts = path_parts[: git_index + 1]
 
             config = get_openviking_config()
-            if (
-                parsed.netloc in config.code.github_domains + config.code.gitlab_domains
-                and len(path_parts) >= 2
-            ):
+            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
                 base_parts = path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()

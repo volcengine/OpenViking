@@ -19,14 +19,15 @@ def get_test_suite(test_type: str = None):
 
     if test_type == "p0":
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_write"))
-    elif test_type == "crud":
-        suite.addTests(loader.loadTestsFromName("tests.crud.test_memory_crud"))
-    elif test_type == "complex":
-        suite.addTests(loader.loadTestsFromName("tests.complex.test_complex_scenarios"))
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_crud"))
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_context_engine"))
+    elif test_type == "v2":
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_v2_full_suite"))
     else:
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_write"))
-        suite.addTests(loader.loadTestsFromName("tests.crud.test_memory_crud"))
-        suite.addTests(loader.loadTestsFromName("tests.complex.test_complex_scenarios"))
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_crud"))
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_context_engine"))
+        suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_v2_full_suite"))
 
     return suite
 
@@ -36,9 +37,9 @@ def main():
     parser.add_argument(
         "--type",
         "-t",
-        choices=["all", "p0", "crud", "complex"],
+        choices=["all", "p0", "v2"],
         default="all",
-        help="测试类型: all(全部), p0(P0级), crud(CRUD操作), complex(复杂场景)",
+        help="测试类型: all(全部), p0(P0核心), v2(V2文件验证)",
     )
     parser.add_argument(
         "--test",

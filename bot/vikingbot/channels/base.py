@@ -11,7 +11,7 @@ from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import SessionKey, BaseChannelConfig
+from vikingbot.config.schema import BaseChannelConfig, SessionKey
 from vikingbot.utils import get_data_path
 
 # Optional HTML processing libraries
@@ -143,6 +143,7 @@ class BaseChannel(ABC):
     async def _handle_message(
         self,
         sender_id: str,
+        sender_name: str,
         chat_id: str,
         content: str,
         need_reply: bool = True,
@@ -175,6 +176,7 @@ class BaseChannel(ABC):
                 chat_id=chat_id,
             ),
             sender_id=str(sender_id),
+            sender_name=sender_name,
             need_reply=need_reply,
             content=content,
             media=media or [],

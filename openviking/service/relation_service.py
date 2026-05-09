@@ -8,6 +8,7 @@ Provides relation management operations: relations, link, unlink.
 
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
@@ -35,6 +36,7 @@ class RelationService:
     async def relations(self, uri: str, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get relations (returns [{"uri": "...", "reason": "..."}, ...])."""
         viking_fs = self._ensure_initialized()
+        uri = validate_viking_uri(uri)
         return await viking_fs.relations(uri, ctx=ctx)
 
     async def link(
@@ -52,6 +54,11 @@ class RelationService:
             reason: Reason for linking
         """
         viking_fs = self._ensure_initialized()
+        from_uri = validate_viking_uri(from_uri, field_name="from_uri")
+        if isinstance(uris, list):
+            uris = [validate_viking_uri(uri, field_name="to_uris") for uri in uris]
+        else:
+            uris = validate_viking_uri(uris, field_name="to_uris")
         await viking_fs.link(from_uri, uris, reason, ctx=ctx)
 
     async def unlink(self, from_uri: str, uri: str, ctx: RequestContext) -> None:
@@ -62,4 +69,6 @@ class RelationService:
             uri: Target URI to remove
         """
         viking_fs = self._ensure_initialized()
+        from_uri = validate_viking_uri(from_uri, field_name="from_uri")
+        uri = validate_viking_uri(uri, field_name="to_uri")
         await viking_fs.unlink(from_uri, uri, ctx=ctx)

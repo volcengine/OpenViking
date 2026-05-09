@@ -16,24 +16,63 @@ class AssertionHelper:
     """
 
     @staticmethod
+    def _strip_tool_result_prefix(text: str) -> str:
+        """
+        去除 LLM 响应中的工具调用结果前缀
+        例如: '[{"name":"none"}] 您的临时密码...' -> '您的临时密码...'
+        """
+        import re
+
+        stripped = text.strip()
+        tool_prefix_pattern = r"^\s*\[?\{[^}]*\}\]?\s*"
+        while re.match(tool_prefix_pattern, stripped):
+            remaining = re.sub(tool_prefix_pattern, "", stripped, count=1)
+            if remaining == stripped:
+                break
+            stripped = remaining.strip()
+        return stripped if stripped else text
+
+    @staticmethod
     def extract_response_text(response: dict) -> str:
         """
         从响应中提取文本内容
         支持多种响应格式
         """
         if isinstance(response, str):
-            return response
+            return AssertionHelper._strip_tool_result_prefix(response)
 
         if isinstance(response, dict):
             if "output" in response:
-                return str(response["output"])
-            elif "message" in response:
-                return str(response["message"])
-            elif "content" in response:
-                return str(response["content"])
-            elif "text" in response:
-                return str(response["text"])
-            elif "choices" in response and len(response["choices"]) > 0:
+                return AssertionHelper._strip_tool_result_prefix(str(response["output"]))
+            if "message" in response:
+                return AssertionHelper._strip_tool_result_prefix(str(response["message"]))
+            if "content" in response:
+                return AssertionHelper._strip_tool_result_prefix(str(response["content"]))
+            if "text" in response:
+                return AssertionHelper._strip_tool_result_prefix(str(response["text"]))
+            if "result" in response and isinstance(response["result"], dict):
+                result = response["result"]
+                payloads = result.get("payloads")
+                if isinstance(payloads, list) and len(payloads) > 0:
+                    texts = []
+                    for p in payloads:
+                        if isinstance(p, dict) and "text" in p:
+                            texts.append(str(p["text"]))
+                    if texts:
+                        return AssertionHelper._strip_tool_result_prefix("\n".join(texts))
+                for key in ("output", "text", "content", "message", "response"):
+                    if key in result and result[key]:
+                        return AssertionHelper._strip_tool_result_prefix(str(result[key]))
+                messages = result.get("messages")
+                if isinstance(messages, list) and len(messages) > 0:
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            if role == "assistant":
+                                c = msg.get("content", "")
+                                if c:
+                                    return AssertionHelper._strip_tool_result_prefix(str(c))
+            if "choices" in response and len(response["choices"]) > 0:
                 choice = response["choices"][0]
                 if isinstance(choice, dict):
                     if "message" in choice:
@@ -44,8 +83,11 @@ class AssertionHelper:
                     elif "text" in choice:
                         return str(choice["text"])
                 return str(choice)
+            if "error" in response:
+                return str(response["error"])
 
-        return str(response)
+        logger.warning("extract_response_text: no text found in response, returning empty string")
+        return ""
 
     @staticmethod
     def assert_keywords_in_response(

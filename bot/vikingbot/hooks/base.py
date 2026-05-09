@@ -1,16 +1,9 @@
 from abc import ABC, abstractmethod
-from enum import Enum
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 from vikingbot.config.schema import SessionKey
-
-
-# class HookType(Enum):
-#     SYNC = "sync"
-#     ASYNC = "async"
-#     BLOCKING = "blocking"
 
 
 @dataclass

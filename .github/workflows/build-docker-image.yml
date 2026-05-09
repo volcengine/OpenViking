@@ -37,6 +37,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Normalize image name
@@ -45,6 +46,27 @@ jobs:
           RAW_IMAGE_NAME: ${{ github.repository }}
         run: |
           echo "image=$(echo "$RAW_IMAGE_NAME" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve OpenViking version
+        id: openviking-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${{ github.ref_name }}"
+          else
+            python -m pip install "setuptools-scm>=8.0"
+            version="$(
+              python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+            )"
+          fi
+          if [ -z "${version}" ] || [ "${version}" = "0.0.0" ]; then
+            echo "Resolved invalid OpenViking version: ${version}" >&2
+            exit 2
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to the Container registry
         uses: docker/login-action@v4
@@ -85,8 +107,7 @@ jobs:
             type=image,name=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            # fallback to 0.0.0 if no version is provided
-            OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.version) || (github.ref_type == 'tag' && github.ref_name) || '0.0.0' }}
+            OPENVIKING_VERSION=${{ steps.openviking-version.outputs.version }}
 
       - name: Build and push Docker image to Docker Hub
         id: push-dockerhub
@@ -98,8 +119,7 @@ jobs:
             type=image,name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            # fallback to 0.0.0 if no version is provided
-            OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.version) || (github.ref_type == 'tag' && github.ref_name) || '0.0.0' }}
+            OPENVIKING_VERSION=${{ steps.openviking-version.outputs.version }}
 
       - name: Export GHCR image digest
         run: |

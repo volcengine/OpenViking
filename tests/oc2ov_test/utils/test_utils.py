@@ -20,6 +20,14 @@ T = TypeVar("T")
 # 使用 UUID 格式，确保 OpenClaw 直接使用，不做 SHA256 转换
 FIXED_SESSION_ID = "00000000-0000-0000-0000-000000000001"
 
+# CI 环境下基于名称生成确定性 UUID 的命名空间
+_CI_SESSION_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+
+def _ci_deterministic_uuid(name: str) -> str:
+    """基于名称生成确定性 UUID，CI 环境下同一名称始终返回同一 UUID。"""
+    return str(uuid.uuid5(_CI_SESSION_NAMESPACE, name))
+
 
 def _is_ci_environment() -> bool:
     """检测是否在 CI 环境中运行"""
@@ -68,10 +76,11 @@ class SessionIdManager:
         Returns:
             str: UUID 格式的 session_id
         """
-        # 在 CI 环境中使用固定的 session ID
+        # 在 CI 环境中使用基于前缀的确定性 session ID，避免不同测试互相干扰
         if _is_ci_environment():
-            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
-            return FIXED_SESSION_ID
+            session_id = _ci_deterministic_uuid(f"session:{prefix}")
+            logger.info(f"CI 环境检测到，使用确定性 Session ID: {session_id} (prefix: {prefix})")
+            return session_id
 
         # 生成 UUID 格式的 session ID
         session_id = str(uuid.uuid4())
@@ -89,10 +98,13 @@ class SessionIdManager:
         Returns:
             str: 唯一的 session_id
         """
-        # 在 CI 环境中使用固定的 session ID
+        # 在 CI 环境中使用基于类名的确定性 session ID，避免不同测试类互相干扰
         if _is_ci_environment():
-            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
-            return FIXED_SESSION_ID
+            session_id = _ci_deterministic_uuid(f"class:{test_class_name}")
+            logger.info(
+                f"CI 环境检测到，使用确定性 Session ID: {session_id} (class: {test_class_name})"
+            )
+            return session_id
 
         return f"test_{test_class_name}_{uuid.uuid4().hex[:8]}"
 
@@ -108,10 +120,14 @@ class SessionIdManager:
         Returns:
             str: 唯一的 session_id
         """
-        # 在 CI 环境中使用固定的 session ID
+        # 在 CI 环境中使用基于类名+方法名的确定性 session ID
         if _is_ci_environment():
-            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
-            return FIXED_SESSION_ID
+            session_id = _ci_deterministic_uuid(f"method:{test_class_name}:{test_method_name}")
+            logger.info(
+                f"CI 环境检测到，使用确定性 Session ID: {session_id} "
+                f"(class: {test_class_name}, method: {test_method_name})"
+            )
+            return session_id
 
         return f"test_{test_class_name}_{test_method_name}_{uuid.uuid4().hex[:8]}"
 

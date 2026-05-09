@@ -126,6 +126,27 @@ class TelemetrySummaryBuilder:
         )
 
     @classmethod
+    def _build_stage_token_summary(cls, counters: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
+        """Build a low-cardinality stage -> source -> token breakdown from counter keys."""
+        summary: Dict[str, Dict[str, Any]] = {}
+        prefix = "tokens.stages."
+        for key, value in counters.items():
+            if not key.startswith(prefix):
+                continue
+            parts = key.split(".")
+            if len(parts) != 5:
+                continue
+            _, _, stage, source, token_field = parts
+            normalized_value = cls._i(value, 0)
+            if normalized_value <= 0:
+                continue
+            source_payload = summary.setdefault(stage, {}).setdefault(source, {})
+            if source != "llm" and token_field != "total":
+                continue
+            source_payload[token_field] = normalized_value
+        return summary
+
+    @classmethod
     def build(
         cls,
         *,
@@ -142,6 +163,8 @@ class TelemetrySummaryBuilder:
         llm_output_tokens = cls._i(counters.get("tokens.llm.output"), 0)
         llm_total_tokens = cls._i(counters.get("tokens.llm.total"), 0)
         embedding_total_tokens = cls._i(counters.get("tokens.embedding.total"), 0)
+        rerank_total_tokens = cls._i(counters.get("tokens.rerank.total"), 0)
+        stage_token_summary = cls._build_stage_token_summary(counters)
         vector_candidates_scored = cls._i(counters.get("vector.scored"), 0)
         vectors_scanned = gauges.get("vector.scanned")
         if vectors_scanned is None:
@@ -162,8 +185,11 @@ class TelemetrySummaryBuilder:
                     "total": llm_total_tokens,
                 },
                 "embedding": {"total": embedding_total_tokens},
+                "rerank": {"total": rerank_total_tokens},
             },
         }
+        if stage_token_summary:
+            summary["tokens"]["stages"] = stage_token_summary
 
         if cls._has_metric_prefix("queue", counters, gauges):
             summary["queue"] = {
@@ -338,15 +364,32 @@ class OperationTelemetry:
         finally:
             self.add_duration(key, (time.perf_counter() - start) * 1000)
 
-    def add_token_usage(self, input_tokens: int, output_tokens: int) -> None:
-        self.add_token_usage_by_source("llm", input_tokens, output_tokens)
+    def add_token_usage(
+        self, input_tokens: int, output_tokens: int, *, stage: str | None = None
+    ) -> None:
+        """Record LLM token usage into aggregate and optional stage-specific counters."""
+        self.add_token_usage_by_source("llm", input_tokens, output_tokens, stage=stage)
 
-    def record_token_usage(self, source: str, input_tokens: int, output_tokens: int = 0) -> None:
-        self.add_token_usage_by_source(source, input_tokens, output_tokens)
+    def record_token_usage(
+        self,
+        source: str,
+        input_tokens: int,
+        output_tokens: int = 0,
+        *,
+        stage: str | None = None,
+    ) -> None:
+        """Record source-scoped token usage into aggregate and optional stage-specific counters."""
+        self.add_token_usage_by_source(source, input_tokens, output_tokens, stage=stage)
 
     def add_token_usage_by_source(
-        self, source: str, input_tokens: int, output_tokens: int = 0
+        self,
+        source: str,
+        input_tokens: int,
+        output_tokens: int = 0,
+        *,
+        stage: str | None = None,
     ) -> None:
+        """Record token usage for one source and optionally mirror it into a fixed stage bucket."""
         if not self.enabled:
             return
 
@@ -360,6 +403,19 @@ class OperationTelemetry:
         self.count(f"tokens.{source}.input", normalized_input)
         self.count(f"tokens.{source}.output", normalized_output)
         self.count(f"tokens.{source}.total", normalized_total)
+        if stage is None:
+            try:
+                from .context import get_current_telemetry_stage
+
+                stage = get_current_telemetry_stage()
+            except Exception:
+                stage = None
+        if stage:
+            normalized_stage = str(stage).strip()
+            if normalized_stage:
+                self.count(f"tokens.stages.{normalized_stage}.{source}.input", normalized_input)
+                self.count(f"tokens.stages.{normalized_stage}.{source}.output", normalized_output)
+                self.count(f"tokens.stages.{normalized_stage}.{source}.total", normalized_total)
 
     def set_error(self, stage: str, code: str, message: str) -> None:
         if not self.enabled:

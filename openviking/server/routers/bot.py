@@ -21,12 +21,29 @@ logger = get_logger(__name__)
 
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
+BOT_API_KEY: str = ""
+
+
+def _create_bot_proxy_client() -> httpx.AsyncClient:
+    """Create an internal client for loopback bot proxy calls.
+
+    These requests target the local vikingbot gateway started alongside the
+    server, so they should not inherit proxy settings from the shell
+    environment.
+    """
+    return httpx.AsyncClient(trust_env=False)
 
 
 def set_bot_api_url(url: str) -> None:
     """Set the Bot API URL. Called by app.py when --with-bot is enabled."""
     global BOT_API_URL
     BOT_API_URL = url
+
+
+def set_bot_api_key(api_key: str) -> None:
+    """Set the Bot API key used by proxy requests to bot gateway."""
+    global BOT_API_KEY
+    BOT_API_KEY = api_key or ""
 
 
 def get_bot_url() -> str:
@@ -49,7 +66,7 @@ async def health_check(request: Request):
     bot_url = get_bot_url()
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with _create_bot_proxy_client() as client:
             # Forward to Vikingbot OpenAPIChannel health endpoint
             response = await client.get(
                 f"{bot_url}/bot/v1/health",
@@ -71,21 +88,6 @@ async def health_check(request: Request):
         )
 
 
-def extract_auth_token(request: Request) -> Optional[str]:
-    """Extract and return authorization token from request."""
-    # Try X-API-Key header first
-    api_key = request.headers.get("X-API-Key")
-    if api_key:
-        return api_key
-
-    # Try Authorization header (Bearer token)
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]  # Remove "Bearer " prefix
-
-    return None
-
-
 @router.post("/chat")
 async def chat(
     request: Request,
@@ -96,7 +98,6 @@ async def chat(
     Proxies the request to Vikingbot OpenAPIChannel.
     """
     bot_url = get_bot_url()
-    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -108,11 +109,11 @@ async def chat(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
-            # Build headers - only include X-API-Key if provided
+        async with _create_bot_proxy_client() as client:
+            # Build headers for bot gateway
             headers = {"Content-Type": "application/json"}
-            if auth_token:
-                headers["X-API-Key"] = auth_token
+            if BOT_API_KEY:
+                headers["X-Gateway-Token"] = BOT_API_KEY
 
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
@@ -143,6 +144,55 @@ async def chat(
         )
 
 
+@router.post("/feedback")
+async def feedback(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Submit explicit user feedback to the bot gateway."""
+    bot_url = get_bot_url()
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON in request body",
+        )
+
+    try:
+        async with _create_bot_proxy_client() as client:
+            headers = {"Content-Type": "application/json"}
+            if BOT_API_KEY:
+                headers["X-Gateway-Token"] = BOT_API_KEY
+
+            response = await client.post(
+                f"{bot_url}/bot/v1/feedback",
+                json=body,
+                headers=headers,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        logger.error(f"Failed to connect to bot service: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {str(e)}",
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Bot service returned error: {e}")
+        if e.response.status_code < 500:
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=e.response.text,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service error: {e.response.text}",
+        )
+
+
 @router.post("/chat/stream")
 async def chat_stream(
     request: Request,
@@ -153,7 +203,6 @@ async def chat_stream(
     Proxies the request to Vikingbot OpenAPIChannel with SSE streaming.
     """
     bot_url = get_bot_url()
-    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -167,11 +216,11 @@ async def chat_stream(
     async def event_stream() -> AsyncGenerator[str, None]:
         """Generate SSE events from bot response stream."""
         try:
-            async with httpx.AsyncClient() as client:
-                # Build headers - only include X-API-Key if provided
+            async with _create_bot_proxy_client() as client:
+                # Build headers for bot gateway
                 headers = {"Content-Type": "application/json"}
-                if auth_token:
-                    headers["X-API-Key"] = auth_token
+                if BOT_API_KEY:
+                    headers["X-Gateway-Token"] = BOT_API_KEY
 
                 # Forward to Vikingbot OpenAPIChannel stream endpoint
                 async with client.stream(

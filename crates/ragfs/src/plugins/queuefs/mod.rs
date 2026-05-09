@@ -18,17 +18,64 @@ use crate::core::{
     types::{ConfigParameter, FileInfo, PluginConfig, WriteFlag},
 };
 use async_trait::async_trait;
-use backend::{MemoryBackend, Message, QueueBackend};
+use backend::{MemoryBackend, Message, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
+
+#[derive(Clone, Copy)]
+struct ControlFileSpec {
+    name: &'static str,
+    mode: u32,
+}
+
+// Single source of truth for control files (names + permissions).
+const CONTROL_FILES: &[ControlFileSpec] = &[
+    ControlFileSpec {
+        name: "enqueue",
+        mode: 0o222,
+    },
+    ControlFileSpec {
+        name: "dequeue",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "peek",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "size",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "clear",
+        mode: 0o222,
+    },
+    ControlFileSpec {
+        name: "ack",
+        mode: 0o222,
+    },
+];
 
 /// Dequeue response format (matches Go libagfsbinding format)
 #[derive(Debug, Serialize)]
 struct QueueMessage {
     id: String,
     data: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BackendKind {
+    Memory,
+    Sqlite,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedBackendConfig {
+    kind: BackendKind,
+    sqlite_db_path: Option<String>,
+    sqlite_options: SQLiteQueueOptions,
 }
 
 /// Parsed path information
@@ -47,14 +94,39 @@ pub struct QueueFileSystem {
 impl QueueFileSystem {
     /// Create a new QueueFileSystem with memory backend
     pub fn new() -> Self {
+        Self::with_backend(Box::new(MemoryBackend::new()))
+    }
+
+    /// Create a QueueFileSystem with a specific backend implementation.
+    pub fn with_backend(backend: Box<dyn QueueBackend>) -> Self {
         Self {
-            backend: Arc::new(Mutex::new(Box::new(MemoryBackend::new()))),
+            backend: Arc::new(Mutex::new(backend)),
         }
     }
 
     /// Check if a name is a control operation
     fn is_control_operation(name: &str) -> bool {
-        matches!(name, "enqueue" | "dequeue" | "peek" | "size" | "clear" | "ack")
+        CONTROL_FILES.iter().any(|spec| spec.name == name)
+    }
+
+    fn control_file_mode(name: &str) -> Option<u32> {
+        CONTROL_FILES
+            .iter()
+            .find(|spec| spec.name == name)
+            .map(|spec| spec.mode)
+    }
+
+    fn leaf_control_files(now: SystemTime) -> Vec<FileInfo> {
+        CONTROL_FILES
+            .iter()
+            .map(|spec| FileInfo {
+                name: spec.name.to_string(),
+                size: 0,
+                mode: spec.mode,
+                mod_time: now,
+                is_dir: false,
+            })
+            .collect()
     }
 
     /// Normalize path by removing trailing slashes and ensuring it starts with /
@@ -154,9 +226,9 @@ impl FileSystem for QueueFileSystem {
 
         match operation.as_str() {
             "dequeue" => {
-                let msg = backend
-                    .dequeue(&queue_name)?
-                    .ok_or_else(|| Error::NotFound("queue is empty".to_string()))?;
+                let Some(msg) = backend.dequeue(&queue_name)? else {
+                    return Ok(b"{}".to_vec());
+                };
                 // Return in Go libagfsbinding format: {"id": "...", "data": "..."}
                 let data_str = String::from_utf8_lossy(&msg.data).to_string();
                 let response = QueueMessage {
@@ -166,9 +238,9 @@ impl FileSystem for QueueFileSystem {
                 Ok(serde_json::to_vec(&response)?)
             }
             "peek" => {
-                let msg = backend
-                    .peek(&queue_name)?
-                    .ok_or_else(|| Error::NotFound("queue is empty".to_string()))?;
+                let Some(msg) = backend.peek(&queue_name)? else {
+                    return Ok(b"{}".to_vec());
+                };
                 // Return in Go libagfsbinding format: {"id": "...", "data": "..."}
                 let data_str = String::from_utf8_lossy(&msg.data).to_string();
                 let response = QueueMessage {
@@ -303,50 +375,7 @@ impl FileSystem for QueueFileSystem {
             )));
         }
 
-        Ok(vec![
-            FileInfo {
-                name: "enqueue".to_string(),
-                size: 0,
-                mode: 0o222,
-                mod_time: now,
-                is_dir: false,
-            },
-            FileInfo {
-                name: "dequeue".to_string(),
-                size: 0,
-                mode: 0o444,
-                mod_time: now,
-                is_dir: false,
-            },
-            FileInfo {
-                name: "peek".to_string(),
-                size: 0,
-                mode: 0o444,
-                mod_time: now,
-                is_dir: false,
-            },
-            FileInfo {
-                name: "size".to_string(),
-                size: 0,
-                mode: 0o444,
-                mod_time: now,
-                is_dir: false,
-            },
-            FileInfo {
-                name: "clear".to_string(),
-                size: 0,
-                mode: 0o222,
-                mod_time: now,
-                is_dir: false,
-            },
-            FileInfo {
-                name: "ack".to_string(),
-                size: 0,
-                mode: 0o222,
-                mod_time: now,
-                is_dir: false,
-            },
-        ])
+        Ok(Self::leaf_control_files(now))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -385,11 +414,8 @@ impl FileSystem for QueueFileSystem {
             Ok(FileInfo {
                 name: operation.clone(),
                 size: 0,
-                mode: if matches!(operation.as_str(), "enqueue" | "clear" | "ack") {
-                    0o222
-                } else {
-                    0o444
-                },
+                mode: Self::control_file_mode(operation)
+                    .ok_or_else(|| Error::NotFound(format!("control file not found: {}", operation)))?,
                 mod_time: SystemTime::now(),
                 is_dir: false,
             })
@@ -441,7 +467,120 @@ impl FileSystem for QueueFileSystem {
 }
 
 /// QueueFS Plugin
-pub struct QueueFSPlugin;
+pub struct QueueFSPlugin {
+    config_params: Vec<ConfigParameter>,
+}
+
+impl QueueFSPlugin {
+    /// Create a new queuefs plugin with supported configuration metadata.
+    pub fn new() -> Self {
+        Self {
+            config_params: vec![
+                ConfigParameter::optional(
+                    "backend",
+                    "string",
+                    "memory",
+                    "Queue backend (memory, sqlite, sqlite3)",
+                ),
+                ConfigParameter::optional(
+                    "db_path",
+                    "string",
+                    "",
+                    "SQLite database file path when backend=sqlite or backend=sqlite3",
+                ),
+                ConfigParameter::optional(
+                    "recover_stale_sec",
+                    "int",
+                    "0",
+                    "Recover processing messages older than this many seconds on startup (0 = recover all)",
+                ),
+                ConfigParameter::optional(
+                    "busy_timeout_ms",
+                    "int",
+                    "5000",
+                    "SQLite busy timeout in milliseconds",
+                ),
+            ],
+        }
+    }
+
+    fn get_string_param<'a>(config: &'a PluginConfig, key: &str) -> Option<&'a str> {
+        config.params.get(key).and_then(|v| v.as_string())
+    }
+
+    fn get_int_param(config: &PluginConfig, key: &str) -> Option<i64> {
+        config.params.get(key).and_then(|v| v.as_int())
+    }
+
+    fn parse_backend_config(config: &PluginConfig) -> Result<ParsedBackendConfig> {
+        let backend_name = Self::get_string_param(config, "backend").unwrap_or("memory");
+        let valid_backends = ["memory", "sqlite", "sqlite3"];
+        if !valid_backends.contains(&backend_name) {
+            return Err(Error::config(format!(
+                "unsupported queue backend: {} (valid: {})",
+                backend_name,
+                valid_backends.join(", ")
+            )));
+        }
+
+        let kind = match backend_name {
+            "memory" => BackendKind::Memory,
+            "sqlite" | "sqlite3" => BackendKind::Sqlite,
+            _ => {
+                return Err(Error::config(format!(
+                    "unsupported queue backend: {}",
+                    backend_name
+                )))
+            }
+        };
+
+        let recover_stale_sec = Self::get_int_param(config, "recover_stale_sec").unwrap_or(0);
+        let busy_timeout_ms = Self::get_int_param(config, "busy_timeout_ms")
+            .unwrap_or(5_000)
+            .max(0) as u64;
+
+        // Ensure typed config values are valid when present (avoid validate/initialize drift).
+        for (key, label) in [
+            ("recover_stale_sec", "recover_stale_sec"),
+            ("busy_timeout_ms", "busy_timeout_ms"),
+        ] {
+            if let Some(value) = config.params.get(key) {
+                value
+                    .as_int()
+                    .ok_or_else(|| Error::config(format!("{} must be an integer", label)))?;
+            }
+        }
+
+        let sqlite_db_path = match kind {
+            BackendKind::Memory => None,
+            BackendKind::Sqlite => {
+                let db_path = Self::get_string_param(config, "db_path").unwrap_or("");
+                if db_path.trim().is_empty() {
+                    return Err(Error::config(format!(
+                        "queuefs db_path is required when backend={} or backend={}",
+                        "sqlite", "sqlite3"
+                    )));
+                }
+                Some(db_path.to_string())
+            }
+        };
+
+        Ok(ParsedBackendConfig {
+            kind,
+            sqlite_db_path,
+            sqlite_options: SQLiteQueueOptions {
+                recover_stale_sec,
+                busy_timeout_ms,
+            },
+        })
+    }
+}
+
+impl Default for QueueFSPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl ServicePlugin for QueueFSPlugin {
@@ -471,29 +610,46 @@ impl ServicePlugin for QueueFSPlugin {
          6. Clear queue:\n\
             echo '' > /queuefs/Embedding/clear\n\
          \n\
+         7. Ack a message:\n\
+            echo '<message_id>' > /queuefs/Embedding/ack\n\
+         \n\
          Control files per queue:\n\
          - enqueue: Write to add a message to the queue\n\
          - dequeue: Read to remove and return the first message\n\
          - peek: Read to view the first message without removing it\n\
          - size: Read to get the current queue size\n\
          - clear: Write to clear all messages from the queue\n\
+         - ack: Write message id to acknowledge and delete it\n\
          \n\
          Supports nested queues:\n\
             mkdir /queuefs/logs/errors\n\
             echo 'error message' > /queuefs/logs/errors/enqueue"
     }
 
-    async fn validate(&self, _config: &PluginConfig) -> Result<()> {
-        // No configuration parameters required
+    async fn validate(&self, config: &PluginConfig) -> Result<()> {
+        Self::parse_backend_config(config)?;
         Ok(())
     }
 
-    async fn initialize(&self, _config: PluginConfig) -> Result<Box<dyn FileSystem>> {
-        Ok(Box::new(QueueFileSystem::new()))
+    async fn initialize(&self, config: PluginConfig) -> Result<Box<dyn FileSystem>> {
+        let parsed = Self::parse_backend_config(&config)?;
+
+        let backend: Box<dyn QueueBackend> = match parsed.kind {
+            BackendKind::Memory => Box::new(MemoryBackend::new()),
+            BackendKind::Sqlite => Box::new(SQLiteQueueBackend::open(
+                parsed
+                    .sqlite_db_path
+                    .as_deref()
+                    .expect("sqlite db_path is validated"),
+                parsed.sqlite_options,
+            )?),
+        };
+
+        Ok(Box::new(QueueFileSystem::with_backend(backend)))
     }
 
     fn config_params(&self) -> &[ConfigParameter] {
-        &[]
+        &self.config_params
     }
 }
 
@@ -530,15 +686,17 @@ mod tests {
         // Dequeue messages
         let result1 = fs.read("/test/dequeue", 0, 0).await.unwrap();
         let msg1: TestQueueMessage = serde_json::from_slice(&result1).unwrap();
+        assert!(!msg1.id.is_empty());
         assert_eq!(msg1.data.as_bytes(), data1);
 
         let result2 = fs.read("/test/dequeue", 0, 0).await.unwrap();
         let msg2: TestQueueMessage = serde_json::from_slice(&result2).unwrap();
+        assert!(!msg2.id.is_empty());
         assert_eq!(msg2.data.as_bytes(), data2);
 
         // Queue should be empty
-        let result = fs.read("/test/dequeue", 0, 0).await;
-        assert!(result.is_err());
+        let result = fs.read("/test/dequeue", 0, 0).await.unwrap();
+        assert_eq!(result, b"{}");
     }
 
     #[tokio::test]
@@ -623,7 +781,7 @@ mod tests {
         assert_eq!(String::from_utf8(size).unwrap(), "0");
 
         let result = fs.read("/test/dequeue", 0, 0).await;
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), b"{}");
     }
 
     #[tokio::test]
@@ -641,7 +799,7 @@ mod tests {
 
         // Queue directory should list control files
         let entries = fs.read_dir("/test").await.unwrap();
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 6);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
@@ -649,6 +807,7 @@ mod tests {
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
         assert!(names.contains(&"clear".to_string()));
+        assert!(names.contains(&"ack".to_string()));
     }
 
     #[tokio::test]
@@ -742,11 +901,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_queuefs_plugin() {
-        let plugin = QueueFSPlugin;
+        let plugin = QueueFSPlugin::new();
 
         assert_eq!(plugin.name(), "queuefs");
         assert!(!plugin.readme().is_empty());
-        assert_eq!(plugin.config_params().len(), 0);
+        assert_eq!(plugin.config_params().len(), 4);
 
         let config = PluginConfig {
             name: "queuefs".to_string(),
@@ -765,7 +924,8 @@ mod tests {
             .await
             .unwrap();
         let result = fs.read("/test/dequeue", 0, 0).await.unwrap();
-        assert_eq!(result, b"test");
+        let msg: TestQueueMessage = serde_json::from_slice(&result).unwrap();
+        assert_eq!(msg.data, "test");
     }
 
     #[tokio::test]
@@ -792,7 +952,8 @@ mod tests {
 
         // Dequeue from specific queue
         let msg = fs.read("/Embedding/dequeue", 0, 0).await.unwrap();
-        assert_eq!(msg, b"embed1");
+        let msg: TestQueueMessage = serde_json::from_slice(&msg).unwrap();
+        assert_eq!(msg.data, "embed1");
 
         // Other queue unaffected
         let size2 = fs.read("/Semantic/size", 0, 0).await.unwrap();
@@ -820,7 +981,8 @@ mod tests {
             .await
             .unwrap();
         let msg = fs.read("/logs/errors/dequeue", 0, 0).await.unwrap();
-        assert_eq!(msg, b"error1");
+        let msg: TestQueueMessage = serde_json::from_slice(&msg).unwrap();
+        assert_eq!(msg.data, "error1");
     }
 
     #[tokio::test]

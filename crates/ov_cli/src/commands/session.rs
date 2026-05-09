@@ -176,17 +176,11 @@ pub async fn add_memory(
         let _: serde_json::Value = client.post(&path, &body).await?;
     }
 
-    // 3. Commit
+    // 3. Commit (async — don't read response)
     let commit_path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
-    let commit_response: serde_json::Value = client.post(&commit_path, &json!({})).await?;
+    let _: serde_json::Value = client.post(&commit_path, &json!({})).await?;
 
-    // Extract memories count from commit response
-    let memories_extracted = commit_response["memories_extracted"].as_i64().unwrap_or(0);
-
-    let result = json!({
-        "memories_extracted": memories_extracted
-    });
-    output_success(&result, output_format, compact);
+    output_success(&json!("OK"), output_format, compact);
     Ok(())
 }
 

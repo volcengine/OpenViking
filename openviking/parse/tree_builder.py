@@ -113,13 +113,15 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
+        create_parent: bool = False,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
 
         Args:
             to_uri: Exact target URI (must not exist)
-            parent_uri: Target parent URI (must exist)
+            parent_uri: Target parent URI (must exist unless create_parent is True)
+            create_parent: Whether to automatically create parent directory if it doesn't exist
         """
 
         viking_fs = get_viking_fs()
@@ -147,6 +149,13 @@ class TreeBuilder:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
         # Check if source_path is a GitHub/GitLab URL and extract org/repo
+        # This is critical for getting the full "org/repo" path instead of just repo name!
+        # For example:
+        #   - source_path = "https://github.com/volcengine/OpenViking"
+        #   - parsed_org_repo = "volcengine/OpenViking"
+        #   - final root_uri = "viking://resources/volcengine/OpenViking"
+        #
+        # Without this, we'd just get "viking://resources/OpenViking" without the org prefix
         final_doc_name = doc_name
         if source_path and source_format == "repository":
             parsed_org_repo = parse_code_hosting_url(source_path)
@@ -163,9 +172,27 @@ class TreeBuilder:
         else:
             effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
             if effective_parent_uri:
-                # Parent URI must exist and be a directory
+                # Parent URI must exist and be a directory, or create it if requested
                 try:
+                    # First check if parent exists
+                    parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
+                    if not parent_exists:
+                        if create_parent:
+                            # Automatically create parent directory
+                            logger.info(
+                                f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                            )
+                            await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
+                        else:
+                            raise FileNotFoundError(
+                                f"Parent URI does not exist: {effective_parent_uri}. "
+                                f"Use --parent-auto-create/-p to automatically create it."
+                            )
+                    # Now get stat result
                     stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+                except FileNotFoundError:
+                    # Re-raise without wrapping
+                    raise
                 except Exception as e:
                     raise FileNotFoundError(
                         f"Parent URI does not exist: {effective_parent_uri}"

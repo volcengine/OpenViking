@@ -15,9 +15,10 @@ import pytest
 
 from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 from openviking.storage.viking_fs import init_viking_fs
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-CONFIG_FILE = os.getenv("OPENVIKING_CONFIG_FILE")
+CONFIG_FILE = os.getenv(OPENVIKING_CONFIG_ENV)
 if not CONFIG_FILE:
     default_conf = Path(__file__).parent / "ov.conf"
     if default_conf.exists():

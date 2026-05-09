@@ -1,27 +1,21 @@
-use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::fs::File;
+use std::env;
 use std::path::Path;
-use tempfile::{Builder, NamedTempFile};
-use zip::CompressionMethod;
-use zip::write::FileOptions;
+
+pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
+
+// ============ HttpClient ============
 
 /// High-level HTTP client for OpenViking API
 #[derive(Clone)]
 pub struct HttpClient {
-    http: ReqwestClient,
-    base_url: String,
-    api_key: Option<String>,
-    account: Option<String>,
-    user: Option<String>,
-    agent_id: Option<String>,
+    base: BaseClient,
 }
 
 impl HttpClient {
-    /// Create a new HTTP client
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
@@ -29,274 +23,101 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
-        let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
-            .build()
-            .expect("Failed to build HTTP client");
-
         Self {
-            http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key,
-            account,
-            user,
-            agent_id,
+            base: BaseClient::new(base_url, api_key, agent_id, account, user, timeout_secs, extra_headers),
         }
     }
 
-    /// Zip a directory to a temporary file
-    fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
-        if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
-                "Path {} is not a directory",
-                dir_path.display()
-            )));
-        }
-
-        let temp_file = Builder::new().suffix(".zip").tempfile()?;
-        let file = File::create(temp_file.path())?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options: FileOptions<'_, ()> =
-            FileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() {
-                let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
-                zip.start_file(name_str, options)?;
-                let mut file = File::open(path)?;
-                std::io::copy(&mut file, &mut zip)?;
-            }
-        }
-
-        zip.finish()?;
-        Ok(temp_file)
+    pub fn user_id(&self) -> Option<&str> {
+        self.base.user_id()
     }
 
-    /// Upload a temporary file and return the temp_file_id
-    async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
-        let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("temp_upload.zip");
-
-        // Read file content
-        let file_content = tokio::fs::read(file_path).await?;
-
-        // Create multipart form
-        let part = reqwest::multipart::Part::bytes(file_content).file_name(file_name.to_string());
-
-        let part = part
-            .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
-
-        let form = reqwest::multipart::Form::new().part("file", part);
-
-        let mut headers = self.build_headers();
-        // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
-        headers.remove(reqwest::header::CONTENT_TYPE);
-
-        let response = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        let result: Value = self.handle_response(response).await?;
-        result
-            .get("temp_file_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
+    pub fn agent_id(&self) -> Option<&str> {
+        self.base.agent_id()
     }
 
-    fn build_headers(&self) -> reqwest::header::HeaderMap {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        if let Some(api_key) = &self.api_key {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
-                headers.insert("X-API-Key", value);
-            }
-        }
-        if let Some(agent_id) = &self.agent_id {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
-                headers.insert("X-OpenViking-Agent", value);
-            }
-        }
-        if let Some(account) = &self.account {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(account) {
-                headers.insert("X-OpenViking-Account", value);
-            }
-        }
-        if let Some(user) = &self.user {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(user) {
-                headers.insert("X-OpenViking-User", value);
-            }
-        }
-        headers
+    pub fn api_key(&self) -> Option<&str> {
+        self.base.api_key()
     }
 
-    /// Make a GET request
+    fn upload_mode(&self) -> Option<String> {
+        match env::var("OPENVIKING_UPLOAD_MODE") {
+            Ok(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if normalized == "shared" || normalized == "local" {
+                    Some(normalized)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
+    // ============ HTTP Methods ============
+
     pub async fn get<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .get(&url)
-            .headers(self.build_headers())
-            .query(params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.get(path, params).await
     }
 
-    /// Make a POST request
     pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .post(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.post(path, body).await
     }
 
-    /// Make a PUT request
     pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .put(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.put(path, body).await
     }
 
-    /// Make a DELETE request
     pub async fn delete<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .delete(&url)
-            .headers(self.build_headers())
-            .query(params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.delete(path, params).await
     }
 
-    /// Make a DELETE request with a JSON body
     pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .delete(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.delete_with_body(path, body).await
     }
 
-    async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
-        let status = response.status();
+    // ============ File Helper Methods ============
 
-        // Handle empty response (204 No Content, etc.)
-        if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
-            return serde_json::from_value(Value::Null)
-                .map_err(|e| Error::Parse(format!("Failed to parse empty response: {}", e)));
-        }
+    fn create_uploader(&self) -> FileUploader {
+        FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
+    }
 
-        let json: Value = response
-            .json()
-            .await
-            .map_err(|e| Error::Network(format!("Failed to parse JSON response: {}", e)))?;
+    fn zip_directory(&self, dir_path: &Path) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader().zip_directory(dir_path)
+    }
 
-        // Handle HTTP errors
-        if !status.is_success() {
-            let error_msg = json
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    json.get("detail")
-                        .and_then(|d| d.as_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| format!("HTTP error {}", status));
-            return Err(Error::Api(error_msg));
-        }
+    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader().zip_directory_with_progress(dir_path, verbose)
+    }
 
-        // Handle API errors (status == success but body has error)
-        if let Some(error) = json.get("error") {
-            if !error.is_null() {
-                let code = error
-                    .get("code")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("UNKNOWN");
-                let message = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
-            }
-        }
+    async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
+        self.create_uploader().upload_temp_file(file_path).await
+    }
 
-        // Extract result from wrapped response or use the whole response
-        let result = if let Some(result) = json.get("result") {
-            result.clone()
-        } else {
-            json
-        };
-
-        serde_json::from_value(result)
-            .map_err(|e| Error::Parse(format!("Failed to deserialize response: {}", e)))
+    async fn upload_temp_file_with_progress(&self, file_path: &Path, verbose: bool) -> Result<String> {
+        self.create_uploader().upload_temp_file_with_progress(file_path, verbose).await
     }
 
     // ============ Content Methods ============
@@ -347,12 +168,12 @@ impl HttpClient {
     pub async fn reindex(
         &self,
         uri: &str,
-        regenerate: bool,
+        mode: &str,
         wait: bool,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
-            "regenerate": regenerate,
+            "mode": mode,
             "wait": wait,
         });
         self.post("/api/v1/content/reindex", &body).await
@@ -360,13 +181,14 @@ impl HttpClient {
 
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/api/v1/content/download", self.base_url);
+        let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![("uri".to_string(), uri.to_string())];
 
         let response = self
+            .base
             .http
             .get(&url)
-            .headers(self.build_headers())
+            .headers(self.base.build_headers())
             .query(&params)
             .send()
             .await
@@ -374,13 +196,12 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON
-            let json_result: Result<serde_json::Value> = response
-                .json()
+            let bytes = response
+                .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
 
-            let error_msg = match json_result {
+            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -392,7 +213,10 @@ impl HttpClient {
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => format!("HTTP error {}", status),
+                Err(_) => {
+                    let body_str = String::from_utf8_lossy(&bytes);
+                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
+                }
             };
 
             return Err(Error::Api(error_msg));
@@ -449,8 +273,11 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str) -> Result<()> {
-        let body = serde_json::json!({ "uri": uri });
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+        let body = match description {
+            Some(description) => serde_json::json!({ "uri": uri, "description": description }),
+            None => serde_json::json!({ "uri": uri }),
+        };
         let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
         Ok(())
     }
@@ -486,12 +313,18 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -503,6 +336,9 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -510,6 +346,9 @@ impl HttpClient {
             "session_id": session_id,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -555,6 +394,7 @@ impl HttpClient {
         path: &str,
         to: Option<String>,
         parent: Option<String>,
+        parent_auto_create: Option<String>,
         reason: &str,
         instruction: &str,
         wait: bool,
@@ -565,8 +405,31 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        show_progress: bool,
+        verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
+
+        // Determine effective parent and create_parent flag.
+        // Only send create_parent when the user explicitly selected
+        // --parent-auto-create, so older servers that do not support the
+        // field still accept the request.
+        let (effective_parent, create_parent) = match (parent, parent_auto_create) {
+            (Some(p), None) => (Some(p), false),
+            (None, Some(p)) => (Some(p), true),
+            (None, None) => (None, false),
+            (Some(_), Some(_)) => unreachable!("handled in cli"),
+        };
+
+        let build_body = |base: serde_json::Value| {
+            let mut body = base;
+            if create_parent {
+                body.as_object_mut()
+                    .expect("add_resource request body must be an object")
+                    .insert("create_parent".to_string(), serde_json::Value::Bool(true));
+            }
+            body
+        };
 
         if path_obj.exists() {
             if path_obj.is_dir() {
@@ -574,14 +437,22 @@ impl HttpClient {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                let zip_file = self.zip_directory(path_obj)?;
-                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
+                let zip_file = if show_progress {
+                    self.zip_directory_with_progress(path_obj, verbose)?
+                } else {
+                    self.zip_directory(path_obj)?
+                };
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose).await?
+                } else {
+                    self.upload_temp_file(zip_file.path()).await?
+                };
 
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -592,21 +463,26 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
-                self.post("/api/v1/resources", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
             } else if path_obj.is_file() {
                 let source_name = path_obj
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                let temp_file_id = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(path_obj, verbose).await?
+                } else {
+                    self.upload_temp_file(path_obj).await?
+                };
 
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -617,14 +493,15 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
-                self.post("/api/v1/resources", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
             } else {
-                let body = serde_json::json!({
+                let body = build_body(serde_json::json!({
                     "path": path,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -635,15 +512,15 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                });
+                }));
 
                 self.post("/api/v1/resources", &body).await
             }
         } else {
-            let body = serde_json::json!({
+            let body = build_body(serde_json::json!({
                 "path": path,
                 "to": to,
-                "parent": parent,
+                "parent": effective_parent,
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,
@@ -654,7 +531,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
-            });
+            }));
 
             self.post("/api/v1/resources", &body).await
         }
@@ -678,7 +555,8 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                self.post("/api/v1/skills", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
             } else if path_obj.is_file() {
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
@@ -687,7 +565,8 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                self.post("/api/v1/skills", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
             } else {
                 let body = serde_json::json!({
                     "data": data,
@@ -704,6 +583,28 @@ impl HttpClient {
             });
             self.post("/api/v1/skills", &body).await
         }
+    }
+
+    // ============ Task Methods ============
+
+    pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/tasks/{}", task_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn list_tasks(
+        &self,
+        task_type: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(t) = task_type {
+            params.push(("task_type".to_string(), t.to_string()));
+        }
+        if let Some(s) = status {
+            params.push(("status".to_string(), s.to_string()));
+        }
+        self.get("/api/v1/tasks", &params).await
     }
 
     // ============ Relation Methods ============
@@ -742,11 +643,12 @@ impl HttpClient {
             "uri": uri,
         });
 
-        let url = format!("{}/api/v1/pack/export", self.base_url);
+        let url = format!("{}/api/v1/pack/export", self.base.base_url);
         let response = self
+            .base
             .http
             .post(&url)
-            .headers(self.build_headers())
+            .headers(self.base.build_headers())
             .json(&body)
             .send()
             .await
@@ -754,13 +656,12 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON
-            let json_result: Result<serde_json::Value> = response
-                .json()
+            let bytes = response
+                .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
 
-            let error_msg = match json_result {
+            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -772,19 +673,20 @@ impl HttpClient {
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => format!("HTTP error {}", status),
+                Err(_) => {
+                    let body_str = String::from_utf8_lossy(&bytes);
+                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
+                }
             };
 
             return Err(Error::Api(error_msg));
         }
 
-        // Download the file content
         let bytes = response
             .bytes()
             .await
             .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
 
-        // Determine target path
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
             let base_name = uri
@@ -799,12 +701,10 @@ impl HttpClient {
             to_path.to_path_buf()
         };
 
-        // Ensure parent directory exists
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Write file
         std::fs::write(&final_path, bytes)?;
 
         Ok(final_path.to_string_lossy().to_string())
@@ -876,8 +776,26 @@ impl HttpClient {
         self.post(&path, &body).await
     }
 
-    pub async fn admin_list_users(&self, account_id: &str) -> Result<Value> {
+    pub async fn admin_list_users(
+        &self,
+        account_id: &str,
+        limit: u32,
+        name: Option<String>,
+        role: Option<String>,
+    ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
+        let mut params = vec![("limit".to_string(), limit.to_string())];
+        if let Some(n) = name {
+            params.push(("name".to_string(), n));
+        }
+        if let Some(r) = role {
+            params.push(("role".to_string(), r));
+        }
+        self.get(&path, &params).await
+    }
+
+    pub async fn admin_list_agents(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/agents", account_id);
         self.get(&path, &[]).await
     }
 
@@ -959,49 +877,125 @@ impl HttpClient {
 
         Ok(count)
     }
+
+    // ============ Privacy Config Methods ============
+
+    pub async fn privacy_list_categories(&self) -> Result<serde_json::Value> {
+        self.get("/api/v1/privacy-configs", &[]).await
+    }
+
+    pub async fn privacy_list_targets(&self, category: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}", category);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_get_current(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_upsert(
+        &self,
+        category: &str,
+        target_key: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.post(&path, body).await
+    }
+
+    pub async fn privacy_list_versions(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/versions",
+            category, target_key
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_get_version(
+        &self,
+        category: &str,
+        target_key: &str,
+        version: i32,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/versions/{}",
+            category, target_key, version
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_activate(
+        &self,
+        category: &str,
+        target_key: &str,
+        version: i32,
+    ) -> Result<serde_json::Value> {
+        let path = format!(
+            "/api/v1/privacy-configs/{}/{}/activate",
+            category, target_key
+        );
+        let body = serde_json::json!({ "version": version });
+        self.post(&path, &body).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::HttpClient;
+    use super::{BaseClient, HttpClient, TimeoutConfig};
+    use crate::base_client::api_error_from_envelope;
+    use reqwest::StatusCode;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
-    fn build_headers_includes_tenant_identity_headers() {
-        let client = HttpClient::new(
+    fn timeout_config_calculation() {
+        let config = TimeoutConfig::new(60, 2.0);
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), vec![0u8; 1024 * 1024]).unwrap();
+
+        let timeout = config.calculate(temp_file.path()).unwrap();
+        assert_eq!(timeout, std::time::Duration::from_secs(60));
+
+        std::fs::write(temp_file.path(), vec![0u8; 40 * 1024 * 1024]).unwrap();
+
+        let timeout = config.calculate(temp_file.path()).unwrap();
+        assert_eq!(timeout, std::time::Duration::from_secs(80));
+    }
+
+    #[test]
+    fn build_headers_includes_extra_headers_for_base_client() {
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+
+        let client = BaseClient::new(
             "http://localhost:1933",
             Some("test-key".to_string()),
             Some("assistant-1".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            Some(extra_headers),
         );
 
         let headers = client.build_headers();
 
         assert_eq!(
-            headers
-                .get("X-API-Key")
-                .and_then(|value| value.to_str().ok()),
+            headers.get("X-API-Key").and_then(|value| value.to_str().ok()),
             Some("test-key")
         );
         assert_eq!(
-            headers
-                .get("X-OpenViking-Agent")
-                .and_then(|value| value.to_str().ok()),
-            Some("assistant-1")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-Account")
-                .and_then(|value| value.to_str().ok()),
-            Some("acme")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-User")
-                .and_then(|value| value.to_str().ok()),
-            Some("alice")
+            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
+            Some("custom-value")
         );
     }
 
@@ -1027,5 +1021,21 @@ mod tests {
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[test]
+    fn standard_error_envelope_formats_api_error() {
+        let body = json!({
+            "status": "error",
+            "error": {
+                "code": "PROCESSING_ERROR",
+                "message": "Parse error: boom"
+            }
+        });
+
+        assert_eq!(
+            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
+            "[PROCESSING_ERROR] Parse error: boom"
+        );
     }
 }

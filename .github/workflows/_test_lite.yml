@@ -75,6 +75,9 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel
 
+    - name: Check ragfs-python workspace build
+      run: cargo check -p ragfs-python
+
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace
 

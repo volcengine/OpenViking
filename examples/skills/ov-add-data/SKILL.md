@@ -131,10 +131,10 @@ ov add-memory '[
 
 ## Output
 
-Returns count of memory extracted:
+Returns `OK` once the request is accepted. Memory extraction runs asynchronously on the server after the commit is queued, so the CLI does not wait for extraction to finish:
 
 ```
-memories_extracted   1
+OK
 ```
 
 ## Agent Best Practices

@@ -13,6 +13,7 @@ class Config:
     OPENVIKING_API_KEY = os.getenv("OPENVIKING_API_KEY", "test-root-api-key")
     OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "default")
     OPENVIKING_USER = os.getenv("OPENVIKING_USER", "default")
+    OPENVIKING_AGENT = os.getenv("OPENVIKING_AGENT", "default")
 
     SERVER_STARTUP_TIMEOUT = 30
     CONSOLE_STARTUP_TIMEOUT = 30

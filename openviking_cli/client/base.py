@@ -45,6 +45,7 @@ class BaseClient(ABC):
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        ...
 
     @abstractmethod
     async def add_skill(
@@ -60,6 +61,16 @@ class BaseClient(ABC):
     @abstractmethod
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
+        ...
+
+    @abstractmethod
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
         ...
 
     # ============= File System =============
@@ -96,7 +107,7 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         ...
 
@@ -152,7 +163,7 @@ class BaseClient(ABC):
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -165,7 +176,7 @@ class BaseClient(ABC):
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -182,7 +193,7 @@ class BaseClient(ABC):
         pattern: str,
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
-        node_limit: Optional[int] = None
+        node_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
@@ -263,6 +274,7 @@ class BaseClient(ABC):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -272,6 +284,7 @@ class BaseClient(ABC):
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to let the server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """

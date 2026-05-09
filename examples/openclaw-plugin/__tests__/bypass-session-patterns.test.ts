@@ -22,7 +22,7 @@ describe("bypass session patterns", () => {
     ]);
   });
 
-  it("supports ingestReplyAssistIgnoreSessionPatterns as a deprecated alias", () => {
+  it("accepts deprecated ingestReplyAssistIgnoreSessionPatterns as bypassSessionPatterns fallback", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       ingestReplyAssistIgnoreSessionPatterns: [
         "agent:*:cron:**",

@@ -184,16 +184,6 @@ class TestSearchReplaceBlock:
         )
         assert block.search == "old content"
         assert block.replace == "new content"
-        assert block.start_line is None
-
-    def test_create_with_start_line(self):
-        """Create with start line."""
-        block = SearchReplaceBlock(
-            search="old",
-            replace="new",
-            start_line=10,
-        )
-        assert block.start_line == 10
 
 
 class TestStrPatch:
@@ -231,7 +221,7 @@ class TestApplyStrPatch:
         """Simple replace."""
         original = "hello world"
         patch = StrPatch(
-            blocks=[SearchReplaceBlock(search="hello world", replace="hello there", start_line=1)]
+            blocks=[SearchReplaceBlock(search="hello world", replace="hello there")]
         )
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch

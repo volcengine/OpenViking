@@ -134,14 +134,14 @@ class CollectionField(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_field_logic(cls, m):
-        if m.FieldType == FieldTypeEnum.VECTOR:
-            if m.Dim is None:
+    def validate_field_logic(self):
+        if self.FieldType == FieldTypeEnum.VECTOR:
+            if self.Dim is None:
                 raise ValueError("vector field must contain dim")
-        if m.IsPrimaryKey:
-            if m.FieldType not in (FieldTypeEnum.INT64, FieldTypeEnum.STRING):
-                raise ValueError(f"primary key must be int64 or string, got '{m.FieldType}'")
-        return m
+        if self.IsPrimaryKey:
+            if self.FieldType not in (FieldTypeEnum.INT64, FieldTypeEnum.STRING):
+                raise ValueError(f"primary key must be int64 or string, got '{self.FieldType}'")
+        return self
 
 
 class CollectionMetaConfig(BaseModel):

@@ -124,13 +124,9 @@ class HeartbeatService:
 
             metadata = session_info.get("metadata", {})
             if metadata.get("skip_heartbeat"):
-                logger.debug(
-                    f"Heartbeat: skipping session {session_key} (marked as skip_heartbeat)"
-                )
                 continue
 
             if self._is_session_stale(session_info):
-                logger.debug(f"Heartbeat: skipping session {session_key} (inactive > 2 days)")
                 continue
 
             if self.sandbox_mode == "shared":

@@ -14,6 +14,8 @@ from typing import Generator
 import httpx
 import pytest
 
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+
 
 def _get_free_port() -> int:
     """Reserve a free port for the test server."""
@@ -67,7 +69,7 @@ def openviking_server(tmp_path_factory: pytest.TempPathFactory) -> Generator[str
         json.dump(conf_data, f)
 
     env = os.environ.copy()
-    env["OPENVIKING_CONFIG_FILE"] = str(tmp_conf)
+    env[OPENVIKING_CONFIG_ENV] = str(tmp_conf)
 
     cmd = [
         sys.executable,

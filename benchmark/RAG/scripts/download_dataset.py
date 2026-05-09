@@ -6,12 +6,10 @@ Supports URL downloads from GitHub, S3, etc.
 
 import argparse
 import hashlib
-import json
-import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -26,9 +24,7 @@ DATASET_SOURCES = {
         "source_type": "url",
         "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
         "checksum": "",
-        "files": [
-            "locomo10.json"
-        ]
+        "files": ["locomo10.json"],
     },
     #
     "SyllabusQA": {
@@ -39,23 +35,19 @@ DATASET_SOURCES = {
             "data/dataset_split/train.csv",
             "data/dataset_split/val.csv",
             "data/dataset_split/test.csv",
-            "syllabi/syllabi_redacted/word/"
+            "syllabi/syllabi_redacted/word/",
         ],
-        "extract_subdir": "SyllabusQA-main"
+        "extract_subdir": "SyllabusQA-main",
     },
     #
     "Qasper": {
         "source_type": "url",
         "urls": [
             "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-train-dev-v0.3.tgz",
-            "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-test-and-evaluator-v0.3.tgz"
+            "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-test-and-evaluator-v0.3.tgz",
         ],
         "checksum": "",
-        "files": [
-            "qasper-train-v0.3.json",
-            "qasper-dev-v0.3.json",
-            "qasper-test-v0.3.json"
-        ]
+        "files": ["qasper-train-v0.3.json", "qasper-dev-v0.3.json", "qasper-test-v0.3.json"],
     },
     #
     "FinanceBench": {
@@ -65,11 +57,12 @@ DATASET_SOURCES = {
         "files": [
             "data/financebench_open_source.jsonl",
             "data/financebench_document_information.jsonl",
-            "pdfs/"
+            "pdfs/",
         ],
-        "extract_subdir": "financebench-main"
+        "extract_subdir": "financebench-main",
     },
 }
+
 
 def calculate_checksum(file_path: Path, algorithm: str = "sha256") -> str:
     """Calculate checksum of a file."""
@@ -83,20 +76,23 @@ def calculate_checksum(file_path: Path, algorithm: str = "sha256") -> str:
 def download_file(url: str, dest_path: Path, chunk_size: int = 8192) -> bool:
     """Download a file with progress bar."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         response = requests.get(url, stream=True, timeout=30)
         response.raise_for_status()
-        
+
         total_size = int(response.headers.get("content-length", 0))
-        
-        with open(dest_path, "wb") as f, tqdm(
-            desc=f"Downloading {dest_path.name}",
-            total=total_size,
-            unit="B",
-            unit_scale=True,
-            unit_divisor=1024,
-        ) as pbar:
+
+        with (
+            open(dest_path, "wb") as f,
+            tqdm(
+                desc=f"Downloading {dest_path.name}",
+                total=total_size,
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+            ) as pbar,
+        ):
             for chunk in response.iter_content(chunk_size=chunk_size):
                 if chunk:
                     f.write(chunk)
@@ -109,26 +105,37 @@ def download_file(url: str, dest_path: Path, chunk_size: int = 8192) -> bool:
         return False
 
 
-def extract_archive(archive_path: Path, extract_to: Path, extract_subdir: Optional[str] = None) -> bool:
+def extract_archive(
+    archive_path: Path, extract_to: Path, extract_subdir: Optional[str] = None
+) -> bool:
     """Extract archive file (zip, tar.gz, etc.)."""
-    import zipfile
     import tarfile
-    
+    import zipfile
+
     try:
         temp_extract_dir = extract_to / ".temp_extract"
         temp_extract_dir.mkdir(parents=True, exist_ok=True)
-        
+
         if archive_path.suffix == ".zip":
             with zipfile.ZipFile(archive_path, "r") as zip_ref:
                 zip_ref.extractall(temp_extract_dir)
         elif archive_path.suffix in [".tar", ".gz", ".tgz"]:
             with tarfile.open(archive_path, "r:*") as tar_ref:
-                tar_ref.extractall(temp_extract_dir)
+                safe_members = []
+                extract_root = temp_extract_dir.resolve()
+                for member in tar_ref.getmembers():
+                    if member.issym() or member.islnk():
+                        raise ValueError(f"Unsafe link entry in tar archive: {member.name}")
+                    member_path = (extract_root / member.name).resolve()
+                    if not member_path.is_relative_to(extract_root):
+                        raise ValueError(f"Unsafe tar member path: {member.name}")
+                    safe_members.append(member)
+                tar_ref.extractall(temp_extract_dir, members=safe_members)
         else:
             print(f"Unsupported archive format: {archive_path.suffix}")
             shutil.rmtree(temp_extract_dir)
             return False
-        
+
         if extract_subdir:
             source_dir = temp_extract_dir / extract_subdir
             if source_dir.exists() and source_dir.is_dir():
@@ -151,7 +158,7 @@ def extract_archive(archive_path: Path, extract_to: Path, extract_subdir: Option
                     else:
                         dest_item.unlink()
                 shutil.move(str(item), str(dest_item))
-        
+
         shutil.rmtree(temp_extract_dir)
         return True
     except Exception as e:
@@ -166,20 +173,20 @@ def verify_dataset(dataset_name: str, dataset_dir: Path) -> bool:
     if dataset_name not in DATASET_SOURCES:
         print(f"Unknown dataset: {dataset_name}")
         return False
-    
+
     source = DATASET_SOURCES[dataset_name]
     missing_files = []
-    
+
     for file_path in source["files"]:
         full_path = dataset_dir / file_path
         # Check if path exists (either file or directory)
         if not full_path.exists():
             missing_files.append(file_path)
-    
+
     if missing_files:
         print(f"Missing files for {dataset_name}: {missing_files}")
         return False
-    
+
     print(f"✓ {dataset_name} verified successfully")
     return True
 
@@ -191,41 +198,37 @@ def is_archive_file(file_path: Path) -> bool:
 
 
 def download_from_url(
-    source: Dict,
-    output_dir: Path,
-    dataset_name: str,
-    force: bool = False,
-    verify: bool = True
+    source: Dict, output_dir: Path, dataset_name: str, force: bool = False, verify: bool = True
 ) -> bool:
     """Download dataset from URL. Supports both archives and single files.
     Supports single url or multiple urls via urls field.
     """
     dataset_dir = output_dir / dataset_name
-    
+
     if dataset_dir.exists() and not force:
         print(f"{dataset_name} already exists at {dataset_dir}, skipping download")
         if verify:
             return verify_dataset(dataset_name, dataset_dir)
         return True
-    
+
     print(f"Downloading {dataset_name}...")
-    
+
     # Support single url or multiple urls
     urls = source.get("urls", [source.get("url")]) if source.get("urls") else [source.get("url")]
-    
+
     success = True
     for url in urls:
         if not url:
             continue
-            
+
         parsed_url = urlparse(url)
         file_name = Path(parsed_url.path).name
         downloaded_path = output_dir / file_name
-        
+
         if not download_file(url, downloaded_path):
             success = False
             continue
-        
+
         if "checksum" in source and source["checksum"]:
             algo, expected_checksum = source["checksum"].split(":", 1)
             actual_checksum = calculate_checksum(downloaded_path, algo)
@@ -237,7 +240,7 @@ def download_from_url(
                 success = False
                 continue
             print(f"✓ Checksum verified for {dataset_name}")
-        
+
         if is_archive_file(downloaded_path):
             extract_subdir = source.get("extract_subdir")
             if not extract_archive(downloaded_path, dataset_dir, extract_subdir):
@@ -250,47 +253,44 @@ def download_from_url(
             dest_path = dataset_dir / file_name
             shutil.move(str(downloaded_path), str(dest_path))
             print(f"✓ Saved single file to {dest_path}")
-    
+
     if verify and not verify_dataset(dataset_name, dataset_dir):
         return False
-    
+
     if success:
         print(f"✓ {dataset_name} downloaded successfully to {dataset_dir}")
     return success
 
 
 def download_dataset(
-    dataset_name: str,
-    output_dir: Path,
-    force: bool = False,
-    verify: bool = True
+    dataset_name: str, output_dir: Path, force: bool = False, verify: bool = True
 ) -> bool:
     """Download a single dataset."""
     if dataset_name not in DATASET_SOURCES:
         print(f"Unknown dataset: {dataset_name}")
         return False
-    
+
     source = DATASET_SOURCES[dataset_name]
     dataset_dir = output_dir / dataset_name
-    
+
     if dataset_dir.exists() and not force:
         print(f"{dataset_name} already exists at {dataset_dir}, skipping download")
         if verify:
             return verify_dataset(dataset_name, dataset_dir)
         return True
-    
+
     success = download_from_url(source, output_dir, dataset_name, force, verify)
-    
+
     if success and verify:
         return verify_dataset(dataset_name, dataset_dir)
-    
+
     return success
 
 
 def main():
     # Check if any datasets are configured
-    configured_datasets = [k for k in DATASET_SOURCES.keys() if not k.startswith('#')]
-    
+    configured_datasets = [k for k in DATASET_SOURCES.keys() if not k.startswith("#")]
+
     if not configured_datasets:
         print("=" * 80)
         print("No datasets configured!")
@@ -302,60 +302,45 @@ def main():
         print("See README_DATASET_CONFIG.md for detailed instructions.")
         print("=" * 80)
         return 1
-    
-    parser = argparse.ArgumentParser(
-        description="Download datasets for RAG benchmark"
-    )
+
+    parser = argparse.ArgumentParser(description="Download datasets for RAG benchmark")
     parser.add_argument(
-        "--dataset", "-d",
+        "--dataset",
+        "-d",
         type=str,
         choices=configured_datasets + ["all"],
         default="all",
-        help="Dataset to download (default: all)"
+        help="Dataset to download (default: all)",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path(__file__).parent.parent / "raw_data",
-        help="Output directory (default: raw_data/)"
+        help="Output directory (default: raw_data/)",
     )
     parser.add_argument(
-        "--force", "-f",
-        action="store_true",
-        help="Force re-download even if dataset exists"
+        "--force", "-f", action="store_true", help="Force re-download even if dataset exists"
     )
-    parser.add_argument(
-        "--no-verify",
-        action="store_true",
-        help="Skip dataset verification"
-    )
-    
+    parser.add_argument("--no-verify", action="store_true", help="Skip dataset verification")
+
     args = parser.parse_args()
-    
+
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    datasets = (
-        configured_datasets 
-        if args.dataset == "all" 
-        else [args.dataset]
-    )
-    
+
+    datasets = configured_datasets if args.dataset == "all" else [args.dataset]
+
     print(f"Downloading datasets to: {output_dir}")
     print(f"Datasets: {', '.join(datasets)}")
     print()
-    
+
     success_count = 0
     for dataset in datasets:
-        if download_dataset(
-            dataset, 
-            output_dir, 
-            args.force, 
-            not args.no_verify
-        ):
+        if download_dataset(dataset, output_dir, args.force, not args.no_verify):
             success_count += 1
         print()
-    
+
     print(f"Download complete: {success_count}/{len(datasets)} successful")
     return 0 if success_count == len(datasets) else 1
 

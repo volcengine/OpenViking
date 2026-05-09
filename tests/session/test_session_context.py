@@ -15,6 +15,7 @@ from openviking.message import Message, TextPart
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -83,7 +84,7 @@ async def client(test_data_dir, monkeypatch, tmp_path):
 
     OpenVikingConfigSingleton.reset_instance()
     await AsyncOpenViking.reset()
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
     _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 

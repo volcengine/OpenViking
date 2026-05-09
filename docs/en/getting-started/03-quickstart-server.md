@@ -11,6 +11,16 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
 
+For first-time setup, run `openviking-server init` first.
+
+Before startup, validate local setup:
+
+```bash
+openviking-server doctor
+```
+
+`openviking-server doctor` validates that the configured local setup is usable, including provider-specific auth when required.
+
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start
 openviking-server
@@ -34,6 +44,8 @@ INFO:     Uvicorn running on http://0.0.0.0:1933
 curl http://localhost:1933/health
 # {"status": "ok"}
 ```
+
+`openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
 
 ## Connect with Python SDK
 
@@ -147,7 +159,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## Connect with curl
 
-Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
+Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly want distributed shared temporary uploads. In Python HTTP client / CLI flows, the same mode can be selected through `ovcli.conf` with `upload.mode = "shared"`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
 
 ```bash
 # Add a resource

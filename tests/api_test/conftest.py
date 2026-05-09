@@ -58,6 +58,49 @@ TEST_CASE_DESCRIPTIONS = {
     "test_concurrent_write.py::TestConcurrentWrite::test_concurrent_write_conflict": "并发写入冲突验证",
     "test_account_isolation.py::TestAccountIsolation::test_processed_not_zero_after_resource_ops": "账户隔离完整性验证",
     "test_account_isolation.py::TestAccountIsolation::test_consecutive_health_checks": "账户隔离连续健康检查",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_txt_file": "TC-B01 TXT文本构建",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_markdown_file": "TC-B02 Markdown构建",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_empty_file": "TC-B15 空文件构建",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_raw_content": "TC-B14 原始内容构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_pdf_file": "TC-B03 PDF构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_html_file": "TC-B04 HTML构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_docx_file": "TC-B05 DOCX构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_legacy_doc_file": "TC-B06 .doc构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_pptx_file": "TC-B07 PPTX构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_xlsx_file": "TC-B08 XLSX构建",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_epub_file": "TC-B09 EPUB构建",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_zip_file": "TC-B10 ZIP构建",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_directory": "TC-B11 目录构建",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_code_repository_url": "TC-B12 代码仓库URL构建",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_svg": "TC-B13 图片构建(SVG)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_jpg": "TC-B13 图片构建(JPG)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_png": "TC-B13 图片构建(PNG)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_webp": "TC-B13 图片构建(WebP)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_audio_mp3": "TC-B14 音频构建(MP3)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_audio_wav": "TC-B14 音频构建(WAV)",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_video_mp4": "TC-B15 视频构建(MP4)",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_repo": "TC-P01 GitHub仓库构建",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_repo_with_branch": "TC-P02 GitHub分支构建",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_raw_file": "TC-P03 GitHub原始文件构建",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_blob_page": "TC-P04 GitHub Blob页构建",
+    "test_build_platform_wikipedia.py::TestBuildPlatformWikipedia::test_build_wikipedia_page": "TC-P05 Wikipedia构建",
+    "test_build_platform_arxiv.py::TestBuildPlatformArxiv::test_build_arxiv_pdf": "TC-P06 arXiv PDF构建",
+    "test_build_platform_arxiv.py::TestBuildPlatformArxiv::test_build_arxiv_abstract_page": "TC-P07 arXiv摘要页构建",
+    "test_build_platform_general_web.py::TestBuildPlatformGeneralWeb::test_build_general_webpage": "TC-P10 通用网页构建",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_404": "TC-E01 远端404不存在",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_403": "TC-E02 远端403禁止访问",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_500": "TC-E03 远端500服务错误",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_http_to_https_redirect": "TC-E05 HTTP→HTTPS跳转",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_multi_redirect": "TC-E06 多重跳转",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_dns_resolve_failure": "TC-E08 DNS解析失败",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_ssh_url_invalid_format": "TC-E09 SSH URL格式错误",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_duplicate_resource_no_to": "TC-E12 同名资源二次添加",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_incremental_update_with_to": "TC-E13 同to增量更新",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_unsupported_file_type": "TC-E15 不支持的文件类型",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_corrupted_zip": "TC-E16 损坏的ZIP文件",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_to_param": "TC-E17 to参数指定URI",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_parent_param": "TC-E18 parent参数指定父目录",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_non_resources_scope_rejected": "TC-E11 scope参数非resources拒绝",
 }
 
 
@@ -114,6 +157,49 @@ TEST_CASE_APIS = {
     "test_concurrent_write.py::TestConcurrentWrite::test_concurrent_write_conflict": "/api/v1/resources (并发写入)",
     "test_account_isolation.py::TestAccountIsolation::test_processed_not_zero_after_resource_ops": "/api/v1/resources,/api/v1/search,/api/v1/system/observer",
     "test_account_isolation.py::TestAccountIsolation::test_consecutive_health_checks": "/api/v1/system/healthy,/api/v1/system/observer",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_txt_file": "/api/v1/resources",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_markdown_file": "/api/v1/resources",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_empty_file": "/api/v1/resources",
+    "test_build_text_resources_slow.py::TestBuildTextResourcesSlow::test_build_raw_content": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_pdf_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_html_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_docx_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_legacy_doc_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_pptx_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_xlsx_file": "/api/v1/resources",
+    "test_build_document_resources_slow.py::TestBuildDocumentResourcesSlow::test_build_epub_file": "/api/v1/resources",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_zip_file": "/api/v1/resources",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_directory": "/api/v1/resources",
+    "test_build_archive_resources.py::TestBuildArchiveResources::test_build_code_repository_url": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_svg": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_jpg": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_png": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_image_webp": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_audio_mp3": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_audio_wav": "/api/v1/resources",
+    "test_build_media_resources_slow.py::TestBuildMediaResourcesSlow::test_build_video_mp4": "/api/v1/resources",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_repo": "/api/v1/resources",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_repo_with_branch": "/api/v1/resources",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_raw_file": "/api/v1/resources",
+    "test_build_platform_github.py::TestBuildPlatformGithub::test_build_github_blob_page": "/api/v1/resources",
+    "test_build_platform_wikipedia.py::TestBuildPlatformWikipedia::test_build_wikipedia_page": "/api/v1/resources",
+    "test_build_platform_arxiv.py::TestBuildPlatformArxiv::test_build_arxiv_pdf": "/api/v1/resources",
+    "test_build_platform_arxiv.py::TestBuildPlatformArxiv::test_build_arxiv_abstract_page": "/api/v1/resources",
+    "test_build_platform_general_web.py::TestBuildPlatformGeneralWeb::test_build_general_webpage": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_404": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_403": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_remote_500": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_http_to_https_redirect": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_multi_redirect": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_dns_resolve_failure": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_ssh_url_invalid_format": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_duplicate_resource_no_to": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_incremental_update_with_to": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_unsupported_file_type": "/api/v1/resources",
+    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_corrupted_zip": "/api/v1/resources",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_to_param": "/api/v1/resources",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_parent_param": "/api/v1/resources",
+    "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_non_resources_scope_rejected": "/api/v1/resources",
 }
 
 
@@ -189,10 +275,10 @@ def format_memory_delta(delta_bytes):
 
 def get_test_category(nodeid):
     parts = nodeid.split(os.sep)
-    
+
     # 优先匹配更具体的路径（倒序匹配）
     priority_categories = ["stability_error", "resources_retrieval", "filesystem", "sessions"]
-    
+
     for part in parts:
         if part in priority_categories:
             # 特殊处理：将子目录映射到正确的分类
@@ -204,18 +290,45 @@ def get_test_category(nodeid):
                 return "文件系统API"
             elif part == "sessions":
                 return "会话管理API"
-    
+
     # 如果没有匹配到优先分类，则按原逻辑匹配
     for part in parts:
         if part in CATEGORY_NAMES:
             return CATEGORY_NAMES[part]
-    
+
     return "其他"
 
 
 @pytest.fixture(scope="session")
 def api_client():
     client = OpenVikingAPIClient(server_url=Config.SERVER_URL, api_key=Config.OPENVIKING_API_KEY)
+
+    account_id = Config.OPENVIKING_ACCOUNT
+    user_id = Config.OPENVIKING_USER
+
+    try:
+        resp = client.admin_list_users(account_id)
+        if resp.status_code == 200:
+            data = resp.json()
+            users = data.get("result", [])
+            user_exists = any(
+                (isinstance(u, dict) and u.get("user_id") == user_id)
+                or (isinstance(u, str) and u == user_id)
+                for u in users
+            )
+            if not user_exists:
+                reg_resp = client.admin_register_user(account_id, user_id, role="admin")
+                if reg_resp.status_code in (200, 201):
+                    print(f"已注册用户 {account_id}/{user_id}")
+                else:
+                    print(f"注册用户失败({reg_resp.status_code}): {reg_resp.text[:200]}")
+            else:
+                print(f"用户 {account_id}/{user_id} 已存在")
+        else:
+            print(f"无法查询用户列表({resp.status_code}), 跳过用户注册(可能为开发模式)")
+    except Exception as e:
+        print(f"用户注册检查异常, 跳过: {e}")
+
     return client
 
 
@@ -263,7 +376,7 @@ def pytest_runtest_makereport(item, call):
                 curl = fixture_value.to_curl()
                 if curl:
                     report.sections.append(("cURL Command", curl))
-            
+
             # 添加 Response Body 显示
             if hasattr(fixture_value, "last_response") and fixture_value.last_response:
                 response = fixture_value.last_response
@@ -272,9 +385,14 @@ def pytest_runtest_makereport(item, call):
                     if response_text:
                         try:
                             import json
+
                             response_json = json.loads(response_text)
-                            formatted_response = json.dumps(response_json, indent=2, ensure_ascii=False)
-                            report.sections.append(("Response Body", f"<pre>{formatted_response}</pre>"))
+                            formatted_response = json.dumps(
+                                response_json, indent=2, ensure_ascii=False
+                            )
+                            report.sections.append(
+                                ("Response Body", f"<pre>{formatted_response}</pre>")
+                            )
                         except Exception:
                             report.sections.append(("Response Body", f"<pre>{response_text}</pre>"))
 

@@ -12,6 +12,7 @@ from openviking.session.memory.utils.content import (
     truncate_content,
 )
 from openviking.session.memory.utils.json_parser import (
+    JsonUtils,
     _any_to_str,
     _get_arg_type,
     _get_origin_type,
@@ -23,6 +24,9 @@ from openviking.session.memory.utils.json_parser import (
 )
 from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
+    resolve_output_language,
+    resolve_output_language_from_conversation,
+    resolve_with_override,
 )
 from openviking.session.memory.utils.messages import (
     parse_memory_file_with_fields,
@@ -33,17 +37,9 @@ from openviking.session.memory.utils.model import (
     model_to_dict,
 )
 from openviking.session.memory.utils.uri import (
-    ResolvedOperation,
     ResolvedOperations,
-    collect_allowed_directories,
-    collect_allowed_path_patterns,
-    extract_uri_fields_from_flat_model,
     generate_uri,
     is_uri_allowed,
-    is_uri_allowed_for_schema,
-    resolve_all_operations,
-    resolve_flat_model_uri,
-    validate_operations_uris,
     validate_uri_template,
 )
 
@@ -56,28 +52,24 @@ __all__ = [
     "truncate_content",
     # Language
     "detect_language_from_conversation",
+    "resolve_output_language",
+    "resolve_output_language_from_conversation",
+    "resolve_with_override",
     # Messages
     "pretty_print_messages",
     "parse_memory_file_with_fields",
     # URI
     "generate_uri",
     "validate_uri_template",
-    "collect_allowed_directories",
-    "collect_allowed_path_patterns",
     "is_uri_allowed",
-    "is_uri_allowed_for_schema",
-    "extract_uri_fields_from_flat_model",
-    "resolve_flat_model_uri",
-    "ResolvedOperation",
     "ResolvedOperations",
-    "resolve_all_operations",
-    "validate_operations_uris",
     # JSON Parser
     "extract_json_content",
     "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
+    "JsonUtils",
     "_get_origin_type",
     "_get_arg_type",
     "_any_to_str",

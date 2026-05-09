@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("  - memfs: In-memory file system");
     fs.register_plugin(KVFSPlugin).await;
     tracing::info!("  - kvfs: Key-value file system");
-    fs.register_plugin(QueueFSPlugin).await;
+    fs.register_plugin(QueueFSPlugin::new()).await;
     tracing::info!("  - queuefs: Message queue file system");
     fs.register_plugin(SQLFSPlugin::new()).await;
     tracing::info!("  - sqlfs: Database-backed file system (SQLite)");
@@ -72,9 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("  GET    /api/v1/mounts");
     tracing::info!("  POST   /api/v1/mount");
     tracing::info!("  POST   /api/v1/unmount");
+    tracing::info!("  POST   /api/v1/grep");
     tracing::info!("");
     tracing::info!("Example: Mount MemFS");
-    tracing::info!("  curl -X POST http://{}//api/v1/mount \\", addr);
+    tracing::info!("  curl -X POST http://{}/api/v1/mount \\", addr);
     tracing::info!("    -H 'Content-Type: application/json' \\");
     tracing::info!("    -d '{{\"plugin\": \"memfs\", \"path\": \"/memfs\"}}'");
 

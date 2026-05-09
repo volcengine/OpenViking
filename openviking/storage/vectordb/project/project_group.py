@@ -8,6 +8,12 @@ from openviking.storage.vectordb.project.local_project import (
     get_or_create_local_project,
 )
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
+from openviking.storage.vectordb.utils.path_safety import (
+    resolve_storage_path,
+    safe_join,
+    safe_join_name,
+)
+from openviking.storage.vectordb.utils.validation import validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -29,8 +35,9 @@ def get_or_create_project_group(path: str = ""):
         return group
     else:
         # Persistent project group - persisted to disk
-        os.makedirs(path, exist_ok=True)
-        group = ProjectGroup(path=path)
+        group_path = str(resolve_storage_path(path))
+        os.makedirs(group_path, exist_ok=True)
+        group = ProjectGroup(path=group_path)
         return group
 
 
@@ -52,7 +59,7 @@ class ProjectGroup:
                 - If empty: Create volatile project group
                 - If not empty: Create persistent project group, auto-load all existing projects in directory
         """
-        self.path = path
+        self.path = str(resolve_storage_path(path)) if path else ""
         self.projects = ThreadSafeDictManager[LocalProject]()
 
         # If persistent project group, load existing projects
@@ -70,9 +77,9 @@ class ProjectGroup:
         if not os.path.exists(self.path):
             logger.info(f"ProjectGroup path does not exist: {self.path}")
             # Create default project
-            default_path = os.path.join(self.path, "default")
+            default_path = safe_join(self.path, "default")
             os.makedirs(default_path, exist_ok=True)
-            self.projects.set("default", get_or_create_local_project(path=default_path))
+            self.projects.set("default", get_or_create_local_project(path=str(default_path)))
             return
 
         # Scan all subdirectories
@@ -84,10 +91,14 @@ class ProjectGroup:
 
         loaded_count = 0
         for entry in entries:
-            entry_path = os.path.join(self.path, entry)
+            try:
+                entry_path = safe_join(self.path, entry)
+            except ValueError:
+                logger.warning(f"Skipping invalid project directory under {self.path}: {entry}")
+                continue
 
             # Only process directories
-            if not os.path.isdir(entry_path):
+            if not entry_path.is_dir():
                 continue
 
             # Use directory name as project name
@@ -96,7 +107,7 @@ class ProjectGroup:
             try:
                 # Load project
                 logger.info(f"Loading project: {project_name} from {entry_path}")
-                project = get_or_create_local_project(path=entry_path)
+                project = get_or_create_local_project(path=str(entry_path))
                 self.projects.set(project_name, project)
                 loaded_count += 1
                 logger.info(f"Successfully loaded project: {project_name}")
@@ -109,9 +120,9 @@ class ProjectGroup:
         # If no projects loaded, create default project
         if loaded_count == 0:
             logger.info("No projects found, creating default project")
-            default_path = os.path.join(self.path, "default")
+            default_path = safe_join(self.path, "default")
             os.makedirs(default_path, exist_ok=True)
-            self.projects.set("default", get_or_create_local_project(path=default_path))
+            self.projects.set("default", get_or_create_local_project(path=str(default_path)))
 
     def close(self):
         """Close project group, release all project resources"""
@@ -183,10 +194,11 @@ class ProjectGroup:
         # Decide whether to create volatile or persistent project based on project group path
         if self.path:
             # Persistent project
-            project_path = os.path.join(self.path, project_name)
+            validate_name_str(project_name)
+            project_path = safe_join_name(self.path, project_name)
             os.makedirs(project_path, exist_ok=True)
             logger.info(f"Creating persistent project: {project_name} at {project_path}")
-            project = get_or_create_local_project(path=project_path)
+            project = get_or_create_local_project(path=str(project_path))
         else:
             # Volatile project
             logger.info(f"Creating volatile project: {project_name}")

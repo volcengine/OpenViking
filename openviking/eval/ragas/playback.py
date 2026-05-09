@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.eval.recorder import IORecord, IOType
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -210,7 +211,7 @@ class IOPlayback:
         if self.config_file:
             import os
 
-            os.environ["OPENVIKING_CONFIG_FILE"] = self.config_file
+            os.environ[OPENVIKING_CONFIG_ENV] = self.config_file
 
         from openviking.storage.viking_fs import init_viking_fs
         from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend

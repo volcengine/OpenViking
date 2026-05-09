@@ -41,6 +41,7 @@ class Session:
         content: Optional[str] = None,
         parts: Optional[List[Part]] = None,
         created_at: Optional[str] = None,
+        role_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -49,6 +50,7 @@ class Session:
             content: Text content (simple mode)
             parts: Parts list (TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
+            role_id: Optional explicit actor identity. Omit to let the server derive it.
 
         If both content and parts are provided, parts takes precedence.
 
@@ -58,10 +60,18 @@ class Session:
         if parts is not None:
             parts_dicts = [asdict(p) for p in parts]
             return await self._client.add_message(
-                self.session_id, role, parts=parts_dicts, created_at=created_at
+                self.session_id,
+                role,
+                parts=parts_dicts,
+                created_at=created_at,
+                role_id=role_id,
             )
         return await self._client.add_message(
-            self.session_id, role, content=content, created_at=created_at
+            self.session_id,
+            role,
+            content=content,
+            created_at=created_at,
+            role_id=role_id,
         )
 
     async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:

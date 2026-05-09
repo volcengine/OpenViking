@@ -43,7 +43,8 @@ IGNORE_EXTENSIONS = {
     ".iso",
     ".img",
     ".db",
-    ".sqlitive",
+    ".sqlite",
+    ".sqlite3",
     # Archive formats
     ".zip",
     ".tar",

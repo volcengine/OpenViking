@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code import CodeRepositoryParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
@@ -29,6 +28,7 @@ from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
+from openviking_cli.utils.config.parser_config import ParserConfig
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -43,7 +43,11 @@ class ParserRegistry:
     Automatically selects appropriate parser based on file extension.
     """
 
-    def __init__(self, register_optional: bool = True):
+    def __init__(
+        self,
+        register_optional: bool = True,
+        parser_configs: Optional[Dict[str, ParserConfig]] = None,
+    ):
         """
         Initialize registry with default parsers.
 
@@ -54,36 +58,26 @@ class ParserRegistry:
         """
         self._parsers: Dict[str, BaseParser] = {}
         self._extension_map: Dict[str, str] = {}
+        self._parser_configs = parser_configs or {}
 
         # Register core parsers
-        self.register("text", TextParser())
-        self.register("markdown", MarkdownParser())
-        self.register("pdf", PDFParser())
-        self.register("html", HTMLParser())  # HTMLParser doesn't accept config yet
+        self.register("text", TextParser(config=self._parser_configs.get("text")))
+        self.register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
+        self.register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
+        self.register("html", HTMLParser(config=self._parser_configs.get("html")))
 
         # Register markitdown-inspired parsers (built-in)
-        self.register("word", WordParser())
-        self.register("legacy_doc", LegacyDocParser())
-        self.register("powerpoint", PowerPointParser())
-        self.register("excel", ExcelParser())
-        self.register("epub", EPubParser())
-        # CodeRepositoryParser also uses .zip; register it before ZipParser
-        # so that .zip resolves to ZipParser (file) rather than code repo.
-        self.register("code", CodeRepositoryParser())
+        self.register("word", WordParser(config=self._parser_configs.get("word")))
+        self.register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
+        self.register("powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint")))
+        self.register("excel", ExcelParser(config=self._parser_configs.get("excel")))
+        self.register("epub", EPubParser(config=self._parser_configs.get("epub")))
         self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
         self.register("image", ImageParser())
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
-
-        # Optional: Feishu/Lark document parser (requires lark-oapi)
-        try:
-            from openviking.parse.parsers.feishu import FeishuParser
-
-            self.register("feishu", FeishuParser())
-        except ImportError:
-            pass
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
@@ -215,33 +209,22 @@ class ParserRegistry:
 
     async def parse(self, source: Union[str, Path], **kwargs) -> ParseResult:
         """
-        Parse a file or content string.
+        Parse a local file or content string.
 
         Automatically selects parser based on file extension.
         Falls back to text parser for unknown types.
 
+        NOTE: For URL handling, use AccessorRegistry in the two-layer architecture.
+        This registry only handles local files and raw content.
+
         Args:
-            source: File path or content string
+            source: Local file path or content string
             **kwargs: Additional arguments passed to parser
 
         Returns:
             ParseResult with document tree
         """
         source_str = str(source)
-
-        # First, check if it's a code repository URL
-        code_parser = self._parsers.get("code")
-        if code_parser:
-            # Check if the parser has the is_repository_url method
-            try:
-                if hasattr(code_parser, "is_repository_url") and code_parser.is_repository_url(
-                    source_str
-                ):
-                    logger.info(f"Detected code repository URL: {source_str}")
-                    return await code_parser.parse(source_str, **kwargs)
-            except Exception as e:
-                logger.warning(f"Error checking if source is repository URL: {e}")
-                # Continue with normal parsing flow
 
         # Check if source looks like a file path (short enough and no newlines)
         is_potential_path = len(source_str) <= 1024 and "\n" not in source_str
@@ -284,7 +267,25 @@ def get_registry() -> ParserRegistry:
     """Get the default parser registry."""
     global _default_registry
     if _default_registry is None:
-        _default_registry = ParserRegistry()
+        parser_configs = None
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            parser_configs = {
+                "text": config.text,
+                "markdown": config.markdown,
+                "pdf": config.pdf,
+                "html": config.html,
+                "word": config.markdown,
+                "legacy_doc": config.markdown,
+                "powerpoint": config.markdown,
+                "excel": config.markdown,
+                "epub": config.markdown,
+            }
+        except Exception:
+            parser_configs = None
+        _default_registry = ParserRegistry(parser_configs=parser_configs)
     return _default_registry
 
 

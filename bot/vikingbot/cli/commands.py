@@ -4,10 +4,12 @@ import asyncio
 import json
 import os
 import select
+import socket
 import sys
 import time
 import warnings
 from pathlib import Path
+from typing import Optional
 
 import typer
 from loguru import logger
@@ -25,7 +27,7 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.manager import ChannelManager
 from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import SessionKey, requires_gateway_token
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
@@ -82,6 +84,38 @@ def _init_bot_data(config):
     """Initialize bot data directory and set global paths."""
     set_bot_data_path(config.bot_data_path)
 
+
+def _abort_if_port_in_use(port: int, label: str) -> None:
+    """Exit with a clear message if anything is already listening on ``port``.
+
+    Without this check, a stale process holding the port keeps serving
+    traffic while a freshly-started gateway silently fails to bind — the
+    operator believes they upgraded but the old (potentially unpatched)
+    binary is still answering requests.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            in_use = True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            in_use = False
+    if in_use:
+        print(
+            f"Error: {label} port {port} is already in use.\n"
+            f"  A previous process is still bound — refusing to start a duplicate.\n"
+            f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
+            f"  Kill it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _get_gateway_token(config) -> str:
+    gateway = getattr(config, "gateway", None)
+    if gateway is None:
+        return ""
+    return getattr(gateway, "token", "") or ""
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -236,14 +270,8 @@ def _make_provider(config, langfuse_client: None = None):
 
 @app.command()
 def gateway(
-    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
-    # console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
-    enable_console: bool = typer.Option(
-        True, "--console/--no-console", help="Enable console web UI"
-    ),
-    agent: bool = typer.Option(
-        True, "--agent/--no-agent", help="Enable agent loop for OpenAPI/chat"
-    ),
+    port: Optional[int] = typer.Option(None, "--port", "-p", help="Gateway port"),
+    host: Optional[str] = typer.Option(None, "--host", help="Gateway host"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config_path: str = typer.Option(None, "--config", "-c", help="ov.conf path"),
 ):
@@ -257,6 +285,19 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
+    effective_host = host if host is not None else config.gateway.host
+    effective_port = port if port is not None else config.gateway.port
+    gateway_token = _get_gateway_token(config)
+    if requires_gateway_token(effective_host, gateway_token):
+        print(
+            "SECURITY: bot.gateway.token is required when gateway.host is non-localhost.\n"
+            "Set bot.gateway.token in ov.conf, or bind gateway.host to 127.0.0.1/localhost.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    config.gateway.host = effective_host
+    config.gateway.port = effective_port
+    _abort_if_port_in_use(effective_port, "vikingbot gateway")
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)
 
@@ -271,7 +312,11 @@ def gateway(
 
     cron = prepare_cron(bus)
     channels = prepare_channel(
-        config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port
+        config,
+        bus,
+        fastapi_app=fastapi_app,
+        enable_openapi=True,
+        openapi_port=effective_port,
     )
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
@@ -282,18 +327,13 @@ def gateway(
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(
             fastapi_app,
-            host="0.0.0.0",
-            port=port,
+            host=effective_host,
+            port=effective_port,
             log_level="info",
         )
         server = uvicorn.Server(config_uvicorn)
 
-        tasks = []
-        tasks.append(cron.start())
-        tasks.append(heartbeat.start())
-        tasks.append(channels.start_all())
-        tasks.append(agent_loop.run())
-        tasks.append(server.serve())  # Start HTTP server
+        tasks = [cron.start(), heartbeat.start(), channels.start_all(), agent_loop.run(), server.serve()]
         # if enable_console:
         #     tasks.append(start_console(console_port))
 
@@ -437,8 +477,6 @@ def prepare_channel(
 
         openapi_config = OpenAPIChannelConfig(
             enabled=True,
-            port=openapi_port,
-            api_key="",  # No auth required by default
         )
         openapi_channel = OpenAPIChannel(
             openapi_config,
@@ -530,6 +568,7 @@ def prepare_agent_channel(
     logs: bool,
     eval: bool = False,
     sender: str | None = None,
+    memory_user: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -538,7 +577,7 @@ def prepare_agent_channel(
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig()
+        channel_config = SingleTurnChannelConfig(memory_user=memory_user)
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -552,7 +591,7 @@ def prepare_agent_channel(
         channels.add_channel(channel)
     else:
         # Interactive mode - use ChatChannel with thinking display
-        channel_config = ChatChannelConfig()
+        channel_config = ChatChannelConfig(memory_user=memory_user)
         channel = ChatChannel(
             channel_config,
             bus,
@@ -586,6 +625,9 @@ def chat(
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
     ),
+    memory_user: list[str] = typer.Option(
+        None, "--memory-user", help="User ID for memory retrieval (can be repeated)"
+    ),
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -618,7 +660,7 @@ def chat(
     if session_id is None:
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender, memory_user)
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
     )

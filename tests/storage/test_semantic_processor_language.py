@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.prompts import render_prompt
-from openviking.session.memory.utils.language import _detect_language_from_text
+from openviking.session.memory.utils.language import (
+    _detect_language_from_text,
+    resolve_output_language,
+    resolve_output_language_from_conversation,
+)
 
 
 class TestLanguageDetection:
@@ -317,3 +321,52 @@ class TestGenerateTextSummaryOutputLanguage:
                 assert _verify_content_language(result["summary"], expected_lang), (
                     f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
                 )
+
+
+class TestOutputLanguageOverride:
+    """Config-level `output_language_override` bypasses content-based detection."""
+
+    def _make_config(self, override: str = "", fallback: str = "en"):
+        config = MagicMock()
+        config.output_language_override = override
+        config.language_fallback = fallback
+        return config
+
+    def test_override_unset_detects_from_content(self):
+        config = self._make_config(override="")
+        result = resolve_output_language("これは日本語のテキストです", config=config)
+        assert result == "ja"
+
+    def test_override_unset_uses_fallback_for_latin_text(self):
+        config = self._make_config(override="", fallback="en")
+        result = resolve_output_language(
+            "Plain English text with no special scripts", config=config
+        )
+        assert result == "en"
+
+    def test_override_set_bypasses_detection(self):
+        config = self._make_config(override="en")
+        result = resolve_output_language("これは日本語のテキストです", config=config)
+        assert result == "en"
+
+    def test_override_set_wins_over_fallback(self):
+        config = self._make_config(override="zh-CN", fallback="en")
+        result = resolve_output_language("Plain English text", config=config)
+        assert result == "zh-CN"
+
+    def test_override_whitespace_treated_as_unset(self):
+        config = self._make_config(override="   ")
+        result = resolve_output_language("これは日本語のテキストです", config=config)
+        assert result == "ja"
+
+    def test_conversation_override_set_bypasses_detection(self):
+        config = self._make_config(override="en")
+        conversation = "[user]: これは日本語のメッセージです\n[assistant]: reply"
+        result = resolve_output_language_from_conversation(conversation, config=config)
+        assert result == "en"
+
+    def test_conversation_override_unset_detects_from_user_content(self):
+        config = self._make_config(override="")
+        conversation = "[user]: これは日本語のメッセージです\n[assistant]: reply"
+        result = resolve_output_language_from_conversation(conversation, config=config)
+        assert result == "ja"

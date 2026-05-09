@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（resources、user、agent、session、queue）
+- **scope**: 顶级命名空间（`resources`、`user`、`agent`、`session`；`temp` 和 `queue` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
@@ -22,6 +22,10 @@ viking://{scope}/{path}
 | **session** | 会话级数据 | 会话生命周期 | 当前会话 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
+
+公开 API 和 CLI 的文件系统/内容操作只接受公开作用域：
+`resources`、`user`、`agent`、`session`，以及根 URI `viking://`。
+`temp` 和 `queue` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
 
@@ -94,6 +98,10 @@ viking://agent/memories/patterns/             # 学习的模式
 viking://agent/instructions/                  # Agent 指令
 ```
 
+上面的 `viking://user/...` 和 `viking://agent/...` 短路径会按当前请求身份解析。
+OpenViking 会在存储和检索前将它们展开为显式命名空间路径，例如
+`viking://user/{user_id}/...` 和 `viking://agent/{agent_id}/...`。
+
 ### 会话数据
 
 ```
@@ -101,6 +109,81 @@ viking://session/{session_id}/                # 会话根目录
 viking://session/{session_id}/messages/       # 会话消息
 viking://session/{session_id}/tools/          # 工具执行
 viking://session/{session_id}/history/        # 归档历史
+```
+
+## 路径变量
+
+Viking URI 支持路径变量用于动态路径生成。这对于按时间序列组织数据（如邮件、日志、日报等）特别有用。
+
+### 变量语法
+
+```
+{namespace:key}
+```
+
+- **namespace**: 变量提供者命名空间（如 `calendar`、`env`、`user`）
+- **key**: 命名空间内的变量名
+
+### 日历变量
+
+`calendar` 命名空间提供日期相关变量：
+
+| 变量 | 说明 | 示例（2026-05-07） |
+|------|------|----------------------|
+| `{calendar:today}` | 完整日期路径 | `2026/05/07` |
+| `{calendar:yesterday}` | 昨天的日期路径 | `2026/05/06` |
+| `{calendar:tomorrow}` | 明天的日期路径 | `2026/05/08` |
+| `{calendar:year}` | 年份 | `2026` |
+| `{calendar:month}` | 月份（带前导零） | `05` |
+| `{calendar:day}` | 日期（带前导零） | `07` |
+| `{calendar:ym}` | 年/月 | `2026/05` |
+| `{calendar:quarter}` | 季度（Q1-Q4） | `Q2` |
+| `{calendar:yq}` | 年/季度 | `2026/Q2` |
+| `{calendar:week}` | ISO 周数（带前导零） | `18` |
+| `{calendar:yw}` | 年/ISO 周 | `2026/w18` |
+
+### 使用示例
+
+```python
+# 按日期组织邮件
+viking://resources/emails/{calendar:today}/inbox
+# 渲染为：viking://resources/emails/2026/05/07/inbox
+
+# 查看昨天的日志
+viking://resources/logs/{calendar:yesterday}/app.log
+# 渲染为：viking://resources/logs/2026/05/06/app.log
+
+# 预上传明天的任务
+viking://resources/tasks/{calendar:tomorrow}/todo.md
+# 渲染为：viking://resources/tasks/2026/05/08/todo.md
+
+# 月度日志
+viking://resources/logs/{calendar:year}/{calendar:month}/app.log
+# 渲染为：viking://resources/logs/2026/05/app.log
+
+# 每日快照
+viking://resources/snapshots/{calendar:today}/
+# 渲染为：viking://resources/snapshots/2026/05/07/
+```
+
+### 解析过程
+
+路径变量在 API 执行时**服务器端**进行解析。CLI/SDK 原样传递 URI 模板，服务器根据当前上下文（时间、认证用户等）渲染为具体路径。
+
+### CLI 使用
+
+```bash
+# 添加今天的邮件 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+
+# 读取昨天的日志
+ov read "viking://resources/logs/{calendar:yesterday}/app.log"
+
+# 准备明天的任务
+ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "规划一天"
+
+# 上传月度报告 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf
 ```
 
 ## 目录结构
@@ -120,11 +203,16 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-├── agent/{agent_space}/          # agent_space 由 memory.agent_scope_mode 决定
+├── agent/{agent_id}/             # isolate_agent_scope_by_user = false 时的 agent 根目录
 │   ├── skills/                   # 技能定义
 │   ├── memories/
 │   │   ├── cases/
 │   │   └── patterns/
+│   └── instructions/
+│
+├── agent/{agent_id}/user/{user_id}/   # isolate_agent_scope_by_user = true 时的 agent 根目录
+│   ├── skills/
+│   ├── memories/
 │   └── instructions/
 │
 └── session/{session_id}/
@@ -133,10 +221,12 @@ viking://
     └── history/
 ```
 
-其中 `agent_space` 的计算方式取决于 `memory.agent_scope_mode`：
+其中 agent 命名空间形状由 account 级 namespace policy 决定：
 
-- `user+agent`（默认）：`agent_space = md5(f"{user_id}:{agent_id}")[:12]`
-- `agent`：`agent_space = md5(agent_id)[:12]`
+- `isolate_agent_scope_by_user = false`：`viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true`：`viking://agent/{agent_id}/user/{user_id}/...`
+
+`memory.agent_scope_mode` 已废弃且被忽略。
 
 ## URI 操作
 

@@ -213,9 +213,11 @@ vikingbot gateway
       "enabled": true,
       "appId": "cli_xxx",
       "appSecret": "xxx",
+      "botName": "",
       "encryptKey": "",
       "verificationToken": "",
-      "allowFrom": []
+      "allowFrom": [],
+      "threadRequireMention": true
     }
   ]
 }
@@ -223,6 +225,8 @@ vikingbot gateway
 
 > 长连接模式下，`encryptKey` 和 `verificationToken` 是可选的。
 > `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
+> `botName`：用于在传给模型的群聊上下文中把 `@<open_id>` 提及替换为机器人名称，以及标注机器人自身发出的消息；留空则回退为 `"Bot"`。
+> `threadRequireMention`：群聊是否需要 `@` 机器人才响应。默认 `true` —— 普通群和话题群的所有消息都需要 `@`；设为 `false` 时，普通群无需 `@`，话题群仅首条消息无需 `@`，非 `DEBUG` 模式下后续回复仍需 `@`。
 
 **3. 运行**
 

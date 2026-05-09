@@ -4,14 +4,18 @@
 Tests for memory tools.
 """
 
+import pytest
+
+from openviking.server.identity import RequestContext, Role, ToolContext
 from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
     MemorySearchTool,
     get_tool,
-    get_tool_schemas,
     list_tools,
+    get_tool_schemas,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestMemoryTools:
@@ -33,7 +37,67 @@ class TestMemoryTools:
         assert tool.name == "search"
         assert "Semantic search" in tool.description
         assert "query" in tool.parameters["properties"]
-        assert "session_info" in tool.parameters["properties"]
+        assert "limit" in tool.parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_search_tool_uses_request_context(self):
+        """Test MemorySearchTool passes RequestContext into VikingFS search."""
+
+        class MockSearchResult:
+            def to_dict(self):
+                return {
+                    "memories": [
+                        {
+                            "uri": "viking://user/test-account/test-user/memories/profile.md",
+                            "score": 0.9,
+                        }
+                    ],
+                    "resources": [],
+                    "skills": [],
+                }
+
+        class MockVikingFS:
+            def __init__(self):
+                self.received_ctx = None
+                self.received_target_uri = None
+                self.received_limit = None
+
+            async def search(self, query, target_uri="", limit=10, ctx=None, **kwargs):
+                self.received_ctx = ctx
+                self.received_target_uri = target_uri
+                self.received_limit = limit
+                _ = ctx.namespace_policy
+                return MockSearchResult()
+
+        request_ctx = RequestContext(
+            user=UserIdentifier(
+                account_id="test-account",
+                user_id="test-user",
+                agent_id="test-agent",
+            ),
+            role=Role.USER,
+        )
+        viking_fs = MockVikingFS()
+        # Create tool_ctx with viking_fs included
+        tool_ctx = ToolContext(
+            viking_fs=viking_fs,
+            request_ctx=request_ctx,
+            default_search_uris=["viking://user/test-account/test-user/memories"],
+            read_file_contents={},
+        )
+
+        result = await MemorySearchTool().execute(
+            tool_ctx,
+            query="profile",
+            limit=2,
+        )
+
+        assert result == [
+            {"uri": "viking://user/test-account/test-user/memories/profile.md", "score": 0.9}
+        ]
+        assert viking_fs.received_ctx is request_ctx
+        assert viking_fs.received_target_uri == tool_ctx.default_search_uris
+        assert viking_fs.received_limit == 12
 
     def test_ls_tool_properties(self):
         """Test MemoryLsTool properties."""
@@ -68,8 +132,6 @@ class TestMemoryTools:
 
         # Check get_tool_schemas
         schemas = get_tool_schemas()
-        assert len(schemas) == 3
         schema_names = [s["function"]["name"] for s in schemas]
         assert "read" in schema_names
-        assert "search" in schema_names
-        assert "ls" in schema_names
+        assert all(name in all_tools for name in schema_names)

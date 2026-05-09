@@ -10,12 +10,20 @@ This module defines the preset directory structure that is created on initializa
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.context import Context, Vectorize
+from openviking.core.namespace import (
+    agent_space_fragment,
+    canonical_agent_root,
+    canonical_user_root,
+    context_type_for_uri,
+    user_space_fragment,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
+    from openviking.storage.viking_fs import VikingFS
 
 
 @dataclass
@@ -72,6 +80,11 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                     ),
                 ],
             ),
+            DirectoryDefinition(
+                path="privacy",
+                abstract="User privacy config root. Stores user-scoped sensitive configuration snapshots by category and target key.",
+                overview="Use this directory to access privacy-managed configuration values such as skill secrets. Concrete category and target-key subdirectories are created lazily by the privacy config service.",
+            ),
         ],
     ),
     "agent": DirectoryDefinition(
@@ -82,22 +95,21 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         children=[
             DirectoryDefinition(
                 path="memories",
-                abstract="Agent's long-term memory storage. Contains cases and patterns, managed hierarchically by type.",
+                abstract="Agent's long-term memory storage. Contains trajectories and experiences, managed hierarchically by type.",
                 overview="Use this directory to access Agent's learning memories. Contains two main categories: "
-                "1) cases-specific cases, 2) patterns-reusable patterns.",
+                "1) trajectories-task execution records, 2) experiences-generalized lessons from trajectories.",
                 children=[
                     DirectoryDefinition(
-                        path="cases",
-                        abstract="Agent's case records. Stores specific problems and solutions, new problems and resolution processes encountered in each interaction.",
-                        overview="Access cases when encountering similar problems, reference historical solutions. "
-                        "Cases are records of specific conversations, each independent and not updated.",
+                        path="trajectories",
+                        abstract="Agent's execution trajectory records. Stores end-to-end task execution traces from each interaction, each trajectory is independent and not updated.",
+                        overview="Access when reviewing how the agent handled past tasks or diagnosing execution history. "
+                        "Trajectories are records of specific task executions, each independent and not updated once created.",
                     ),
                     DirectoryDefinition(
-                        path="patterns",
-                        abstract="Agent's effective patterns. Stores reusable processes and best practices distilled from multiple interactions, "
-                        "validated general solutions.",
-                        overview="Access patterns when executing tasks requiring strategy selection or process determination. "
-                        "Patterns are highly distilled experiences, each independent and not updated; create new pattern if modification needed.",
+                        path="experiences",
+                        abstract="Agent's generalized experience memories. Reusable insights and lessons distilled from execution trajectories, updated as new evidence accumulates.",
+                        overview="Access when the agent encounters recurring situations or needs guidance from past lessons. "
+                        "Experiences are distilled from trajectories and updated incrementally as more supporting evidence accumulates.",
                     ),
                 ],
             ),
@@ -124,27 +136,23 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
 }
 
 
-def get_context_type_for_uri(uri: str) -> str:
-    """Determine context_type based on URI."""
-    if "/memories" in uri:
-        return ContextType.MEMORY.value
-    elif "/resources" in uri:
-        return ContextType.RESOURCE.value
-    elif "/skills" in uri:
-        return ContextType.SKILL.value
-    elif uri.startswith("viking://session"):
-        return ContextType.MEMORY.value
-    return ContextType.RESOURCE.value
-
-
 class DirectoryInitializer:
     """Initialize preset directory structure."""
 
     def __init__(
         self,
         vikingdb: "VikingDBManager",
+        viking_fs: Optional["VikingFS"] = None,
     ):
         self.vikingdb = vikingdb
+        self._viking_fs = viking_fs
+
+    def _get_viking_fs(self) -> "VikingFS":
+        if self._viking_fs is not None:
+            return self._viking_fs
+        from openviking.storage.viking_fs import get_viking_fs
+
+        return get_viking_fs()
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared scope roots."""
@@ -172,11 +180,16 @@ class DirectoryInitializer:
         """Initialize user-space tree lazily for the current user."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
-        user_space_root = f"viking://user/{ctx.user.user_space_name()}"
+        user_space_root = canonical_user_root(ctx)
         user_tree = PRESET_DIRECTORIES["user"]
+        parent_uri = "viking://user"
+        if ctx.namespace_policy.isolate_user_scope_by_agent:
+            container_uri = f"viking://user/{ctx.user.user_id}"
+            await self._ensure_container_directory(container_uri, parent_uri=parent_uri, ctx=ctx)
+            parent_uri = container_uri
         created = await self._ensure_directory(
             uri=user_space_root,
-            parent_uri="viking://user",
+            parent_uri=parent_uri,
             defn=user_tree,
             scope="user",
             ctx=ctx,
@@ -191,11 +204,16 @@ class DirectoryInitializer:
         """Initialize agent-space tree lazily for the current user+agent."""
         if "agent" not in PRESET_DIRECTORIES:
             return 0
-        agent_space_root = f"viking://agent/{ctx.user.agent_space_name()}"
+        agent_space_root = canonical_agent_root(ctx)
         agent_tree = PRESET_DIRECTORIES["agent"]
+        parent_uri = "viking://agent"
+        if ctx.namespace_policy.isolate_agent_scope_by_user:
+            container_uri = f"viking://agent/{ctx.user.agent_id}"
+            await self._ensure_container_directory(container_uri, parent_uri=parent_uri, ctx=ctx)
+            parent_uri = container_uri
         created = await self._ensure_directory(
             uri=agent_space_root,
-            parent_uri="viking://agent",
+            parent_uri=parent_uri,
             defn=agent_tree,
             scope="agent",
             ctx=ctx,
@@ -206,6 +224,18 @@ class DirectoryInitializer:
         )
 
         return count
+
+    async def _ensure_container_directory(
+        self,
+        uri: str,
+        parent_uri: Optional[str],
+        ctx: RequestContext,
+    ) -> None:
+        """Ensure an intermediate namespace container exists without seeding vectors."""
+        try:
+            await self._get_viking_fs().mkdir(uri, exist_ok=True, ctx=ctx)
+        except Exception:
+            pass
 
     async def _ensure_directory(
         self,
@@ -267,7 +297,7 @@ class DirectoryInitializer:
                 uri=uri,
                 parent_uri=parent_uri,
                 is_leaf=False,
-                context_type=get_context_type_for_uri(uri),
+                context_type=context_type_for_uri(uri),
                 abstract=defn.abstract,
                 level=level,
                 user=ctx.user,
@@ -282,17 +312,15 @@ class DirectoryInitializer:
     @staticmethod
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:
         if scope in {"user", "session"}:
-            return ctx.user.user_space_name()
+            return user_space_fragment(ctx)
         if scope == "agent":
-            return ctx.user.agent_space_name()
+            return agent_space_fragment(ctx)
         return ""
 
     async def _check_agfs_files_exist(self, uri: str, ctx: RequestContext) -> bool:
         """Check if L0/L1 files exist in AGFS."""
-        from openviking.storage.viking_fs import get_viking_fs
-
         try:
-            viking_fs = get_viking_fs()
+            viking_fs = self._get_viking_fs()
             await viking_fs.abstract(uri, ctx=ctx)
             return True
         except Exception:
@@ -330,9 +358,7 @@ class DirectoryInitializer:
         self, uri: str, abstract: str, overview: str, ctx: RequestContext
     ) -> None:
         """Create L0/L1 file structure for directory in AGFS."""
-        from openviking.storage.viking_fs import get_viking_fs
-
-        await get_viking_fs().write_context(
+        await self._get_viking_fs().write_context(
             uri=uri,
             abstract=abstract,
             overview=overview,

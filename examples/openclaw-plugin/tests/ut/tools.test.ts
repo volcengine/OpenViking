@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import contextEnginePlugin, {
   parseOvImportCommandArgs,
-  parseOvSearchCommandArgs,
+  parseMemorySearchCommandArgs,
   tokenizeCommandArgs,
 } from "../../index.js";
 import type { FindResultItem } from "../../client.js";
@@ -84,7 +84,6 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
-      ingestReplyAssist: false,
     },
     logger: {
       info: vi.fn(),
@@ -182,6 +181,113 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
   });
+
+  it("uses requesterSenderId to populate role_id for user writes", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: false,
+          memories_extracted: { core: 1 },
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_store");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
+    expect(body.role_id).toBe("wx_user-01_abc");
+  });
+
+  it("uses a temporary session by default instead of the current tool session", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(String(messageCall?.[0])).toContain("/api/v1/sessions/memory-store-");
+  });
+
+  it("normalizes explicit memory_store sessionId without using current sessionKey", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    await tool.execute("tc-memory-store", {
+      text: "hello from tool",
+      sessionId: "C:\\Users\\test",
+    });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(String(messageCall?.[0])).not.toContain("runtime-session");
+    expect(String(messageCall?.[0])).not.toContain("agent%3Amain%3Amain");
+    expect(String(messageCall?.[0])).toMatch(/\/api\/v1\/sessions\/[a-f0-9]{64}\/messages$/);
+  });
 });
 
 describe("Tool: memory_forget (behavioral)", () => {
@@ -229,7 +335,7 @@ describe("Tool: ov_archive_expand (behavioral)", () => {
   });
 });
 
-describe("Tool: ov_import and ov_search (registration)", () => {
+describe("Tool: ov_import and memory_search (registration)", () => {
   it("registers unified import tool with expected parameters", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
@@ -245,10 +351,10 @@ describe("Tool: ov_import and ov_search (registration)", () => {
     expect(props).toHaveProperty("wait");
   });
 
-  it("registers search tool with natural-language trigger guidance", () => {
+  it("registers memory_search tool with natural-language trigger guidance", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const tool = tools.get("ov_search");
+    const tool = tools.get("memory_search");
     expect(tool).toBeDefined();
     expect(tool!.description).toContain("Search OpenViking resources and skills");
     expect(tool!.description).toContain("Use after importing");
@@ -259,7 +365,7 @@ describe("Tool: ov_import and ov_search (registration)", () => {
   });
 });
 
-describe("Tool: ov_search (behavioral)", () => {
+describe("Tool: memory_search (behavioral)", () => {
   it("searches resources and skills by default when no uri is provided", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
@@ -315,7 +421,7 @@ describe("Tool: ov_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("ov_search")!;
+    const search = tools.get("memory_search")!;
     const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("no");
@@ -370,7 +476,7 @@ describe("Tool: ov_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("ov_search")!;
+    const search = tools.get("memory_search")!;
     const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
 
     expect(result.details.resources).toHaveLength(1);
@@ -406,7 +512,7 @@ describe("Tool: ov_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("ov_search")!;
+    const search = tools.get("memory_search")!;
     const result = await search.execute("tc1", {
       query: "theme",
       uri: "viking://user/default/memories",
@@ -487,9 +593,9 @@ describe("OpenViking import command parsing", () => {
   });
 });
 
-describe("OpenViking search command parsing", () => {
-  it("parses ov-search query and flags", () => {
-    expect(parseOvSearchCommandArgs(`"OpenViking install" --uri viking://resources --limit=3`)).toMatchObject({
+describe("OpenViking memory_search command parsing", () => {
+  it("parses memory_search query and flags", () => {
+    expect(parseMemorySearchCommandArgs(`"OpenViking install" --uri viking://resources --limit=3`)).toMatchObject({
       query: "OpenViking install",
       uri: "viking://resources",
       limit: 3,
@@ -497,7 +603,7 @@ describe("OpenViking search command parsing", () => {
   });
 
   it("keeps multi-word unquoted slash-command queries intact", () => {
-    expect(parseOvSearchCommandArgs(`OpenViking install --uri viking://resources`)).toMatchObject({
+    expect(parseMemorySearchCommandArgs(`OpenViking install --uri viking://resources`)).toMatchObject({
       query: "OpenViking install",
       uri: "viking://resources",
     });
@@ -505,10 +611,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 6 tools", () => {
+  it("registers all 7 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(6);
+    expect(api.registerTool).toHaveBeenCalledTimes(7);
   });
 
   it("registers import and search commands", () => {
@@ -518,7 +624,7 @@ describe("Plugin registration", () => {
       acceptsArgs: true,
       description: "Import a resource or skill into OpenViking.",
     });
-    expect(commands.get("ov-search")).toMatchObject({
+    expect(commands.get("memory-search")).toMatchObject({
       acceptsArgs: true,
       description: "Search OpenViking resources and skills.",
     });
@@ -531,12 +637,12 @@ describe("Plugin registration", () => {
       args: "",
       commandBody: "/ov-import",
     });
-    const search = await commands.get("ov-search")!.handler({
+    const search = await commands.get("memory-search")!.handler({
       args: "",
-      commandBody: "/ov-search",
+      commandBody: "/memory-search",
     });
     expect(resource.text).toContain("Usage: /ov-import");
-    expect(search.text).toContain("Usage: /ov-search");
+    expect(search.text).toContain("Usage: /memory-search");
   });
 
   it("search command propagates agent identity when command ctx includes it", async () => {
@@ -551,9 +657,9 @@ describe("Plugin registration", () => {
     const { commands, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
 
-    await commands.get("ov-search")!.handler({
+    await commands.get("memory-search")!.handler({
       args: "test query --uri viking://resources",
-      commandBody: "/ov-search",
+      commandBody: "/memory-search",
       agentId: "worker",
       sessionId: "session-1",
       sessionKey: "agent:worker:session-1",
@@ -562,6 +668,66 @@ describe("Plugin registration", () => {
     const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("memory-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/memory-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("import tool propagates configured tenant headers for resource imports", async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ root_uri: "viking://resources/shared-docs", status: "success" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    const tool = tools.get("ov_import")!;
+    await tool.execute("tc-import", {
+      kind: "resource",
+      source: "https://example.com/docs",
+      to: "viking://resources/shared-docs",
+      wait: true,
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/resources")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
   });
 
   it("slash commands honor bypassSessionPatterns", async () => {
@@ -575,9 +741,9 @@ describe("Plugin registration", () => {
     };
     contextEnginePlugin.register(api as any);
 
-    const search = await commands.get("ov-search")!.handler({
+    const search = await commands.get("memory-search")!.handler({
       args: "test query --uri viking://resources",
-      commandBody: "/ov-search",
+      commandBody: "/memory-search",
       sessionKey: "agent:bypass:session-1",
     });
 
@@ -602,16 +768,16 @@ describe("Plugin registration", () => {
     );
   });
 
-  it("registers hooks: session_start, session_end, before_prompt_build, agent_end, before_reset, after_compaction", () => {
+  it("registers hooks: session_start, session_end, before_reset, after_compaction", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
     const hookNames = api.on.mock.calls.map((c: unknown[]) => c[0]);
     expect(hookNames).toContain("session_start");
     expect(hookNames).toContain("session_end");
-    expect(hookNames).toContain("before_prompt_build");
-    expect(hookNames).toContain("agent_end");
     expect(hookNames).toContain("before_reset");
     expect(hookNames).toContain("after_compaction");
+    expect(hookNames).not.toContain("agent_end");
+    expect(hookNames).not.toContain("before_prompt_build");
   });
 
   it("plugin has correct metadata", () => {

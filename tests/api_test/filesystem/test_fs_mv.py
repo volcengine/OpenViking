@@ -5,8 +5,8 @@ import uuid
 class TestFsMv:
     def test_fs_mv(self, api_client):
         random_id = str(uuid.uuid4())[:8]
-        src_dir = f"/tmp/test-mv-src-{random_id}"
-        dst_dir = f"/tmp/test-mv-dst-{random_id}"
+        src_dir = f"viking://resources/test-mv-src-{random_id}"
+        dst_dir = f"viking://resources/test-mv-dst-{random_id}"
 
         try:
             response = api_client.fs_mkdir(src_dir)
@@ -31,3 +31,9 @@ class TestFsMv:
         except Exception as e:
             print(f"Error: {e}")
             raise
+        finally:
+            try:
+                api_client.fs_rm(dst_dir, recursive=True)
+                api_client.fs_rm(src_dir, recursive=True)
+            except Exception:
+                pass

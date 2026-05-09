@@ -1,0 +1,33 @@
+# OpenViking aggregated reverse proxy
+#
+# Port 1934 merges the API server (1933) and Console (8020) under one origin.
+# This block always serves plain HTTP — suitable for local dev, internal
+# networks, and as an upstream behind your own TLS-terminating proxy.
+#
+# To add public HTTPS, append a domain block below (Caddy auto-provisions
+# Let's Encrypt certs):
+#
+#   {$OPENVIKING_PUBLIC_BASE_URL} {
+#       @console path /console /console/*
+#       handle @console {
+#           reverse_proxy openviking:8020
+#       }
+#       handle {
+#           reverse_proxy openviking:1933
+#       }
+#       # Optional: pin ACME email
+#       # tls {$OV_ACME_EMAIL}
+#   }
+#
+# Then expose ports 80/443 in docker-compose.yml and set
+# OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com in .env.
+
+:1934 {
+	@console path /console /console/*
+	handle @console {
+		reverse_proxy openviking:8020
+	}
+	handle {
+		reverse_proxy openviking:1933
+	}
+}

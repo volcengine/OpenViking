@@ -3,17 +3,18 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query
-from pydantic import BaseModel, model_validator
+from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from pydantic import BaseModel, Field, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.responses import error_response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ class AddMessageRequest(BaseModel):
     """
 
     role: str
+    role_id: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -96,6 +98,13 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _request_auth_mode(request: Request) -> AuthMode:
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
 
 
 @router.post("")
@@ -151,8 +160,7 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
-    result["pending_tokens"] = pending_tokens
+    result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)
 
 
@@ -163,6 +171,13 @@ async def get_session_context(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get assembled session context."""
+    if token_budget < 0:
+        return error_response(
+            "INVALID_ARGUMENT",
+            "token_budget must be greater than or equal to 0",
+            details={"field": "token_budget", "value": token_budget},
+        )
+
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
@@ -203,9 +218,31 @@ async def delete_session(
     return Response(status="ok", result={"session_id": session_id})
 
 
+class CommitRequest(BaseModel):
+    """Commit request body.
+
+    WM v2: ``keep_recent_count`` allows the plugin to retain a tail of recent
+    messages in the live session after commit so the next turn still has
+    immediate context. Default 0 preserves the pre-v2 "archive everything"
+    behavior.
+    """
+
+    keep_recent_count: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "Number of most-recent messages to keep live after commit. "
+            "Plugin's afterTurn path typically passes its configured value "
+            "(default 10); compact path passes 0 to archive everything."
+        ),
+    )
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
+    body: CommitRequest = Body(default_factory=CommitRequest),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories).
@@ -215,7 +252,9 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    result = await service.sessions.commit_async(session_id, _ctx)
+    result = await service.sessions.commit_async(
+        session_id, _ctx, keep_recent_count=body.keep_recent_count
+    )
     return Response(status="ok", result=result).model_dump(exclude_none=True)
 
 
@@ -253,14 +292,34 @@ async def add_message(
     """
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=True)
+    role_id = _ctx.resolve_role_id(request.role, request.role_id)
 
     if request.parts is not None:
-        parts = [part_from_dict(p) for p in request.parts]
+        # Resolve path variables in URIs within parts
+        resolved_parts = []
+        for p in request.parts:
+            part_copy = dict(p)
+            # Resolve uri in context parts
+            if part_copy.get("type") == "context" and "uri" in part_copy:
+                part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+            # Resolve tool_uri and skill_uri in tool parts
+            if part_copy.get("type") == "tool":
+                if "tool_uri" in part_copy:
+                    part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
+                if "skill_uri" in part_copy:
+                    part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+            resolved_parts.append(part_copy)
+        parts = [part_from_dict(p) for p in resolved_parts]
     else:
         parts = [TextPart(text=request.content or "")]
 
     # created_at 直接传递给 session (ISO string)
-    session.add_message(request.role, parts, created_at=request.created_at)
+    session.add_message(
+        request.role,
+        parts,
+        role_id=role_id,
+        created_at=request.created_at,
+    )
     return Response(
         status="ok",
         result={
@@ -280,7 +339,19 @@ async def record_used(
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
-    session.used(contexts=request.contexts, skill=request.skill)
+
+    # Resolve path variables in contexts
+    resolved_contexts = None
+    if request.contexts is not None:
+        resolved_contexts = [resolve_path_variables(uri) for uri in request.contexts]
+
+    # Resolve path variables in skill URI if present
+    resolved_skill = request.skill
+    if resolved_skill is not None and "uri" in resolved_skill:
+        resolved_skill = dict(resolved_skill)
+        resolved_skill["uri"] = resolve_path_variables(resolved_skill["uri"])
+
+    session.used(contexts=resolved_contexts, skill=resolved_skill)
     return Response(
         status="ok",
         result={

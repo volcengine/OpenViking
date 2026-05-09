@@ -57,10 +57,11 @@ pub async fn tree(
 pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
+    description: Option<&str>,
     _output_format: OutputFormat,
     _compact: bool,
 ) -> Result<()> {
-    client.mkdir(uri).await?;
+    client.mkdir(uri, description).await?;
     println!("Directory created: {}", uri);
     Ok(())
 }

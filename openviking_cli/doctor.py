@@ -20,6 +20,7 @@ from typing import Optional
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 # ANSI helpers (disabled when stdout is not a terminal)
 _USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
@@ -53,7 +54,7 @@ def _find_config() -> Optional[Path]:
 def _load_config_json(config_path: Path) -> Optional[dict]:
     """Parse ov.conf as JSON. Returns None if the file is unreadable or not valid JSON."""
     try:
-        raw = config_path.read_text(encoding="utf-8")
+        raw = config_path.read_text(encoding="utf-8-sig")
         raw = os.path.expandvars(raw)
         return json.loads(raw)
     except (OSError, json.JSONDecodeError):
@@ -71,13 +72,13 @@ def check_config() -> tuple[bool, str, Optional[str]]:
         )
 
     try:
-        raw = config_path.read_text(encoding="utf-8")
+        raw = config_path.read_text(encoding="utf-8-sig")
         raw = os.path.expandvars(raw)
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in ("embedding",) if key not in data]
+    missing = [key for key in () if key not in data]
     if missing:
         return (
             False,
@@ -152,13 +153,54 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     if data is None:
         return False, "Cannot check (config unreadable)", None
 
-    embedding = data.get("embedding", {})
-    dense = embedding.get("dense", {})
-    provider = dense.get("provider", "unknown")
-    model = dense.get("model", "unknown")
+    embedding = data.get("embedding", {}) or {}
+    dense = embedding.get("dense", {}) or {}
+    provider = dense.get("provider", "local")
+    model = dense.get("model", "bge-small-zh-v1.5-f16")
 
-    if provider == "unknown":
-        return False, "No embedding provider configured", "Add embedding.dense section to ov.conf"
+    if provider == "local":
+        from openviking.models.embedder.local_embedders import (
+            get_local_model_cache_path,
+            get_local_model_spec,
+        )
+
+        try:
+            get_local_model_spec(model)
+        except ValueError as exc:
+            return (
+                False,
+                f"{provider}/{model} (unsupported local model)",
+                str(exc),
+            )
+
+        try:
+            importlib.import_module("llama_cpp")
+        except ImportError:
+            return (
+                False,
+                f"{provider}/{model} (missing llama-cpp-python)",
+                'pip install "openviking[local-embed]"',
+            )
+
+        model_path = dense.get("model_path", "")
+        cache_dir = Path(dense.get("cache_dir", "~/.cache/openviking/models")).expanduser()
+        if model_path:
+            if not Path(model_path).expanduser().exists():
+                return (
+                    False,
+                    f"{provider}/{model} (model_path missing)",
+                    f"Download the GGUF model to {Path(model_path).expanduser()} or update embedding.dense.model_path",
+                )
+            return True, f"{provider}/{model} ({Path(model_path).expanduser()})", None
+
+        cached_file = get_local_model_cache_path(model, str(cache_dir))
+        if cached_file.exists():
+            return True, f"{provider}/{model} ({cached_file})", None
+        return (
+            True,
+            f"{provider}/{model} (will auto-download during startup initialization)",
+            None,
+        )
 
     # Ollama doesn't need an API key
     if provider == "ollama":
@@ -185,18 +227,43 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
     if data is None:
         return False, "Cannot check (config unreadable)", None
 
-    vlm = data.get("vlm", {})
-    provider = vlm.get("provider", "")
-    model = vlm.get("model", "")
+    raw_vlm = data.get("vlm", {})
+    normalized_vlm = VLMConfig.sync_provider_backend(dict(raw_vlm))
+    vlm = VLMConfig.model_construct(**normalized_vlm)
+    _, provider = vlm.get_provider_config()
+    model = vlm.model or ""
 
     if not provider:
         return False, "No VLM provider configured", "Add vlm section to ov.conf"
+
+    if provider == "openai-codex":
+        api_key = vlm._get_effective_api_key()
+        if api_key and not api_key.startswith("{"):
+            return True, f"openai-codex/{model} (explicit api_key)", None
+
+        importlib.import_module("openviking.models.vlm")
+        codex_auth = importlib.import_module("openviking.models.vlm.backends.codex_auth")
+
+        try:
+            creds = codex_auth.resolve_codex_runtime_credentials()
+            source = creds.get("source", "unknown")
+            return True, f"openai-codex/{model} (oauth via {source})", None
+        except Exception as exc:
+            status = codex_auth.get_codex_auth_status()
+            store_path = status.get("store_path") or "~/.openviking/codex_auth.json"
+            bootstrap_path = status.get("bootstrap_path") or "~/.codex/auth.json"
+            return (
+                False,
+                f"openai-codex/{model} ({exc})",
+                "Run `openviking-server init` and choose `OpenAI Codex` to create OV-owned auth state\n"
+                f"Or bootstrap once from {bootstrap_path} into {store_path}",
+            )
 
     # Ollama via LiteLLM doesn't need a real API key
     if provider == "litellm" and model.startswith("ollama/"):
         return True, f"{provider}/{model}", None
 
-    api_key = vlm.get("api_key", "")
+    api_key = vlm._get_effective_api_key()
     if not api_key or api_key.startswith("{"):
         return (
             False,
@@ -301,7 +368,7 @@ def run_doctor() -> int:
         try:
             ok, detail, fix = check_fn()
         except Exception as exc:
-            ok, detail, fix = False, f"Unexpected error: {exc}", None
+            ok, detail, fix = False, f"Unexpected error: {type(exc).__name__}: {exc}", None
 
         pad = " " * (max_label - len(label) + 1)
         if ok:

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for MiniMax provider support (MiniMax-M2.7, MiniMax-M2.7-highspeed)."""
 
-import pytest
+from urllib.parse import urlparse
 
-from vikingbot.providers.registry import find_by_model, find_by_name, PROVIDERS, ProviderSpec
+from vikingbot.providers.registry import ProviderSpec, find_by_model, find_by_name
 
 
 class TestMiniMaxRegistry:
@@ -50,7 +50,9 @@ class TestMiniMaxRegistry:
     def test_minimax_api_base_uses_international_domain(self):
         """Default API base must point to the international endpoint."""
         spec = find_by_name("minimax")
-        assert spec.default_api_base.startswith("https://api.minimax.io"), (
+        parsed = urlparse(spec.default_api_base)
+        assert parsed.scheme == "https"
+        assert parsed.hostname == "api.minimax.io", (
             "Default base URL must use international domain api.minimax.io, "
             "not the mainland China domain api.minimaxi.com"
         )

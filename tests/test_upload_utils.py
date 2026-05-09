@@ -189,6 +189,14 @@ class TestShouldSkipFile:
         assert skip is True
         assert ".jpg" in reason
 
+    def test_sqlite_extensions_are_ignored(self, tmp_path: Path) -> None:
+        for name in ["cache.sqlite", "cache.sqlite3"]:
+            f = tmp_path / name
+            f.write_bytes(b"SQLite format 3\x00")
+            skip, reason = should_skip_file(f)
+            assert skip is True
+            assert f.suffix in reason
+
     def test_large_file(self, tmp_path: Path) -> None:
         f = tmp_path / "big.txt"
         f.write_bytes(b"x" * 100)
@@ -366,6 +374,18 @@ class TestUploadDirectory:
         count, _ = await upload_directory(tmp_dir, "viking://temp/test", viking_fs, max_file_size=5)
         # Most files are > 5 bytes, so fewer uploads
         assert count < 4
+
+    @pytest.mark.asyncio
+    async def test_respects_gitignore(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
+        (tmp_path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+        (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
+        (tmp_path / "skip.tmp").write_text("no", encoding="utf-8")
+
+        count, _ = await upload_directory(tmp_path, "viking://temp/gi", viking_fs)
+
+        assert count == 1
+        assert "viking://temp/gi/keep.txt" in viking_fs.files
+        assert "viking://temp/gi/skip.tmp" not in viking_fs.files
 
 
 # ---------------------------------------------------------------------------

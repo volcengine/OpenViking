@@ -63,6 +63,7 @@ class _FakeProcessor:
     def __init__(self, viking_fs):
         self._fs = viking_fs
         self.summarized_files = []
+        self.sync_calls = []
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -94,6 +95,7 @@ class _FakeProcessor:
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lifecycle_lock_handle_id=""
     ):
+        self.sync_calls.append((root_uri, target_uri))
         root_uri = self._fs._norm(root_uri)
         target_uri = self._fs._norm(target_uri)
         for path, content in list(self._fs._file_contents.items()):
@@ -163,6 +165,50 @@ async def test_incremental_missing_summary_triggers_overview_regen(monkeypatch):
     assert len(processor.summarized_files) == first_run_calls
 
 
+@pytest.mark.asyncio
+async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://resources/root"
+    tree = {
+        root_uri: [
+            {"name": "a.txt", "isDir": False},
+            {"name": "b.txt", "isDir": False},
+        ],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "new content",
+            f"{root_uri}/b.txt": "unchanged",
+            f"{root_uri}/.overview.md": "FILES:\n- a.txt: old-a\n- b.txt: old-b",
+            f"{root_uri}/.abstract.md": "old-abstract",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [f"{root_uri}/a.txt"]},
+    )
+    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == [f"{root_uri}/a.txt"]
+    assert processor.sync_calls == []
+    overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
+    assert "- a.txt: summary" in overview
+    assert "- b.txt: old-b" in overview
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
-
