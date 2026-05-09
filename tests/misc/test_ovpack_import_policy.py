@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -143,6 +144,16 @@ def _write_ovpack(path: Path, entries: dict[str, str]) -> None:
             zf.writestr(name, content)
 
 
+def _content_sha256(entries: list[dict[str, object]]) -> str:
+    payload = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def test_import_scalar_overrides_ignore_runtime_fields():
     class FakeEmbeddingMsg:
         def __init__(self) -> None:
@@ -190,6 +201,13 @@ async def test_export_ovpack_writes_v2_manifest_without_derived_files(
     assert "demo/_._overview.md" not in names
     assert manifest["format_version"] == 2
     assert manifest["kind"] == "openviking.ovpack"
+    note_entry = next(entry for entry in manifest["entries"] if entry["path"] == "notes.txt")
+    note_sha256 = hashlib.sha256(b"hello").hexdigest()
+    assert note_entry["size"] == 5
+    assert note_entry["sha256"] == note_sha256
+    assert manifest["content_sha256"] == _content_sha256(
+        [{"path": "notes.txt", "size": 5, "sha256": note_sha256}]
+    )
     assert manifest["vectors"][""][0]["text"] == "root abstract"
     note_scalars = manifest["vectors"]["notes.txt"][0]["scalars"]
     assert note_scalars["type"] == "file"
@@ -251,6 +269,158 @@ async def test_import_legacy_ovpack_skips_derived_semantic_files(
 
     assert imported_uri == "viking://resources/demo"
     assert fake_fs.written_files == ["viking://resources/demo/notes.txt"]
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_manifest_file_hash_mismatch(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    expected_sha256 = hashlib.sha256(b"hello").hexdigest()
+    manifest = {
+        "kind": "openviking.ovpack",
+        "format_version": 2,
+        "root": {"name": "demo"},
+        "entries": [
+            {"path": "", "kind": "directory"},
+            {
+                "path": "notes.txt",
+                "kind": "file",
+                "size": 5,
+                "sha256": expected_sha256,
+            },
+        ],
+        "content_sha256": _content_sha256(
+            [{"path": "notes.txt", "size": 5, "sha256": expected_sha256}]
+        ),
+        "vectors": {},
+    }
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/": "",
+            "demo/_._ovpack_manifest.json": json.dumps(manifest),
+            "demo/notes.txt": "jello",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"sha256 does not match manifest"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_manifest_content_hash_mismatch(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    expected_sha256 = hashlib.sha256(b"hello").hexdigest()
+    manifest = {
+        "kind": "openviking.ovpack",
+        "format_version": 2,
+        "root": {"name": "demo"},
+        "entries": [
+            {"path": "", "kind": "directory"},
+            {
+                "path": "notes.txt",
+                "kind": "file",
+                "size": 5,
+                "sha256": expected_sha256,
+            },
+        ],
+        "content_sha256": "0" * 64,
+        "vectors": {},
+    }
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/": "",
+            "demo/_._ovpack_manifest.json": json.dumps(manifest),
+            "demo/notes.txt": "hello",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"content_sha256 mismatch"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_v2_manifest_without_content_hash(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    expected_sha256 = hashlib.sha256(b"hello").hexdigest()
+    manifest = {
+        "kind": "openviking.ovpack",
+        "format_version": 2,
+        "root": {"name": "demo"},
+        "entries": [
+            {"path": "", "kind": "directory"},
+            {
+                "path": "notes.txt",
+                "kind": "file",
+                "size": 5,
+                "sha256": expected_sha256,
+            },
+        ],
+        "vectors": {},
+    }
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/": "",
+            "demo/_._ovpack_manifest.json": json.dumps(manifest),
+            "demo/notes.txt": "hello",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"Missing ovpack manifest content_sha256"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_manifest_unexpected_file(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    expected_sha256 = hashlib.sha256(b"hello").hexdigest()
+    manifest = {
+        "kind": "openviking.ovpack",
+        "format_version": 2,
+        "root": {"name": "demo"},
+        "entries": [
+            {"path": "", "kind": "directory"},
+            {
+                "path": "notes.txt",
+                "kind": "file",
+                "size": 5,
+                "sha256": expected_sha256,
+            },
+        ],
+        "content_sha256": _content_sha256(
+            [{"path": "notes.txt", "size": 5, "sha256": expected_sha256}]
+        ),
+        "vectors": {},
+    }
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/": "",
+            "demo/_._ovpack_manifest.json": json.dumps(manifest),
+            "demo/notes.txt": "hello",
+            "demo/extra.txt": "unexpected",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"file entries do not match manifest"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert fake_fs.written_files == []
 
 
 @pytest.mark.asyncio

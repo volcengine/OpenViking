@@ -16,6 +16,11 @@ from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 
 
+def _allow_admin_api_in_dev_mode(client: httpx.AsyncClient) -> None:
+    # Admin routes require the app to have an API key manager, even in dev-mode tests.
+    client._transport.app.state.api_key_manager = object()
+
+
 async def test_add_skill_accepts_temp_uploaded_file(
     client: httpx.AsyncClient,
     upload_temp_dir,
@@ -125,6 +130,7 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
+    _allow_admin_api_in_dev_mode(client)
     ovpack_file = upload_temp_dir / "demo.ovpack"
     ovpack_file.write_bytes(_build_ovpack_bytes())
 
@@ -139,6 +145,40 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["uri"].startswith("viking://resources/imported/")
+
+
+async def test_import_ovpack_conflict_returns_structured_conflict(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    _allow_admin_api_in_dev_mode(client)
+    ovpack_file = upload_temp_dir / "demo_conflict.ovpack"
+    ovpack_file.write_bytes(_build_ovpack_bytes())
+
+    first = await client.post(
+        "/api/v1/pack/import",
+        json={
+            "temp_file_id": ovpack_file.name,
+            "parent": "viking://resources/imported",
+        },
+    )
+    assert first.status_code == 200
+
+    ovpack_file.write_bytes(_build_ovpack_bytes())
+    resp = await client.post(
+        "/api/v1/pack/import",
+        json={
+            "temp_file_id": ovpack_file.name,
+            "parent": "viking://resources/imported",
+        },
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "CONFLICT"
+    assert "Use on_conflict='overwrite'" in body["error"]["message"]
+    assert body["error"]["details"]["resource"] == "viking://resources/imported/pkg"
 
 
 async def test_import_ovpack_rejects_direct_file_path_field(client: httpx.AsyncClient):

@@ -986,8 +986,15 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 **处理流程**：
 1. 验证用户权限
 2. 遍历指定 URI 下的资源
-3. 打包成 zip 格式（.ovpack）
-4. 以文件流形式返回
+3. 写入内容文件和 OVPack manifest
+4. 打包成 zip 格式（.ovpack）
+5. 以文件流形式返回
+
+**格式说明**：
+- 导出的 ZIP 会包含 `<root>/_._ovpack_manifest.json`，这是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。
+- `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
+- 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
+- 原始 embedding 向量以及 `created_at`、`updated_at`、`active_count` 等运行态字段不会被导出。
 
 **代码入口**：
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP 路由
@@ -1059,8 +1066,9 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 **处理流程**：
 1. 验证用户权限
 2. 解析上传的 `.ovpack` 文件
-3. 导入资源到目标位置
-4. 可选地触发向量化
+3. 校验 manifest 元数据、路径、文件集合、文件大小和 checksum
+4. 应用 `on_conflict`
+5. 导入资源到目标位置，并重建向量
 
 **代码入口**：
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP 路由
@@ -1078,6 +1086,13 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 
 **权限要求**：ROOT 或 ADMIN
+
+**行为说明**：
+- 导入后总是在目标环境重建向量。API 已不再接受 `vectorize` 或 `force`。
+- `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
+- `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。
+- 带 manifest entries 的包如果缺少内容文件、混入额外文件、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
+- 没有 manifest 的旧包仍可导入，但没有 manifest checksum 校验。
 
 #### 3. 使用示例
 
@@ -1140,6 +1155,21 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+**冲突错误示例**
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "CONFLICT",
+    "message": "Resource already exists at viking://resources/imported/my-project. Use on_conflict='overwrite' to replace it.",
+    "details": {
+      "resource": "viking://resources/imported/my-project"
+    }
   }
 }
 ```

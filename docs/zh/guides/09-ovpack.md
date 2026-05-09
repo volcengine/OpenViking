@@ -99,13 +99,53 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 
 ## 格式说明
 
-OVPack v2 仍然是标准 ZIP 文件，并在 `<root>/_._ovpack_manifest.json` 中保存
-OpenViking manifest。manifest 记录 `format_version`、内容条目和可迁移的向量标量
-元数据。原始 embedding 向量以及 `created_at`、`updated_at`、`active_count`
-等运行态字段不会被导出；导入后会在目标环境重新向量化并生成运行态状态。
-旧版本没有 manifest 的 OVPack 仍可导入；带 manifest 的包会校验 `kind` 和
-`format_version`，高于当前支持版本的包会被拒绝。`.abstract.md`、`.overview.md`、
-`.relations.json` 等派生语义文件不会作为普通内容导入。
+OVPack v2 仍然是标准 ZIP 文件。每个包会在
+`<root>/_._ovpack_manifest.json` 中保存 OpenViking manifest；这是隐藏文件名
+`.ovpack_manifest.json` 在 ZIP 内的转义形式。
+
+manifest 会记录 `kind`、`format_version`、导出的 root、内容条目以及可迁移的向量
+标量元数据。`entries` 里的 `path` 是相对导出 root 的路径；空字符串 `""` 表示
+root 目录本身，例如 `my-project/`。
+
+例如，从 `viking://resources/demo/` 导出的包可以包含下面这样的 manifest：
+
+```json
+{
+  "kind": "openviking.ovpack",
+  "format_version": 2,
+  "root": {
+    "name": "demo",
+    "uri": "viking://resources/demo",
+    "scope": "resources"
+  },
+  "entries": [
+    {
+      "path": "",
+      "kind": "directory"
+    },
+    {
+      "path": "notes.txt",
+      "kind": "file",
+      "size": 5,
+      "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    }
+  ],
+  "content_sha256": "b2a6e9582119c7510d68e3446de3e71a486934bf450d68f65596259ed1cf7997",
+  "vectors": {}
+}
+```
+
+对于带 manifest entries 的包，导入会在写入资源前校验 ZIP 内文件集合、每个文件的
+`size`、每个文件的 `sha256`，以及整体 `content_sha256`。缺少文件、混入额外文件、
+或文件内容被修改，以及 v2 `content_sha256` 缺失/不匹配都会被拒绝。这个校验用于
+确认包内容完整性；如果 manifest 和内容都可以被同时重写，它并不等价于签名或身份认证。
+
+原始 embedding 向量不会被导出。`created_at`、`updated_at`、`active_count`
+等运行态字段也不会被导出；导入后会在目标环境重新向量化并生成运行态状态。
+旧版本没有 manifest 的 OVPack 仍可导入，但没有 manifest checksum 校验。带
+manifest 的包会校验 `kind` 和 `format_version`，高于当前支持版本的包会被拒绝。
+`.abstract.md`、`.overview.md`、`.relations.json` 等派生语义文件不会作为普通内容
+导入。
 
 ## 记忆导入导出
 

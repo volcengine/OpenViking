@@ -51,7 +51,7 @@ This is a sample markdown document for server testing.
 
 def _install_fake_embedder(monkeypatch):
     """Use an in-process fake embedder so server tests never hit external APIs."""
-    dimension = 2048
+    dimension = 1024
 
     class FakeEmbedder(DenseEmbedderBase):
         def __init__(self):
@@ -119,9 +119,15 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
     monkeypatch.setattr(
         "openviking.server.routers.resources.get_openviking_config",
         lambda: config,
+        raising=False,
     )
     monkeypatch.setattr(
         "openviking.server.routers.pack.get_openviking_config",
+        lambda: config,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "openviking.server.temp_upload_store.get_openviking_config",
         lambda: config,
     )
     return temp_dir

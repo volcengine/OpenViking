@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -12,7 +13,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -41,6 +42,7 @@ _PORTABLE_VECTOR_SCALAR_FIELDS = [
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _strip_uri_trailing_slash(uri: str) -> str:
@@ -64,6 +66,10 @@ def _rel_path_for_uri(root_uri: str, uri: str) -> str:
 
 def _leaf_name(uri_or_path: str) -> str:
     return uri_or_path.rstrip("/").split("/")[-1]
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _is_derived_rel_path(rel_path: str) -> bool:
@@ -385,6 +391,198 @@ def _manifest_scalar_overrides(
     return overrides
 
 
+def _normalize_sha256(value: Any, *, field: str, path: str | None = None) -> str:
+    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+        details = {"field": field}
+        if path is not None:
+            details["path"] = path
+        raise InvalidArgumentError(f"Invalid ovpack manifest {field}", details=details)
+    return value.lower()
+
+
+def _manifest_entries_by_path(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if not isinstance(manifest, dict) or "entries" not in manifest:
+        return {}
+
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        raise InvalidArgumentError("Invalid ovpack manifest: entries must be a list")
+
+    by_path: dict[str, dict[str, Any]] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise InvalidArgumentError(
+                "Invalid ovpack manifest entry",
+                details={"index": index},
+            )
+
+        rel_path = entry.get("path")
+        kind = entry.get("kind")
+        if not isinstance(rel_path, str):
+            raise InvalidArgumentError(
+                "Invalid ovpack manifest entry path",
+                details={"index": index},
+            )
+        if kind not in {"directory", "file"}:
+            raise InvalidArgumentError(
+                "Invalid ovpack manifest entry kind",
+                details={"path": rel_path, "kind": kind},
+            )
+        if rel_path in by_path:
+            raise InvalidArgumentError(
+                "Duplicate ovpack manifest entry",
+                details={"path": rel_path},
+            )
+        by_path[rel_path] = entry
+
+    return by_path
+
+
+def _manifest_format_version(manifest: dict[str, Any]) -> int:
+    try:
+        return int(manifest.get("format_version", OVPACK_FORMAT_VERSION))
+    except (TypeError, ValueError):
+        return OVPACK_FORMAT_VERSION
+
+
+def _manifest_content_sha256(file_entries_by_path: dict[str, dict[str, Any]]) -> str:
+    content_entries: list[dict[str, Any]] = []
+    for rel_path, entry in sorted(file_entries_by_path.items()):
+        size = entry.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise InvalidArgumentError(
+                "Invalid ovpack manifest file size",
+                details={"path": rel_path, "size": size},
+            )
+        content_entries.append(
+            {
+                "path": rel_path,
+                "size": size,
+                "sha256": _normalize_sha256(entry.get("sha256"), field="sha256", path=rel_path),
+            }
+        )
+
+    payload = json.dumps(
+        content_entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _sha256_hex(payload)
+
+
+def _zip_file_members_by_path(
+    infolist: list[zipfile.ZipInfo], base_name: str
+) -> dict[str, tuple[zipfile.ZipInfo, str]]:
+    files: dict[str, tuple[zipfile.ZipInfo, str]] = {}
+    for info in infolist:
+        zip_path = info.filename
+        if not zip_path:
+            continue
+        safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+        if _is_manifest_zip_path(safe_zip_path, base_name) or safe_zip_path.endswith("/"):
+            continue
+
+        rel_path = get_viking_rel_path_from_zip(safe_zip_path)
+        if rel_path in files:
+            raise InvalidArgumentError(
+                "Duplicate ovpack file entry",
+                details={"path": rel_path},
+            )
+        files[rel_path] = (info, safe_zip_path)
+    return files
+
+
+def _validate_manifest_content(
+    zf: zipfile.ZipFile,
+    manifest: dict[str, Any],
+    infolist: list[zipfile.ZipInfo],
+    base_name: str,
+) -> None:
+    if not manifest or "entries" not in manifest:
+        return
+
+    manifest_entries = _manifest_entries_by_path(manifest)
+    manifest_files = {
+        rel_path: entry
+        for rel_path, entry in manifest_entries.items()
+        if entry.get("kind") == "file"
+    }
+    zip_files = _zip_file_members_by_path(infolist, base_name)
+
+    missing_files = sorted(set(manifest_files) - set(zip_files))
+    unexpected_files = sorted(set(zip_files) - set(manifest_files))
+    if missing_files or unexpected_files:
+        raise InvalidArgumentError(
+            "ovpack file entries do not match manifest",
+            details={
+                "missing_files": missing_files,
+                "unexpected_files": unexpected_files,
+            },
+        )
+
+    expected_content_sha256 = manifest.get("content_sha256")
+    if expected_content_sha256 is None and _manifest_format_version(manifest) >= 2:
+        raise InvalidArgumentError(
+            "Missing ovpack manifest content_sha256",
+            details={"field": "content_sha256"},
+        )
+    if expected_content_sha256 is not None:
+        expected_content_sha256 = _normalize_sha256(expected_content_sha256, field="content_sha256")
+        actual_content_sha256 = _manifest_content_sha256(manifest_files)
+        if actual_content_sha256 != expected_content_sha256:
+            raise InvalidArgumentError(
+                "ovpack manifest content_sha256 mismatch",
+                details={
+                    "expected": expected_content_sha256,
+                    "actual": actual_content_sha256,
+                },
+            )
+
+    for rel_path, (_, safe_zip_path) in sorted(zip_files.items()):
+        entry = manifest_files[rel_path]
+        data = zf.read(safe_zip_path)
+
+        expected_size = entry.get("size")
+        if expected_size is not None:
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size < 0
+            ):
+                raise InvalidArgumentError(
+                    "Invalid ovpack manifest file size",
+                    details={"path": rel_path, "size": expected_size},
+                )
+            if len(data) != expected_size:
+                raise InvalidArgumentError(
+                    "ovpack file size does not match manifest",
+                    details={
+                        "path": rel_path,
+                        "expected": expected_size,
+                        "actual": len(data),
+                    },
+                )
+
+        expected_sha256 = entry.get("sha256")
+        if expected_sha256 is not None:
+            expected_sha256 = _normalize_sha256(
+                expected_sha256,
+                field="sha256",
+                path=rel_path,
+            )
+            actual_sha256 = _sha256_hex(data)
+            if actual_sha256 != expected_sha256:
+                raise InvalidArgumentError(
+                    "ovpack file sha256 does not match manifest",
+                    details={
+                        "path": rel_path,
+                        "expected": expected_sha256,
+                        "actual": actual_sha256,
+                    },
+                )
+
+
 def _validated_import_members(
     infolist: list[zipfile.ZipInfo], base_name: str, root_uri: str
 ) -> list[tuple[zipfile.ZipInfo, str, str, str]]:
@@ -562,16 +760,22 @@ async def import_ovpack(
             )
 
         members = _validated_import_members(infolist, base_name, root_uri)
+        root_exists = await _root_exists(viking_fs, root_uri, ctx)
 
-        if await _root_exists(viking_fs, root_uri, ctx):
+        if root_exists:
             if conflict_action == "skip":
                 logger.info(f"[local_fs] Skipped existing resource at {root_uri}")
                 return root_uri
             if conflict_action == "fail":
-                raise FileExistsError(
+                raise ConflictError(
                     f"Resource already exists at {root_uri}. "
-                    "Use on_conflict='overwrite' to replace it."
+                    "Use on_conflict='overwrite' to replace it.",
+                    resource=root_uri,
                 )
+
+        _validate_manifest_content(zf, manifest, infolist, base_name)
+
+        if root_exists:
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
             await _remove_existing_root(viking_fs, root_uri, ctx)
 
@@ -650,13 +854,15 @@ async def export_ovpack(
         )
 
     manifest = await _build_manifest(viking_fs, vector_store, uri, base_name, entries, ctx)
+    manifest_entries = _manifest_entries_by_path(manifest)
+    manifest_file_entries = {
+        rel_path: entry
+        for rel_path, entry in manifest_entries.items()
+        if entry.get("kind") == "file"
+    }
 
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         zf.writestr(base_name + "/", "")
-        zf.writestr(
-            f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
-            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
-        )
 
         for entry in entries:
             rel_path = entry["rel_path"]
@@ -668,9 +874,21 @@ async def export_ovpack(
                 full_uri = _join_uri(uri, rel_path)
                 try:
                     data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
-                    zf.writestr(zip_path, data)
                 except Exception as exc:
                     logger.warning(f"Failed to export file {full_uri}: {exc}")
+                    raise
+
+                manifest_entry = manifest_file_entries.get(rel_path)
+                if manifest_entry is not None:
+                    manifest_entry["size"] = len(data)
+                    manifest_entry["sha256"] = _sha256_hex(data)
+                zf.writestr(zip_path, data)
+
+        manifest["content_sha256"] = _manifest_content_sha256(manifest_file_entries)
+        zf.writestr(
+            f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
+        )
 
     logger.info(f"[local_fs] Exported {uri} to {to}")
     return to

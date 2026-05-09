@@ -88,16 +88,58 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 
 ## Format Notes
 
-OVPack v2 files are standard ZIP archives with an OpenViking manifest at
-`<root>/_._ovpack_manifest.json`. The manifest records `format_version`,
-content entries, and portable vector scalar metadata. Raw embedding vectors are
-not exported. Runtime fields such as `created_at`, `updated_at`, and
-`active_count` are also not exported; imports rebuild vectors and runtime state
-in the target environment. Legacy OVPack
-files without a manifest can still be imported; packages with a manifest validate
-`kind` and `format_version`, and packages newer than this implementation are
-rejected. Derived semantic files such as `.abstract.md`, `.overview.md`, and
-`.relations.json` are not imported as normal content.
+OVPack v2 files are standard ZIP archives. Each package contains an OpenViking
+manifest at `<root>/_._ovpack_manifest.json`; this is the ZIP-escaped form of the
+hidden filename `.ovpack_manifest.json`.
+
+The manifest records `kind`, `format_version`, the exported root, content
+entries, and portable vector scalar metadata. In `entries`, `path` is relative to
+the exported root. An empty path (`""`) means the root directory itself, for
+example `my-project/`.
+
+Example manifest for a package exported from `viking://resources/demo/`:
+
+```json
+{
+  "kind": "openviking.ovpack",
+  "format_version": 2,
+  "root": {
+    "name": "demo",
+    "uri": "viking://resources/demo",
+    "scope": "resources"
+  },
+  "entries": [
+    {
+      "path": "",
+      "kind": "directory"
+    },
+    {
+      "path": "notes.txt",
+      "kind": "file",
+      "size": 5,
+      "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    }
+  ],
+  "content_sha256": "b2a6e9582119c7510d68e3446de3e71a486934bf450d68f65596259ed1cf7997",
+  "vectors": {}
+}
+```
+
+For packages with manifest entries, import validates the ZIP file set, per-file
+`size`, per-file `sha256`, and top-level `content_sha256` before writing any
+resources. Missing, extra, or modified content files, and missing or mismatched
+v2 `content_sha256`, are rejected. This is an integrity check for the package
+contents, not a signature or authentication mechanism if both the manifest and
+content can be rewritten.
+
+Raw embedding vectors are not exported. Runtime fields such as `created_at`,
+`updated_at`, and `active_count` are also not exported; imports rebuild vectors
+and runtime state in the target environment. Legacy OVPack files without a
+manifest can still be imported, but they do not have manifest checksum
+validation. Packages with a manifest validate `kind` and `format_version`, and
+packages newer than this implementation are rejected. Derived semantic files such
+as `.abstract.md`, `.overview.md`, and `.relations.json` are not imported as
+normal content.
 
 ## Memory Import and Export
 

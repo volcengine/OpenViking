@@ -986,8 +986,15 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 **Processing Flow**:
 1. Verify user permissions
 2. Traverse resources under the specified URI
-3. Package into zip format (`.ovpack`)
-4. Return as file stream
+3. Write content files and the OVPack manifest
+4. Package into zip format (`.ovpack`)
+5. Return as file stream
+
+**Format Notes**:
+- The exported ZIP contains `<root>/_._ovpack_manifest.json`, the escaped ZIP name for `.ovpack_manifest.json`.
+- `entries[].path` is relative to the exported root; `""` means the root directory itself.
+- File entries include `size` and `sha256`; `content_sha256` covers the sorted file list of `path`, `size`, and `sha256`.
+- Raw embedding vectors and runtime fields such as `created_at`, `updated_at`, and `active_count` are not exported.
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP router
@@ -1059,8 +1066,9 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 **Processing Flow**:
 1. Verify user permissions
 2. Parse uploaded `.ovpack` file
-3. Import resources to target location
-4. Optionally trigger vectorization
+3. Validate manifest metadata, paths, file set, file sizes, and checksums
+4. Apply `on_conflict`
+5. Import resources to target location and rebuild vectors
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP router
@@ -1078,6 +1086,13 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 
 **Permission Requirements**: ROOT or ADMIN
+
+**Behavior Notes**:
+- Imports always rebuild vectors in the target environment. The API no longer accepts `vectorize` or `force`.
+- `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
+- `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents.
+- Packages with manifest entries are rejected if content files are missing, extra files are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
+- Legacy packages without a manifest can still be imported, but they do not have manifest checksum validation.
 
 #### 3. Usage Examples
 
@@ -1140,6 +1155,21 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+**Conflict Error Example**
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "CONFLICT",
+    "message": "Resource already exists at viking://resources/imported/my-project. Use on_conflict='overwrite' to replace it.",
+    "details": {
+      "resource": "viking://resources/imported/my-project"
+    }
   }
 }
 ```
