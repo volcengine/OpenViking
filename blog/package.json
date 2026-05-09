@@ -13,6 +13,9 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.3.5"
+    "sharp": "^0.34.5",
+    "svgo": "^4.0.1",
+    "vite": "^6.3.5",
+    "vite-plugin-image-optimizer": "^2.0.3"
   }
 }
