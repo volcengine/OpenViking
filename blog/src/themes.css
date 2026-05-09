@@ -276,7 +276,7 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-post__foot { max-width: var(--th-measure); margin: 64px auto 0; padding: 0 24px 96px; border-top: 1px solid var(--th-line); padding-top: 48px; }
 .b-post__nav { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 32px; }
 @media (max-width: 640px) { .b-post__nav { grid-template-columns: 1fr; } }
-.b-post__navcard { padding: 20px; border: 1px solid var(--th-line); border-radius: var(--th-radius); cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+.b-post__navcard { display: block; text-decoration: none; color: inherit; padding: 20px; border: 1px solid var(--th-line); border-radius: var(--th-radius); cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
 .b-post__navcard:hover { border-color: var(--th-ink); transform: translateY(-1px); }
 .b-post__navcard--next { text-align: right; }
 .b-post__navcard__dir { font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--th-mute); margin-bottom: 6px; }
