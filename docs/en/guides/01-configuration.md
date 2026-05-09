@@ -1061,7 +1061,8 @@ Path locks are enabled by default and usually require no configuration. **The de
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "redo_recovery_enabled": true
     }
   }
 }
@@ -1071,6 +1072,7 @@ Path locks are enabled by default and usually require no configuration. **The de
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
 | `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
+| `redo_recovery_enabled` | bool | Enable session-commit phase-2 crash-recovery redo. When `false`, pending redo markers are not written and startup redo recovery is skipped. | `true` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
@@ -1234,7 +1236,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     },
     "transaction": {
       "lock_timeout": 0.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "redo_recovery_enabled": true
     },
     "vectordb": {
       "backend": "local|remote",
