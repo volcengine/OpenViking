@@ -29,6 +29,7 @@ OVPACK_BACKUP_TYPE = "backup"
 
 _PUBLIC_SCOPES = ("resources", "user", "agent", "session")
 _IMPORTABLE_SCOPES = frozenset(_PUBLIC_SCOPES)
+_STRUCTURED_IMPORT_SCOPES = frozenset({"user", "agent", "session"})
 _EXCLUDED_FILENAMES = frozenset({".relations.json", OVPACK_MANIFEST_FILENAME})
 _NON_VECTOR_SCOPES = frozenset({"session"})
 _PORTABLE_VECTOR_SCALAR_FIELDS = [
@@ -466,6 +467,44 @@ def _resolve_import_root_uri(parent: str, base_name: str, manifest: dict[str, An
     return _join_uri(parent, base_name)
 
 
+def _parse_import_uri(uri: str, *, field: str) -> VikingURI:
+    if not uri:
+        raise InvalidArgumentError(f"Missing ovpack {field}")
+    try:
+        return VikingURI(uri)
+    except ValueError as exc:
+        raise InvalidArgumentError(f"Invalid ovpack {field}", details={field: uri}) from exc
+
+
+def _uri_depth(parsed: VikingURI) -> int:
+    return len([part for part in parsed.full_path.split("/") if part])
+
+
+def _validate_import_scope_compatibility(manifest: dict[str, Any], target_root_uri: str) -> None:
+    source_root_uri = _manifest_root_uri(manifest)
+    source = _parse_import_uri(source_root_uri, field="manifest root uri")
+    target = _parse_import_uri(target_root_uri, field="target root uri")
+
+    if source.scope not in _IMPORTABLE_SCOPES:
+        raise InvalidArgumentError(
+            "ovpack import is not supported for source scope",
+            details={"source_scope": source.scope},
+        )
+    if source.scope != target.scope:
+        raise InvalidArgumentError(
+            "ovpack source scope does not match target scope",
+            details={
+                "source_scope": source.scope,
+                "target_scope": target.scope,
+            },
+        )
+    if source.scope in _STRUCTURED_IMPORT_SCOPES and _uri_depth(source) != _uri_depth(target):
+        raise InvalidArgumentError(
+            "ovpack source path is incompatible with target path",
+            details={"source": source_root_uri, "target": target_root_uri},
+        )
+
+
 def _manifest_records_by_level(
     manifest: dict[str, Any], rel_path: str
 ) -> dict[int, dict[str, Any]]:
@@ -495,29 +534,6 @@ def _manifest_scalar_overrides(
         if isinstance(scalars, dict):
             overrides[level] = dict(scalars)
     return overrides
-
-
-def _validate_manifest_context_types(
-    manifest: dict[str, Any], root_uri: str, manifest_entries: dict[str, dict[str, Any]]
-) -> None:
-    for rel_path in manifest_entries:
-        expected = context_type_for_uri(_join_uri(root_uri, rel_path))
-        for record in _manifest_records_by_level(manifest, rel_path).values():
-            scalars = record.get("scalars")
-            if not isinstance(scalars, dict) or "context_type" not in scalars:
-                continue
-
-            actual = scalars["context_type"]
-            if not isinstance(actual, str):
-                raise InvalidArgumentError(
-                    "Invalid ovpack manifest context_type",
-                    details={"path": rel_path, "context_type": actual},
-                )
-            if actual != expected:
-                raise InvalidArgumentError(
-                    "ovpack context_type conflicts with target path",
-                    details={"path": rel_path, "expected": expected, "actual": actual},
-                )
 
 
 def _normalize_sha256(value: Any, *, field: str, path: str | None = None) -> str:
@@ -918,8 +934,8 @@ async def import_ovpack(
         base_name = _base_name_from_entries(infolist)
         manifest = _read_manifest(zf, base_name)
         root_uri = _resolve_import_root_uri(parent, base_name, manifest)
+        _validate_import_scope_compatibility(manifest, root_uri)
         _validate_import_target_uri(root_uri)
-        manifest_entries = _manifest_entries_by_path(manifest)
         manifest_root = manifest.get("root") if isinstance(manifest.get("root"), dict) else {}
         if manifest_root.get("name") and manifest_root.get("name") != base_name:
             logger.warning(
@@ -929,7 +945,6 @@ async def import_ovpack(
 
         members = _validated_import_members(infolist, base_name, root_uri)
         existing_roots = [root_uri] if await _root_exists(viking_fs, root_uri, ctx) else []
-        _validate_manifest_context_types(manifest, root_uri, manifest_entries)
 
         if existing_roots:
             if conflict_action == "skip":
@@ -1216,7 +1231,6 @@ async def restore_ovpack(
         backup_scopes = _backup_scopes_from_manifest(manifest, manifest_entries)
         members = _validated_import_members(infolist, base_name, root_uri)
         existing_roots = await _existing_scope_roots(viking_fs, backup_scopes, ctx)
-        _validate_manifest_context_types(manifest, root_uri, manifest_entries)
 
         if existing_roots:
             if conflict_action == "skip":

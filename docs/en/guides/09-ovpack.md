@@ -142,12 +142,17 @@ whose format version is not the current supported version are rejected.
 `.abstract.md` and `.overview.md` are restored as semantic sidecar files;
 `.relations.json` and OVPack internals are excluded.
 
-Manifest scalar `context_type` is validated against the final import path. The
-target path wins; a package cannot silently turn a resource path into a memory or
-skill vector record.
+Manifest scalar `context_type`, when present, is treated as exported scalar
+metadata only. Import compatibility is based on the source and target URI scopes;
+the final `context_type` is derived again from the target URI during
+vectorization.
 
 Top-level scope packages such as `viking://resources/`, `viking://user/`,
 `viking://agent/`, and `viking://session/` must be imported to `viking://`.
+Regular import also requires the manifest root scope to match the final target
+root scope. Structured scopes (`user`, `agent`, and `session`) cannot be imported
+in a way that changes the root depth, such as importing a session package into a
+concrete session URI and creating `session/sess_123/sess_123`.
 Full backups use the separate `backup` / `restore` interface, not regular
 import parent semantics.
 OVPack itself does not add package-size, file-count, or directory-depth limits;

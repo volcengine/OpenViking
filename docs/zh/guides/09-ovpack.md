@@ -206,7 +206,8 @@ my-project/_._ovpack_manifest.json
 - 文件条目包含 `size` 和 `sha256`。
 - `content_sha256` 覆盖按路径排序后的文件列表，元素只包含 `path`、`size`、`sha256`。
 - `vectors` 只保存可迁移的标量和目录摘要文本，不保存原始 embedding 向量。
-- 包内 `context_type` 只用于校验；导入时最终 `context_type` 以目标路径推导结果为准。
+- 包内如果带有 `context_type`，只作为导出时的标量信息；导入校验不依赖它，最终
+  `context_type` 以目标路径推导结果为准。
 
 当前会导出的向量标量字段是：
 
@@ -230,8 +231,9 @@ created_at, updated_at, active_count
 4. `entries` 中声明的文件和目录集合必须和 ZIP 内容一致。
 5. 每个文件的 `size` 和 `sha256` 必须匹配实际内容。
 6. v2 包必须带 `content_sha256`，并且整体 checksum 必须匹配。
-7. 包内 `context_type` 必须和最终导入路径的语义一致。
-8. `.relations.json`、manifest、锁文件等内部文件不会作为普通内容导入。
+7. manifest root 的 source scope 必须和最终导入 root 的 target scope 一致。
+8. `user`、`agent`、`session` 这类结构化 scope 不能通过导入改变 root 层级。
+9. `.relations.json`、manifest、锁文件等内部文件不会作为普通内容导入。
 
 如果旧包没有 manifest，会被拒绝：
 
@@ -249,8 +251,9 @@ INVALID_ARGUMENT: ovpack file sha256 does not match manifest
 这个校验保证的是“包内容没有偏离 manifest”。如果攻击者能同时改 manifest 和文件内容，
 它不能替代签名、可信发布链或访问控制。
 
-如果包内 scalar 声明 `context_type=memory`，但导入后的目标路径会被识别成普通 resource，
-导入会被拒绝，避免记忆或技能语义静默漂移。
+如果包从 `viking://session/sess_123` 导出，却导入到 `viking://resources/`，会因为
+source scope 和 target scope 不一致被拒绝。导入到 `viking://session/sess_123/` 也会
+被拒绝，因为它会生成 `viking://session/sess_123/sess_123` 这种嵌套 root。
 
 ## 旧包和未来版本
 
@@ -368,7 +371,8 @@ ov import ./shared-docs.ovpack viking://resources/team-shared/
 | `Missing ovpack manifest content_sha256` | 开发期 v2 预览包缺少整体 checksum | 重新导出。 |
 | `sha256 does not match manifest` | 文件内容和 manifest 不一致 | 丢弃该包，或从可信源重新导出。 |
 | `ovpack entries do not match manifest` | ZIP 中缺文件/目录，或混入额外文件/目录 | 丢弃该包，或重新导出。 |
-| `context_type conflicts with target path` | 包内语义类型和导入目标路径冲突 | 导入到对应父目录，或重新导出。 |
+| `source scope does not match target scope` | 将包导入到了不同 scope，例如 session 导入 resources | 导入到同 scope 的父目录。 |
+| `source path is incompatible with target path` | 结构化 scope 的导入会改变 root 层级，例如 session 导入具体 session 内部 | 导入到正确的系统父目录。 |
 | `Top-level scope ovpack packages must be imported to viking://` | 将 `resources`/`user`/`agent`/`session` 顶级包导入了非根父目录 | 改为导入 `viking://`。 |
 | `Unsupported ovpack format_version` | 包格式版本不是当前支持版本 | 升级 OpenViking 或重新导出为当前支持版本。 |
 | `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |

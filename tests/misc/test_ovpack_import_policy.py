@@ -206,7 +206,11 @@ def _manifest_for_files(root_name: str, files: dict[str, str]) -> dict[str, obje
     return {
         "kind": "openviking.ovpack",
         "format_version": 2,
-        "root": {"name": root_name},
+        "root": {
+            "name": root_name,
+            "uri": f"viking://resources/{root_name}",
+            "scope": "resources",
+        },
         "entries": entries,
         "content_sha256": _content_sha256(content_entries),
         "vectors": {},
@@ -382,10 +386,17 @@ async def test_import_ovpack_restores_session_without_vectorization(
         ".meta.json": json.dumps({"session_id": "victim"}),
         "messages.jsonl": '{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}\n',
     }
+    manifest = _manifest_for_files("victim", files)
+    manifest["root"] = {
+        "name": "victim",
+        "uri": "viking://session/victim",
+        "scope": "session",
+    }
     _write_ovpack_with_manifest(
         temp_ovpack_path,
         "victim",
         files,
+        manifest=manifest,
     )
     fake_fs = FakeVikingFS()
 
@@ -398,29 +409,29 @@ async def test_import_ovpack_restores_session_without_vectorization(
     ]
     assert fake_fs.tree_calls == []
 
+    invalid_fs = FakeVikingFS()
+    with pytest.raises(InvalidArgumentError, match=r"source scope does not match target scope"):
+        await import_ovpack(invalid_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+    with pytest.raises(InvalidArgumentError, match=r"source path is incompatible"):
+        await import_ovpack(
+            invalid_fs,
+            str(temp_ovpack_path),
+            "viking://session/victim",
+            request_ctx,
+        )
+    assert invalid_fs.written_files == []
+
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_context_type_conflict(
+async def test_import_ovpack_rejects_scope_mismatch(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
-    manifest["vectors"] = {
-        "notes.txt": [
-            {
-                "level": 2,
-                "scalars": {
-                    "context_type": "memory",
-                    "level": 2,
-                    "abstract": "memory note",
-                },
-            }
-        ]
-    }
     _write_ovpack_with_manifest(temp_ovpack_path, "demo", {"notes.txt": "hello"}, manifest=manifest)
     fake_fs = FakeVikingFS()
 
-    with pytest.raises(InvalidArgumentError, match=r"context_type conflicts"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+    with pytest.raises(InvalidArgumentError, match=r"source scope does not match target scope"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session", request_ctx)
 
     assert fake_fs.written_files == []
 
