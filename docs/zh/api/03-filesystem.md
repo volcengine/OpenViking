@@ -995,6 +995,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 - `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
 - 原始 embedding 向量以及 `created_at`、`updated_at`、`active_count` 等运行态字段不会被导出。
+- OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 **代码入口**：
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP 路由
@@ -1089,11 +1090,16 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 
 **行为说明**：
 - 导入后总是在目标环境重建向量。API 已不再接受 `vectorize` 或 `force`。
+- Session 导入只恢复 session 文件状态，不触发向量化。
 - `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
-- `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。
+- `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。`skip` 是 root 级跳过，不是文件级补齐。
 - 默认拒绝没有 manifest 的包，因为这类包无法提供内容完整性校验。
 - 带 manifest entries 的包如果缺少内容文件或目录、混入额外文件或目录、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
 - manifest `format_version` 不是当前支持版本的包会被拒绝。
+- `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
+- manifest `context_type` 必须和最终导入路径语义一致。
+- `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
+- OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 #### 3. 使用示例
 

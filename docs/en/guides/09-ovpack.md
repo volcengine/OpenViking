@@ -134,13 +134,24 @@ content can be rewritten.
 
 Raw embedding vectors are not exported. Runtime fields such as `created_at`,
 `updated_at`, and `active_count` are also not exported; imports rebuild vectors
-and runtime state in the target environment. Packages without a manifest are
-rejected by default because OpenViking cannot verify their file set or content
-checksums. Packages with a manifest validate `kind` and `format_version`, and
-packages whose format version is not the current supported version are rejected.
-Derived semantic files such
-as `.abstract.md`, `.overview.md`, and `.relations.json` are not imported as
-normal content.
+and runtime state in the target environment. Session packages restore session
+files and do not trigger vectorization. Packages without a manifest are rejected
+by default because OpenViking cannot verify their file set or content checksums.
+Packages with a manifest validate `kind` and `format_version`, and packages
+whose format version is not the current supported version are rejected.
+`.abstract.md` and `.overview.md` are restored as semantic sidecar files;
+`.relations.json` and OVPack internals are excluded.
+
+Manifest scalar `context_type` is validated against the final import path. The
+target path wins; a package cannot silently turn a resource path into a memory or
+skill vector record.
+
+Top-level scope packages such as `viking://resources/`, `viking://user/`,
+`viking://agent/`, and `viking://session/` must be imported to `viking://`.
+Absolute root packages for `viking://` are not supported in this version.
+OVPack itself does not add package-size, file-count, or directory-depth limits;
+the practical limit comes from ZIP, the storage backend, and the runtime
+environment.
 
 ## Memory Import and Export
 
@@ -244,7 +255,26 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 ### Vectorization on Import
 
 Imports always rebuild vectors in the target environment for `find/search`.
-OVPack no longer exposes an import option to disable vectorization.
+OVPack no longer exposes an import option to disable vectorization. Session
+imports are restored as files only and are not vectorized.
+
+### Session Import and Export
+
+```bash
+openviking export viking://session/sess_123/ ./exports/sess_123.ovpack
+openviking import ./exports/sess_123.ovpack viking://session/ --on-conflict overwrite
+```
+
+The restored root is `viking://session/sess_123/`.
+
+### Scope Root Import
+
+```bash
+openviking export viking://resources/ ./backups/resources.ovpack
+openviking import ./backups/resources.ovpack viking:// --on-conflict overwrite
+```
+
+Scope-root packages cannot be imported under another scope directory.
 
 ## Use Cases
 

@@ -23,6 +23,7 @@ class FakeVikingFS:
     def __init__(self) -> None:
         self.written_files: list[str] = []
         self.created_dirs: list[str] = []
+        self.tree_calls: list[str] = []
 
     async def stat(self, uri: str, ctx=None):
         return {"uri": uri, "isDir": True}
@@ -36,7 +37,8 @@ class FakeVikingFS:
     async def write_file_bytes(self, uri: str, data: bytes, ctx=None):
         self.written_files.append(uri)
 
-    async def tree(self, uri: str, node_limit: int = 100000, level_limit: int = 1000, ctx=None):
+    async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
+        self.tree_calls.append(uri)
         return []
 
     async def exists(self, uri: str, ctx=None):
@@ -56,9 +58,18 @@ class FakeExportVikingFS:
             "viking://resources/demo/.overview.md": "root overview",
         }
 
-    async def tree(self, uri: str, show_all_hidden: bool = False, ctx=None):
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
         assert uri == "viking://resources/demo"
         assert show_all_hidden is True
+        assert node_limit is None
+        assert level_limit is None
         return [
             {
                 "rel_path": ".overview.md",
@@ -81,6 +92,8 @@ class FakeExportVikingFS:
         return self.text_files[uri]
 
     async def read_file_bytes(self, uri: str, ctx=None):
+        if uri in self.text_files:
+            return self.text_files[uri].encode("utf-8")
         return self.binary_files[uri]
 
 
@@ -163,7 +176,7 @@ def _write_ovpack_with_manifest(
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_writes_v2_manifest_without_derived_files(
+async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     await export_ovpack(
@@ -178,15 +191,21 @@ async def test_export_ovpack_writes_v2_manifest_without_derived_files(
         manifest = json.loads(zf.read("demo/_._ovpack_manifest.json").decode("utf-8"))
 
     assert "demo/notes.txt" in names
-    assert "demo/_._overview.md" not in names
+    assert "demo/_._overview.md" in names
     assert manifest["format_version"] == 2
     assert manifest["kind"] == "openviking.ovpack"
     note_entry = next(entry for entry in manifest["entries"] if entry["path"] == "notes.txt")
     note_sha256 = hashlib.sha256(b"hello").hexdigest()
     assert note_entry["size"] == 5
     assert note_entry["sha256"] == note_sha256
+    overview_entry = next(entry for entry in manifest["entries"] if entry["path"] == ".overview.md")
+    overview_sha256 = hashlib.sha256(b"root overview").hexdigest()
+    assert overview_entry["sha256"] == overview_sha256
     assert manifest["content_sha256"] == _content_sha256(
-        [{"path": "notes.txt", "size": 5, "sha256": note_sha256}]
+        [
+            {"path": ".overview.md", "size": 13, "sha256": overview_sha256},
+            {"path": "notes.txt", "size": 5, "sha256": note_sha256},
+        ]
     )
     assert manifest["vectors"][""][0]["text"] == "root abstract"
 
@@ -268,22 +287,77 @@ async def test_import_ovpack_rejects_manifest_unexpected_directory(
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_session_scope_targets(
+async def test_import_ovpack_restores_session_without_vectorization(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
-    _write_ovpack(
+    files = {
+        ".meta.json": json.dumps({"session_id": "victim"}),
+        "messages.jsonl": '{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}\n',
+    }
+    _write_ovpack_with_manifest(
         temp_ovpack_path,
-        {
-            "victim/_._meta.json": json.dumps({"session_id": "victim"}),
-            "victim/messages.jsonl": '{"id":"msg_attacker","role":"user","parts":[{"type":"text","text":"forged"}],"created_at":"2026-01-01T00:00:00Z"}\n',
-        },
+        "victim",
+        files,
     )
     fake_fs = FakeVikingFS()
 
-    with pytest.raises(
-        InvalidArgumentError,
-        match=r"ovpack import is not supported for scope: session",
-    ):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session/default", request_ctx)
+    result = await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session", request_ctx)
+
+    assert result == "viking://session/victim"
+    assert fake_fs.written_files == [
+        "viking://session/victim/.meta.json",
+        "viking://session/victim/messages.jsonl",
+    ]
+    assert fake_fs.tree_calls == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_context_type_conflict(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
+    manifest["vectors"] = {
+        "notes.txt": [
+            {
+                "level": 2,
+                "scalars": {
+                    "context_type": "memory",
+                    "level": 2,
+                    "abstract": "memory note",
+                },
+            }
+        ]
+    }
+    _write_ovpack_with_manifest(temp_ovpack_path, "demo", {"notes.txt": "hello"}, manifest=manifest)
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"context_type conflicts"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
 
     assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
+async def test_import_top_level_scope_package_requires_root_target(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    manifest = _manifest_for_files("resources", {"README.md": "hello"})
+    manifest["root"] = {
+        "name": "resources",
+        "uri": "viking://resources",
+        "scope": "resources",
+    }
+    _write_ovpack_with_manifest(
+        temp_ovpack_path,
+        "resources",
+        {"README.md": "hello"},
+        manifest=manifest,
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"must be imported to viking://"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == (
+        "viking://resources"
+    )

@@ -26,7 +26,6 @@ _EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
 _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
-        "context_type",
         "level",
         "name",
         "description",

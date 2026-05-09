@@ -25,10 +25,9 @@ OVPACK_MANIFEST_FILENAME = ".ovpack_manifest.json"
 OVPACK_MANIFEST_ZIP_LEAF = "_._ovpack_manifest.json"
 OVPACK_ON_CONFLICT_VALUES = frozenset({"fail", "overwrite", "skip"})
 
-_IMPORTABLE_SCOPES = frozenset({"resources", "user", "agent"})
-_DERIVED_FILENAMES = frozenset(
-    {".abstract.md", ".overview.md", ".relations.json", OVPACK_MANIFEST_FILENAME}
-)
+_IMPORTABLE_SCOPES = frozenset({"resources", "user", "agent", "session"})
+_EXCLUDED_FILENAMES = frozenset({".relations.json", OVPACK_MANIFEST_FILENAME})
+_NON_VECTOR_SCOPES = frozenset({"session"})
 _PORTABLE_VECTOR_SCALAR_FIELDS = [
     "uri",
     "type",
@@ -72,8 +71,8 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _is_derived_rel_path(rel_path: str) -> bool:
-    return _leaf_name(rel_path) in _DERIVED_FILENAMES
+def _is_excluded_rel_path(rel_path: str) -> bool:
+    return _leaf_name(rel_path) in _EXCLUDED_FILENAMES
 
 
 def _is_manifest_zip_path(zip_path: str, base_name: str) -> bool:
@@ -136,29 +135,31 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
     return "/".join(restored)
 
 
-def _validate_scope(uri: str, *, operation: str) -> None:
+def _validate_public_scope(uri: str, *, operation: str, allow_root: bool = False) -> None:
     parsed = VikingURI(uri)
+    if parsed.uri == "viking://":
+        if allow_root:
+            return
+        raise InvalidArgumentError(f"ovpack {operation} is not supported for root URI")
     if parsed.scope not in _IMPORTABLE_SCOPES:
         raise InvalidArgumentError(f"ovpack {operation} is not supported for scope: {parsed.scope}")
-    if parsed.uri == "viking://":
-        raise InvalidArgumentError(f"ovpack {operation} is not supported for root URI")
 
 
 def _validate_import_target_uri(uri: str) -> None:
     """Enforce the same target-policy boundary as direct content writes."""
-    _validate_scope(uri, operation="import")
+    _validate_public_scope(uri, operation="import")
     name = _leaf_name(uri)
-    if name in _DERIVED_FILENAMES:
-        raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
+    if name in _EXCLUDED_FILENAMES:
+        raise InvalidArgumentError(f"cannot import internal ovpack file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
 
 
 def _validate_export_source_uri(uri: str) -> None:
-    _validate_scope(uri, operation="export")
+    _validate_public_scope(uri, operation="export")
     name = _leaf_name(uri)
-    if name in _DERIVED_FILENAMES:
-        raise InvalidArgumentError(f"cannot export derived semantic file: {uri}")
+    if name in _EXCLUDED_FILENAMES:
+        raise InvalidArgumentError(f"cannot export internal ovpack file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot export watch task control file: {uri}")
 
@@ -401,6 +402,41 @@ def _read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
     return manifest
 
 
+def _manifest_root_uri(manifest: dict[str, Any]) -> str:
+    root = manifest.get("root")
+    if not isinstance(root, dict):
+        return ""
+    uri = root.get("uri")
+    if isinstance(uri, str):
+        try:
+            return _strip_uri_trailing_slash(uri)
+        except Exception:
+            return uri.rstrip("/")
+    return ""
+
+
+def _is_top_level_scope_package(base_name: str, manifest: dict[str, Any]) -> bool:
+    root_uri = _manifest_root_uri(manifest)
+    return base_name in _IMPORTABLE_SCOPES and root_uri == f"viking://{base_name}"
+
+
+def _resolve_import_root_uri(parent: str, base_name: str, manifest: dict[str, Any]) -> str:
+    if parent == "viking://":
+        if not _is_top_level_scope_package(base_name, manifest):
+            raise InvalidArgumentError(
+                "Only top-level scope ovpack packages can be imported to viking://",
+                details={"root": base_name},
+            )
+        return f"viking://{base_name}"
+
+    if _is_top_level_scope_package(base_name, manifest):
+        raise InvalidArgumentError(
+            "Top-level scope ovpack packages must be imported to viking://",
+            details={"root": base_name, "parent": parent},
+        )
+    return _join_uri(parent, base_name)
+
+
 def _manifest_records_by_level(
     manifest: dict[str, Any], rel_path: str
 ) -> dict[int, dict[str, Any]]:
@@ -430,6 +466,29 @@ def _manifest_scalar_overrides(
         if isinstance(scalars, dict):
             overrides[level] = dict(scalars)
     return overrides
+
+
+def _validate_manifest_context_types(
+    manifest: dict[str, Any], root_uri: str, manifest_entries: dict[str, dict[str, Any]]
+) -> None:
+    for rel_path in manifest_entries:
+        expected = context_type_for_uri(_join_uri(root_uri, rel_path))
+        for record in _manifest_records_by_level(manifest, rel_path).values():
+            scalars = record.get("scalars")
+            if not isinstance(scalars, dict) or "context_type" not in scalars:
+                continue
+
+            actual = scalars["context_type"]
+            if not isinstance(actual, str):
+                raise InvalidArgumentError(
+                    "Invalid ovpack manifest context_type",
+                    details={"path": rel_path, "context_type": actual},
+                )
+            if actual != expected:
+                raise InvalidArgumentError(
+                    "ovpack context_type conflicts with target path",
+                    details={"path": rel_path, "expected": expected, "actual": actual},
+                )
 
 
 def _normalize_sha256(value: Any, *, field: str, path: str | None = None) -> str:
@@ -668,9 +727,6 @@ def _validated_import_members(
         rel_path = get_viking_rel_path_from_zip(
             safe_zip_path.rstrip("/") if kind == "directory" else safe_zip_path
         )
-        if _is_derived_rel_path(rel_path):
-            logger.info(f"[local_fs] Skipping derived ovpack entry: {safe_zip_path}")
-            continue
         target_uri = _join_uri(root_uri, rel_path)
         _validate_import_target_uri(target_uri)
         members.append((info, safe_zip_path, kind, rel_path))
@@ -708,7 +764,7 @@ async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -
 
 
 def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [entry for entry in entries if not _is_derived_rel_path(entry.get("rel_path", ""))]
+    return [entry for entry in entries if not _is_excluded_rel_path(entry.get("rel_path", ""))]
 
 
 async def _enqueue_direct_vectorization(
@@ -718,7 +774,7 @@ async def _enqueue_direct_vectorization(
     manifest: Optional[dict[str, Any]] = None,
 ) -> None:
     manifest = manifest or {}
-    entries = await viking_fs.tree(uri, node_limit=100000, level_limit=1000, ctx=ctx)
+    entries = await viking_fs.tree(uri, node_limit=None, level_limit=None, ctx=ctx)
     dir_uris = {uri}
     file_entries: list[tuple[str, str, str, str]] = []
     for entry in entries:
@@ -805,7 +861,7 @@ async def import_ovpack(
         raise FileNotFoundError(f"File not found: {file_path}")
 
     parent = _strip_uri_trailing_slash(parent)
-    _validate_scope(parent, operation="import")
+    _validate_public_scope(parent, operation="import", allow_root=True)
     conflict_action = _normalize_on_conflict(on_conflict)
 
     with zipfile.ZipFile(file_path, "r") as zf:
@@ -814,9 +870,9 @@ async def import_ovpack(
             raise ValueError("Empty ovpack file")
 
         base_name = _base_name_from_entries(infolist)
-        root_uri = _join_uri(parent, base_name)
-        _validate_import_target_uri(root_uri)
         manifest = _read_manifest(zf, base_name)
+        root_uri = _resolve_import_root_uri(parent, base_name, manifest)
+        _validate_import_target_uri(root_uri)
         manifest_root = manifest.get("root") if isinstance(manifest.get("root"), dict) else {}
         if manifest_root.get("name") and manifest_root.get("name") != base_name:
             logger.warning(
@@ -826,6 +882,8 @@ async def import_ovpack(
 
         members = _validated_import_members(infolist, base_name, root_uri)
         root_exists = await _root_exists(viking_fs, root_uri, ctx)
+        manifest_entries = _manifest_entries_by_path(manifest)
+        _validate_manifest_context_types(manifest, root_uri, manifest_entries)
 
         if root_exists:
             if conflict_action == "skip":
@@ -839,7 +897,8 @@ async def import_ovpack(
                 )
 
         _validate_manifest_content(zf, manifest, infolist, base_name)
-        await _ensure_parent_exists(viking_fs, parent, ctx)
+        if parent != "viking://":
+            await _ensure_parent_exists(viking_fs, parent, ctx)
 
         if root_exists:
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
@@ -858,8 +917,11 @@ async def import_ovpack(
 
     logger.info(f"[local_fs] Successfully imported {file_path} to {root_uri}")
 
-    await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx, manifest=manifest)
-    logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
+    if VikingURI(root_uri).scope not in _NON_VECTOR_SCOPES:
+        await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx, manifest=manifest)
+        logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
+    else:
+        logger.info(f"[local_fs] Skipped vectorization for non-vector scope: {root_uri}")
 
     return root_uri
 
@@ -896,7 +958,15 @@ async def export_ovpack(
 
     ensure_dir_exists(to)
 
-    entries = _exportable_entries(await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx))
+    entries = _exportable_entries(
+        await viking_fs.tree(
+            uri,
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=ctx,
+        )
+    )
 
     manifest = await _build_manifest(viking_fs, vector_store, uri, base_name, entries, ctx)
     manifest_entries = _manifest_entries_by_path(manifest)

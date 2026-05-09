@@ -995,6 +995,7 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 - `entries[].path` is relative to the exported root; `""` means the root directory itself.
 - File entries include `size` and `sha256`; `content_sha256` covers the sorted file list of `path`, `size`, and `sha256`.
 - Raw embedding vectors and runtime fields such as `created_at`, `updated_at`, and `active_count` are not exported.
+- OVPack does not add package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:export_ovpack` - HTTP router
@@ -1089,11 +1090,16 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 
 **Behavior Notes**:
 - Imports always rebuild vectors in the target environment. The API no longer accepts `vectorize` or `force`.
+- Session imports restore session files and do not trigger vectorization.
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
-- `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents.
+- `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents. `skip` is root-level, not file-level.
 - Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
 - Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
 - Packages whose manifest `format_version` is not the current supported version are rejected.
+- `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
+- Manifest `context_type` must match the final import path semantics.
+- Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
+- OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 #### 3. Usage Examples
 
