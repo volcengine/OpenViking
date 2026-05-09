@@ -384,7 +384,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/content/overview` | Read overview (L1) |
 | GET | `/api/v1/content/download` | Download raw file bytes |
 | POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
-| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content (deprecated, use maintenance) |
+| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content |
 
 ### Search
 
@@ -455,12 +455,6 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/debug/health` | Quick health check |
 | GET | `/api/v1/debug/vector/scroll` | Paginated vector record inspection |
 | GET | `/api/v1/debug/vector/count` | Count vector records |
-
-### Maintenance
-
-| Method | Path | Description | Permission |
-|--------|------|-------------|------------|
-| POST | `/api/v1/maintenance/reindex` | Reindex content (optional abstract regeneration) | ROOT/ADMIN |
 
 ### Statistics
 

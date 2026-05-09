@@ -8,11 +8,16 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.models.vlm.base import VLMBase, ToolCall
+from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
-from openviking.session.memory.memory_isolation_handler import RoleScope, MemoryIsolationHandler
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -20,17 +25,11 @@ from openviking.session.memory.schema_model_generator import (
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     add_tool_call_pair_to_messages,
-    get_tool,
 )
 from openviking.session.memory.utils import (
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
-)
-from openviking.session.memory.dataclass import (
-    MemoryFileContent,
-    ResolvedOperation,
-    ResolvedOperations,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.uri import supplement_operation_uris
@@ -187,7 +186,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 messages.append(
                     {
                         "role": "user",
-                        "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
+                        "content": self._build_final_operations_instruction(),
                     }
                 )
 
@@ -236,10 +235,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 tracer.info(f"Extended max_iterations to {max_iterations} for format retry")
                 self._add_format_error_message(messages)
 
-            # If it's the last iteration, use empty operations
+            # If it's the last iteration, fail instead of silently treating an
+            # unparseable final response as "no memory operations".
             if iteration >= max_iterations:
-                final_operations = ResolvedOperations()
-                break
+                raise RuntimeError(
+                    "Memory extraction final response could not be parsed as JSON operations"
+                )
 
             self._disable_tools_for_iteration = True
             continue
@@ -368,11 +369,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     "result": result,
                 }
             )
-
-            # Track read tool calls for refetch detection
-            if tool_call.name == "read" and tool_call.arguments.get("uri"):
-                uri = tool_call.arguments["uri"]
-                # 内容由 ToolContext.read_file_contents 记录
 
             add_tool_call_pair_to_messages(
                 messages,
@@ -524,6 +520,26 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     "Do not include any explanation, markdown formatting, or text outside the JSON."
                 ),
             }
+        )
+
+    def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
+        """Build an empty operations object matching the expected flat schema fields."""
+        fields = ["delete_uris", *(self._expected_fields or [])]
+        return {field: [] for field in dict.fromkeys(fields)}
+
+    def _build_final_operations_instruction(self) -> str:
+        """Build schema-aware final-iteration instructions for the LLM."""
+        skeleton = json.dumps(
+            self._build_final_operations_skeleton(),
+            ensure_ascii=False,
+            indent=2,
+        )
+        return (
+            "You have reached the maximum number of tool call iterations. "
+            "Do not call any more tools. Return your final result now as ONLY a valid JSON object "
+            "matching the required schema. Do not include explanations or markdown. "
+            "If there are no memory changes, return this exact empty-shape JSON with all fields present:\n"
+            f"{skeleton}"
         )
 
     async def _add_refetch_results_to_messages(

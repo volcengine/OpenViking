@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -34,6 +35,8 @@ class AddResourceRequest(BaseModel):
             If not specified, an auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
             Cannot be used together with 'to'.
+        create_parent: Whether to automatically create the parent directory if it doesn't exist.
+            Default is False.
         reason: Reason for adding the resource. Used for documentation and monitoring.
         instruction: Processing instruction for semantic extraction.
             Provides hints for how the resource should be processed.
@@ -65,6 +68,7 @@ class AddResourceRequest(BaseModel):
     temp_file_id: Optional[str] = None
     to: Optional[str] = None
     parent: Optional[str] = None
+    create_parent: bool = False
     reason: str = ""
     instruction: str = ""
     wait: bool = False
@@ -174,9 +178,14 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
+        "create_parent": request.create_parent,
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
+
+    # Resolve path variables before passing to service
+    to = resolve_path_variables(request.to) if request.to else None
+    parent = resolve_path_variables(request.parent) if request.parent else None
 
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
@@ -185,8 +194,8 @@ async def add_resource(
             result = await service.resources.add_resource(
                 path=path,
                 ctx=_ctx,
-                to=request.to,
-                parent=request.parent,
+                to=to,
+                parent=parent,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,

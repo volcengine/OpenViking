@@ -17,6 +17,11 @@ _AGENT_SHORTHAND_SEGMENTS = {
     ".abstract.md",
     ".overview.md",
 }
+_CROSS_SCOPE_OWNER_SEGMENT = {"user": "agent", "agent": "user"}
+_CONTENT_TYPES_BY_SCOPE = {
+    "user": {"memories": "memory"},
+    "agent": {"memories": "memory", "skills": "skill"},
+}
 
 
 class NamespaceShapeError(ValueError):
@@ -34,13 +39,100 @@ class ResolvedNamespace:
     is_container: bool = False
 
 
-def _uri_parts(uri: str) -> list[str]:
-    normalized = VikingURI.normalize(uri).rstrip("/")
+@dataclass(frozen=True)
+class UriClassification:
+    """Viking URI classification derived from path structure."""
+
+    parts: tuple[str, ...]
+    scope: str
+    content_index: Optional[int]
+    context_type: str
+
+    @property
+    def is_memory(self) -> bool:
+        return self.context_type == "memory"
+
+    @property
+    def is_skill(self) -> bool:
+        return self.context_type == "skill"
+
+    @property
+    def is_user_namespace_root(self) -> bool:
+        return _is_namespace_root_parts(self.parts, "user")
+
+    @property
+    def is_agent_namespace_root(self) -> bool:
+        return _is_namespace_root_parts(self.parts, "agent")
+
+    @property
+    def is_memory_root(self) -> bool:
+        return (
+            self.is_memory
+            and self.content_index is not None
+            and len(self.parts) == self.content_index + 1
+        )
+
+    @property
+    def is_skill_namespace(self) -> bool:
+        return (
+            self.is_skill
+            and self.content_index is not None
+            and len(self.parts) == self.content_index + 1
+        )
+
+    @property
+    def is_skill_root(self) -> bool:
+        return (
+            self.is_skill
+            and self.content_index is not None
+            and len(self.parts) == self.content_index + 2
+        )
+
+
+def uri_parts(uri: str) -> list[str]:
+    """Return normalized Viking URI path segments without query parameters."""
+    normalized = VikingURI.normalize(uri.split("?", 1)[0]).rstrip("/")
     if normalized == "viking:":
         normalized = "viking://"
     if normalized == "viking://":
         return []
     return [part for part in normalized[len("viking://") :].split("/") if part]
+
+
+def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
+    """Return the first content segment after a user/agent namespace root."""
+    if len(parts) < 3 or parts[0] not in _CONTENT_TYPES_BY_SCOPE:
+        return None
+    cross_scope_segment = _CROSS_SCOPE_OWNER_SEGMENT[parts[0]]
+    if len(parts) >= 5 and parts[2] == cross_scope_segment:
+        return 4
+    return 2
+
+
+def _is_namespace_root_parts(parts: tuple[str, ...], scope: str) -> bool:
+    return parts[:1] == (scope,) and (
+        len(parts) == 2 or (len(parts) == 4 and parts[2] == _CROSS_SCOPE_OWNER_SEGMENT[scope])
+    )
+
+
+def classify_uri(uri: str) -> UriClassification:
+    parts = tuple(uri_parts(uri))
+    content_index = _content_segment_index(parts)
+    context_type = "resource"
+    if content_index is not None:
+        context_type = _CONTENT_TYPES_BY_SCOPE.get(parts[0], {}).get(
+            parts[content_index], "resource"
+        )
+    return UriClassification(
+        parts=parts,
+        scope=parts[0] if parts else "",
+        content_index=content_index,
+        context_type=context_type,
+    )
+
+
+def context_type_for_uri(uri: str) -> str:
+    return classify_uri(uri).context_type
 
 
 def canonical_user_root(ctx: RequestContext) -> str:
@@ -94,7 +186,7 @@ def resolve_uri(
 ) -> ResolvedNamespace:
     """Resolve a URI into a canonical URI and owner tuple."""
 
-    parts = _uri_parts(uri)
+    parts = uri_parts(uri)
     if not parts:
         return ResolvedNamespace(uri="viking://", scope="", is_container=True)
 
@@ -190,6 +282,16 @@ def owner_fields_for_uri(
         "owner_user_id": resolved.owner_user_id,
         "owner_agent_id": resolved.owner_agent_id,
     }
+
+
+def owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
+    """Derive the legacy owner_space bucket for vector records from URI scope and context."""
+    parts = uri_parts(uri)
+    if parts[:1] == ["agent"]:
+        return agent_space_fragment(ctx)
+    if parts[:1] in (["user"], ["session"]):
+        return user_space_fragment(ctx)
+    return ""
 
 
 def _resolve_user_uri(

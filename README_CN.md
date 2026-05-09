@@ -432,9 +432,12 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 #### CLI/客户端配置示例
 
+你可以通过 `ov config setup-cli` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
+
 👇 展开查看您的 CLI/客户端的配置示例：
 
-示例：用于访问本地服务器的 ovcli.conf
+<details>
+<summary><b>示例：用于访问本地服务器的 ovcli.conf</b></summary>
 
 ```json
 {
@@ -463,6 +466,8 @@ $env:OPENVIKING_CLI_CONFIG_FILE = "$HOME/.openviking/ovcli.conf"
 ```bat
 set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 ```
+
+</details>
 
 ### 4. 运行您的第一个示例
 

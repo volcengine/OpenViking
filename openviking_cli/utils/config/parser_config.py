@@ -37,7 +37,7 @@ class ParserConfig:
     encoding: str = "utf-8"
 
     # Smart splitting configuration
-    max_section_size: int = 1000  # Maximum tokens per section before splitting
+    max_section_size: int = 2048  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
     max_section_chars: int = (
         6000  # Hard character limit per section (guards against token estimation errors)

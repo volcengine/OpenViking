@@ -10,6 +10,7 @@ pub async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
     parent: Option<String>,
+    parent_auto_create: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -56,9 +57,14 @@ pub async fn handle_add_resource(
         path = unescaped_path;
     }
 
-    // Check that only one of --to or --parent is set
-    if to.is_some() && parent.is_some() {
-        eprintln!("Error: Cannot specify both --to and --parent at the same time.");
+    // Check that only one of --to, --parent, or --parent-auto-create is set
+    let mut exclusive_count = 0;
+    if to.is_some() { exclusive_count += 1; }
+    if parent.is_some() { exclusive_count += 1; }
+    if parent_auto_create.is_some() { exclusive_count += 1; }
+
+    if exclusive_count > 1 {
+        eprintln!("Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time.");
         std::process::exit(1);
     }
 
@@ -89,6 +95,7 @@ pub async fn handle_add_resource(
         &path,
         to,
         parent,
+        parent_auto_create,
         reason,
         instruction,
         wait,
@@ -471,6 +478,7 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
 
 use crate::ConfigCommands;
 use crate::config::Config;
+use crate::base_client::BaseClient;
 use crate::output;
 
 pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
@@ -491,6 +499,247 @@ pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> 
             }
             Err(e) => Err(Error::Config(e.to_string())),
         },
+        ConfigCommands::SetupCli => {
+            handle_setup_cli().await
+        },
+        ConfigCommands::Switch => {
+            handle_config_switch().await
+        },
+    }
+}
+
+/// Interactive setup for CLI configuration
+async fn handle_setup_cli() -> Result<()> {
+    use rustyline::DefaultEditor;
+    use colored::Colorize;
+
+    println!("{}", "Welcome to OpenViking CLI Setup!".bold().green());
+    println!();
+
+    // Load existing config if available
+    let mut config = match Config::load_default() {
+        Ok(c) => c,
+        Err(_) => Config::default(),
+    };
+
+    let mut rl = DefaultEditor::new().map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
+
+    // Step 1: Get server URL
+    let default_url = config.url.clone();
+    let prompt = format!("OpenViking Server URL [{}]: ", default_url);
+    let url_input = rl.readline(&prompt).unwrap_or_default();
+    let url = if url_input.trim().is_empty() {
+        default_url
+    } else {
+        url_input.trim().to_string()
+    };
+
+    // Update config with URL immediately for probing
+    config.url = url.clone();
+
+    // Step 2: Probe health endpoint
+    println!();
+    println!("{}", "Probing server health...".blue());
+    let probe_result = probe_health(&url, 5.0).await;
+
+    let needs_api_key = match probe_result {
+        Ok((healthy, auth_required)) => {
+            if healthy {
+                println!("{}", "✓ Server is healthy!".green());
+            } else {
+                println!("{}", "⚠ Server responded but reports unhealthy".yellow());
+            }
+            auth_required
+        }
+        Err(e) => {
+            println!("{}", format!("⚠ Could not reach server: {}", e).yellow());
+            // Default to asking for API key if we can't probe
+            true
+        }
+    };
+
+    // Step 3: Ask for API key if needed
+    if needs_api_key {
+        println!();
+        let default_key = config.api_key.clone().unwrap_or_default();
+        let prompt = if default_key.is_empty() {
+            "API Key (optional, press Enter to skip): ".to_string()
+        } else {
+            format!("API Key [{}]: ", "*".repeat(default_key.len().min(8)))
+        };
+        let key_input = rl.readline(&prompt).unwrap_or_default();
+        if !key_input.trim().is_empty() {
+            config.api_key = Some(key_input.trim().to_string());
+        } else if default_key.is_empty() {
+            config.api_key = None;
+        }
+    }
+
+    // Step 4: Save config
+    println!();
+    let config_path = crate::config::default_config_path()?;
+    println!("{}", format!("Saving configuration to: {}", config_path.to_string_lossy()).blue());
+    config.save_default()?;
+
+    // Step 5: Optionally save a named backup
+    println!();
+    let prompt = "Name this configuration (optional, press Enter to skip): ";
+    let name_input = rl.readline(prompt).unwrap_or_default();
+    if !name_input.trim().is_empty() {
+        let config_name = name_input.trim().to_string();
+        if let Some(parent) = config_path.parent() {
+            let backup_path = parent.join(format!("ovcli.conf.{}", config_name));
+            std::fs::copy(&config_path, &backup_path).map_err(|e| Error::Config(format!("Failed to save configuration backup: {}", e)))?;
+            println!("{}", format!("✓ Configuration saved as backup: {}", backup_path.to_string_lossy()).green());
+        }
+    }
+
+    println!();
+    println!("{}", "✓ Setup complete!".bold().green());
+    println!("{}", "You can now use the 'ov' command to interact with OpenViking.".dimmed());
+    println!("{}", "Use 'ov config switch' to switch between saved configurations.".dimmed());
+
+    Ok(())
+}
+
+/// Probe health endpoint to check server status and auth requirement
+async fn probe_health(base_url: &str, timeout_secs: f64) -> Result<(bool, bool)> {
+    let client = BaseClient::new_simple(base_url, timeout_secs);
+
+    // First try without API key
+    let result: Result<serde_json::Value> = client.get("/health", &[]).await;
+
+    match result {
+        Ok(value) => {
+            let healthy = value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+            Ok((healthy, false))
+        }
+        Err(Error::Api(msg)) => {
+            // If we get auth-related errors, auth is required
+            if msg.contains("401") || msg.contains("403") || msg.contains("unauthorized") || msg.contains("forbidden") || msg.contains("AuthenticationError") {
+                Ok((false, true))
+            } else {
+                Ok((false, false))
+            }
+        }
+        Err(_) => {
+            Ok((false, true))
+        }
+    }
+}
+
+/// Interactive configuration switcher
+async fn handle_config_switch() -> Result<()> {
+    use colored::Colorize;
+
+    // Step 1: Find all available configurations
+    let config_path = crate::config::default_config_path()?;
+    let config_dir = config_path.parent().ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?;
+
+    let mut configs = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(config_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                if filename.starts_with("ovcli.conf.") && filename != "ovcli.conf" {
+                    if let Some(name) = filename.strip_prefix("ovcli.conf.") {
+                        // Try to load the config to get its URL for display
+                        let url = if let Ok(cfg) = Config::from_file(&path.to_string_lossy()) {
+                            cfg.url.clone()
+                        } else {
+                            String::new()
+                        };
+                        configs.push((name.to_string(), path, url));
+                    }
+                }
+            }
+        }
+    }
+
+    if configs.is_empty() {
+        println!("{}", "No saved configurations found.".yellow());
+        println!("{}", "Use 'ov config setup-cli' and save a named configuration first.".dimmed());
+        return Ok(());
+    }
+
+    // Step 2: Interactive selection using simple numbered menu
+    println!("{}", "Select a configuration to use:".bold());
+    println!();
+
+    for (i, (name, _, url)) in configs.iter().enumerate() {
+        if url.is_empty() {
+            println!("  {}. {}", i + 1, name.bold());
+        } else {
+            println!("  {}. {} ({})", i + 1, name.bold(), url.dimmed());
+        }
+    }
+
+    println!();
+    println!("{}", "Enter    '<number>' to use a configuration (e.g. '2')".dimmed());
+    println!("{}", "Or enter 'del<number>' to delete a configuration (e.g. 'del2')".dimmed());
+    println!("{}", "Press Enter without input to cancel".dimmed());
+
+    let mut rl = rustyline::DefaultEditor::new().map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
+
+    loop {
+        let input = rl.readline("> ").unwrap_or_default();
+        let input = input.trim();
+
+        if input.is_empty() {
+            println!();
+            println!("{}", "Cancelled.".dimmed());
+            return Ok(());
+        }
+
+        // Check for delete command
+        if let Some(num_str) = input.strip_prefix("del").or_else(|| input.strip_prefix("Del")) {
+            if let Ok(idx) = num_str.parse::<usize>() {
+                if idx >= 1 && idx <= configs.len() {
+                    let idx = idx - 1;
+                    let (name, path, _) = &configs[idx];
+                    println!();
+                    println!("{}", format!("Are you sure you want to delete configuration '{}'? (y/N)", name).yellow());
+
+                    let confirm = rl.readline("> ").unwrap_or_default();
+                    if confirm.trim().eq_ignore_ascii_case("y") || confirm.trim().eq_ignore_ascii_case("yes") {
+                        std::fs::remove_file(path).map_err(|e| Error::Config(format!("Failed to delete configuration: {}", e)))?;
+                        println!("{}", format!("✓ Configuration '{}' deleted.", name).green());
+                    } else {
+                        println!("{}", "Deletion cancelled.".dimmed());
+                    }
+                    return Ok(());
+                }
+            }
+            println!("{}", "Invalid selection. Please try again.".yellow());
+            continue;
+        }
+
+        // Try to parse as selection number
+        if let Ok(idx) = input.parse::<usize>() {
+            if idx >= 1 && idx <= configs.len() {
+                let idx = idx - 1;
+                // Handle switching
+                let (name, source_path, _) = &configs[idx];
+
+                // First, backup current config as .bak
+                if config_path.exists() {
+                    let backup_path = config_dir.join("ovcli.conf.bak");
+                    std::fs::copy(&config_path, &backup_path).map_err(|e| Error::Config(format!("Failed to backup current config: {}", e)))?;
+                }
+
+                // Copy selected config to main config
+                std::fs::copy(source_path, &config_path).map_err(|e| Error::Config(format!("Failed to switch configuration: {}", e)))?;
+
+                println!();
+                println!("{}", format!("✓ Switched to configuration '{}'", name).bold().green());
+                println!("{}", format!("Configuration saved to: {}", config_path.to_string_lossy()).dimmed());
+
+                return Ok(());
+            }
+        }
+
+        println!("{}", format!("Invalid selection. Please enter a number between 1 and {}.", configs.len()).yellow());
     }
 }
 
@@ -542,17 +791,14 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_reindex(
+    uri: String,
+    mode: String,
+    wait: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::reindex(
-        &client,
-        &uri,
-        regenerate,
-        wait,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
+    commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
 }
 
 pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
@@ -834,5 +1080,27 @@ pub async fn handle_health(ctx: CliContext) -> Result<()> {
 
 pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
+
+    // Probe health endpoint first with a short timeout
+    println!("Connecting to {}...", ctx.config.url);
+    match client.get::<serde_json::Value>("/health", &[]).await {
+        Ok(value) => {
+            let healthy = value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !healthy {
+                println!("Warning: Server reports unhealthy status");
+            }
+        }
+        Err(e) => {
+            println!("Error: Failed to connect to server at {}", ctx.config.url);
+            println!("{}", e);
+            println!("\nPlease check:");
+            println!("  1. The server is running");
+            println!("  2. The URL is correct");
+            println!("  3. Your API key is valid (if required)");
+            println!("\nRun `ov config setup-cli` to reconfigure if needed.");
+            std::process::exit(1);
+        }
+    }
+
     tui::run_tui(client, &uri).await
 }

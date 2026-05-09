@@ -197,150 +197,75 @@ async def test_write_permission_denied_returns_structured_error(app, service, mo
 
 
 async def test_reindex_missing_uri_returns_not_found_error_payload(client, monkeypatch):
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(False),
-    )
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            from openviking_cli.exceptions import NotFoundError
+
+            raise NotFoundError(uri, "resource")
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
     response = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/missing", "wait": True},
+        json={"uri": "viking://resources/missing", "mode": "vectors_only", "wait": True},
     )
     _assert_error(response, status_code=404, error_code="NOT_FOUND")
 
 
 async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(True),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: _FakeTracker(has_running=True),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            from openviking_cli.exceptions import OpenVikingError
+
+            raise OpenVikingError(
+                f"URI {uri} already has a reindex in progress",
+                code="CONFLICT",
+                details={"uri": uri},
+            )
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
     response = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/conflict", "wait": True},
+        json={"uri": "viking://resources/conflict", "mode": "vectors_only", "wait": True},
     )
     _assert_error(response, status_code=409, error_code="CONFLICT")
 
 
-async def test_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "error", "message": "bad summarize"}
-
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(True),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: _FakeTracker(has_running=False),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
-    response = await client.post(
-        "/api/v1/content/reindex",
-        json={"uri": "viking://resources/demo", "wait": True, "regenerate": True},
-    )
-    _assert_error(
-        response,
-        status_code=500,
-        error_code="PROCESSING_ERROR",
-        message_fragment="bad summarize",
-    )
-
-
-async def test_maintenance_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "error", "message": "bad maintenance summarize"}
-
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(True),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: _FakeTracker(has_running=False),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.maintenance.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
-    response = await client.post(
-        "/api/v1/maintenance/reindex",
-        json={"uri": "viking://resources/demo", "wait": True, "regenerate": True},
-    )
-    _assert_error(
-        response,
-        status_code=500,
-        error_code="PROCESSING_ERROR",
-        message_fragment="bad maintenance summarize",
-    )
-
-
 async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "success", "message": "Indexed 1 resources"}
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            return {"status": "completed", "mode": mode, "uri": uri}
 
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(True),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: _FakeTracker(has_running=False),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
     response = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/demo", "wait": True},
+        json={"uri": "viking://resources/demo", "mode": "semantic_and_vectors", "wait": True},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["result"]["status"] == "success"
+    assert body["result"]["status"] == "completed"
+    assert body["result"]["mode"] == "semantic_and_vectors"
 
 
 async def test_reindex_async_returns_task_id(client, monkeypatch):
-    created = {"called": False}
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            return {
+                "task_id": "task-123",
+                "status": "accepted",
+                "uri": uri,
+                "object_type": "resource",
+                "mode": mode,
+            }
 
-    def fake_create_task(coro):
-        created["called"] = True
-        coro.close()
-        return None
-
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: _FakeVikingFS(True),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: _FakeTracker(task_id="task-123"),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.content.asyncio.create_task", fake_create_task)
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
     response = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/demo", "wait": False},
+        json={"uri": "viking://resources/demo", "mode": "vectors_only", "wait": False},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
     assert body["result"]["status"] == "accepted"
     assert body["result"]["task_id"] == "task-123"
-    assert created["called"] is True
+    assert body["result"]["mode"] == "vectors_only"

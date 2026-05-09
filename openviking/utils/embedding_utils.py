@@ -12,8 +12,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.directories import get_context_type_for_uri
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -79,15 +78,6 @@ async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: in
             f"Failed to decrement embedding tracker for semantic_msg_id={semantic_msg_id}: {e}",
             exc_info=True,
         )
-
-
-def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
-    """Derive owner_space from a URI."""
-    if uri.startswith("viking://agent/"):
-        return agent_space_fragment(ctx)
-    if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-        return user_space_fragment(ctx)
-    return ""
 
 
 def _coerce_datetime(value: object) -> Optional[datetime]:
@@ -251,7 +241,7 @@ async def vectorize_directory_meta(
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
         parent_uri = VikingURI(uri).parent.uri
-        owner_space = _owner_space_for_uri(uri, ctx)
+        owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
 
@@ -362,7 +352,7 @@ async def vectorize_file(
             updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
-            owner_space=_owner_space_for_uri(file_path, ctx),
+            owner_space=owner_space_for_uri(file_path, ctx),
         )
 
         content_type = get_resource_content_type(file_name)
@@ -442,8 +432,12 @@ async def index_resource(
     (``/memories/``) are indexed as ``"memory"`` rather than the default
     ``"resource"``.
     """
+    if uri.startswith("viking://session/") or uri == "viking://session":
+        logger.info("Skipping indexing for session namespace: %s", uri)
+        return
+
     viking_fs = get_viking_fs()
-    context_type = get_context_type_for_uri(uri)
+    context_type = context_type_for_uri(uri)
 
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"

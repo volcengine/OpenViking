@@ -3,6 +3,7 @@
 
 """Tests for resource management endpoints."""
 
+import asyncio
 import zipfile
 
 import httpx
@@ -627,3 +628,204 @@ async def test_add_resource_rejects_temp_file_id_symlink(
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_async_returns_task_id(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test async task tracking",
+            "wait": False,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "task_id" in body["result"]
+    assert body["result"]["task_id"]
+
+
+async def test_add_resource_sync_no_task_id(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test sync no task_id",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "task_id" not in body["result"]
+
+
+async def test_add_resource_async_task_queryable(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    from openviking.service.task_tracker import reset_task_tracker
+
+    reset_task_tracker()
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test task queryable",
+            "wait": False,
+        },
+    )
+    task_id = resp.json()["result"]["task_id"]
+
+    await asyncio.sleep(2.0)
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    result = task_resp.json()["result"]
+    assert result["task_id"] == task_id
+    assert result["task_type"] == "add_resource"
+    assert result["status"] in {"running", "completed", "failed"}
+
+
+async def test_add_resource_async_failure_cleans_up_tracker(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+    upload_temp_dir,
+):
+    """Regression: when wait=False and telemetry_id is registered but processor
+    raises before task/monitor creation, RequestWaitTracker and telemetry
+    registry must not leak state."""
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.telemetry.registry import _REGISTERED_TELEMETRY
+    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+    from openviking_cli.session.user_id import UserIdentifier
+
+    async def _failing_process_resource(**kwargs):
+        raise RuntimeError("processor exploded")
+
+    monkeypatch.setattr(
+        service.resources._resource_processor, "process_resource", _failing_process_resource
+    )
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    rwt_before = set(get_request_wait_tracker()._states.keys())
+    tel_before = set(_REGISTERED_TELEMETRY.keys())
+
+    try:
+        await service.resources.add_resource(
+            path="/tmp/fail_test.md",
+            ctx=ctx,
+            reason="failure cleanup test",
+            wait=False,
+        )
+    except RuntimeError:
+        pass
+
+    rwt_after = set(get_request_wait_tracker()._states.keys())
+    tel_after = set(_REGISTERED_TELEMETRY.keys())
+
+    leaked_rwt = rwt_after - rwt_before
+    assert not leaked_rwt, f"RequestWaitTracker leaked: {leaked_rwt}"
+
+    leaked_telemetry = tel_after - tel_before
+    assert not leaked_telemetry, f"Telemetry registry leaked: {leaked_telemetry}"
+
+
+async def test_add_resource_business_error_no_task(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+    upload_temp_dir,
+):
+    """When process_resource returns status=error, no task should be created."""
+
+    from openviking.service.task_tracker import get_task_tracker
+
+    async def _error_process_resource(**kwargs):
+        return {"status": "error", "message": "unsupported format"}
+
+    monkeypatch.setattr(
+        service.resources._resource_processor, "process_resource", _error_process_resource
+    )
+
+    task_count_before = get_task_tracker().count()
+
+    await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": "nonexistent",
+            "reason": "test business error",
+            "wait": False,
+        },
+    )
+
+    task_count_after = get_task_tracker().count()
+    assert task_count_after == task_count_before, "Business error should not create a task"
+
+
+async def test_monitor_marks_failed_on_queue_error(
+    service,
+    monkeypatch,
+):
+    """When queue processing has errors, _monitor_queue_processing should mark task as failed."""
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+    from openviking_cli.session.user_id import UserIdentifier
+
+    reset_task_tracker()
+
+    async def _fake_process_resource(**kwargs):
+        return {"status": "success", "root_uri": "viking://resources/queue-err-test"}
+
+    monkeypatch.setattr(
+        service.resources._resource_processor, "process_resource", _fake_process_resource
+    )
+
+    original_wait_for_request = get_request_wait_tracker().wait_for_request
+
+    async def _mock_wait_then_error(telemetry_id, timeout=None, poll_interval=0.05):
+        rwt = get_request_wait_tracker()
+        with rwt._lock:
+            state = rwt._states.get(telemetry_id)
+            if state:
+                state.semantic_error_count = 1
+                state.semantic_errors.append("semantic processing failed")
+                state.pending_semantic_roots.clear()
+                state.pending_embedding_roots.clear()
+        await original_wait_for_request(telemetry_id, timeout=timeout, poll_interval=0.01)
+
+    monkeypatch.setattr(get_request_wait_tracker(), "wait_for_request", _mock_wait_then_error)
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_resource(
+        path="/tmp/queue_err_test.md",
+        ctx=ctx,
+        reason="queue error test",
+        wait=False,
+    )
+
+    task_id = result.get("task_id")
+    assert task_id, "Expected task_id in result"
+
+    await asyncio.sleep(1.0)
+
+    task = get_task_tracker().get(task_id)
+    assert task is not None
+    assert task.status.value == "failed", f"Expected failed, got {task.status.value}"
+    assert "queue processing failed" in task.error

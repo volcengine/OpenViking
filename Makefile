@@ -27,15 +27,17 @@ CLEAN_DIRS := \
 	**/__pycache__/
 
 .PHONY: all build clean help check-pip check-deps
+.PHONY: build-cli
 
 all: build
 
 help:
 	@echo "Available targets:"
-	@echo "  build       - Build ragfs-python and C++ extensions using setup.py"
-	@echo "  clean       - Remove build artifacts and temporary files"
-	@echo "  check-deps  - Check if required dependencies (Rust, CMake, etc.) are installed"
-	@echo "  help        - Show this help message"
+	@echo "  build           - Build ragfs-python and C++ extensions using setup.py"
+	@echo "  build-cli       - Build Rust CLI (ov) in development mode (fast) and copy to openviking/bin/"
+	@echo "  clean           - Remove build artifacts and temporary files"
+	@echo "  check-deps      - Check if required dependencies (Rust, CMake, etc.) are installed"
+	@echo "  help            - Show this help message"
 
 check-pip:
 	@if command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
@@ -138,3 +140,13 @@ clean:
 	@find . -name "*.pyc" -delete
 	@find . -name "__pycache__" -type d -exec rm -rf {} +
 	@echo "Cleanup completed."
+
+# Rust CLI targets
+build-cli:
+	@echo "Building Rust CLI (ov) in development mode..."
+	@cd $(OV_CLI_DIR) && cargo build
+	@mkdir -p openviking/bin
+	@cp target/debug/ov openviking/bin/ov
+	@chmod +x openviking/bin/ov
+	@echo "  [OK] CLI built at target/debug/ov"
+	@echo "  [OK] CLI copied to openviking/bin/ov"

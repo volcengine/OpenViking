@@ -18,7 +18,7 @@ The following platforms have been successfully integrated with OpenViking MCP:
 |----------|-------------------|
 | **Claude Code** | `type: http` |
 | **ChatGPT & Codex** | Standard MCP config |
-| **Claude.ai / Claude Desktop** | Via MCP-Key2OAuth proxy |
+| **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
 | **Manus** | Standard MCP config |
 | **Trae** | Standard MCP config |
 
@@ -78,31 +78,27 @@ Or in `.mcp.json`:
 
 Add `--scope user` to make the config global (shared across all projects).
 
-### Claude.ai / Claude Desktop (OAuth Proxy)
+### Claude.ai / Claude Desktop / ChatGPT / Cursor (OAuth)
 
-Claude.ai and Claude Desktop Connector require MCP servers to use OAuth 2.1 authentication — API Keys cannot be passed directly.
+These clients only accept OAuth 2.1 — API Keys cannot be passed directly.
+OpenViking ships a native OAuth 2.1 implementation (DCR + PKCE + opaque
+tokens, backed by SQLite, with a console-driven OTP authorization page) so
+no external proxy is needed.
 
-#### Official OAuth Support (Planned)
+**See the [OAuth 2.1 Guide](11-oauth.md)** for:
 
-We are evaluating built-in OAuth 2.1 authorization endpoints for `openviking-server`. The initial design includes:
+- End-to-end flow (device-flow style: page displays a 6-character code,
+  user confirms in the OpenViking console)
+- HTTP (local) and HTTPS (production) deployment, including Caddy and nginx
+  reverse-proxy templates plus a docker-compose example
+- Connecting Claude.ai / Claude Desktop / Cursor / ChatGPT step by step
+- `OPENVIKING_PUBLIC_BASE_URL` and the `oauth` config block
+- Token model (`ovat_` / `ovrt_` / `ovac_` prefixes) and revocation
 
-- **OTP Authorization**: Obtain a one-time passcode via CLI (`ov otp`) or REST API, then enter it on the OAuth authorization page — no external dependencies required
-- **Console Quick-Auth**: Leverage the Web Console (port 8020) same-origin session for one-click authorization
-- **Third-party Login**: Optional delegated login via GitHub / Google or other IdPs
-
-These approaches are currently in design review; implementation timeline is TBD.
-
-#### Current Workaround: MCP-Key2OAuth (Community Project)
-
-Until official OAuth support is available, the community project [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) can proxy API Key auth as an OAuth flow:
-
-1. Follow the project README to self-host the proxy (Cloudflare Workers)
-2. Enter your OpenViking MCP server URL (e.g., `https://your-server.com/mcp`)
-3. Generate the proxied URL
-4. In Claude.ai / Claude Desktop, enter the generated URL — it will redirect to the proxy for auth
-5. After authorization, MCP tools are available
-
-> ⚠️ **Disclaimer:** MCP-Key2OAuth is a third-party community-maintained project. The OpenViking team makes no guarantees regarding its security, availability, or data handling. Please assess the risks before use. If you have concerns, consider waiting for the official OAuth implementation or deploying your own proxy.
+> The community [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth)
+> Cloudflare Worker proxy is still around and remains a valid third-party
+> option, but the native flow is recommended now: no extra deployment unit,
+> no third-party trust boundary on the API key.
 
 
 ## Available MCP Tools

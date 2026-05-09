@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -56,6 +57,13 @@ def _resolve_search_filter(
         )
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
+
+
+def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
+    """Resolve path variables in a single URI or list of URIs."""
+    if isinstance(uri, list):
+        return [resolve_path_variables(u) for u in uri]
+    return resolve_path_variables(uri)
 
 
 class FindRequest(BaseModel):
@@ -126,13 +134,14 @@ async def find(
         request.until,
         request.time_field,
     )
+    resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
         fn=lambda: service.search.find(
             query=request.query,
             ctx=_ctx,
-            target_uri=request.target_uri,
+            target_uri=resolved_target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
@@ -163,6 +172,7 @@ async def search(
         request.until,
         request.time_field,
     )
+    resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
 
     async def _search():
         session = None
@@ -172,7 +182,7 @@ async def search(
         return await service.search.search(
             query=request.query,
             ctx=_ctx,
-            target_uri=request.target_uri,
+            target_uri=resolved_target_uri,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,
@@ -202,26 +212,30 @@ async def grep(
 ):
     """Content search with pattern."""
     service = get_service()
+    resolved_uri = resolve_path_variables(request.uri)
+    resolved_exclude_uri = None
+    if request.exclude_uri:
+        resolved_exclude_uri = resolve_path_variables(request.exclude_uri)
     try:
         result = await service.fs.grep(
-            request.uri,
+            resolved_uri,
             request.pattern,
             ctx=_ctx,
-            exclude_uri=request.exclude_uri,
+            exclude_uri=resolved_exclude_uri,
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
         )
     except AGFSNotFoundError:
-        raise NotFoundError(request.uri, "file")
+        raise NotFoundError(resolved_uri, "file")
     except AGFSClientError as e:
         # Fallback for older versions without typed exceptions
         err_msg = str(e).lower()
         if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(request.uri, "file")
+            raise NotFoundError(resolved_uri, "file")
         raise
     except Exception as exc:
-        mapped = map_exception(exc, resource=request.uri, resource_type="file")
+        mapped = map_exception(exc, resource=resolved_uri, resource_type="file")
         if mapped is not None:
             raise mapped from exc
         raise
@@ -235,17 +249,18 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
+    resolved_uri = resolve_path_variables(request.uri)
     try:
         result = await service.fs.glob(
-            request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
+            request.pattern, ctx=_ctx, uri=resolved_uri, node_limit=request.node_limit
         )
     except AGFSNotFoundError:
-        raise NotFoundError(request.uri or request.pattern, "file")
+        raise NotFoundError(resolved_uri or request.pattern, "file")
     except AGFSClientError as e:
         # Fallback for older versions without typed exceptions
         err_msg = str(e).lower()
         if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(request.uri or request.pattern, "file")
+            raise NotFoundError(resolved_uri or request.pattern, "file")
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=request.uri, resource_type="file")

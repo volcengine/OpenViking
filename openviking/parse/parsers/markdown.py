@@ -86,7 +86,7 @@ class MarkdownParser(BaseParser):
     """
 
     # Configuration constants
-    DEFAULT_MAX_SECTION_SIZE = 1024  # Maximum tokens per section
+    DEFAULT_MAX_SECTION_SIZE = 2048  # Maximum tokens per section
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
@@ -372,10 +372,16 @@ class MarkdownParser(BaseParser):
             para_tokens = self._estimate_token_count(para)
             para_len = len(para)
 
-            # Single paragraph too long (by tokens or chars): force split by characters
+            # Single paragraph too long (by tokens or chars): force split by characters.
+            # If the already accumulated prefix is very short, merge it into this
+            # oversized paragraph first so we do not create a low-value tiny chunk
+            # like `section_1.md` that only contains the heading/introduction.
             if para_tokens > max_size or para_len > max_chars:
                 if current:
-                    parts.append(current.strip())
+                    if current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
+                        para = current + "\n\n" + para
+                    else:
+                        parts.append(current.strip())
                     current = ""
                     current_tokens = 0
                 for i in range(0, len(para), max_chars):
@@ -391,7 +397,13 @@ class MarkdownParser(BaseParser):
                 current_tokens += para_tokens
 
         if current.strip():
-            parts.append(current.strip())
+            # Avoid emitting a tiny trailing chunk when all earlier content has
+            # already been split out (for example, a huge paragraph followed by
+            # a short "no data" tail). Fold the tail back into the previous part.
+            if parts and current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
+                parts[-1] = f"{parts[-1]}\n\n{current.strip()}".strip()
+            else:
+                parts.append(current.strip())
 
         return parts if parts else [content]
 
@@ -525,34 +537,116 @@ class MarkdownParser(BaseParser):
         ]
 
         pending = []
+        buffered_section = None
+
+        async def flush_buffered() -> None:
+            nonlocal buffered_section
+            if buffered_section is not None:
+                await self._save_section(
+                    content,
+                    headings,
+                    parent_dir,
+                    buffered_section,
+                    max_size,
+                    min_size,
+                )
+                buffered_section = None
+
         for sec in expanded:
             name, tokens, content_text = sec["name"], sec["tokens"], sec["content"]
             has_children = sec["has_children"]
 
             # Handle small sections
             if tokens < min_size:
-                pending = await self._try_add_to_pending(
-                    viking_fs, parent_dir, pending, (name, content_text, tokens), max_size
-                )
+                if pending and sum(t for _, _, t in pending) + tokens > max_size:
+                    await flush_buffered()
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+                pending.append((name, content_text, tokens))
                 continue
 
-            # Try merge with pending
-            if pending and self._can_merge(pending, tokens, max_size, has_children):
-                pending.append((name, content_text, tokens))
+            if pending:
+                await flush_buffered()
+
+                # Try merge with pending
+                if self._can_merge(pending, tokens, max_size, has_children):
+                    pending.append((name, content_text, tokens))
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+                    continue
+
+                # Avoid flushing a single tiny section as a standalone low-value file.
+                if self._should_merge_pending_into_next(pending):
+                    sec = self._merge_pending_into_next_section(pending, sec)
+                    pending = []
+                else:
+                    await self._save_merged(viking_fs, parent_dir, pending)
+                    pending = []
+            else:
+                await flush_buffered()
+
+            buffered_section = sec
+
+        if pending:
+            # No next section exists. Fold a single tiny pending section back into
+            # the previous saved candidate instead of emitting a standalone file.
+            if buffered_section is not None and self._should_merge_pending_into_next(pending):
+                buffered_section = self._merge_pending_into_previous_section(
+                    buffered_section, pending
+                )
+                pending = []
+            else:
+                await flush_buffered()
                 await self._save_merged(viking_fs, parent_dir, pending)
                 pending = []
-                continue
 
-            # Save pending and process current section
-            pending = await self._flush_pending(viking_fs, parent_dir, pending)
-            await self._save_section(content, headings, parent_dir, sec, max_size, min_size)
-
-        # Save remaining pending
-        await self._flush_pending(viking_fs, parent_dir, pending)
+        await flush_buffered()
 
     def _can_merge(self, pending: List, tokens: int, max_size: int, has_children: bool) -> bool:
         """Check if section can merge with pending."""
         return sum(t for _, _, t in pending) + tokens <= max_size and not has_children
+
+    def _should_merge_pending_into_next(self, pending: List[Tuple[str, str, int]]) -> bool:
+        """Prefer folding a single tiny pending section into the next section."""
+        return len(pending) == 1 and pending[0][2] <= self.DEFAULT_MIN_SECTION_TOKENS
+
+    def _merge_pending_into_next_section(
+        self, pending: List[Tuple[str, str, int]], section: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach a tiny pending section to the following section."""
+        _, pending_content, _ = pending[0]
+        merged = dict(section)
+        merged["content"] = f"{pending_content}\n\n{section['content']}".strip()
+        merged["tokens"] = self._estimate_token_count(merged["content"])
+
+        if merged.get("has_children"):
+            direct_content = section.get("direct_content", "").strip()
+            merged["direct_content"] = (
+                f"{pending_content}\n\n{direct_content}".strip()
+                if direct_content
+                else pending_content
+            )
+
+        return merged
+
+    def _merge_pending_into_previous_section(
+        self, section: Dict[str, Any], pending: List[Tuple[str, str, int]]
+    ) -> Dict[str, Any]:
+        """Attach a tiny trailing pending section back into the previous section."""
+        _, pending_content, _ = pending[0]
+        merged = dict(section)
+        merged["content"] = f"{section['content']}\n\n{pending_content}".strip()
+        merged["tokens"] = self._estimate_token_count(merged["content"])
+
+        if merged.get("has_children"):
+            direct_content = section.get("direct_content", "").strip()
+            merged["direct_content"] = (
+                f"{direct_content}\n\n{pending_content}".strip()
+                if direct_content
+                else pending_content
+            )
+
+        return merged
 
     async def _try_add_to_pending(
         self, viking_fs, parent_dir: str, pending: List, item: Tuple, max_size: int

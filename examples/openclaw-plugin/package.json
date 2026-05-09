@@ -1,42 +1,75 @@
 {
   "name": "@openclaw/openviking",
-  "version": "2026.4.33",
+  "version": "2026.5.8",
   "displayName": "OpenViking",
-  "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "description": "OpenClaw context-engine plugin — OpenViking AI memory, long-term memory, knowledge base, semantic search, RAG, context engine. 长期记忆 · 知识库 · 语义检索 · 上下文引擎",
   "type": "module",
+  "keywords": [
+    "openclaw",
+    "openviking",
+    "plugin",
+    "context-engine",
+    "memory",
+    "remote-memory",
+    "RAG",
+    "semantic-retrieval",
+    "context-database",
+    "long-term-memory",
+    "auto-recall",
+    "auto-capture"
+  ],
   "files": [
+    "dist/",
     "*.ts",
     "commands/setup.ts",
     "!vitest.config.ts",
+    "install-manifest.json",
     "openclaw.plugin.json",
-    "package.json"
+    "package.json",
+    "README.md",
+    "INSTALL.md",
+    "INSTALL-ZH.md",
+    "INSTALL-AGENT.md",
+    "skills/"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
     "test:watch": "vitest"
   },
   "engines": {
-    "openclaw": ">=2026.4.24"
+    "openclaw": ">=2026.4.8"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
     "fflate": "^0.8.2"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin",
+  "license": "MIT",
+  "author": "OpenViking Contributors",
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./commands/setup.ts",
     "compat": {
-      "pluginApi": ">=2026.4.24",
-      "minGatewayVersion": "2026.4.24"
+      "pluginApi": ">=2026.4.8",
+      "minGatewayVersion": "2026.4.8"
     },
     "build": {
-      "openclawVersion": "2026.4.24",
-      "pluginSdkVersion": "2026.4.24"
+      "openclawVersion": "2026.4.8",
+      "pluginSdkVersion": "2026.4.8"
     }
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
+    "typescript": "^5.8.0",
     "vitest": "^4.1.0"
   }
 }

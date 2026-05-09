@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.core.namespace import context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
@@ -68,7 +69,7 @@ class ContentWriteCoordinator:
         if stat.get("isDir"):
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
 
-        context_type = self._context_type_for_uri(normalized_uri)
+        context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -300,7 +301,7 @@ class ContentWriteCoordinator:
         if not stat.get("not_found"):
             raise AlreadyExistsError(uri, "file")
 
-        context_type = self._context_type_for_uri(uri)
+        context_type = context_type_for_uri(uri)
         root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -339,7 +340,7 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and self._context_type_for_uri(uri) == "memory":
+        if mode == "replace" and context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
             existing = deserialize_full(existing_raw)
             if existing.memory_fields:
@@ -601,10 +602,3 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")
             root_uri = parent.uri
         return root_uri
-
-    def _context_type_for_uri(self, uri: str) -> str:
-        if "/memories/" in uri:
-            return "memory"
-        if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
-            return "skill"
-        return "resource"

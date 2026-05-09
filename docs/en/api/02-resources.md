@@ -136,8 +136,9 @@ This endpoint is the core entry point for resource management, supporting adding
 |-----------|------|----------|---------|-------------|
 | path | string | No | - | Remote resource URL (HTTP/HTTPS/Git). Mutually exclusive with `temp_file_id` |
 | temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
-| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
-| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
+| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` and `parent_auto_create` |
+| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` and `parent_auto_create` |
+| create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
 | reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
@@ -152,7 +153,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
-- `to` and `parent` cannot be specified together
+- `to`, `parent`, and `parent_auto_create` cannot be specified together
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
@@ -252,6 +253,17 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
 
 # Cancel scheduled updates
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
+
+# Add with parent directory (parent must exist)
+ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# Add with parent directory (auto-create parent if it doesn't exist)
+ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
+# Or using full flag
+ov add-resource ./documents/guide.md --parent-auto-create viking://resources/docs/2026/05/07
+
+# Using path variables with auto-create
+ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 
 **Response Example**

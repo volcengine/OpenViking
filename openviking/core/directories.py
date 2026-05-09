@@ -10,11 +10,12 @@ This module defines the preset directory structure that is created on initializa
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
     agent_space_fragment,
     canonical_agent_root,
     canonical_user_root,
+    context_type_for_uri,
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
@@ -133,19 +134,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         "No preset subdirectory structure, users create project directories as needed.",
     ),
 }
-
-
-def get_context_type_for_uri(uri: str) -> str:
-    """Determine context_type based on URI."""
-    if "/memories" in uri:
-        return ContextType.MEMORY.value
-    elif "/resources" in uri:
-        return ContextType.RESOURCE.value
-    elif "/skills" in uri:
-        return ContextType.SKILL.value
-    elif uri.startswith("viking://session"):
-        return ContextType.MEMORY.value
-    return ContextType.RESOURCE.value
 
 
 class DirectoryInitializer:
@@ -309,7 +297,7 @@ class DirectoryInitializer:
                 uri=uri,
                 parent_uri=parent_uri,
                 is_leaf=False,
-                context_type=get_context_type_for_uri(uri),
+                context_type=context_type_for_uri(uri),
                 abstract=defn.abstract,
                 level=level,
                 user=ctx.user,
