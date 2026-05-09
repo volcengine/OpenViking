@@ -7,7 +7,7 @@ enabled: true
 content_template: |
   Skill: {{ skill_name }}
   
-  - Success rate: {{ ((success_count|default(0) / (total_executions|default(1) if total_executions|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0) }}/{{ total_executions|default(0) }})
+  - Success rate: {{ ((success_count|default(0, true) / (total_executions|default(1, true) if total_executions|default(0, true) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0, true) }}/{{ total_executions|default(0, true) }})
   - Best for: {{ best_for|default('N/A') }}
   - Recommended flow: {{ recommended_flow|default('N/A') }}
   - Key dependencies: {{ key_dependencies|default('N/A') }}
