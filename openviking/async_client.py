@@ -563,7 +563,6 @@ class AsyncOpenViking:
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
         on_conflict: Optional[str] = None,
     ) -> str:
         """
@@ -572,7 +571,6 @@ class AsyncOpenViking:
         Args:
             file_path: Local .ovpack file path
             parent: Target parent URI (e.g., viking://user/alice/resources/references/)
-            force: Legacy alias for on_conflict="overwrite" (default: False)
             on_conflict: One of "fail", "overwrite", or "skip"
 
         Returns:
@@ -582,7 +580,6 @@ class AsyncOpenViking:
         return await self._client.import_ovpack(
             file_path,
             parent,
-            force=force,
             on_conflict=on_conflict,
         )
 

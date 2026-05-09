@@ -25,13 +25,12 @@ pub async fn import(
     client: &HttpClient,
     file_path: &str,
     target: &str,
-    force: bool,
     on_conflict: Option<&str>,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .import_ovpack(file_path, target, force, on_conflict)
+        .import_ovpack(file_path, target, on_conflict)
         .await?;
     output_success(&result, format, compact);
     Ok(())

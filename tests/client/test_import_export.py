@@ -58,20 +58,22 @@ class TestImportOvpack:
         assert isinstance(import_uri, str)
         assert "imported" in import_uri
 
-    async def test_import_with_force(self, client_with_resource, temp_dir: Path):
-        """Test force overwrite import"""
+    async def test_import_with_on_conflict_overwrite(self, client_with_resource, temp_dir: Path):
+        """Test overwrite import."""
         client, uri = client_with_resource
 
         # Export first
-        export_path = temp_dir / "force_test.ovpack"
+        export_path = temp_dir / "overwrite_test.ovpack"
         await client.export_ovpack(uri, str(export_path))
 
         # First import
-        await client.import_ovpack(str(export_path), "viking://resources/force_test/")
+        await client.import_ovpack(str(export_path), "viking://resources/overwrite_test/")
 
-        # Second force import (overwrite)
+        # Second import overwrites the existing root.
         import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/force_test/", force=True
+            str(export_path),
+            "viking://resources/overwrite_test/",
+            on_conflict="overwrite",
         )
 
         assert isinstance(import_uri, str)

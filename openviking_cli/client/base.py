@@ -302,7 +302,6 @@ class BaseClient(ABC):
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""

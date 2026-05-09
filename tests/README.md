@@ -122,7 +122,7 @@ Tests for the OpenViking client API (`AsyncOpenViking` / `SyncOpenViking`).
 | `test_search.py` | Semantic search | `find()` fast vector search with limit/threshold/target_uri; `search()` with intent analysis and session context |
 | `test_relations.py` | Resource linking | `link()` single/multiple URIs with reason; `unlink()` existing/nonexistent; `relations()` query |
 | `test_file_operations.py` | File manipulation | `rm()` file/directory with recursive; `mv()` rename/move; `grep()` content search with case sensitivity; `glob()` pattern matching |
-| `test_import_export.py` | Import/Export | `export_ovpack()` file/directory; `import_ovpack()` with force/vectorize options; roundtrip verification |
+| `test_import_export.py` | Import/Export | `export_ovpack()` file/directory; `import_ovpack()` with conflict policy; roundtrip verification |
 
 ### server/
 

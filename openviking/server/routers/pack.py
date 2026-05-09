@@ -33,7 +33,6 @@ class ImportRequest(BaseModel):
     Attributes:
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         parent: Parent URI under which the imported pack will be placed.
-        force: Legacy alias for on_conflict="overwrite".
         on_conflict: Conflict policy: fail, overwrite, or skip.
     """
 
@@ -41,7 +40,6 @@ class ImportRequest(BaseModel):
 
     temp_file_id: str
     parent: str
-    force: bool = False
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
 
 
@@ -111,7 +109,6 @@ async def import_ovpack(
             resolved.local_path,
             parent,
             ctx=ctx,
-            force=body.force,
             on_conflict=body.on_conflict,
         )
     except Exception:

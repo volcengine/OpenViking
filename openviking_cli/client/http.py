@@ -926,14 +926,12 @@ class AsyncHTTPClient(BaseClient):
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         parent = VikingURI.normalize(parent)
         request_data = {
             "parent": parent,
-            "force": force,
         }
         if on_conflict is not None:
             request_data["on_conflict"] = on_conflict

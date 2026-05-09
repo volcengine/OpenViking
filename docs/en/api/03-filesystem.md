@@ -1075,9 +1075,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 |-----------|------|----------|---------|-------------|
 | temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp_upload)) |
 | parent | string | Yes | - | Target parent URI (import to this location) |
-| force | bool | No | False | Legacy alias for `on_conflict=overwrite` |
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
-| vectorize | bool | No | True | Whether to trigger vectorization |
 
 **Permission Requirements**: ROOT or ADMIN
 
@@ -1106,8 +1104,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
-    \"vectorize\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -1128,9 +1125,6 @@ client.initialize()
 ```bash
 # Import .ovpack file
 ov import ./exports/my-project.ovpack viking://resources/imported/
-
-# Force overwrite existing content
-ov import ./exports/my-project.ovpack viking://resources/imported/ --force
 
 # Explicit conflict policy
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite

@@ -168,7 +168,6 @@ pub async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<(
 pub async fn handle_import(
     file_path: String,
     target_uri: String,
-    force: bool,
     on_conflict: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -177,7 +176,6 @@ pub async fn handle_import(
         &client,
         &file_path,
         &target_uri,
-        force,
         on_conflict.as_deref(),
         ctx.output_format,
         ctx.compact,

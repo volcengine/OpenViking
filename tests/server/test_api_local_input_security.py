@@ -179,6 +179,22 @@ async def test_import_ovpack_rejects_removed_vectorize_field(client: httpx.Async
     assert any("vectorize" in error["loc"] for error in validation_errors)
 
 
+async def test_import_ovpack_rejects_removed_force_field(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/pack/import",
+        json={
+            "temp_file_id": "demo.ovpack",
+            "parent": "viking://resources/imported",
+            "force": True,
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    validation_errors = body["error"]["details"]["validation_errors"]
+    assert any("force" in error["loc"] for error in validation_errors)
+
+
 async def test_import_ovpack_rejects_forged_temp_file_id(
     client: httpx.AsyncClient,
     upload_temp_dir,

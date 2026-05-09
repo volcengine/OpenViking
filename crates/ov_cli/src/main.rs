@@ -500,9 +500,6 @@ enum Commands {
         file_path: String,
         /// Target parent URI
         target_uri: String,
-        /// Overwrite when conflicts exist
-        #[arg(long)]
-        force: bool,
         /// Conflict policy: fail, overwrite, or skip
         #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
         on_conflict: Option<String>,
@@ -1061,10 +1058,9 @@ async fn main() {
         Commands::Import {
             file_path,
             target_uri,
-            force,
             on_conflict,
         } => {
-            handlers::handle_import(file_path, target_uri, force, on_conflict, ctx).await
+            handlers::handle_import(file_path, target_uri, on_conflict, ctx).await
         }
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
@@ -1389,6 +1385,19 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed import vectorize flag should not parse");
+    }
+
+    #[test]
+    fn cli_import_rejects_removed_force_flag() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "import",
+            "./exports/demo.ovpack",
+            "viking://resources/imported/",
+            "--force",
+        ]);
+
+        assert!(result.is_err(), "removed import force flag should not parse");
     }
 
     #[test]

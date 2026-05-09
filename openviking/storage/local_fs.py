@@ -170,17 +170,13 @@ def _base_name_from_entries(infolist: list[zipfile.ZipInfo]) -> str:
     raise ValueError("Could not determine root directory name from ovpack")
 
 
-def _normalize_on_conflict(on_conflict: Optional[str], force: bool) -> str:
+def _normalize_on_conflict(on_conflict: Optional[str]) -> str:
     if on_conflict is None:
-        return "overwrite" if force else "fail"
+        return "fail"
     if on_conflict not in OVPACK_ON_CONFLICT_VALUES:
         allowed = ", ".join(sorted(OVPACK_ON_CONFLICT_VALUES))
         raise InvalidArgumentError(
             f"Invalid on_conflict value: {on_conflict}. Must be one of: {allowed}"
-        )
-    if force and on_conflict != "overwrite":
-        raise InvalidArgumentError(
-            "force=True conflicts with on_conflict values other than 'overwrite'"
         )
     return on_conflict
 
@@ -529,7 +525,6 @@ async def import_ovpack(
     file_path: str,
     parent: str,
     ctx: RequestContext,
-    force: bool = False,
     on_conflict: Optional[str] = None,
 ) -> str:
     """
@@ -539,7 +534,6 @@ async def import_ovpack(
         viking_fs: VikingFS instance
         file_path: Local .ovpack file path
         parent: Target parent URI (e.g., viking://resources/...)
-        force: Legacy alias for on_conflict="overwrite"
         on_conflict: One of "fail", "overwrite", or "skip"
 
     Returns:
@@ -550,7 +544,7 @@ async def import_ovpack(
 
     parent = _strip_uri_trailing_slash(parent)
     _validate_scope(parent, operation="import")
-    conflict_action = _normalize_on_conflict(on_conflict, force)
+    conflict_action = _normalize_on_conflict(on_conflict)
 
     await _ensure_parent_exists(viking_fs, parent, ctx)
 

@@ -412,7 +412,6 @@ class SyncHTTPClient:
         self,
         file_path: str,
         target: str,
-        force: bool = False,
         on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
@@ -420,7 +419,6 @@ class SyncHTTPClient:
             self._async_client.import_ovpack(
                 file_path,
                 target,
-                force=force,
                 on_conflict=on_conflict,
             )
         )

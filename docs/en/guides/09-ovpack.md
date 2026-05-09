@@ -39,9 +39,6 @@ Import an `.ovpack` file into OpenViking.
 # Basic import
 openviking import ./exports/my-project.ovpack viking://resources/imported/
 
-# Force overwrite
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
-
 # Explicit conflict policy
 openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
 ```
@@ -116,7 +113,7 @@ When migrating memories with OVPack, you must import the `.ovpack` into the pare
 openviking export viking://user/default/memories/ ./exports/user-memories.ovpack
 
 # Import into the user space root (imports to viking://user/default/memories/)
-openviking import ./exports/user-memories.ovpack viking://user/default/ --force
+openviking import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
 ### Export/Import Agent Memories (CLI)
@@ -124,11 +121,11 @@ openviking import ./exports/user-memories.ovpack viking://user/default/ --force
 ```bash
 # isolate_agent_scope_by_user = false
 openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
+openviking import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
 
 # isolate_agent_scope_by_user = true
 openviking export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --force
+openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --on-conflict overwrite
 ```
 
 ### Export/Import Memories (Python SDK)
@@ -195,7 +192,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://user/default/\",
-    \"force\": true
+    \"on_conflict\": \"overwrite\"
   }"
 ```
 
@@ -218,7 +215,7 @@ openviking export viking://resources/ ./backups/backup_${DATE}.ovpack
 openviking export viking://resources/my-project/ ./migration.ovpack
 
 # Import on Machine B
-openviking import ./migration.ovpack viking://resources/ --force
+openviking import ./migration.ovpack viking://resources/ --on-conflict overwrite
 ```
 
 ### Resource Sharing
@@ -239,4 +236,4 @@ A: Yes! OVPack is a standard ZIP format and can be opened with any compression t
 A: Imports now always rebuild vectors. If import time is too high, split the content into smaller OVPack files and import them in batches.
 
 **Q: How to handle duplicate resources during import?**
-A: Use `--on-conflict overwrite` to replace existing resources, or `--on-conflict skip` to keep them. `--force` remains as a shorthand for overwrite.
+A: Use `--on-conflict overwrite` to replace existing resources, or `--on-conflict skip` to keep them.
