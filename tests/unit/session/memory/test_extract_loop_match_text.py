@@ -37,10 +37,15 @@ class TestValidateMatchText:
     def test_not_found_in_content(self):
         assert ExtractLoop._validate_match_text("Java", "I love Python programming") is False
 
-    def test_not_found_none_content(self):
-        assert ExtractLoop._validate_match_text("Python", None) is False
+    def test_none_content_allows_word(self):
+        # When page content is unavailable, only word/phrase constraint is enforced
+        assert ExtractLoop._validate_match_text("Python", None) is True
 
-    def test_not_found_empty_content(self):
+    def test_none_content_rejects_long_text(self):
+        # Even with no content, long text is still rejected
+        assert ExtractLoop._validate_match_text("A" * 51, None) is False
+
+    def test_not_found_in_empty_content(self):
         assert ExtractLoop._validate_match_text("Python", "") is False
 
     def test_long_text_rejected(self):

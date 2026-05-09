@@ -371,16 +371,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     @staticmethod
     def _validate_match_text(match_text: Optional[str], page_text: Optional[str]) -> bool:
-        """Validate match_text: must be a word/short phrase and exist verbatim in page content."""
+        """Validate match_text: must be a word/short phrase and exist verbatim in page content.
+
+        If page_text is None (content unavailable, e.g. new page not yet persisted),
+        only the word/phrase constraint is enforced; the verbatim-existence check is skipped.
+        """
         if not match_text:
             return True  # None/empty is allowed
-        if not page_text:
-            return False
-        # Must exist verbatim in page content
-        if match_text not in page_text:
-            return False
+
         # Must be a word or short phrase (not a sentence/long text)
-        # A phrase is a few words without sentence-ending punctuation
         stripped = match_text.strip()
         if len(stripped) > 50:
             return False
@@ -391,6 +390,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 return False
             if any(p in stripped[:-1] for p in ("。", "！", "？", ".", "!", "?")):
                 return False
+
+        # Must exist verbatim in page content (skip check if content unavailable)
+        if page_text is not None and match_text not in page_text:
+            return False
+
         return True
 
     def _resolve_links(
