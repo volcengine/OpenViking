@@ -1,0 +1,29 @@
+{
+  "name": "@openviking/cli",
+  "version": "0.0.0",
+  "description": "OpenViking CLI — agent-native context database",
+  "bin": {
+    "ov": "bin/ov.mjs"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.mjs"
+  },
+  "type": "module",
+  "files": ["bin", "README.md"],
+  "optionalDependencies": {
+    "@openviking/cli-darwin-arm64": "0.0.0",
+    "@openviking/cli-darwin-x64": "0.0.0",
+    "@openviking/cli-linux-arm64": "0.0.0",
+    "@openviking/cli-linux-x64": "0.0.0",
+    "@openviking/cli-win32-x64": "0.0.0"
+  },
+  "keywords": ["openviking", "cli", "context", "embeddings", "agent", "memory"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volcengine/openviking.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

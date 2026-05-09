@@ -9,7 +9,7 @@ on:
       - 'Cargo.toml'
       - '.github/workflows/rust-cli.yml'
     tags:
-      - 'cli@*'  # Trigger release on tags starting with cli@
+      - 'cli@*'
   pull_request:
     branches: [ main ]
     paths:
@@ -28,18 +28,33 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact_name: ov-linux-x86_64
+            npm_pkg: cli-linux-x64
+            npm_os: linux
+            npm_cpu: x64
           - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             artifact_name: ov-linux-aarch64
+            npm_pkg: cli-linux-arm64
+            npm_os: linux
+            npm_cpu: arm64
           - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: ov-macos-x86_64
+            npm_pkg: cli-darwin-x64
+            npm_os: darwin
+            npm_cpu: x64
           - os: macos-14
             target: aarch64-apple-darwin
             artifact_name: ov-macos-aarch64
+            npm_pkg: cli-darwin-arm64
+            npm_os: darwin
+            npm_cpu: arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: ov-windows-x86_64.exe
+            npm_pkg: cli-win32-x64
+            npm_os: win32
+            npm_cpu: x64
 
     steps:
     - uses: actions/checkout@v6
@@ -85,65 +100,79 @@ jobs:
           ${{ runner.os }}-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-
           ${{ runner.os }}-target-${{ matrix.target }}-
 
+    - name: Inject version from tag
+      shell: bash
+      run: |
+        VERSION="${GITHUB_REF#refs/tags/cli@}"
+        if [[ "$VERSION" != "$GITHUB_REF" ]]; then
+          sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" crates/ov_cli/Cargo.toml
+          rm -f crates/ov_cli/Cargo.toml.bak
+          echo "Injected version $VERSION into Cargo.toml"
+        fi
+
     - name: Build CLI
       run: cargo build --release --target ${{ matrix.target }} -p ov_cli
-        
-    - name: Create compressed artifacts
+
+    - name: Package platform npm package
       shell: bash
       run: |
-        mkdir -p artifacts
-        cd target/${{ matrix.target }}/release
-
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          # Windows: create zip
-          7z a ../../../artifacts/${{ matrix.artifact_name }}.zip ov.exe
-          cd ../../../artifacts
-          # Use PowerShell to get hash in correct format
-          powershell -Command "(Get-FileHash -Algorithm SHA256 '${{ matrix.artifact_name }}.zip').Hash.ToLower() + '  ${{ matrix.artifact_name }}.zip'" > ${{ matrix.artifact_name }}.zip.sha256
-        else
-          # Unix: create tar.gz
-          tar czf ../../../artifacts/${{ matrix.artifact_name }}.tar.gz ov
-          cd ../../../artifacts
-          # shasum format: <hash>  <filename>
-          shasum -a 256 ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+        VERSION="${GITHUB_REF#refs/tags/cli@}"
+        # For non-tag builds, use 0.0.0-dev
+        if [[ "$VERSION" == "$GITHUB_REF" ]]; then
+          VERSION="0.0.0-dev"
         fi
 
-    - name: Verify checksum format
-      shell: bash
-      run: |
-        echo "Contents of checksum file:"
-        cat artifacts/*.sha256
-        echo ""
-        echo "Verifying checksum locally:"
-        cd artifacts
+        PKG_DIR="npm-pkg"
+        mkdir -p "$PKG_DIR/bin"
+
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          sha256sum -c *.sha256 || shasum -a 256 -c *.sha256 || echo "Checksum verification skipped on Windows"
+          cp "target/${{ matrix.target }}/release/ov.exe" "$PKG_DIR/bin/ov.exe"
         else
-          shasum -a 256 -c *.sha256
+          cp "target/${{ matrix.target }}/release/ov" "$PKG_DIR/bin/ov"
+          chmod +x "$PKG_DIR/bin/ov"
         fi
 
-    - name: Upload artifacts
+        node -e "
+          const pkg = {
+            name: '@openviking/${{ matrix.npm_pkg }}',
+            version: '$VERSION',
+            description: 'OpenViking CLI native binary for ${{ matrix.npm_os }}-${{ matrix.npm_cpu }}',
+            os: ['${{ matrix.npm_os }}'],
+            cpu: ['${{ matrix.npm_cpu }}'],
+            files: ['bin'],
+            license: 'Apache-2.0',
+            repository: { type: 'git', url: 'git+https://github.com/volcengine/openviking.git' },
+            publishConfig: { access: 'public' }
+          };
+          require('fs').writeFileSync('$PKG_DIR/package.json', JSON.stringify(pkg, null, 2) + '\n');
+        "
+
+    - name: Upload npm package artifact
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ matrix.artifact_name }}
-        path: artifacts/*
+        name: ${{ matrix.npm_pkg }}
+        path: npm-pkg/
 
-  release:
-    name: Create GitHub Release
+  npm-publish:
+    name: Publish to npm
     runs-on: ubuntu-24.04
     needs: build
     if: startsWith(github.ref, 'refs/tags/cli@')
-    permissions:
-      contents: write
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        registry-url: 'https://registry.npmjs.org'
 
     - name: Get version from tag
       id: get_version
       run: echo "version=${GITHUB_REF#refs/tags/cli@}" >> $GITHUB_OUTPUT
 
-    - name: Download all artifacts
+    - name: Download all platform artifacts
       uses: actions/download-artifact@v8
       with:
         path: artifacts
@@ -151,43 +180,36 @@ jobs:
     - name: Display artifact structure
       run: ls -R artifacts/
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: CLI v${{ steps.get_version.outputs.version }}
-        body: |
-          # OpenViking CLI v${{ steps.get_version.outputs.version }}
-
-          ## Installation
-
-          ### Quick Install (macOS/Linux)
-          ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/refs/tags/cli@${{ steps.get_version.outputs.version }}/crates/ov_cli/install.sh | bash
-          ```
-
-          ### Manual Installation
-          Download the appropriate binary for your platform below, extract it, and add it to your PATH.
-
-          The CLI command is simply `ov`:
-          ```bash
-          # After extraction
-          chmod +x ov  # Unix only
-          mv ov /usr/local/bin/  # or any directory in your PATH
-
-          # Verify installation
-          ov --version
-          ```
-
-          ### Checksums
-          SHA256 checksums are provided for each binary for verification.
-
-          ## Changes
-          See the [commit history](https://github.com/${{ github.repository }}/commits/cli@${{ steps.get_version.outputs.version }}) for details.
-        files: |
-          artifacts/**/*.tar.gz
-          artifacts/**/*.zip
-          artifacts/**/*.sha256
-        draft: false
-        prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') || contains(steps.get_version.outputs.version, 'rc') }}
+    - name: Publish platform packages
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        for pkg_dir in artifacts/cli-*/; do
+          pkg_name=$(basename "$pkg_dir")
+          echo "Publishing @openviking/$pkg_name@$VERSION..."
+          chmod +x "$pkg_dir/bin/ov" 2>/dev/null || true
+          cd "$pkg_dir"
+          npm publish --access public
+          cd "$GITHUB_WORKSPACE"
+        done
+
+    - name: Publish wrapper package
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        cd npm/cli
+
+        # Inject version into package.json
+        node -e "
+          const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+          pkg.version = '$VERSION';
+          for (const dep of Object.keys(pkg.optionalDependencies || {})) {
+            pkg.optionalDependencies[dep] = '$VERSION';
+          }
+          require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+        "
+
+        echo "Publishing @openviking/cli@$VERSION..."
+        npm publish --access public
