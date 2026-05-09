@@ -319,6 +319,39 @@ ov import ./exports/session.ovpack viking:// --on-conflict overwrite
 
 ## 常见场景
 
+### 全量备份和迁移
+
+当前版本不支持直接导出绝对根 URI `viking://`。如果要做 OpenViking 可迁移内容的全量备份，
+需要分别导出所有公开 scope root：
+
+```bash
+mkdir -p ./backups/openviking-full
+
+ov export viking://resources/ ./backups/openviking-full/resources.ovpack
+ov export viking://user/ ./backups/openviking-full/user.ovpack
+ov export viking://agent/ ./backups/openviking-full/agent.ovpack
+ov export viking://session/ ./backups/openviking-full/session.ovpack
+```
+
+在目标环境恢复时，这些顶级 scope 包都必须导入到 `viking://`：
+
+```bash
+ov import ./backups/openviking-full/resources.ovpack viking:// --on-conflict overwrite
+ov import ./backups/openviking-full/user.ovpack viking:// --on-conflict overwrite
+ov import ./backups/openviking-full/agent.ovpack viking:// --on-conflict overwrite
+ov import ./backups/openviking-full/session.ovpack viking:// --on-conflict overwrite
+```
+
+这会恢复：
+
+- `viking://resources/`
+- `viking://user/`
+- `viking://agent/`
+- `viking://session/`
+
+不包含 `temp`、`queue`、锁文件、manifest、`.relations.json` 等内部或运行态数据。非 session
+内容导入后会在目标环境重新向量化；session 只恢复文件状态。
+
 ### 备份资源
 
 ```bash

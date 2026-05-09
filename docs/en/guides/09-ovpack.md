@@ -278,6 +278,37 @@ Scope-root packages cannot be imported under another scope directory.
 
 ## Use Cases
 
+### Full Backup and Migration
+
+This version does not support exporting the absolute root URI `viking://`
+directly. To back up all OVPack-supported OpenViking content, export each public
+scope root separately:
+
+```bash
+mkdir -p ./backups/openviking-full
+
+openviking export viking://resources/ ./backups/openviking-full/resources.ovpack
+openviking export viking://user/ ./backups/openviking-full/user.ovpack
+openviking export viking://agent/ ./backups/openviking-full/agent.ovpack
+openviking export viking://session/ ./backups/openviking-full/session.ovpack
+```
+
+Restore those top-level scope packages to `viking://` in the target
+environment:
+
+```bash
+openviking import ./backups/openviking-full/resources.ovpack viking:// --on-conflict overwrite
+openviking import ./backups/openviking-full/user.ovpack viking:// --on-conflict overwrite
+openviking import ./backups/openviking-full/agent.ovpack viking:// --on-conflict overwrite
+openviking import ./backups/openviking-full/session.ovpack viking:// --on-conflict overwrite
+```
+
+This restores `viking://resources/`, `viking://user/`, `viking://agent/`, and
+`viking://session/`. It does not include internal or runtime data such as
+`temp`, `queue`, lock files, OVPack manifests, or `.relations.json`. Non-session
+content is re-vectorized in the target environment; session packages restore
+files only.
+
 ### Resource Backup
 ```bash
 DATE=$(date +%Y%m%d)
