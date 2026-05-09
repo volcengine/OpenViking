@@ -7,19 +7,26 @@ from typing import Any
 
 import pytest
 
+pytest.importorskip("langchain")
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 pytest.importorskip("openai")
 
+from langchain.agents import create_agent
+from langchain_core.language_models.chat_models import SimpleChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from openai import OpenAI
 from typing_extensions import Annotated, TypedDict
 
 from openviking.integrations.langchain import (
+    OpenVikingChatMessageHistory,
     OpenVikingContextMiddleware,
+    OpenVikingRetriever,
+    OpenVikingStore,
     create_openviking_tools,
     with_openviking_context,
 )
@@ -112,6 +119,64 @@ def test_true_live_langchain_context_backend_e2e():
         _cleanup(client, session_id)
 
 
+def test_true_live_langchain_message_history_e2e():
+    client = _build_real_client()
+    session_id = f"langchain-history-live-e2e-{uuid.uuid4().hex}"
+    code = f"history_live_{uuid.uuid4().hex[:10]}"
+
+    def answer(messages: list[BaseMessage]) -> AIMessage:
+        text = "\n".join(extract_message_text(message.content) for message in messages)
+        if code in text.lower():
+            return AIMessage(content=code)
+        return AIMessage(content="missing")
+
+    app = RunnableWithMessageHistory(
+        RunnableLambda(answer),
+        lambda resolved_session_id: OpenVikingChatMessageHistory(
+            session_id=resolved_session_id,
+            client=client,
+        ),
+    )
+
+    try:
+        first = app.invoke(
+            [
+                HumanMessage(
+                    content=(
+                        f"Remember this OpenViking LangChain history exact code: {code}. "
+                        "Answer only the exact code."
+                    )
+                )
+            ],
+            config={"configurable": {"session_id": session_id}},
+        )
+        assert code in first.content.lower()
+
+        second = app.invoke(
+            [
+                HumanMessage(
+                    content=(
+                        "Repeat the OpenViking LangChain history exact code from the "
+                        "conversation. Answer only the exact code."
+                    )
+                )
+            ],
+            config={"configurable": {"session_id": session_id}},
+        )
+        assert code in second.content.lower()
+
+        context = client.get_session_context(session_id, token_budget=8_000)
+        assert [message["role"] for message in context["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert code in str(context).lower()
+    finally:
+        _cleanup(client, session_id)
+
+
 def test_true_live_langgraph_middleware_e2e():
     _require_live_env()
     client = _build_real_client()
@@ -181,6 +246,120 @@ def test_true_live_langgraph_middleware_e2e():
         _cleanup(client, session_id)
 
 
+def test_true_live_langgraph_create_agent_middleware_e2e():
+    _require_live_env()
+    client = _build_real_client()
+    session_id = f"langgraph-agent-live-e2e-{uuid.uuid4().hex}"
+    code = f"lg_agent_live_{uuid.uuid4().hex[:10]}"
+
+    try:
+        _seed_session_context(
+            client,
+            session_id,
+            code,
+            framework="LangGraph create_agent",
+        )
+        middleware = OpenVikingContextMiddleware(
+            client=client,
+            session_id_resolver=lambda _state, _runtime: session_id,
+            token_budget=8_000,
+            commit_on_after_agent=False,
+            include_active_messages=True,
+        )
+        agent = create_agent(
+            model=_LiveOpenAIChatModel(
+                instruction=(
+                    "You are validating OpenViking with LangGraph create_agent "
+                    "middleware. Return only the exact lg_agent_live_* code if one "
+                    "appears in the context or conversation."
+                )
+            ),
+            tools=[],
+            middleware=[middleware],
+        )
+
+        result = agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "What is the OpenViking LangGraph create_agent live e2e "
+                            "exact code? Answer only the exact code."
+                        )
+                    )
+                ]
+            },
+            config={"configurable": {"thread_id": session_id}},
+        )
+        answer = extract_message_text(result["messages"][-1].content)
+        assert code in answer.lower()
+
+        context = client.get_session_context(session_id, token_budget=8_000)
+        assert [message["role"] for message in context["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert code in str(context).lower()
+    finally:
+        _cleanup(client, session_id)
+
+
+def test_true_live_retriever_and_langgraph_store_e2e():
+    client = _build_real_client()
+    root_uri = f"viking://user/memories/langgraph_store_live_{uuid.uuid4().hex}"
+    code = f"store_live_{uuid.uuid4().hex[:10]}"
+
+    try:
+        store = OpenVikingStore(
+            client=client,
+            root_uri=root_uri,
+            wait=True,
+            timeout=float(os.environ.get("OPENVIKING_LIVE_INDEX_TIMEOUT", "180")),
+        )
+        store.put(
+            ("users", "ada"),
+            "preferences",
+            {
+                "framework": "langgraph",
+                "deployment_color": "azure",
+                "exact_code": code,
+                "note": f"OpenViking live store and retriever validation code {code}.",
+            },
+        )
+
+        item = store.get(("users", "ada"), "preferences")
+        assert item is not None
+        assert item.value["exact_code"] == code
+
+        store_search = _invoke_until_contains(
+            lambda: "\n".join(
+                str(result.value) for result in store.search(("users",), query=code, limit=5)
+            ),
+            code,
+            label="LangGraph store semantic search",
+        )
+        assert code in store_search.lower()
+
+        retriever = OpenVikingRetriever(
+            client=client,
+            target_uri=f"{root_uri}/index",
+            limit=5,
+            content_mode="read",
+        )
+        retrieved = _invoke_until_contains(
+            lambda: "\n".join(
+                f"{doc.page_content}\n{doc.metadata}" for doc in retriever.invoke(code)
+            ),
+            code,
+            label="LangChain retriever live HTTP search",
+        )
+        assert code in retrieved.lower()
+    finally:
+        _cleanup_uri(client, root_uri)
+
+
 def _langchain_live_model(messages: list[BaseMessage]) -> AIMessage:
     answer = _call_llm(
         _langchain_messages_to_openai(
@@ -193,6 +372,23 @@ def _langchain_live_model(messages: list[BaseMessage]) -> AIMessage:
         )
     )
     return AIMessage(content=answer)
+
+
+class _LiveOpenAIChatModel(SimpleChatModel):
+    instruction: str
+
+    @property
+    def _llm_type(self) -> str:
+        return "openviking-live-openai-compatible"
+
+    def _call(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> str:
+        return _call_llm(_langchain_messages_to_openai(messages, instruction=self.instruction))
 
 
 class _LiveGraphState(TypedDict, total=False):
@@ -338,6 +534,13 @@ def _seed_session_context(client, session_id: str, code: str, *, framework: str)
 def _cleanup(client, session_id: str) -> None:
     try:
         client.delete_session(session_id)
+    except Exception:
+        pass
+
+
+def _cleanup_uri(client, uri: str) -> None:
+    try:
+        client.rm(uri, recursive=True)
     except Exception:
         pass
 

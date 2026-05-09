@@ -220,9 +220,7 @@ def test_chat_message_history_preserves_tool_parts():
 
     restored = history.messages
     restored_ai_messages = [message for message in restored if isinstance(message, AIMessage)]
-    restored_tool_messages = [
-        message for message in restored if isinstance(message, ToolMessage)
-    ]
+    restored_tool_messages = [message for message in restored if isinstance(message, ToolMessage)]
     assert len(restored_ai_messages) == 1
     assert len(restored_ai_messages[0].tool_calls) == 1
     assert len(restored_tool_messages) == 1
@@ -584,6 +582,46 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
+def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root():
+    class CanonicalizingClient(InMemoryOpenVikingClient):
+        def _canonicalize(self, value):
+            if isinstance(value, str):
+                return value.replace(
+                    "viking://user/memories/",
+                    "viking://user/default/memories/",
+                    1,
+                )
+            if isinstance(value, list):
+                return [self._canonicalize(item) for item in value]
+            return value
+
+        def write(self, uri, content, mode="replace", **kwargs):
+            return super().write(self._canonicalize(uri), content, mode=mode, **kwargs)
+
+        def read(self, uri, *args, **kwargs):
+            return super().read(self._canonicalize(uri), *args, **kwargs)
+
+        def glob(self, pattern, uri="viking://"):
+            return super().glob(pattern, self._canonicalize(uri))
+
+        def find(self, query, target_uri="", **kwargs):
+            return super().find(query, self._canonicalize(target_uri), **kwargs)
+
+        def rm(self, uri, recursive=False):
+            return super().rm(self._canonicalize(uri), recursive=recursive)
+
+    client = CanonicalizingClient()
+    store = OpenVikingStore(client=client, root_uri="viking://user/memories/langgraph_store")
+
+    store.put(("users", "ada"), "preferences", {"color": "azure"})
+
+    semantic = store.search(("users",), query="azure", limit=5)
+
+    assert semantic[0].namespace == ("users", "ada")
+    assert semantic[0].key == "preferences"
+    assert semantic[0].value["color"] == "azure"
+
+
 def test_langgraph_store_waits_for_indexing_by_default():
     class RecordingClient(InMemoryOpenVikingClient):
         def __init__(self):
@@ -858,9 +896,7 @@ def test_langgraph_middleware_captures_in_place_message_mutation():
     messages[1].content = "Mutable second stored."
     middleware.after_agent({"messages": messages}, runtime=None)
 
-    assert [
-        message["parts"][0]["text"] for message in client.sessions["middleware-mutated"]
-    ] == [
+    assert [message["parts"][0]["text"] for message in client.sessions["middleware-mutated"]] == [
         "Remember mutable first.",
         "Mutable first stored.",
         "Remember mutable second.",
@@ -894,9 +930,7 @@ def test_langgraph_middleware_captures_same_id_changed_content():
         runtime=None,
     )
 
-    assert [
-        message["parts"][0]["text"] for message in client.sessions["middleware-same-id"]
-    ] == [
+    assert [message["parts"][0]["text"] for message in client.sessions["middleware-same-id"]] == [
         "Remember same id first.",
         "Same id first stored.",
         "Remember same id second.",

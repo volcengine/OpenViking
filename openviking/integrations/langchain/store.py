@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import quote, unquote
 
+from openviking.core.namespace import uri_parts
 from openviking.integrations.langchain.client import (
     OpenVikingConnection,
     call_openviking,
@@ -40,6 +41,11 @@ else:
     _LANGGRAPH_IMPORT_ERROR = None
 
 logger = logging.getLogger(__name__)
+
+_SHORTHAND_CONTENT_SEGMENTS = {
+    "user": {"memories"},
+    "agent": {"memories", "skills"},
+}
 
 
 class OpenVikingStore(BaseStore):
@@ -228,7 +234,9 @@ class OpenVikingStore(BaseStore):
             limit=max(limit + offset, self.search_fetch_limit),
         )
         items: list[Any] = []
-        for _context_type, result_item in iter_result_items(result, ("memory", "resource", "skill")):
+        for _context_type, result_item in iter_result_items(
+            result, ("memory", "resource", "skill")
+        ):
             uri = item_value(result_item, "uri", "")
             parsed = self._parse_index_uri(uri)
             if parsed is None:
@@ -365,14 +373,13 @@ class OpenVikingStore(BaseStore):
     ) -> tuple[tuple[str, ...], str] | None:
         prefix = _join_uri(self.root_uri, collection) + "/"
         if not uri.startswith(prefix) or not uri.endswith(suffix):
-            return None
-        rel = uri[len(prefix) : -len(suffix)]
-        if not rel:
-            return None
-        parts = rel.split("/")
-        namespace = tuple(unquote(part) for part in parts[:-1])
-        key = unquote(parts[-1])
-        return namespace, key
+            return _parse_canonicalized_record_uri(
+                root_uri=self.root_uri,
+                uri=uri,
+                collection=collection,
+                suffix=suffix,
+            )
+        return _parse_record_parts(uri[len(prefix) : -len(suffix)].split("/"))
 
     def _index_document(self, record: dict[str, Any], index: bool | list[str] | None) -> str:
         value = record["value"]
@@ -420,6 +427,49 @@ def _segment(value: str) -> str:
 def _join_uri(root: str, *segments: str) -> str:
     suffix = "/".join(_segment(segment) for segment in segments if segment)
     return root.rstrip("/") if not suffix else f"{root.rstrip('/')}/{suffix}"
+
+
+def _parse_canonicalized_record_uri(
+    *,
+    root_uri: str,
+    uri: str,
+    collection: str,
+    suffix: str,
+) -> tuple[tuple[str, ...], str] | None:
+    root_parts = uri_parts(root_uri)
+    if not _is_identity_relative_root(root_parts):
+        return None
+
+    candidate_parts = uri_parts(uri)
+    if len(candidate_parts) < len(root_parts) + 2:
+        return None
+    canonical_root_parts = [root_parts[0], candidate_parts[1], *root_parts[1:]]
+    if candidate_parts[: len(canonical_root_parts)] != canonical_root_parts:
+        return None
+    if candidate_parts[len(canonical_root_parts)] != collection:
+        return None
+
+    rel_parts = candidate_parts[len(canonical_root_parts) + 1 :]
+    if not rel_parts or not rel_parts[-1].endswith(suffix):
+        return None
+    rel_parts = [*rel_parts[:-1], rel_parts[-1][: -len(suffix)]]
+    return _parse_record_parts(rel_parts)
+
+
+def _is_identity_relative_root(parts: list[str]) -> bool:
+    return (
+        len(parts) >= 2
+        and parts[0] in _SHORTHAND_CONTENT_SEGMENTS
+        and parts[1] in _SHORTHAND_CONTENT_SEGMENTS[parts[0]]
+    )
+
+
+def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
+    if not parts or not parts[-1]:
+        return None
+    namespace = tuple(unquote(part) for part in parts[:-1])
+    key = unquote(parts[-1])
+    return namespace, key
 
 
 def _parse_dt(value: str) -> datetime:
