@@ -355,44 +355,25 @@ The final output of the model must strictly follow the JSON Schema format shown 
         resolved.resolved_links = resolved_links
         return resolved
 
-    def _get_page_text(self, uri: str, upsert_operations: List[ResolvedOperation]) -> Optional[str]:
-        """Get the text content of a page by URI for match_text validation."""
-        # Existing pages: look in read_file_contents
-        file_content = self.context_provider.read_file_contents.get(uri)
-        if file_content:
-            return file_content.plain_content
-        # New pages: look in upsert_operations
-        for op in upsert_operations:
-            if uri in op.uris:
-                content = op.memory_fields.get("content", "")
-                if content:
-                    return content
-        return None
-
     @staticmethod
-    def _validate_match_text(match_text: Optional[str], page_text: Optional[str]) -> bool:
-        """Validate match_text: must be a word/short phrase and exist verbatim in page content.
+    def _validate_match_text(match_text: Optional[str], conversation_text: str) -> bool:
+        """Validate match_text: must be a single word and exist verbatim in conversation.
 
-        If page_text is None (content unavailable, e.g. new page not yet persisted),
-        only the word/phrase constraint is enforced; the verbatim-existence check is skipped.
+        Args:
+            match_text: The match_text value to validate.
+            conversation_text: The full conversation text to check against.
         """
         if not match_text:
             return True  # None/empty is allowed
 
-        # Must be a word or short phrase (not a sentence/long text)
         stripped = match_text.strip()
-        if len(stripped) > 50:
-            return False
-        # Reject if it contains sentence-ending punctuation (period, exclamation, question mark)
-        if any(p in stripped for p in ("。", "！", "？", ".", "!", "?")):
-            # Allow trailing punctuation only if it's a single word
-            if stripped.count(".") > 0 and not stripped.endswith("."):
-                return False
-            if any(p in stripped[:-1] for p in ("。", "！", "？", ".", "!", "?")):
-                return False
 
-        # Must exist verbatim in page content (skip check if content unavailable)
-        if page_text is not None and match_text not in page_text:
+        # Must be a single word (no spaces/whitespace)
+        if " " in stripped or "\t" in stripped or "\n" in stripped:
+            return False
+
+        # Must exist verbatim in conversation
+        if stripped not in conversation_text:
             return False
 
         return True
@@ -417,13 +398,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 logger.warning(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
                 continue
 
-            # Validate match_text: must be a word/short phrase and exist verbatim in from page
+            # Validate match_text: must be a single word and exist verbatim in conversation
             if link.match_text:
-                from_page_text = self._get_page_text(from_uri, upsert_operations)
-                if not self._validate_match_text(link.match_text, from_page_text):
+                conversation_text = self.context_provider.get_conversation_text()
+                if not self._validate_match_text(link.match_text, conversation_text):
                     logger.warning(
                         f"Skipping link: match_text '{link.match_text}' is invalid"
-                        f" (not found in from page or not a word/phrase)"
+                        f" (not a single word or not found in conversation)"
                     )
                     continue
 

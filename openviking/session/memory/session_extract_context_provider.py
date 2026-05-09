@@ -70,6 +70,17 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def read_file_contents(self) -> Dict[str, MemoryFileContent]:
         return self._read_file_contents
 
+    def get_conversation_text(self) -> str:
+        """Get the full conversation text for match_text validation."""
+        from openviking.message.part import TextPart
+
+        text_parts = []
+        for message in self.messages or []:
+            for part in getattr(message, "parts", []):
+                if isinstance(part, TextPart) and part.text:
+                    text_parts.append(part.text)
+        return "\n".join(text_parts)
+
     def set_page_id_map(self, page_id_map):
         """Set PageIdMap for annotating read results with page_ids."""
         self._page_id_map = page_id_map
@@ -137,7 +148,7 @@ For each link:
 - For NEW items you create, assign a unique page_id >= 100 and set it in the item's "page_id" field.
 - "t_field": which field in the target page (usually "content")
 - "t_line_ranges": 1-based line range(s) within the t_field of the target page, using the line numbers shown in read results. Single range: "3-5", multiple ranges: "3-5,8-10". Required when the link points to a specific passage.
-- "match_text": a single word or short phrase from the from page's content that should become a link. Rules: (1) must exist verbatim in the from page's content; (2) must be a word or short phrase only, NOT a sentence or long text; (3) pick the most specific/identifying term
+- "match_text": a single WORD from the original conversation that should become a link. Rules: (1) must be a single word only (NOT a phrase, sentence, or multi-word text); (2) must exist verbatim in the original conversation messages; (3) pick the most specific/identifying word
 - "description": brief explanation of the relationship
 - "weight": 0.0-1.0, how strong the relationship is (default 1.0)
 
