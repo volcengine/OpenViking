@@ -99,6 +99,7 @@ class PreprocessorOptions:
     expand_budget_on_risk: bool = True
     max_facts_total: int = 24
     min_full_tokens_for_compact: int = 600
+    min_absolute_savings_tokens: int = 500
     max_tool_output_chars: int = 300
 
 
@@ -254,6 +255,8 @@ def build_wm_compact_packet(
         fallback_reason = "session_too_short"
     elif compact_tokens >= int(full_tokens * opts.fallback_if_compact_ratio_above):
         fallback_reason = "compact_not_smaller_enough"
+    elif (full_tokens - compact_tokens) < opts.min_absolute_savings_tokens:
+        fallback_reason = "savings_too_small"
     elif "failed_tool" in risk_flags and not any(
         span.source_index == item["index"] and item["has_tool"]
         for item in normalized
