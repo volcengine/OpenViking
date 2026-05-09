@@ -808,8 +808,6 @@ async def import_ovpack(
     _validate_scope(parent, operation="import")
     conflict_action = _normalize_on_conflict(on_conflict)
 
-    await _ensure_parent_exists(viking_fs, parent, ctx)
-
     with zipfile.ZipFile(file_path, "r") as zf:
         infolist = zf.infolist()
         if not infolist:
@@ -841,6 +839,7 @@ async def import_ovpack(
                 )
 
         _validate_manifest_content(zf, manifest, infolist, base_name)
+        await _ensure_parent_exists(viking_fs, parent, ctx)
 
         if root_exists:
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
