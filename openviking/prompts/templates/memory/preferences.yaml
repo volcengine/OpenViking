@@ -16,6 +16,7 @@ overview_template: |-
   {% for item in items %}
   - [{{ item.file_content.topic }}](./{{ item.file_name }})
   {% endfor %}
+  
 fields:
   - name: user
     type: string

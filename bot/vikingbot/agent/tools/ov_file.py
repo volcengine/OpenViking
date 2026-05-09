@@ -80,18 +80,6 @@ class VikingListTool(OVFileTool):
 class VikingSearchTool(OVFileTool):
     """Tool to search Viking resources."""
 
-    @staticmethod
-    def _should_scope_to_sample_memory(
-        tool_context: "ToolContext", target_uri: Optional[str]
-    ) -> bool:
-        return (
-            not target_uri
-            and bool(getattr(tool_context, "workspace_id", ""))
-            and bool(getattr(tool_context, "sender_id", ""))
-            and str(tool_context.workspace_id).startswith("lm_")
-            and str(tool_context.sender_id).startswith("lm_user_")
-        )
-
     @property
     def name(self) -> str:
         return "openviking_search"
@@ -278,8 +266,8 @@ class VikingSearchTool(OVFileTool):
                 if total == 0:
                     return f"No results found for query: {query}"
                 return self._format_search_items_json(grouped_items, min_score=min_score)
-
-            results = await search_client.search(query, target_uri=target_uri, limit=20)
+            else:
+                results = await search_client.search(query, target_uri=target_uri, limit=20)
 
             if not results:
                 return f"No results found for query: {query}"

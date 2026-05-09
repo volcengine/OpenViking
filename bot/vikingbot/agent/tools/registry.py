@@ -12,7 +12,6 @@ from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.tracing import get_current_response_id
-from vikingbot.utils.openviking_routing import resolve_openviking_workspace_id
 
 
 class ToolRegistry:
@@ -156,15 +155,9 @@ class ToolRegistry:
         if not tool:
             return f"Error: Tool '{name}' not found"
 
-        workspace_id = resolve_openviking_workspace_id(
-            session_key=session_key,
-            sandbox_manager=sandbox_manager,
-            eval_mode=False,
-        )
         tool_context = ToolContext(
             session_key=session_key,
             sandbox_manager=sandbox_manager,
-            workspace_id=workspace_id,
             sender_id=sender_id,
             memory_user_ids=memory_user_ids,
         )
@@ -220,7 +213,7 @@ class ToolRegistry:
             context=HookContext(
                 event_type="tool.post_call",
                 session_key=session_key,
-                workspace_id=workspace_id,
+                workspace_id=sandbox_manager.to_workspace_id(session_key),
             ),
             tool_name=name,
             params=params,
