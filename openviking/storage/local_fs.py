@@ -883,12 +883,7 @@ async def export_ovpack(
     Returns:
         Exported file path
 
-    Raises:
-        ValueError: If export size exceeds limits (65536 files or 2GB total size)
     """
-    MAX_FILES = 65536
-    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-
     uri = _strip_uri_trailing_slash(uri)
     _validate_export_source_uri(uri)
 
@@ -902,22 +897,6 @@ async def export_ovpack(
     ensure_dir_exists(to)
 
     entries = _exportable_entries(await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx))
-
-    file_count = sum(1 for entry in entries if not entry.get("isDir"))
-    if file_count > MAX_FILES:
-        raise ValueError(
-            f"Export aborted: too many files ({file_count} files, limit is {MAX_FILES}). "
-            f"Please export a smaller directory."
-        )
-
-    total_size = sum(entry.get("size", 0) for entry in entries if not entry.get("isDir"))
-    if total_size > MAX_TOTAL_SIZE:
-        size_mb = total_size / (1024 * 1024)
-        limit_mb = MAX_TOTAL_SIZE / (1024 * 1024)
-        raise ValueError(
-            f"Export aborted: total size too large ({size_mb:.1f}MB, limit is {limit_mb:.0f}MB). "
-            f"Please export a smaller directory."
-        )
 
     manifest = await _build_manifest(viking_fs, vector_store, uri, base_name, entries, ctx)
     manifest_entries = _manifest_entries_by_path(manifest)
