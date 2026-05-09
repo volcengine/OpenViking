@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
+from openviking.server.schemas.bot import BotChatResponse, BotHealthResponse
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -39,12 +40,14 @@ def get_bot_url() -> str:
     return BOT_API_URL
 
 
-@router.get("/health")
-async def health_check(request: Request):
+@router.get("/health", response_model=BotHealthResponse)
+async def health_check(request: Request) -> BotHealthResponse:
     """Health check endpoint for Bot API.
 
     Returns 503 if --with-bot is not enabled.
-    Proxies to Vikingbot health check if enabled.
+    Proxies to Vikingbot health check if enabled. The response mirrors the
+    upstream ``HealthResponse`` schema; unknown fields are preserved via
+    ``extra='allow'`` on the mirror model.
     """
     bot_url = get_bot_url()
 
@@ -56,7 +59,7 @@ async def health_check(request: Request):
                 timeout=5.0,
             )
             response.raise_for_status()
-            return response.json()
+            return BotHealthResponse.model_validate(response.json())
     except httpx.RequestError as e:
         logger.error(f"Failed to connect to bot service at {bot_url}: {e}")
         raise HTTPException(
@@ -86,14 +89,16 @@ def extract_auth_token(request: Request) -> Optional[str]:
     return None
 
 
-@router.post("/chat")
+@router.post("/chat", response_model=BotChatResponse)
 async def chat(
     request: Request,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> BotChatResponse:
     """Send a message to the bot and get a response.
 
-    Proxies the request to Vikingbot OpenAPIChannel.
+    Proxies the request to Vikingbot OpenAPIChannel. The response mirrors
+    the upstream ``ChatResponse`` schema; unknown fields are preserved via
+    ``extra='allow'`` on the mirror model.
     """
     bot_url = get_bot_url()
     auth_token = extract_auth_token(request)
@@ -122,7 +127,7 @@ async def chat(
                 timeout=300.0,  # 5 minute timeout for chat
             )
             response.raise_for_status()
-            return response.json()
+            return BotChatResponse.model_validate(response.json())
     except httpx.RequestError as e:
         logger.error(f"Failed to connect to bot service: {e}")
         raise HTTPException(

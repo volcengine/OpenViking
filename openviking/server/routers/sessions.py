@@ -3,7 +3,6 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -14,8 +13,26 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.sessions import (
+    CommitResult,
+    ContextItem,
+    MessageAddedResult,
+    SessionArchiveDetail,
+    SessionContextResult,
+    SessionCreatedResult,
+    SessionDeletedResult,
+    SessionDetail,
+    SessionListItem,
+    UsageRecordedResult,
+    UserInfo,
+)
 
-router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+router = APIRouter(
+    prefix="/api/v1/sessions",
+    tags=["sessions"],
+    route_class=ExcludeNoneRoute,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -98,11 +115,11 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-@router.post("")
+@router.post("", response_model=Response[SessionCreatedResult])
 async def create_session(
     request: Optional[CreateSessionRequest] = None,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionCreatedResult]:
     """Create a new session.
 
     If session_id is provided, creates a session with the given ID.
@@ -115,29 +132,32 @@ async def create_session(
     session = await service.sessions.create(_ctx, session_id)
     return Response(
         status="ok",
-        result={
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-        },
+        result=SessionCreatedResult(
+            session_id=session.session_id,
+            user=UserInfo(**session.user.to_dict()),
+        ),
     )
 
 
-@router.get("")
+@router.get("", response_model=Response[List[SessionListItem]])
 async def list_sessions(
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[List[SessionListItem]]:
     """List all sessions."""
     service = get_service()
-    result = await service.sessions.sessions(_ctx)
-    return Response(status="ok", result=result)
+    items = await service.sessions.sessions(_ctx)
+    return Response(
+        status="ok",
+        result=[SessionListItem(**item) for item in items],
+    )
 
 
-@router.get("/{session_id}")
+@router.get("/{session_id}", response_model=Response[SessionDetail])
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
     auto_create: bool = Query(False, description="Create the session if it does not exist"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionDetail]:
     """Get session details."""
     from openviking_cli.exceptions import NotFoundError
 
@@ -149,33 +169,41 @@ async def get_session(
             status="error",
             error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
         )
-    result = session.meta.to_dict()
-    result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
-    result["pending_tokens"] = pending_tokens
-    return Response(status="ok", result=result)
+    meta_dict = session.meta.to_dict()
+    meta_dict["user"] = session.user.to_dict()
+    meta_dict["pending_tokens"] = sum(len(m.content) // 4 for m in session.messages)
+    return Response(
+        status="ok",
+        result=SessionDetail.model_validate(meta_dict),
+    )
 
 
-@router.get("/{session_id}/context")
+@router.get("/{session_id}/context", response_model=Response[SessionContextResult])
 async def get_session_context(
     session_id: str = Path(..., description="Session ID"),
     token_budget: int = Query(128_000, description="Token budget for session context"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionContextResult]:
     """Get assembled session context."""
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
     result = await session.get_session_context(token_budget=token_budget)
-    return Response(status="ok", result=_to_jsonable(result))
+    return Response(
+        status="ok",
+        result=SessionContextResult.model_validate(_to_jsonable(result)),
+    )
 
 
-@router.get("/{session_id}/archives/{archive_id}")
+@router.get(
+    "/{session_id}/archives/{archive_id}",
+    response_model=Response[SessionArchiveDetail],
+)
 async def get_session_archive(
     session_id: str = Path(..., description="Session ID"),
     archive_id: str = Path(..., description="Archive ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionArchiveDetail]:
     """Get one completed archive for a session."""
     from openviking_cli.exceptions import NotFoundError
 
@@ -189,25 +217,31 @@ async def get_session_archive(
             status="error",
             error=ErrorInfo(code="NOT_FOUND", message=f"Archive {archive_id} not found"),
         )
-    return Response(status="ok", result=_to_jsonable(result))
+    return Response(
+        status="ok",
+        result=SessionArchiveDetail.model_validate(_to_jsonable(result)),
+    )
 
 
-@router.delete("/{session_id}")
+@router.delete("/{session_id}", response_model=Response[SessionDeletedResult])
 async def delete_session(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SessionDeletedResult]:
     """Delete a session."""
     service = get_service()
     await service.sessions.delete(session_id, _ctx)
-    return Response(status="ok", result={"session_id": session_id})
+    return Response(
+        status="ok",
+        result=SessionDeletedResult(session_id=session_id),
+    )
 
 
-@router.post("/{session_id}/commit")
+@router.post("/{session_id}/commit", response_model=Response[CommitResult])
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[CommitResult]:
     """Commit a session (archive and extract memories).
 
     Archive (Phase 1) completes before returning.  Memory extraction
@@ -216,26 +250,30 @@ async def commit_session(
     """
     service = get_service()
     result = await service.sessions.commit_async(session_id, _ctx)
-    return Response(status="ok", result=result).model_dump(exclude_none=True)
+    return Response(
+        status="ok",
+        result=CommitResult.model_validate(result),
+    )
 
 
-@router.post("/{session_id}/extract")
+@router.post("/{session_id}/extract", response_model=Response[List[ContextItem]])
 async def extract_session(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[List[ContextItem]]:
     """Extract memories from a session."""
     service = get_service()
     result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
+    items = [ContextItem.model_validate(_to_jsonable(ctx)) for ctx in result]
+    return Response(status="ok", result=items)
 
 
-@router.post("/{session_id}/messages")
+@router.post("/{session_id}/messages", response_model=Response[MessageAddedResult])
 async def add_message(
     request: AddMessageRequest,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[MessageAddedResult]:
     """Add a message to a session.
 
     Supports two modes:
@@ -263,19 +301,19 @@ async def add_message(
     session.add_message(request.role, parts, created_at=request.created_at)
     return Response(
         status="ok",
-        result={
-            "session_id": session_id,
-            "message_count": len(session.messages),
-        },
+        result=MessageAddedResult(
+            session_id=session_id,
+            message_count=len(session.messages),
+        ),
     )
 
 
-@router.post("/{session_id}/used")
+@router.post("/{session_id}/used", response_model=Response[UsageRecordedResult])
 async def record_used(
     request: UsedRequest,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[UsageRecordedResult]:
     """Record actually used contexts and skills in a session."""
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
@@ -283,9 +321,9 @@ async def record_used(
     session.used(contexts=request.contexts, skill=request.skill)
     return Response(
         status="ok",
-        result={
-            "session_id": session_id,
-            "contexts_used": session.stats.contexts_used,
-            "skills_used": session.stats.skills_used,
-        },
+        result=UsageRecordedResult(
+            session_id=session_id,
+            contexts_used=session.stats.contexts_used,
+            skills_used=session.stats.skills_used,
+        ),
     )

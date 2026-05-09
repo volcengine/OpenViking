@@ -12,6 +12,12 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.search import (
+    GlobResult,
+    GrepResult,
+    SearchResult,
+)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 
@@ -53,7 +59,11 @@ def _merge_filter_with_tags(
     return conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
 
 
-router = APIRouter(prefix="/api/v1/search", tags=["search"])
+router = APIRouter(
+    prefix="/api/v1/search",
+    tags=["search"],
+    route_class=ExcludeNoneRoute,
+)
 
 
 class FindRequest(BaseModel):
@@ -104,11 +114,11 @@ class GlobRequest(BaseModel):
     node_limit: Optional[int] = None
 
 
-@router.post("/find")
+@router.post("/find", response_model=Response[SearchResult])
 async def find(
     request: FindRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SearchResult]:
     """Semantic search without session context."""
     service = get_service()
     actual_limit = request.node_limit if request.node_limit is not None else request.limit
@@ -131,16 +141,16 @@ async def find(
     result = _sanitize_floats(result)
     return Response(
         status="ok",
-        result=result,
+        result=SearchResult.model_validate(result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )
 
 
-@router.post("/search")
+@router.post("/search", response_model=Response[SearchResult])
 async def search(
     request: SearchRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[SearchResult]:
     """Semantic search with optional session context."""
     service = get_service()
 
@@ -172,16 +182,16 @@ async def search(
     result = _sanitize_floats(result)
     return Response(
         status="ok",
-        result=result,
+        result=SearchResult.model_validate(result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )
 
 
-@router.post("/grep")
+@router.post("/grep", response_model=Response[GrepResult])
 async def grep(
     request: GrepRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[GrepResult]:
     """Content search with pattern."""
     service = get_service()
     result = await service.fs.grep(
@@ -193,17 +203,21 @@ async def grep(
         node_limit=request.node_limit,
         level_limit=request.level_limit,
     )
-    return Response(status="ok", result=result)
+    # ``service.fs.grep`` is expected to return a dict (AGFS contract).
+    # Trust the contract and let Pydantic surface any shape violation so a
+    # silent fallback cannot swallow a polymorphic upstream response.
+    return Response(status="ok", result=GrepResult.model_validate(result))
 
 
-@router.post("/glob")
+@router.post("/glob", response_model=Response[GlobResult])
 async def glob(
     request: GlobRequest,
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[GlobResult]:
     """File pattern matching."""
     service = get_service()
     result = await service.fs.glob(
         request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
     )
-    return Response(status="ok", result=result)
+    # See ``grep`` above — no silent fallback to an empty ``GlobResult``.
+    return Response(status="ok", result=GlobResult.model_validate(result))

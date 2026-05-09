@@ -13,6 +13,12 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.schemas import ExcludeNoneRoute
+from openviking.server.schemas.content import (
+    ContentReadResult,
+    ContentWriteResult,
+    ReindexResult,
+)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.utils import get_logger
@@ -43,16 +49,20 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
-router = APIRouter(prefix="/api/v1/content", tags=["content"])
+router = APIRouter(
+    prefix="/api/v1/content",
+    tags=["content"],
+    route_class=ExcludeNoneRoute,
+)
 
 
-@router.get("/read")
+@router.get("/read", response_model=Response[ContentReadResult])
 async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
     limit: int = Query(-1, description="Number of lines to read, -1 means read to end"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[ContentReadResult]:
     """Read file content (L2)."""
     service = get_service()
     result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
@@ -73,22 +83,22 @@ async def read(
     return Response(status="ok", result=result)
 
 
-@router.get("/abstract")
+@router.get("/abstract", response_model=Response[str])
 async def abstract(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[str]:
     """Read L0 abstract."""
     service = get_service()
     result = await service.fs.abstract(uri, ctx=_ctx)
     return Response(status="ok", result=result)
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=Response[str])
 async def overview(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[str]:
     """Read L1 overview."""
     service = get_service()
     result = await service.fs.overview(uri, ctx=_ctx)
@@ -120,11 +130,11 @@ async def download(
     )
 
 
-@router.post("/write")
+@router.post("/write", response_model=Response[ContentWriteResult])
 async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[ContentWriteResult]:
     """Write text content to an existing file and refresh semantics/vectors."""
     service = get_service()
     execution = await run_operation(
@@ -141,16 +151,16 @@ async def write(
     )
     return Response(
         status="ok",
-        result=execution.result,
+        result=ContentWriteResult.model_validate(execution.result),
         telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    )
 
 
-@router.post("/reindex")
+@router.post("/reindex", response_model=Response[ReindexResult])
 async def reindex(
     request: ReindexRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
-):
+) -> Response[ReindexResult]:
     """Reindex content at a URI.
 
     Re-embeds existing .abstract.md/.overview.md content into the vector
@@ -192,7 +202,10 @@ async def reindex(
                 ),
             )
         result = await _do_reindex(service, uri, request.regenerate, _ctx)
-        return Response(status="ok", result=result)
+        return Response(
+            status="ok",
+            result=ReindexResult.model_validate(result),
+        )
     else:
         # Async path: run in background, return task_id for polling
         task = tracker.create_if_no_running(
@@ -214,12 +227,12 @@ async def reindex(
         )
         return Response(
             status="ok",
-            result={
-                "uri": uri,
-                "status": "accepted",
-                "task_id": task.task_id,
-                "message": "Reindex is processing in the background",
-            },
+            result=ReindexResult(
+                uri=uri,
+                status="accepted",
+                task_id=task.task_id,
+                message="Reindex is processing in the background",
+            ),
         )
 
 
