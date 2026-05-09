@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.local_fs import export_ovpack, import_ovpack
+from openviking.storage.local_fs import backup_ovpack, export_ovpack, import_ovpack, restore_ovpack
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -94,6 +94,60 @@ class FakeExportVikingFS:
     async def read_file_bytes(self, uri: str, ctx=None):
         if uri in self.text_files:
             return self.text_files[uri].encode("utf-8")
+        return self.binary_files[uri]
+
+
+class FakeBackupVikingFS:
+    def __init__(self) -> None:
+        self.binary_files = {
+            "viking://resources/README.md": b"hello",
+            "viking://session/sess_1/.meta.json": b'{"session_id":"sess_1"}',
+        }
+
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        assert show_all_hidden is True
+        assert node_limit is None
+        assert level_limit is None
+        if uri == "viking://resources":
+            return [
+                {
+                    "rel_path": "README.md",
+                    "uri": "viking://resources/README.md",
+                    "isDir": False,
+                    "size": 5,
+                }
+            ]
+        if uri == "viking://session":
+            return [
+                {
+                    "rel_path": "sess_1",
+                    "uri": "viking://session/sess_1",
+                    "isDir": True,
+                    "size": 0,
+                },
+                {
+                    "rel_path": "sess_1/.meta.json",
+                    "uri": "viking://session/sess_1/.meta.json",
+                    "isDir": False,
+                    "size": 23,
+                },
+            ]
+        return []
+
+    async def exists(self, uri: str, ctx=None):
+        return False
+
+    async def read_file(self, uri: str, ctx=None):
+        raise FileNotFoundError(uri)
+
+    async def read_file_bytes(self, uri: str, ctx=None):
         return self.binary_files[uri]
 
 
@@ -208,6 +262,40 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
         ]
     )
     assert manifest["vectors"][""][0]["text"] == "root abstract"
+
+
+@pytest.mark.asyncio
+async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
+    await backup_ovpack(
+        FakeBackupVikingFS(),
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("openviking-backup/_._ovpack_manifest.json").decode("utf-8"))
+
+    assert "openviking-backup/resources/README.md" in names
+    assert "openviking-backup/session/sess_1/_._meta.json" in names
+    assert manifest["root"] == {
+        "name": "openviking-backup",
+        "uri": "viking://",
+        "scope": "root",
+        "package_type": "backup",
+    }
+    assert manifest["scopes"] == ["resources", "user", "agent", "session"]
+
+    with pytest.raises(InvalidArgumentError, match=r"must be restored"):
+        await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
+
+    fake_fs = FakeVikingFS()
+    assert await restore_ovpack(fake_fs, str(temp_ovpack_path), request_ctx) == "viking://"
+    assert fake_fs.written_files == [
+        "viking://resources/README.md",
+        "viking://session/sess_1/.meta.json",
+    ]
+    assert fake_fs.tree_calls == ["viking://resources", "viking://user", "viking://agent"]
 
 
 @pytest.mark.asyncio

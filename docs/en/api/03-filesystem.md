@@ -1183,6 +1183,68 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 
 ---
 
+### backup_ovpack
+
+Back up public scope roots as a restore-only `.ovpack` file. The backup includes
+`resources`, `user`, `agent`, and `session`; it excludes internal runtime data
+such as `temp` and `queue`.
+
+```
+POST /api/v1/pack/backup
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "X-API-Key: your-admin-key" \
+  --output openviking-backup.ovpack
+```
+
+CLI:
+
+```bash
+ov backup ./backups/openviking.ovpack
+```
+
+---
+
+### restore_ovpack
+
+Restore a backup package created by `backup_ovpack` to the original public scope
+roots. Regular import rejects backup packages. Non-session content is
+re-vectorized after restore; session files are restored without vectorization.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| temp_file_id | string | Yes | - | Temporary upload file ID |
+| on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
+
+```
+POST /api/v1/pack/restore
+Content-Type: application/json
+```
+
+```bash
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./backups/openviking.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+curl -X POST http://localhost:1933/api/v1/pack/restore \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+```
+
+CLI:
+
+```bash
+ov restore ./backups/openviking.ovpack --on-conflict overwrite
+```
+
+---
+
 ## Related Documentation
 
 - [Viking URI](../concepts/04-viking-uri.md) - URI specification

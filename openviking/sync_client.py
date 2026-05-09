@@ -286,6 +286,10 @@ class SyncOpenViking:
         """Export .ovpack file"""
         return run_async(self._async_client.export_ovpack(uri, to))
 
+    def backup_ovpack(self, to: str) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        return run_async(self._async_client.backup_ovpack(to))
+
     def import_ovpack(
         self,
         file_path: str,
@@ -297,6 +301,19 @@ class SyncOpenViking:
             self._async_client.import_ovpack(
                 file_path,
                 target,
+                on_conflict=on_conflict,
+            )
+        )
+
+    def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        return run_async(
+            self._async_client.restore_ovpack(
+                file_path,
                 on_conflict=on_conflict,
             )
         )

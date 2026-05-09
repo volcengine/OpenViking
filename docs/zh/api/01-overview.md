@@ -363,6 +363,8 @@ JSON 输出 - 错误：
 |------|------|------|------|
 | POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN |
 | POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN |
+| POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
+| POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
 
 ### 文件系统端点
 

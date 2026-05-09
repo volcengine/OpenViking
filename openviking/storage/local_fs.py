@@ -24,8 +24,11 @@ OVPACK_KIND = "openviking.ovpack"
 OVPACK_MANIFEST_FILENAME = ".ovpack_manifest.json"
 OVPACK_MANIFEST_ZIP_LEAF = "_._ovpack_manifest.json"
 OVPACK_ON_CONFLICT_VALUES = frozenset({"fail", "overwrite", "skip"})
+OVPACK_BACKUP_NAME = "openviking-backup"
+OVPACK_BACKUP_TYPE = "backup"
 
-_IMPORTABLE_SCOPES = frozenset({"resources", "user", "agent", "session"})
+_PUBLIC_SCOPES = ("resources", "user", "agent", "session")
+_IMPORTABLE_SCOPES = frozenset(_PUBLIC_SCOPES)
 _EXCLUDED_FILENAMES = frozenset({".relations.json", OVPACK_MANIFEST_FILENAME})
 _NON_VECTOR_SCOPES = frozenset({"session"})
 _PORTABLE_VECTOR_SCALAR_FIELDS = [
@@ -51,6 +54,8 @@ def _strip_uri_trailing_slash(uri: str) -> str:
 
 def _join_uri(base_uri: str, rel_path: str) -> str:
     base_uri = _strip_uri_trailing_slash(base_uri)
+    if base_uri == "viking://":
+        return f"viking://{rel_path}" if rel_path else base_uri
     return f"{base_uri}/{rel_path}" if rel_path else base_uri
 
 
@@ -285,15 +290,18 @@ async def _build_manifest(
     base_name: str,
     entries: list[dict[str, Any]],
     ctx: RequestContext,
+    package_type: Optional[str] = None,
+    scopes: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     manifest_entries = [{"path": "", "kind": "directory"}]
     vectors: dict[str, list[dict[str, Any]]] = {}
 
-    root_vectors = await _manifest_vector_records(
-        viking_fs, vector_store, root_uri, is_dir=True, ctx=ctx
-    )
-    if root_vectors:
-        vectors[""] = root_vectors
+    if root_uri != "viking://":
+        root_vectors = await _manifest_vector_records(
+            viking_fs, vector_store, root_uri, is_dir=True, ctx=ctx
+        )
+        if root_vectors:
+            vectors[""] = root_vectors
 
     for entry in entries:
         rel_path = entry["rel_path"]
@@ -315,17 +323,23 @@ async def _build_manifest(
         if records:
             vectors[rel_path] = records
 
-    return {
+    root = {
+        "name": base_name,
+        "uri": root_uri,
+        "scope": "root" if root_uri == "viking://" else VikingURI(root_uri).scope,
+    }
+    manifest: dict[str, Any] = {
         "kind": OVPACK_KIND,
         "format_version": OVPACK_FORMAT_VERSION,
-        "root": {
-            "name": base_name,
-            "uri": root_uri,
-            "scope": VikingURI(root_uri).scope,
-        },
+        "root": root,
         "entries": manifest_entries,
         "vectors": vectors,
     }
+    if package_type:
+        root["package_type"] = package_type
+    if scopes is not None:
+        manifest["scopes"] = scopes
+    return manifest
 
 
 def _invalid_manifest(message: str, manifest_path: str, **details: Any) -> InvalidArgumentError:
@@ -415,12 +429,27 @@ def _manifest_root_uri(manifest: dict[str, Any]) -> str:
     return ""
 
 
+def _is_backup_package(manifest: dict[str, Any]) -> bool:
+    root = manifest.get("root")
+    return (
+        isinstance(root, dict)
+        and root.get("package_type") == OVPACK_BACKUP_TYPE
+        and _manifest_root_uri(manifest) == "viking://"
+    )
+
+
 def _is_top_level_scope_package(base_name: str, manifest: dict[str, Any]) -> bool:
     root_uri = _manifest_root_uri(manifest)
     return base_name in _IMPORTABLE_SCOPES and root_uri == f"viking://{base_name}"
 
 
 def _resolve_import_root_uri(parent: str, base_name: str, manifest: dict[str, Any]) -> str:
+    if _is_backup_package(manifest):
+        raise InvalidArgumentError(
+            "Backup ovpack packages must be restored with ov restore or the restore API",
+            details={"root": base_name, "parent": parent},
+        )
+
     if parent == "viking://":
         if not _is_top_level_scope_package(base_name, manifest):
             raise InvalidArgumentError(
@@ -727,6 +756,9 @@ def _validated_import_members(
         rel_path = get_viking_rel_path_from_zip(
             safe_zip_path.rstrip("/") if kind == "directory" else safe_zip_path
         )
+        if root_uri == "viking://" and rel_path == "":
+            members.append((info, safe_zip_path, kind, rel_path))
+            continue
         target_uri = _join_uri(root_uri, rel_path)
         _validate_import_target_uri(target_uri)
         members.append((info, safe_zip_path, kind, rel_path))
@@ -763,6 +795,17 @@ async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -
         return
 
 
+async def _existing_scope_roots(
+    viking_fs, scopes: tuple[str, ...], ctx: RequestContext
+) -> list[str]:
+    existing: list[str] = []
+    for scope in scopes:
+        scope_uri = f"viking://{scope}"
+        if await _root_exists(viking_fs, scope_uri, ctx):
+            existing.append(scope_uri)
+    return existing
+
+
 def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [entry for entry in entries if not _is_excluded_rel_path(entry.get("rel_path", ""))]
 
@@ -772,8 +815,10 @@ async def _enqueue_direct_vectorization(
     uri: str,
     ctx: RequestContext,
     manifest: Optional[dict[str, Any]] = None,
+    manifest_path_root_uri: Optional[str] = None,
 ) -> None:
     manifest = manifest or {}
+    manifest_path_root_uri = manifest_path_root_uri or uri
     entries = await viking_fs.tree(uri, node_limit=None, level_limit=None, ctx=ctx)
     dir_uris = {uri}
     file_entries: list[tuple[str, str, str, str]] = []
@@ -782,6 +827,7 @@ async def _enqueue_direct_vectorization(
         if not entry_uri:
             continue
         rel_path = entry.get("rel_path") or _rel_path_for_uri(uri, entry_uri)
+        manifest_rel_path = _rel_path_for_uri(manifest_path_root_uri, entry_uri)
         if entry.get("isDir"):
             dir_uris.add(entry_uri)
             continue
@@ -790,10 +836,10 @@ async def _enqueue_direct_vectorization(
             continue
         parent = VikingURI(entry_uri).parent
         if parent:
-            file_entries.append((entry_uri, parent.uri, name, rel_path))
+            file_entries.append((entry_uri, parent.uri, name, manifest_rel_path))
 
     async def index_dir(dir_uri: str) -> None:
-        rel_path = _rel_path_for_uri(uri, dir_uri)
+        rel_path = _rel_path_for_uri(manifest_path_root_uri, dir_uri)
         records_by_level = _manifest_records_by_level(manifest, rel_path)
         scalar_overrides = _manifest_scalar_overrides(manifest, rel_path)
         abstract = str(records_by_level.get(0, {}).get("text") or "")
@@ -873,6 +919,7 @@ async def import_ovpack(
         manifest = _read_manifest(zf, base_name)
         root_uri = _resolve_import_root_uri(parent, base_name, manifest)
         _validate_import_target_uri(root_uri)
+        manifest_entries = _manifest_entries_by_path(manifest)
         manifest_root = manifest.get("root") if isinstance(manifest.get("root"), dict) else {}
         if manifest_root.get("name") and manifest_root.get("name") != base_name:
             logger.warning(
@@ -881,28 +928,28 @@ async def import_ovpack(
             )
 
         members = _validated_import_members(infolist, base_name, root_uri)
-        root_exists = await _root_exists(viking_fs, root_uri, ctx)
-        manifest_entries = _manifest_entries_by_path(manifest)
+        existing_roots = [root_uri] if await _root_exists(viking_fs, root_uri, ctx) else []
         _validate_manifest_context_types(manifest, root_uri, manifest_entries)
 
-        if root_exists:
+        if existing_roots:
             if conflict_action == "skip":
                 logger.info(f"[local_fs] Skipped existing resource at {root_uri}")
                 return root_uri
             if conflict_action == "fail":
+                resource = existing_roots[0]
                 raise ConflictError(
-                    f"Resource already exists at {root_uri}. "
+                    f"Resource already exists at {resource}. "
                     "Use on_conflict='overwrite' to replace it.",
-                    resource=root_uri,
+                    resource=resource,
                 )
 
         _validate_manifest_content(zf, manifest, infolist, base_name)
         if parent != "viking://":
             await _ensure_parent_exists(viking_fs, parent, ctx)
 
-        if root_exists:
-            logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
-            await _remove_existing_root(viking_fs, root_uri, ctx)
+        for existing_root in existing_roots:
+            logger.info(f"[local_fs] Overwriting existing resource at {existing_root}")
+            await _remove_existing_root(viking_fs, existing_root, ctx)
 
         for _, safe_zip_path, kind, rel_path in members:
             if kind == "manifest":
@@ -924,6 +971,143 @@ async def import_ovpack(
         logger.info(f"[local_fs] Skipped vectorization for non-vector scope: {root_uri}")
 
     return root_uri
+
+
+async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for scope in _PUBLIC_SCOPES:
+        scope_uri = f"viking://{scope}"
+        entries.append(
+            {
+                "rel_path": scope,
+                "uri": scope_uri,
+                "isDir": True,
+                "size": 0,
+            }
+        )
+        try:
+            scope_entries = await viking_fs.tree(
+                scope_uri,
+                show_all_hidden=True,
+                node_limit=None,
+                level_limit=None,
+                ctx=ctx,
+            )
+        except (NotFoundError, FileNotFoundError):
+            continue
+
+        for entry in _exportable_entries(scope_entries):
+            rel_path = entry.get("rel_path", "")
+            if not rel_path:
+                continue
+            scoped_entry = dict(entry)
+            scoped_entry["rel_path"] = f"{scope}/{rel_path}"
+            scoped_entry["uri"] = _join_uri(scope_uri, rel_path)
+            entries.append(scoped_entry)
+    return entries
+
+
+def _backup_scopes_from_manifest(
+    manifest: dict[str, Any], manifest_entries: dict[str, dict[str, Any]]
+) -> tuple[str, ...]:
+    roots = {rel_path.split("/", 1)[0] for rel_path in manifest_entries if rel_path}
+    unexpected = sorted(root for root in roots if root not in _IMPORTABLE_SCOPES)
+    if unexpected:
+        raise InvalidArgumentError(
+            "Backup ovpack contains unsupported roots",
+            details={"roots": unexpected},
+        )
+
+    directory_scope_roots = {
+        rel_path
+        for rel_path, entry in manifest_entries.items()
+        if rel_path in _IMPORTABLE_SCOPES and entry.get("kind") == "directory"
+    }
+    missing_scope_directories = sorted(roots - directory_scope_roots)
+    if missing_scope_directories:
+        raise InvalidArgumentError(
+            "Backup ovpack scope roots must be directory entries",
+            details={"missing_scope_directories": missing_scope_directories},
+        )
+
+    entry_scopes = tuple(scope for scope in _PUBLIC_SCOPES if scope in directory_scope_roots)
+    declared_scopes = manifest.get("scopes")
+    if not isinstance(declared_scopes, list) or any(
+        not isinstance(scope, str) for scope in declared_scopes
+    ):
+        raise InvalidArgumentError(
+            "Invalid backup ovpack scopes",
+            details={"field": "scopes"},
+        )
+    duplicate_scopes = sorted(
+        scope for scope in set(declared_scopes) if declared_scopes.count(scope) > 1
+    )
+    invalid_scopes = sorted(scope for scope in declared_scopes if scope not in _IMPORTABLE_SCOPES)
+    if duplicate_scopes or invalid_scopes:
+        raise InvalidArgumentError(
+            "Invalid backup ovpack scopes",
+            details={
+                "duplicate_scopes": duplicate_scopes,
+                "invalid_scopes": invalid_scopes,
+            },
+        )
+    if set(declared_scopes) != set(entry_scopes):
+        raise InvalidArgumentError(
+            "Backup ovpack scopes do not match entries",
+            details={
+                "declared_scopes": declared_scopes,
+                "entry_scopes": list(entry_scopes),
+            },
+        )
+    return entry_scopes
+
+
+async def _write_ovpack_archive(
+    viking_fs,
+    root_uri: str,
+    to: str,
+    base_name: str,
+    entries: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    ctx: RequestContext,
+) -> str:
+    ensure_dir_exists(to)
+    manifest_entries = _manifest_entries_by_path(manifest)
+    manifest_file_entries = {
+        rel_path: entry
+        for rel_path, entry in manifest_entries.items()
+        if entry.get("kind") == "file"
+    }
+
+    with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        zf.writestr(base_name + "/", "")
+
+        for entry in entries:
+            rel_path = entry["rel_path"]
+            zip_path = get_ovpack_zip_path(base_name, rel_path)
+
+            if entry.get("isDir"):
+                zf.writestr(zip_path + "/", "")
+            else:
+                full_uri = entry.get("uri") or _join_uri(root_uri, rel_path)
+                try:
+                    data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
+                except Exception as exc:
+                    logger.warning(f"Failed to export file {full_uri}: {exc}")
+                    raise
+
+                manifest_entry = manifest_file_entries.get(rel_path)
+                if manifest_entry is not None:
+                    manifest_entry["size"] = len(data)
+                    manifest_entry["sha256"] = _sha256_hex(data)
+                zf.writestr(zip_path, data)
+
+        manifest["content_sha256"] = _manifest_content_sha256(manifest_file_entries)
+        zf.writestr(
+            f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
+        )
+    return to
 
 
 async def export_ovpack(
@@ -956,8 +1140,6 @@ async def export_ovpack(
     else:
         to = ensure_ovpack_extension(to)
 
-    ensure_dir_exists(to)
-
     entries = _exportable_entries(
         await viking_fs.tree(
             uri,
@@ -967,43 +1149,117 @@ async def export_ovpack(
             ctx=ctx,
         )
     )
-
     manifest = await _build_manifest(viking_fs, vector_store, uri, base_name, entries, ctx)
-    manifest_entries = _manifest_entries_by_path(manifest)
-    manifest_file_entries = {
-        rel_path: entry
-        for rel_path, entry in manifest_entries.items()
-        if entry.get("kind") == "file"
-    }
-
-    with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        zf.writestr(base_name + "/", "")
-
-        for entry in entries:
-            rel_path = entry["rel_path"]
-            zip_path = get_ovpack_zip_path(base_name, rel_path)
-
-            if entry.get("isDir"):
-                zf.writestr(zip_path + "/", "")
-            else:
-                full_uri = _join_uri(uri, rel_path)
-                try:
-                    data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
-                except Exception as exc:
-                    logger.warning(f"Failed to export file {full_uri}: {exc}")
-                    raise
-
-                manifest_entry = manifest_file_entries.get(rel_path)
-                if manifest_entry is not None:
-                    manifest_entry["size"] = len(data)
-                    manifest_entry["sha256"] = _sha256_hex(data)
-                zf.writestr(zip_path, data)
-
-        manifest["content_sha256"] = _manifest_content_sha256(manifest_file_entries)
-        zf.writestr(
-            f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
-            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
-        )
+    await _write_ovpack_archive(viking_fs, uri, to, base_name, entries, manifest, ctx)
 
     logger.info(f"[local_fs] Exported {uri} to {to}")
     return to
+
+
+async def backup_ovpack(
+    viking_fs,
+    to: str,
+    ctx: RequestContext,
+    vector_store=None,
+) -> str:
+    """Export all public OpenViking scopes as a restore-only backup package."""
+    base_name = OVPACK_BACKUP_NAME
+    if os.path.isdir(to):
+        to = os.path.join(to, f"{base_name}.ovpack")
+    else:
+        to = ensure_ovpack_extension(to)
+
+    entries = await _backup_entries(viking_fs, ctx)
+    manifest = await _build_manifest(
+        viking_fs,
+        vector_store,
+        "viking://",
+        base_name,
+        entries,
+        ctx,
+        package_type=OVPACK_BACKUP_TYPE,
+        scopes=list(_PUBLIC_SCOPES),
+    )
+    await _write_ovpack_archive(viking_fs, "viking://", to, base_name, entries, manifest, ctx)
+
+    logger.info(f"[local_fs] Backed up OpenViking public scopes to {to}")
+    return to
+
+
+async def restore_ovpack(
+    viking_fs,
+    file_path: str,
+    ctx: RequestContext,
+    on_conflict: Optional[str] = None,
+) -> str:
+    """Restore a backup package to its original public scope roots."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    conflict_action = _normalize_on_conflict(on_conflict)
+    root_uri = "viking://"
+
+    with zipfile.ZipFile(file_path, "r") as zf:
+        infolist = zf.infolist()
+        if not infolist:
+            raise ValueError("Empty ovpack file")
+
+        base_name = _base_name_from_entries(infolist)
+        manifest = _read_manifest(zf, base_name)
+        if not _is_backup_package(manifest):
+            raise InvalidArgumentError(
+                "Only backup ovpack packages can be restored with ov restore or the restore API",
+                details={"root": base_name},
+            )
+
+        manifest_entries = _manifest_entries_by_path(manifest)
+        backup_scopes = _backup_scopes_from_manifest(manifest, manifest_entries)
+        members = _validated_import_members(infolist, base_name, root_uri)
+        existing_roots = await _existing_scope_roots(viking_fs, backup_scopes, ctx)
+        _validate_manifest_context_types(manifest, root_uri, manifest_entries)
+
+        if existing_roots:
+            if conflict_action == "skip":
+                logger.info("[local_fs] Skipped backup restore because target scopes exist")
+                return root_uri
+            if conflict_action == "fail":
+                resource = existing_roots[0]
+                raise ConflictError(
+                    f"Resource already exists at {resource}. "
+                    "Use on_conflict='overwrite' to replace it.",
+                    resource=resource,
+                )
+
+        _validate_manifest_content(zf, manifest, infolist, base_name)
+
+        for existing_root in existing_roots:
+            logger.info(f"[local_fs] Overwriting existing resource at {existing_root}")
+            await _remove_existing_root(viking_fs, existing_root, ctx)
+
+        for _, safe_zip_path, kind, rel_path in members:
+            if kind == "manifest" or rel_path == "":
+                continue
+            if kind == "directory":
+                await viking_fs.mkdir(_join_uri(root_uri, rel_path), exist_ok=True, ctx=ctx)
+                continue
+
+            data = zf.read(safe_zip_path)
+            await viking_fs.write_file_bytes(_join_uri(root_uri, rel_path), data, ctx=ctx)
+
+    logger.info(f"[local_fs] Successfully restored backup {file_path}")
+
+    for scope in backup_scopes:
+        if scope in _NON_VECTOR_SCOPES:
+            logger.info(f"[local_fs] Skipped vectorization for non-vector scope: {scope}")
+            continue
+        scope_uri = f"viking://{scope}"
+        await _enqueue_direct_vectorization(
+            viking_fs,
+            scope_uri,
+            ctx=ctx,
+            manifest=manifest,
+            manifest_path_root_uri=root_uri,
+        )
+        logger.info(f"[local_fs] Enqueued direct vectorization for: {scope_uri}")
+
+    return root_uri

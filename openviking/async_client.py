@@ -559,6 +559,19 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.export_ovpack(uri, to)
 
+    async def backup_ovpack(self, to: str) -> str:
+        """
+        Back up public OpenViking scopes as a restore-only .ovpack file.
+
+        Args:
+            to: Target file path
+
+        Returns:
+            Exported backup file path
+        """
+        await self._ensure_initialized()
+        return await self._client.backup_ovpack(to)
+
     async def import_ovpack(
         self,
         file_path: str,
@@ -580,6 +593,27 @@ class AsyncOpenViking:
         return await self._client.import_ovpack(
             file_path,
             parent,
+            on_conflict=on_conflict,
+        )
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """
+        Restore a backup .ovpack file to its original public scope roots.
+
+        Args:
+            file_path: Local backup .ovpack file path
+            on_conflict: One of "fail", "overwrite", or "skip"
+
+        Returns:
+            Restored root URI
+        """
+        await self._ensure_initialized()
+        return await self._client.restore_ovpack(
+            file_path,
             on_conflict=on_conflict,
         )
 

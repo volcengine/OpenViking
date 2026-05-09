@@ -3,15 +3,17 @@
 """
 Pack Service for OpenViking.
 
-Provides ovpack export/import operations.
+Provides ovpack export/import and backup/restore operations.
 """
 
 from typing import Optional
 
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
+from openviking.storage.local_fs import backup_ovpack as local_backup_ovpack
 from openviking.storage.local_fs import export_ovpack as local_export_ovpack
 from openviking.storage.local_fs import import_ovpack as local_import_ovpack
+from openviking.storage.local_fs import restore_ovpack as local_restore_ovpack
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
@@ -20,7 +22,7 @@ logger = get_logger(__name__)
 
 
 class PackService:
-    """OVPack export/import service."""
+    """OVPack export/import and backup/restore service."""
 
     def __init__(self, viking_fs: Optional[VikingFS] = None, vector_store=None):
         self._viking_fs = viking_fs
@@ -61,6 +63,16 @@ class PackService:
             vector_store=self._vector_store,
         )
 
+    async def backup_ovpack(self, to: str, ctx: RequestContext) -> str:
+        """Back up all public OpenViking scopes as a restore-only .ovpack file."""
+        viking_fs = self._ensure_initialized()
+        return await local_backup_ovpack(
+            viking_fs,
+            to,
+            ctx=ctx,
+            vector_store=self._vector_store,
+        )
+
     async def import_ovpack(
         self,
         file_path: str,
@@ -86,4 +98,19 @@ class PackService:
             parent,
             on_conflict=on_conflict,
             ctx=ctx,
+        )
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        ctx: RequestContext,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """Restore a backup .ovpack file to its original public scope roots."""
+        viking_fs = self._ensure_initialized()
+        return await local_restore_ovpack(
+            viking_fs,
+            file_path,
+            ctx=ctx,
+            on_conflict=on_conflict,
         )

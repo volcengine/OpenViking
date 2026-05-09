@@ -922,6 +922,25 @@ class AsyncHTTPClient(BaseClient):
 
         return str(to_path)
 
+    async def backup_ovpack(self, to: str) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        to_path = Path(to)
+        if to_path.is_dir():
+            to_path = to_path / "openviking-backup.ovpack"
+        elif not str(to_path).endswith(".ovpack"):
+            to_path = Path(str(to_path) + ".ovpack")
+
+        to_path.parent.mkdir(parents=True, exist_ok=True)
+
+        response = await self._http.post("/api/v1/pack/backup", json={})
+        if not response.is_success:
+            self._handle_response(response)
+
+        with open(to_path, "wb") as f:
+            f.write(response.content)
+
+        return str(to_path)
+
     async def import_ovpack(
         self,
         file_path: str,
@@ -947,6 +966,32 @@ class AsyncHTTPClient(BaseClient):
 
         response = await self._http.post(
             "/api/v1/pack/import",
+            json=request_data,
+        )
+        result = self._handle_response(response)
+        return result.get("uri", "")
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        request_data = {}
+        if on_conflict is not None:
+            request_data["on_conflict"] = on_conflict
+
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
+        if not file_path_obj.is_file():
+            raise ValueError(f"Path {file_path} is not a file")
+
+        temp_file_id = await self._upload_temp_file(file_path)
+        request_data["temp_file_id"] = temp_file_id
+
+        response = await self._http.post(
+            "/api/v1/pack/restore",
             json=request_data,
         )
         result = self._handle_response(response)

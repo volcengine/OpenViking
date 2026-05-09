@@ -44,6 +44,15 @@ class ImportRequest(BaseModel):
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
 
 
+class RestoreRequest(BaseModel):
+    """Request model for backup restore."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    temp_file_id: str
+    on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
+
+
 @router.post("/export")
 @require_auth_root_or_admin
 async def export_ovpack(
@@ -93,6 +102,39 @@ async def export_ovpack(
         raise
 
 
+@router.post("/backup")
+@require_auth_root_or_admin
+async def backup_ovpack(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Back up all public OpenViking scopes as a restore-only .ovpack file."""
+    service = get_service()
+    temp_dir = tempfile.gettempdir()
+    temp_file = os.path.join(temp_dir, f"backup_{os.urandom(16).hex()}.ovpack")
+
+    try:
+        await service.pack.backup_ovpack(temp_file, ctx=ctx)
+
+        def cleanup():
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+
+        return FileResponse(
+            path=temp_file,
+            media_type="application/zip",
+            filename="openviking-backup.ovpack",
+            background=BackgroundTask(cleanup),
+        )
+    except Exception as exc:
+        if os.path.exists(temp_file):
+            os.unlink(temp_file)
+        mapped = map_exception(exc, resource="viking://", resource_type="resource")
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
 @router.post("/import")
 @require_auth_root_or_admin
 async def import_ovpack(
@@ -112,6 +154,35 @@ async def import_ovpack(
         result = await service.pack.import_ovpack(
             resolved.local_path,
             parent,
+            ctx=ctx,
+            on_conflict=body.on_conflict,
+        )
+    except Exception:
+        await store.mark_failed(resolved, ctx)
+        raise
+    else:
+        await store.mark_consumed(resolved, ctx)
+    finally:
+        await resolved.cleanup()
+
+    return Response(status="ok", result={"uri": result})
+
+
+@router.post("/restore")
+@require_auth_root_or_admin
+async def restore_ovpack(
+    request: Request,
+    body: RestoreRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Restore a backup .ovpack file."""
+    service = get_service()
+    store = TempUploadStore.build(request.app.state.config)
+    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
+
+    try:
+        result = await service.pack.restore_ovpack(
+            resolved.local_path,
             ctx=ctx,
             on_conflict=body.on_conflict,
         )

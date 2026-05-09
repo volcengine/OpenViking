@@ -165,6 +165,11 @@ pub async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<(
     commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact).await
 }
 
+pub async fn handle_backup(to: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::pack::backup(&client, &to, ctx.output_format, ctx.compact).await
+}
+
 pub async fn handle_import(
     file_path: String,
     target_uri: String,
@@ -176,6 +181,22 @@ pub async fn handle_import(
         &client,
         &file_path,
         &target_uri,
+        on_conflict.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_restore(
+    file_path: String,
+    on_conflict: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::pack::restore(
+        &client,
+        &file_path,
         on_conflict.as_deref(),
         ctx.output_format,
         ctx.compact,

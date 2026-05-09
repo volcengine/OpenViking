@@ -148,7 +148,8 @@ skill vector record.
 
 Top-level scope packages such as `viking://resources/`, `viking://user/`,
 `viking://agent/`, and `viking://session/` must be imported to `viking://`.
-Absolute root packages for `viking://` are not supported in this version.
+Full backups use the separate `backup` / `restore` interface, not regular
+import parent semantics.
 OVPack itself does not add package-size, file-count, or directory-depth limits;
 the practical limit comes from ZIP, the storage backend, and the runtime
 environment.
@@ -280,34 +281,18 @@ Scope-root packages cannot be imported under another scope directory.
 
 ### Full Backup and Migration
 
-This version does not support exporting the absolute root URI `viking://`
-directly. To back up all OVPack-supported OpenViking content, export each public
-scope root separately:
+Use a backup package for full migration instead of regular `export/import`
+parent-directory semantics:
 
 ```bash
-mkdir -p ./backups/openviking-full
-
-openviking export viking://resources/ ./backups/openviking-full/resources.ovpack
-openviking export viking://user/ ./backups/openviking-full/user.ovpack
-openviking export viking://agent/ ./backups/openviking-full/agent.ovpack
-openviking export viking://session/ ./backups/openviking-full/session.ovpack
+openviking backup ./backups/openviking.ovpack
+openviking restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
-Restore those top-level scope packages to `viking://` in the target
-environment:
-
-```bash
-openviking import ./backups/openviking-full/resources.ovpack viking:// --on-conflict overwrite
-openviking import ./backups/openviking-full/user.ovpack viking:// --on-conflict overwrite
-openviking import ./backups/openviking-full/agent.ovpack viking:// --on-conflict overwrite
-openviking import ./backups/openviking-full/session.ovpack viking:// --on-conflict overwrite
-```
-
-This restores `viking://resources/`, `viking://user/`, `viking://agent/`, and
-`viking://session/`. It does not include internal or runtime data such as
-`temp`, `queue`, lock files, OVPack manifests, or `.relations.json`. Non-session
-content is re-vectorized in the target environment; session packages restore
-files only.
+Backup packages restore to the original public scope roots: `resources`, `user`,
+`agent`, and `session`. They exclude internal/runtime data such as `temp`,
+`queue`, lock files, OVPack manifests, and `.relations.json`. Non-session
+content is re-vectorized; session files are only restored.
 
 ### Resource Backup
 ```bash

@@ -1183,6 +1183,66 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 
 ---
 
+### backup_ovpack
+
+将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
+`resources`、`user`、`agent`、`session`，不包含 `temp`、`queue` 等内部运行态数据。
+
+```
+POST /api/v1/pack/backup
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "X-API-Key: your-admin-key" \
+  --output openviking-backup.ovpack
+```
+
+CLI：
+
+```bash
+ov backup ./backups/openviking.ovpack
+```
+
+---
+
+### restore_ovpack
+
+恢复 `backup_ovpack` 生成的备份包到原始公开 scope root。普通 import 不接受备份包。
+非 session 内容恢复后重新向量化；session 只恢复文件状态。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| temp_file_id | string | 是 | - | 临时上传文件 ID |
+| on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
+
+```
+POST /api/v1/pack/restore
+Content-Type: application/json
+```
+
+```bash
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./backups/openviking.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+curl -X POST http://localhost:1933/api/v1/pack/restore \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+```
+
+CLI：
+
+```bash
+ov restore ./backups/openviking.ovpack --on-conflict overwrite
+```
+
+---
+
 ## 相关文档
 
 - [Viking URI](../concepts/04-viking-uri.md) - URI 规范

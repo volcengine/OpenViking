@@ -513,6 +513,10 @@ class LocalClient(BaseClient):
         """Export context as .ovpack file."""
         return await self._service.pack.export_ovpack(uri, to, ctx=self._ctx)
 
+    async def backup_ovpack(self, to: str) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        return await self._service.pack.backup_ovpack(to, ctx=self._ctx)
+
     async def import_ovpack(
         self,
         file_path: str,
@@ -523,6 +527,18 @@ class LocalClient(BaseClient):
         return await self._service.pack.import_ovpack(
             file_path,
             parent,
+            ctx=self._ctx,
+            on_conflict=on_conflict,
+        )
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        return await self._service.pack.restore_ovpack(
+            file_path,
             ctx=self._ctx,
             on_conflict=on_conflict,
         )

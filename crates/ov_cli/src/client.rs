@@ -629,12 +629,14 @@ impl HttpClient {
 
     // ============ Pack Methods ============
 
-    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<String> {
-        let body = serde_json::json!({
-            "uri": uri,
-        });
-
-        let url = format!("{}/api/v1/pack/export", self.base.base_url);
+    async fn download_pack(
+        &self,
+        endpoint: &str,
+        body: serde_json::Value,
+        to: &str,
+        default_name: &str,
+    ) -> Result<String> {
+        let url = format!("{}{}", self.base.base_url, endpoint);
         let response = self
             .base
             .http
@@ -680,12 +682,7 @@ impl HttpClient {
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
-            let base_name = uri
-                .trim_end_matches('/')
-                .split('/')
-                .last()
-                .unwrap_or("export");
-            to_path.join(format!("{}.ovpack", base_name))
+            to_path.join(format!("{}.ovpack", default_name))
         } else if !to.ends_with(".ovpack") {
             Path::new(&format!("{}.ovpack", to)).to_path_buf()
         } else {
@@ -699,6 +696,29 @@ impl HttpClient {
         std::fs::write(&final_path, bytes)?;
 
         Ok(final_path.to_string_lossy().to_string())
+    }
+
+    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        let base_name = uri
+            .trim_end_matches('/')
+            .split('/')
+            .last()
+            .unwrap_or("export");
+        self.download_pack("/api/v1/pack/export", body, to, base_name)
+            .await
+    }
+
+    pub async fn backup_ovpack(&self, to: &str) -> Result<String> {
+        self.download_pack(
+            "/api/v1/pack/backup",
+            serde_json::json!({}),
+            to,
+            "openviking-backup",
+        )
+        .await
     }
 
     pub async fn import_ovpack(
@@ -727,6 +747,32 @@ impl HttpClient {
             "on_conflict": conflict_policy,
         });
         self.post("/api/v1/pack/import", &body).await
+    }
+
+    pub async fn restore_ovpack(
+        &self,
+        file_path: &str,
+        on_conflict: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let file_path_obj = Path::new(file_path);
+
+        if !file_path_obj.exists() {
+            return Err(Error::Client(format!(
+                "Local ovpack file not found: {}",
+                file_path
+            )));
+        }
+        if !file_path_obj.is_file() {
+            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
+        }
+
+        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let conflict_policy = on_conflict.unwrap_or("fail");
+        let body = serde_json::json!({
+            "temp_file_id": temp_file_id,
+            "on_conflict": conflict_policy,
+        });
+        self.post("/api/v1/pack/restore", &body).await
     }
 
     // ============ Admin Methods ============
