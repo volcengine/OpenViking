@@ -188,6 +188,20 @@ class LockManager:
             return None
         return current
 
+    def is_path_locked(self, path: str, ignore_stale: bool = True) -> bool:
+        """Check whether *path* is currently locked.
+
+        Semantics align with conflict detection in the acquire flow: the path
+        is considered locked if it (or any ancestor) holds a lock. By default,
+        stale locks are ignored because they will be reclaimed on the next
+        acquire attempt.
+        """
+        try:
+            return self._path_lock.is_locked(path, ignore_stale=ignore_stale)
+        except Exception as e:
+            logger.warning(f"is_path_locked failed for {path}: {e}")
+            return False
+
     async def refresh_lock(self, handle: LockHandle) -> None:
         current = self._reconcile_handle(handle)
         if current is None:

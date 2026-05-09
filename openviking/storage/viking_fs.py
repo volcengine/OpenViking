@@ -944,11 +944,29 @@ class VikingFS:
         """
         File/directory information.
 
-        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
+        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'isLocked': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
+
+        Extra field:
+            isLocked (bool): Whether the path is currently held by a path lock
+                (either the path itself or any ancestor directory). Returns
+                False when the LockManager is not initialized or the lookup
+                fails.
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        return self.agfs.stat(path)
+        result = self.agfs.stat(path)
+        if isinstance(result, dict):
+            result["isLocked"] = self._is_path_locked(path)
+        return result
+
+    def _is_path_locked(self, path: str) -> bool:
+        """Best-effort path-lock lookup; returns False when LockManager is absent."""
+        try:
+            from openviking.storage.transaction import get_lock_manager
+
+            return get_lock_manager().is_path_locked(path)
+        except Exception:
+            return False
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
         """Check if a URI exists.

@@ -115,6 +115,42 @@ class PathLock:
         current_owner_id, _ = self._read_owner_and_type(lock_path)
         return current_owner_id == owner_id
 
+    def is_locked(self, path: str, ignore_stale: bool = True) -> bool:
+        """Check whether *path* is currently locked.
+
+        Detection rules (aligned with conflict checks in the acquire flow):
+        - The path itself has a valid .path.ovlock; or
+        - Any ancestor directory holds a SUBTREE lock.
+
+        Args:
+            path: Path to check (already converted to AGFS internal path).
+            ignore_stale: Whether to ignore expired (stale) locks. Defaults
+                to True to stay consistent with the acquire flow: stale
+                locks will be cleaned up by the next acquirer, so they are
+                not considered as held here.
+        """
+        # 1. Lock on the path itself
+        own_lock_path = self._get_lock_path(path)
+        token = self._read_token(own_lock_path)
+        if token is not None:
+            if not (ignore_stale and self.is_lock_stale(own_lock_path, self._lock_expire)):
+                return True
+
+        # 2. Ancestor SUBTREE locks
+        parent = self._get_parent_path(path)
+        while parent:
+            ancestor_lock = self._get_lock_path(parent)
+            ancestor_token = self._read_token(ancestor_lock)
+            if ancestor_token is not None:
+                _, _, lock_type = _parse_fencing_token(ancestor_token)
+                if lock_type == LOCK_TYPE_SUBTREE and not (
+                    ignore_stale and self.is_lock_stale(ancestor_lock, self._lock_expire)
+                ):
+                    return True
+            parent = self._get_parent_path(parent)
+
+        return False
+
     def collect_lost_owner_locks(self, owner: LockOwner) -> list[str]:
         lost_paths: list[str] = []
         for lock_path in list(owner.locks):

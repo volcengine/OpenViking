@@ -73,6 +73,58 @@ class TestPathLockStale:
         assert lock.is_lock_stale("/test/.path.ovlock", expire_seconds=300.0) is False
 
 
+class TestPathLockIsLocked:
+    def _agfs_with_locks(self, locks: dict[str, bytes]) -> MagicMock:
+        """Build an AGFS mock that only returns content for paths in *locks*."""
+        agfs = MagicMock()
+
+        def _read(p):
+            if p in locks:
+                return locks[p]
+            raise Exception("not found")
+
+        agfs.read.side_effect = _read
+        return agfs
+
+    def test_is_locked_no_lock(self):
+        agfs = self._agfs_with_locks({})
+        lock = PathLock(agfs)
+        assert lock.is_locked("/local/u/foo") is False
+
+    def test_is_locked_self_point_lock(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_POINT)
+        agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": token.encode("utf-8")})
+        lock = PathLock(agfs)
+        assert lock.is_locked("/local/u/foo") is True
+
+    def test_is_locked_ancestor_subtree_lock(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_SUBTREE)
+        agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
+        lock = PathLock(agfs)
+        assert lock.is_locked("/local/u/foo/bar") is True
+
+    def test_is_locked_ancestor_point_lock_does_not_propagate(self):
+        """An ancestor POINT lock must not affect descendants -- POINT locks only the path itself."""
+        token = _make_fencing_token("tx-1", LOCK_TYPE_POINT)
+        agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
+        lock = PathLock(agfs)
+        assert lock.is_locked("/local/u/foo/bar") is False
+
+    def test_is_locked_ignores_stale_by_default(self):
+        old_ts = time.time_ns() - int(600 * 1e9)  # 600s ago
+        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_POINT}".encode("utf-8")
+        agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": stale})
+        lock = PathLock(agfs, lock_expire=300.0)
+        assert lock.is_locked("/local/u/foo") is False
+
+    def test_is_locked_can_include_stale(self):
+        old_ts = time.time_ns() - int(600 * 1e9)
+        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_POINT}".encode("utf-8")
+        agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": stale})
+        lock = PathLock(agfs, lock_expire=300.0)
+        assert lock.is_locked("/local/u/foo", ignore_stale=False) is True
+
+
 class TestPathLockOwnership:
     async def test_refresh_reports_refreshed_lost_and_failed_paths(self):
         owned_path = "/locks/owned/.path.ovlock"
