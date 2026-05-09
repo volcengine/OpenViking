@@ -83,10 +83,16 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.session.memory.utils import resolve_output_language_from_conversation
+        from openviking.message.part import TextPart
+        from openviking.session.memory.utils import resolve_output_language
 
-        conversation = self._assemble_conversation(self.messages)
-        return resolve_output_language_from_conversation(conversation)
+        text_parts = []
+        for message in self.messages or []:
+            for part in getattr(message, "parts", []):
+                if isinstance(part, TextPart) and part.text:
+                    text_parts.append(part.text)
+
+        return resolve_output_language("\n".join(text_parts))
 
     def instruction(self) -> str:
         output_language = self._output_language

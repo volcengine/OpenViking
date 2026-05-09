@@ -95,3 +95,30 @@ class TestSkillToolCallExposure:
         assert "[ToolCall]" in conversation
         assert '"tool_name": "read"' in conversation
         assert '"skill_name":' not in conversation
+
+    def test_detect_language_only_uses_text_parts(self):
+        messages = [
+            Message(
+                id="m1",
+                role="assistant",
+                parts=[TextPart("Please keep the memory in English.")],
+            ),
+            Message(
+                id="m2",
+                role="assistant",
+                parts=[
+                    ToolPart(
+                        tool_id="tool_1",
+                        tool_name="read",
+                        tool_uri="viking://session/test/tools/tool_1",
+                        tool_input={"file_path": "README.md"},
+                        tool_output="这是中文工具输出",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "en"
