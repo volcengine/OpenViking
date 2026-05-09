@@ -52,7 +52,10 @@ class WikiLink(BaseModel):
     f: int = Field(..., description="From page_id (temporary)")
     t: int = Field(..., description="To page_id (temporary)")
     t_field: str = Field("content", description="Target field name")
-    t_line_ranges: Optional[str] = Field(None, description='Target line range, e.g. "3-5"')
+    t_line_ranges: Optional[str] = Field(
+        None,
+        description='1-based line range within the t_field of the target page, e.g. "3-5" for lines 3-5, "3-5,8-10" for multiple ranges. Use the line numbers shown in read results.',
+    )
     link_type: LinkType = Field(LinkType.RELATED_TO, description="Relationship type")
     weight: float = Field(1.0, description="Association weight 0~1")
     match_text: Optional[str] = Field(None, description="Text in from page to be linkified")

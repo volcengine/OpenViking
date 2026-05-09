@@ -423,7 +423,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 uri = tool_call.arguments.get("uri", "")
                 if uri:
                     page_id = self._page_id_map.register_existing(uri)
-                    if isinstance(result, str):
+                    if isinstance(result, dict):
+                        result["page_id"] = page_id
+                    elif isinstance(result, str):
                         result = f"[page_id: {page_id}]\n{result}"
             return idx, tool_call, result
 

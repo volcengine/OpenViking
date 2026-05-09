@@ -136,7 +136,7 @@ For each link:
 - "t": to page_id (the target page being linked to). Use the page_id shown in read results.
 - For NEW items you create, assign a unique page_id >= 100 and set it in the item's "page_id" field.
 - "t_field": which field in the target page (usually "content")
-- "t_line_ranges": line range in target (e.g., "3-5"), optional
+- "t_line_ranges": 1-based line range(s) within the t_field of the target page, using the line numbers shown in read results. Single range: "3-5", multiple ranges: "3-5,8-10". Required when the link points to a specific passage.
 - "match_text": exact text in the from page's content that should become a link (must exist verbatim in the from page)
 - "description": brief explanation of the relationship
 - "weight": 0.0-1.0, how strong the relationship is (default 1.0)
@@ -348,19 +348,19 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
             try:
-                result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                 # Annotate with page_id for link extraction
                 page_id = (
                     self._page_id_map.register_existing(file_uri) if self._page_id_map else None
                 )
-                if page_id is not None:
-                    result_str = f"[page_id: {page_id}]\n{result_str}"
+                if page_id is not None and isinstance(result, dict):
+                    result["page_id"] = page_id
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
                     tool_name="read",
                     params={"uri": file_uri},
-                    result=result_str,
+                    result=result,
                 )
                 # read_file_contents
                 call_id_seq += 1
@@ -375,19 +375,19 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 if not file_uri:
                     continue
                 try:
-                    result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                    result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                     # Annotate with page_id for link extraction
                     page_id = (
                         self._page_id_map.register_existing(file_uri) if self._page_id_map else None
                     )
-                    if page_id is not None:
-                        result_str = f"[page_id: {page_id}]\n{result_str}"
+                    if page_id is not None and isinstance(result, dict):
+                        result["page_id"] = page_id
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
                         tool_name="read",
                         params={"uri": file_uri},
-                        result=result_str,
+                        result=result,
                     )
                     call_id_seq += 1
                 except Exception as e:

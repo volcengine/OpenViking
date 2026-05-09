@@ -82,7 +82,6 @@ def add_tool_call_pair_to_messages(
     )
 
 
-
 class MemoryTool(ABC):
     """
     Abstract base class for memory tools.
@@ -181,6 +180,12 @@ class MemoryReadTool(MemoryTool):
                 plain_content=parsed.get("content", ""),
                 memory_fields=parsed,
             )
+            # Add 1-based line numbers to content for LLM readability & link extraction
+            raw_content = parsed.get("content", "")
+            if raw_content:
+                lines = raw_content.split("\n")
+                numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))
+                parsed = {**parsed, "content": numbered}
             return parsed
         except NotFoundError as e:
             tracer.info(f"read not found: {uri}")
@@ -327,7 +332,6 @@ def get_tool(name: str) -> Optional[MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.get(name)
 
 
-
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
@@ -335,7 +339,6 @@ LLM_TOOLS = ["read"]
 def get_tool_schemas() -> List[Dict[str, Any]]:
     """Get tools exposed to LLM in OpenAI function schema format."""
     return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
-
 
 
 # Register default tools
