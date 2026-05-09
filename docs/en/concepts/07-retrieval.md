@@ -124,7 +124,7 @@ while dir_queue:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `retrieval.score_propagation_alpha` | 0.5 | Child-score weight in the propagation blend; `0.5` means 50% child score + 50% parent score |
+| `retrieval.score_propagation_alpha` | 1.0 | Child-score weight in the propagation blend; `1.0` uses only the child's own score and ignores the parent score |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | Convergence detection rounds |
 | `GLOBAL_SEARCH_TOPK` | 10 | Global search candidates |
 | `MAX_RELATIONS` | 5 | Max relations per resource |
