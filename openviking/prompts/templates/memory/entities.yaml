@@ -6,6 +6,7 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
+link_enabled: true
 
 overview_template: |-
   # Entities Overview

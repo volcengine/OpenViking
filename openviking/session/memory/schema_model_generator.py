@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
 
-from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
+from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
@@ -114,6 +114,16 @@ class SchemaModelGenerator:
                     Optional[union_type],
                     Field(None, description=desc),
                 )
+
+        # Add page_id field for link resolution when link_enabled
+        if getattr(memory_type, "link_enabled", True):
+            field_definitions["page_id"] = (
+                Optional[int],
+                Field(
+                    None,
+                    description="Page ID for link reference. Use the page_id shown in read results for existing items. For new items, assign a unique ID >= 100.",
+                ),
+            )
         # Create the model
         model = create_model(
             model_name,
@@ -188,7 +198,6 @@ class SchemaModelGenerator:
         self._union_model = MemoryDataWrapper
         return self._union_model
 
-
     def create_structured_operations_model(self, role_scope: RoleScope) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
@@ -225,13 +234,22 @@ class SchemaModelGenerator:
                 List[flat_model],  # type: ignore
                 Field(
                     default_factory=list,
-                    description=f"{mt.memory_type} memories: {mt.description} (top-level field, do not nest inside other arrays)"
+                    description=f"{mt.memory_type} memories: {mt.description} (top-level field, do not nest inside other arrays)",
                 ),
             )
 
         field_definitions["delete_uris"] = (
             List[str],
             Field(default_factory=list, description="Delete operations as URI strings"),
+        )
+
+        # Add links field for link extraction
+        field_definitions["links"] = (
+            List[WikiLink],
+            Field(
+                default_factory=list,
+                description="Links between memory pages. Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to).",
+            ),
         )
 
         # Create model using create_model
@@ -290,7 +308,6 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
 
     def get_memory_data_json_schema(self) -> Dict[str, Any]:
         """

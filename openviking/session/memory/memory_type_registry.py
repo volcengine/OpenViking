@@ -206,6 +206,7 @@ class MemoryTypeRegistry:
             operation_mode=data.get("operation_mode", "upsert"),
             agent_only=data.get("agent_only", False),
             overview_template=data.get("overview_template"),
+            link_enabled=data.get("link_enabled", True),
         )
 
     async def initialize_memory_files(self, ctx: Any) -> None:

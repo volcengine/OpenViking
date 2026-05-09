@@ -4,6 +4,7 @@ description: |
 directory: "viking://agent/{{ agent_space }}/memories"
 filename_template: "identity.md"
 enabled: true
+link_enabled: false
 operation_mode: "upsert"
 content_template: |
   # identity.md - Who Am I?

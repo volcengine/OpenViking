@@ -8,6 +8,7 @@ description: |
 directory: "viking://agent/{{ agent_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}.md"
 enabled: true
+link_enabled: false
 operation_mode: "add_only"
 agent_only: true
 

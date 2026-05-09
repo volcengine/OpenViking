@@ -17,6 +17,7 @@ description: |
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
 enabled: true
+link_enabled: true
 fields:
   - name: content
     type: string

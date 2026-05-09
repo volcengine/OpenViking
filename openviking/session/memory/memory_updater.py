@@ -311,6 +311,9 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
+        # Distribute resolved_links to corresponding upsert operations
+        self._distribute_links_to_operations(operations)
+
         # 为每个upsert operation填充需要更新的uri列表
         supplement_operation_uris(
             operations,
@@ -353,6 +356,10 @@ class MemoryUpdater:
 
         # Vectorize written and edited memories
         await self._vectorize_memories(result, ctx)
+
+        # Apply links to endpoint files not covered by upsert_operations
+        if operations.resolved_links:
+            await self._apply_links_to_existing_files(operations.resolved_links, result, ctx)
 
         tracer.info(f"Memory operations applied: {result.summary()}")
 
@@ -418,6 +425,20 @@ class MemoryUpdater:
                     new_value = merge_op.apply(current_value, patch_value)
                     metadata[field.name] = new_value
 
+            # Handle links field: merge with existing links
+            incoming_links = getattr(resolved_op, "_incoming_links", [])
+            if incoming_links or (old_content and old_content.memory_fields.get("links")):
+                from openviking.session.memory.merge_op.link_merge import merge_links
+
+                existing_links = []
+                if old_content and old_content.memory_fields:
+                    existing_links = old_content.memory_fields.get("links", [])
+                merged_links = merge_links(
+                    existing_links,
+                    [link.model_dump() for link in incoming_links],
+                )
+                metadata["links"] = merged_links
+
             # serialize_with_metadata modifies metadata dict, so pass a copy
             new_full_content = serialize_with_metadata(
                 metadata.copy(),
@@ -425,6 +446,75 @@ class MemoryUpdater:
                 extract_context=extract_context,
             )
             await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+
+    def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
+        """Distribute resolved_links to corresponding upsert operations by URI."""
+        # Collect all URIs that will be upserted
+        upserted_uris = set()
+        for op in operations.upsert_operations:
+            op._incoming_links = []
+            for uri in op.uris:
+                upserted_uris.add(uri)
+
+        # Attach links to their corresponding upsert operations
+        for link in operations.resolved_links:
+            target_uri = link.from_uri if link.direction == "links" else link.to_uri
+            if target_uri in upserted_uris:
+                for op in operations.upsert_operations:
+                    if target_uri in op.uris:
+                        op._incoming_links.append(link)
+                        break
+
+    async def _apply_links_to_existing_files(
+        self,
+        resolved_links: List[StoredLink],
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> None:
+        """Apply links to endpoint files that are NOT in the current upsert batch."""
+        from openviking.session.memory.merge_op.link_merge import merge_links
+        from openviking.session.memory.utils.content import serialize_with_metadata
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return
+
+        # Collect URIs of files being upserted (links handled in _apply_upsert)
+        upserted_uris = set()
+        for op in result.written_uris + result.edited_uris:
+            upserted_uris.add(op)
+
+        # Group remaining links by target file
+        file_links: Dict[str, List[StoredLink]] = {}
+        for link in resolved_links:
+            target_uri = link.from_uri if link.direction == "links" else link.to_uri
+            if target_uri not in upserted_uris:
+                if target_uri not in file_links:
+                    file_links[target_uri] = []
+                file_links[target_uri].append(link)
+
+        # Apply links to each remaining file
+        for uri, links in file_links.items():
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if not content:
+                    continue
+                parsed = parse_memory_file_with_fields(content)
+                existing_links = parsed.get("links", [])
+
+                merged_links = merge_links(
+                    existing_links,
+                    [link.model_dump() for link in links],
+                )
+                parsed["links"] = merged_links
+
+                # Re-serialize with updated links
+                new_full_content = serialize_with_metadata(
+                    parsed.copy(), content_template=None, extract_context=None
+                )
+                await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+            except Exception as e:
+                logger.warning(f"Failed to apply links to existing file {uri}: {e}")
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

@@ -6,6 +6,7 @@ Core domain data classes for memory system.
 
 import json
 from datetime import datetime
+from enum import Enum
 from typing import (
     Any,
     Dict,
@@ -27,6 +28,50 @@ from openviking.session.memory.merge_op.base import (
 )
 
 T = TypeVar("T")
+
+
+# ============================================================================
+# Link Type and Link Models
+# ============================================================================
+
+
+class LinkType(str, Enum):
+    """Link relationship types between memory pages."""
+
+    RELATED_TO = "related_to"
+    BELONGS_TO = "belongs_to"
+    CAUSED_BY = "caused_by"
+    DERIVED_FROM = "derived_from"
+    CONTRADICTS = "contradicts"
+    EVOLVED_FROM = "evolved_from"
+
+
+class WikiLink(BaseModel):
+    """Link output by LLM during extraction, using temporary page_ids."""
+
+    f: int = Field(..., description="From page_id (temporary)")
+    t: int = Field(..., description="To page_id (temporary)")
+    t_field: str = Field("content", description="Target field name")
+    t_line_ranges: Optional[str] = Field(None, description='Target line range, e.g. "3-5"')
+    link_type: LinkType = Field(LinkType.RELATED_TO, description="Relationship type")
+    weight: float = Field(1.0, description="Association weight 0~1")
+    match_text: Optional[str] = Field(None, description="Text in from page to be linkified")
+    description: str = Field("", description="Why this link exists")
+
+
+class StoredLink(BaseModel):
+    """Persisted link in MEMORY_FIELDS, with URIs instead of page_ids."""
+
+    from_uri: str
+    to_uri: str
+    direction: str = Field(..., description='"links" (forward) or "backlinks" (reverse)')
+    link_type: LinkType = LinkType.RELATED_TO
+    weight: float = 1.0
+    t_field: str = "content"
+    t_line_ranges: Optional[str] = None
+    match_text: Optional[str] = None
+    description: str = ""
+    created_at: str = ""
 
 
 # ============================================================================
@@ -64,6 +109,9 @@ class MemoryTypeSchema(BaseModel):
     )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
+    )
+    link_enabled: bool = Field(
+        True, description="Whether this memory type supports link extraction"
     )
 
     def filename_has_variables(self):
@@ -104,6 +152,7 @@ class ResolvedOperation(BaseModel):
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
+    page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
 
     def is_edit(self):
         return self.old_memory_file_content is not None
@@ -113,6 +162,7 @@ class ResolvedOperations(BaseModel):
     upsert_operations: List[ResolvedOperation]
     delete_file_contents: List[MemoryFileContent]
     errors: List[str]
+    resolved_links: List[StoredLink] = Field(default_factory=list)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0

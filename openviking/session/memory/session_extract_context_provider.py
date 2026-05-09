@@ -64,10 +64,15 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
+        self._page_id_map = None  # Set by ExtractLoop before prefetch
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFileContent]:
         return self._read_file_contents
+
+    def set_page_id_map(self, page_id_map):
+        """Set PageIdMap for annotating read results with page_ids."""
+        self._page_id_map = page_id_map
 
     def set_transaction_handle(self, handle):
         """Set transaction handle after lock is acquired."""
@@ -113,6 +118,30 @@ All memory content MUST be written in {output_language}.
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
+
+## Link Extraction
+When you identify semantic relationships between memory items, express them as links in the "links" field.
+Each link connects two pages (from → to) with a relationship type.
+
+Available link types:
+- related_to: general association (e.g., event related_to entity)
+- belongs_to: A is part of / owned by B (e.g., preference belongs_to profile/entity)
+- caused_by: A was caused by B (e.g., event caused_by another event)
+- derived_from: A was derived from B (e.g., experience derived_from skills)
+- contradicts: A contradicts B (e.g., new preference contradicts old one)
+- evolved_from: A is an evolution/update of B (e.g., updated preference evolved_from old version)
+
+For each link:
+- "f": from page_id (the page containing the match_text). Use the page_id shown in read results (e.g., [page_id: 1]).
+- "t": to page_id (the target page being linked to). Use the page_id shown in read results.
+- For NEW items you create, assign a unique page_id >= 100 and set it in the item's "page_id" field.
+- "t_field": which field in the target page (usually "content")
+- "t_line_ranges": line range in target (e.g., "3-5"), optional
+- "match_text": exact text in the from page's content that should become a link (must exist verbatim in the from page)
+- "description": brief explanation of the relationship
+- "weight": 0.0-1.0, how strong the relationship is (default 1.0)
+
+Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
 
 """
 
@@ -189,7 +218,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     }
                     if part.skill_uri:
                         tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    formatted_parts.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+                    formatted_parts.append(
+                        f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}"
+                    )
             return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
@@ -232,7 +263,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
         schemas = [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
 
@@ -317,6 +349,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         for file_uri in read_files:
             try:
                 result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                # Annotate with page_id for link extraction
+                page_id = (
+                    self._page_id_map.register_existing(file_uri) if self._page_id_map else None
+                )
+                if page_id is not None:
+                    result_str = f"[page_id: {page_id}]\n{result_str}"
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
@@ -338,6 +376,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     continue
                 try:
                     result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                    # Annotate with page_id for link extraction
+                    page_id = (
+                        self._page_id_map.register_existing(file_uri) if self._page_id_map else None
+                    )
+                    if page_id is not None:
+                        result_str = f"[page_id: {page_id}]\n{result_str}"
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
@@ -373,7 +417,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
         return [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
 

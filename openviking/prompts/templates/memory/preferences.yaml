@@ -8,6 +8,7 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/preferences"
 filename_template: "{{ user }}/{{ topic }}.md"
 enabled: true
+link_enabled: true
 
 overview_template: |-
   # Preferences Overview

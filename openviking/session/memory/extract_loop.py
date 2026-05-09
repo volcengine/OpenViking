@@ -16,6 +16,7 @@ from openviking.session.memory.dataclass import (
     MemoryFileContent,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.schema_model_generator import (
@@ -130,7 +131,7 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        self._expected_fields = ["delete_uris"]
+        self._expected_fields = ["delete_uris", "links"]
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -170,9 +171,19 @@ The final output of the model must strictly follow the JSON Schema format shown 
         )
 
         await self._mark_cache_breakpoint(messages)
+
+        # Initialize PageIdMap for link resolution
+        self._page_id_map = PageIdMap()
+        # Inject PageIdMap into context provider so it can annotate read results
+        self.context_provider.set_page_id_map(self._page_id_map)
+
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
+
+        # Register prefetched files in PageIdMap
+        for uri in self.context_provider.read_file_contents:
+            self._page_id_map.register_existing(uri)
 
         while iteration < max_iterations:
             iteration += 1
@@ -282,6 +293,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 # 填充 user_id 和 agent_id
                 self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
 
+                # Extract page_id before it's excluded from memory_fields
+                page_id = item_dict.pop("page_id", None)
+
                 # 构建 ResolvedOperation
                 # 注意：此时 uris 为空，稍后由 supplement_operation_uris 填充
 
@@ -290,6 +304,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     memory_fields=item_dict,
                     memory_type=memory_type,
                     uris=[],
+                    page_id=page_id,
                 )
                 upsert_operations.append(resolved_op)
 
@@ -327,7 +342,66 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
+        # Register new page_ids (100+) after URI resolution
+        for op in upsert_operations:
+            if op.page_id is not None and op.page_id >= 100:
+                for uri in op.uris:
+                    self._page_id_map.register_new(uri)
+
+        # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
+        resolved_links = self._resolve_links(operations)
+
+        resolved.resolved_links = resolved_links
         return resolved
+
+    def _resolve_links(self, operations) -> List[StoredLink]:
+        """Resolve WikiLinks with page_ids to StoredLinks with URIs."""
+        from datetime import datetime, timezone
+
+        raw_links = getattr(operations, "links", None)
+        if not raw_links:
+            return []
+
+        resolved_links = []
+        now = datetime.now(timezone.utc).isoformat()
+
+        for link in raw_links:
+            from_uri = self._page_id_map.resolve(link.f)
+            to_uri = self._page_id_map.resolve(link.t)
+            if not from_uri or not to_uri:
+                logger.warning(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
+                continue
+
+            # Forward link (direction="links") - stored in from_uri's MEMORY_FIELDS
+            forward_link = StoredLink(
+                from_uri=from_uri,
+                to_uri=to_uri,
+                direction="links",
+                link_type=link.link_type,
+                weight=link.weight,
+                t_field=link.t_field,
+                t_line_ranges=link.t_line_ranges,
+                match_text=link.match_text,
+                description=link.description,
+                created_at=now,
+            )
+            # Backward link (direction="backlinks") - stored in to_uri's MEMORY_FIELDS
+            backward_link = StoredLink(
+                from_uri=from_uri,
+                to_uri=to_uri,
+                direction="backlinks",
+                link_type=link.link_type,
+                weight=link.weight,
+                t_field=link.t_field,
+                t_line_ranges=link.t_line_ranges,
+                match_text=link.match_text,
+                description=link.description,
+                created_at=now,
+            )
+            resolved_links.append(forward_link)
+            resolved_links.append(backward_link)
+
+        return resolved_links
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
@@ -343,6 +417,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
         async def execute_single_tool_call(idx: int, tool_call):
             """Execute a single tool call."""
             result = await self.context_provider.execute_tool(tool_call)
+            # Annotate read results with page_id for link extraction
+            if tool_call.name == "read" and self._page_id_map:
+                uri = tool_call.arguments.get("uri", "")
+                if uri:
+                    page_id = self._page_id_map.register_existing(uri)
+                    if isinstance(result, str):
+                        result = f"[page_id: {page_id}]\n{result}"
             return idx, tool_call, result
 
         action_tasks = [
