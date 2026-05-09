@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import HeatMap from '@uiw/react-heat-map'
 import { Area, AreaChart, CartesianGrid, Cell, Label, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
@@ -154,6 +156,36 @@ function createDemoHeatmapData(): HeatMapDayValue[] {
 
 const DEMO_HEATMAP_DATA = createDemoHeatmapData()
 const DEMO_HEATMAP_TOTAL = DEMO_HEATMAP_DATA.reduce((total, item) => total + item.count, 0)
+
+function computeHeatmapStats(data: HeatMapDayValue[]) {
+  let busiestDay = data[0]
+  let activeDays = 0
+  let longestStreak = 0
+  let streak = 0
+
+  for (const d of data) {
+    if (d.count > 0) {
+      activeDays++
+      streak++
+      if (streak > longestStreak) longestStreak = streak
+      if (d.count > busiestDay.count) busiestDay = d
+    } else {
+      streak = 0
+    }
+  }
+
+  let currentStreak = 0
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (data[i].count > 0) currentStreak++
+    else break
+  }
+
+  return { busiestDay, activeDays, currentStreak, longestStreak }
+}
+
+const DEMO_HEATMAP_STATS = computeHeatmapStats(DEMO_HEATMAP_DATA)
+const HEATMAP_LEGEND_COLORS = Object.values(HEATMAP_COLORS)
+
 const OVERVIEW_RANGE_START = '2026-04-25'
 const OVERVIEW_RANGE_END = '2026-05-08'
 const TOKEN_TREND_DATA = [
@@ -814,16 +846,21 @@ function RecentTasksCard({
 }
 
 function ContributionHeatmapDemo({ t }: { t: (key: string) => string }) {
+  const [tooltipData, setTooltipData] = useState<{
+    x: number
+    y: number
+    date: string
+    count: number
+  } | null>(null)
+
   return (
     <Panel className="overflow-hidden">
-      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">{t('contributionHeatmap.title')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t('contributionHeatmap.subtitle')}</p>
+      <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+        <div className="flex items-baseline gap-2">
+          <span className="text-2xl font-bold tabular-nums">{DEMO_HEATMAP_TOTAL.toLocaleString()}</span>
+          <span className="text-sm text-muted-foreground">{t('contributionHeatmap.inPastYear')}</span>
         </div>
-        <div className="shrink-0 rounded-full bg-background/70 px-3 py-1 text-sm font-medium tabular-nums text-foreground/80 dark:bg-background/20">
-          {t('contributionHeatmap.total')}: {DEMO_HEATMAP_TOTAL}
-        </div>
+        <h2 className="text-sm font-medium text-muted-foreground">{t('contributionHeatmap.title')}</h2>
       </div>
 
       <div className="overflow-x-auto pb-2 [--heatmap-empty:theme(colors.background)] [&_.w-heatmap-month]:fill-muted-foreground [&_.w-heatmap-week]:fill-muted-foreground [&_.w-heatmap-rect]:stroke-foreground/10">
@@ -835,7 +872,7 @@ function ContributionHeatmapDemo({ t }: { t: (key: string) => string }) {
           weekLabels={HEATMAP_WEEK_LABELS}
           panelColors={HEATMAP_COLORS}
           rectSize={13}
-          legendCellSize={13}
+          legendCellSize={0}
           space={3}
           width={850}
           rectProps={{
@@ -843,18 +880,76 @@ function ContributionHeatmapDemo({ t }: { t: (key: string) => string }) {
           }}
           rectRender={(props, data) => {
             const count = data.count ?? 0
-            const label = count === 1 ? t('contributionHeatmap.oneCommit') : t('contributionHeatmap.nCommits')
-
             return (
-              <rect {...props}>
-                <title>{`${data.date}: ${count} ${label}`}</title>
-              </rect>
+              <rect
+                {...props}
+                style={{ ...props.style, cursor: 'pointer', transition: 'opacity 0.15s' }}
+                onMouseEnter={(e) => {
+                  const rect = (e.target as SVGRectElement).getBoundingClientRect()
+                  setTooltipData({
+                    x: rect.x + rect.width / 2,
+                    y: rect.y,
+                    date: data.date,
+                    count,
+                  })
+                }}
+                onMouseLeave={() => setTooltipData(null)}
+              />
             )
           }}
         />
       </div>
 
-      <p className="mt-3 text-xs text-muted-foreground">{t('contributionHeatmap.demoHint')}</p>
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+          <span>
+            {t('contributionHeatmap.activeDays')}:{' '}
+            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.activeDays}</span>
+          </span>
+          <span>
+            {t('contributionHeatmap.longestStreak')}:{' '}
+            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.longestStreak} {t('contributionHeatmap.days')}</span>
+          </span>
+          <span>
+            {t('contributionHeatmap.currentStreak')}:{' '}
+            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.currentStreak} {t('contributionHeatmap.days')}</span>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{t('contributionHeatmap.less')}</span>
+          {HEATMAP_LEGEND_COLORS.map((color, i) => (
+            <span
+              key={i}
+              className={`inline-block size-[13px] rounded-[3px] ${i === 0 ? 'border border-foreground/10 bg-background' : ''}`}
+              style={i > 0 ? { backgroundColor: color } : undefined}
+            />
+          ))}
+          <span>{t('contributionHeatmap.more')}</span>
+        </div>
+      </div>
+
+      {tooltipData && createPortal(
+        <div
+          className="pointer-events-none fixed z-[100] rounded-lg bg-foreground px-3 py-2 text-xs text-background shadow-lg"
+          style={{
+            left: tooltipData.x,
+            top: tooltipData.y - 10,
+            transform: 'translate(-50%, -100%)',
+          }}
+        >
+          <div className="font-semibold tabular-nums">
+            {tooltipData.count === 0
+              ? t('contributionHeatmap.noActivity')
+              : `${tooltipData.count} ${tooltipData.count === 1 ? t('contributionHeatmap.oneCommit') : t('contributionHeatmap.nCommits')}`}
+          </div>
+          <div className="mt-0.5 opacity-70">
+            {new Date(tooltipData.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+          </div>
+          <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-foreground" />
+        </div>,
+        document.body
+      )}
     </Panel>
   )
 }
@@ -1018,6 +1113,60 @@ function SessionsCard({
   )
 }
 
+// ---------- onboarding ----------
+
+const ONBOARDING_KEY = 'ov-onboarding-seen'
+
+function WelcomeDialog() {
+  const { t } = useTranslation('home')
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(() => {
+    try {
+      return !localStorage.getItem(ONBOARDING_KEY)
+    } catch {
+      return false
+    }
+  })
+
+  const dismiss = () => {
+    setOpen(false)
+    try {
+      localStorage.setItem(ONBOARDING_KEY, '1')
+    } catch { /* noop */ }
+  }
+
+  const handleCta = () => {
+    dismiss()
+    navigate({ to: '/resources', search: { upload: true } })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) dismiss() }}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <div className="flex flex-col items-center px-8 pt-10 pb-6 text-center">
+          <span
+            className="mb-6 flex size-16 items-center justify-center rounded-2xl"
+            style={{ backgroundColor: 'oklch(0.5 0.134 243 / 0.12)' }}
+          >
+            <Database className="size-8" style={{ color: 'oklch(0.5 0.134 243)' }} />
+          </span>
+          <h2 className="text-xl font-bold tracking-tight">{t('onboarding.title')}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t('onboarding.subtitle')}</p>
+          <div className="mt-6 space-y-1">
+            <p className="text-base font-medium">{t('onboarding.sloganZh')}</p>
+            <p className="text-sm text-muted-foreground">{t('onboarding.sloganEn')}</p>
+          </div>
+        </div>
+        <div className="border-t px-8 py-5">
+          <Button className="w-full" size="lg" onClick={handleCta}>
+            {t('onboarding.cta')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ---------- main ----------
 
 export function HomePage() {
@@ -1080,6 +1229,7 @@ export function HomePage() {
 
   return (
     <div ref={containerRef} className="flex flex-col gap-6 pb-8">
+      <WelcomeDialog />
       {/* Row 1: Summary cards */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard

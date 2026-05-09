@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, ChevronRight, RefreshCcw, Search } from 'lucide-react'
+import { ArrowUp, ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '#/components/ui/dialog'
 
 import { normalizeDirUri, normalizeFileUri, parentUri } from '../-lib/normalize'
 import { useInvalidateVikingFs, useVikingFsList } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
+import { AddResourceForm } from './add-resource-page'
 import { FileList } from './file-list'
 import { FilePreview } from './file-preview'
 import { FileTree } from './file-tree'
@@ -14,6 +23,7 @@ import { FindPalette } from './find-palette'
 interface VikingFileManagerProps {
   initialUri?: string
   initialFile?: string
+  initialUploadOpen?: boolean
   onUriChange?: (uri: string) => void
 }
 
@@ -43,8 +53,10 @@ function isDirectoryUri(uri: string): boolean {
 export function VikingFileManager({
   initialUri,
   initialFile,
+  initialUploadOpen,
   onUriChange,
 }: VikingFileManagerProps) {
+  const { t } = useTranslation('resources')
   const [currentUri, setCurrentUri] = useState(
     normalizeDirUri(initialUri || 'viking://'),
   )
@@ -53,6 +65,7 @@ export function VikingFileManager({
   )
   const [selectedFile, setSelectedFile] = useState<VikingFsEntry | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(initialUploadOpen ?? false)
 
   useEffect(() => {
     const normalized = normalizeDirUri(initialUri || 'viking://')
@@ -144,6 +157,11 @@ export function VikingFileManager({
     await listQuery.refetch()
   }
 
+  const handleUploadSubmitted = () => {
+    setUploadDialogOpen(false)
+    void invalidateList()
+  }
+
   useEffect(() => {
     onUriChange?.(currentUri)
   }, [currentUri, onUriChange])
@@ -198,13 +216,13 @@ export function VikingFileManager({
     <div className="flex h-10 items-center gap-1 border-b px-3">
       {!showTree && (
         <>
-          <Button variant="ghost" size="icon" className="size-7" title="返回父级" onClick={handleGoParent}>
+          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.parent')} onClick={handleGoParent}>
             <ArrowUp className="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="size-7" title="刷新目录" onClick={() => void handleRefresh()}>
+          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
             <RefreshCcw className="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="size-7" title="搜索 ⌘K" onClick={() => setPaletteOpen(true)}>
+          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.search')} onClick={() => setPaletteOpen(true)}>
             <Search className="size-4" />
           </Button>
           <div className="mx-1 h-4 w-px bg-border" />
@@ -224,6 +242,15 @@ export function VikingFileManager({
           </span>
         ))}
       </nav>
+      <Button
+        type="button"
+        size="sm"
+        className="ml-auto h-8 gap-1.5"
+        onClick={() => setUploadDialogOpen(true)}
+      >
+        <Upload className="size-4" />
+        {t('toolbar.upload')}
+      </Button>
     </div>
   )
 
@@ -234,17 +261,26 @@ export function VikingFileManager({
           <>
             <section className="flex min-h-0 flex-col bg-muted/30" style={{ width: treeWidth, minWidth: treeWidth }}>
               <div className="flex h-10 items-center gap-1 border-b px-2">
-                <Button variant="ghost" size="icon" className="size-7" title="返回父级" onClick={handleGoParent}>
+                <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.parent')} onClick={handleGoParent}>
                   <ArrowUp className="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" className="size-7" title="刷新目录" onClick={() => void handleRefresh()}>
+                <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
                   <RefreshCcw className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="ml-1 h-8 gap-1.5"
+                  onClick={() => setUploadDialogOpen(true)}
+                >
+                  <Upload className="size-4" />
+                  {t('toolbar.upload')}
                 </Button>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="ml-auto size-7"
-                  title="搜索 ⌘K"
+                  title={t('toolbar.search')}
                   onClick={() => setPaletteOpen(true)}
                 >
                   <Search className="size-4" />
@@ -281,12 +317,23 @@ export function VikingFileManager({
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
             <div className="min-h-0 flex-1 overflow-auto">
-              <FileList
-                entries={entries}
-                selectedFileUri={null}
-                onOpenDirectory={updateUri}
-                onOpenFile={(file) => setSelectedFile(file)}
-              />
+              {entries.length === 0 && !listQuery.isLoading ? (
+                <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+                  <FolderOpen className="size-16 text-muted-foreground/20" />
+                  <p className="text-sm text-muted-foreground">{t('emptyState.title')}</p>
+                  <Button size="sm" className="gap-1.5" onClick={() => setUploadDialogOpen(true)}>
+                    <Upload className="size-4" />
+                    {t('emptyState.upload')}
+                  </Button>
+                </div>
+              ) : (
+                <FileList
+                  entries={entries}
+                  selectedFileUri={null}
+                  onOpenDirectory={updateUri}
+                  onOpenFile={(file) => setSelectedFile(file)}
+                />
+              )}
             </div>
           </section>
         )}
@@ -299,6 +346,18 @@ export function VikingFileManager({
         onNavigateDir={(uri) => { updateUri(uri); setPaletteOpen(false) }}
         scopeUri={currentUri}
       />
+
+      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+        <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="border-b px-6 py-5">
+            <DialogTitle className="text-xl">{t('uploadDialog.title')}</DialogTitle>
+            <DialogDescription>{t('uploadDialog.description')}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
+            <AddResourceForm onSubmitted={handleUploadSubmitted} />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
