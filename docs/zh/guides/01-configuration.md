@@ -1128,7 +1128,8 @@ openviking add-resource ./docs --exclude "*.tmp"
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "redo_recovery_enabled": true
     }
   }
 }
@@ -1138,6 +1139,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `lock_timeout` | float | 获取路径锁的等待超时（秒）。`0` = 立即失败（默认）；`> 0` = 最多等待此时间后抛出 `LockAcquisitionError` | `0.0` |
 | `lock_expire` | float | 锁失活阈值（秒）。超过此时间未被 refresh 的锁会被视为陈旧锁并回收 | `300.0` |
+| `redo_recovery_enabled` | bool | 是否启用 session commit 阶段 2 的崩溃恢复 redo。设为 `false` 时不写入待执行 redo marker，启动时也不执行 redo 恢复。 | `true` |
 
 路径锁机制的详细说明见 [路径锁与崩溃恢复](../concepts/09-transaction.md)。
 
@@ -1208,7 +1210,8 @@ openviking add-resource ./docs --exclude "*.tmp"
     },
     "transaction": {
       "lock_timeout": 0.0,
-      "lock_expire": 300.0
+      "lock_expire": 300.0,
+      "redo_recovery_enabled": true
     },
     "vectordb": {
       "backend": "local|remote",
