@@ -29,4 +29,12 @@ class TransactionConfig(BaseModel):
         ),
     )
 
+    redo_recovery_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable session commit phase-2 crash-recovery redo. "
+            "When false, pending redo markers are not written and startup redo recovery is skipped."
+        ),
+    )
+
     model_config = {"extra": "forbid"}

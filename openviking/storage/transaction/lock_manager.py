@@ -26,10 +26,12 @@ class LockManager:
         agfs: AGFSClient,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
+        redo_recovery_enabled: bool = True,
     ):
         self._agfs = agfs
         self._path_lock = PathLock(agfs, lock_expire=lock_expire)
         self._lock_timeout = lock_timeout
+        self._redo_recovery_enabled = redo_recovery_enabled
         self._redo_log = RedoLog(agfs)
         self._handles: Dict[str, LockHandle] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -39,6 +41,10 @@ class LockManager:
     @property
     def redo_log(self) -> RedoLog:
         return self._redo_log
+
+    @property
+    def redo_recovery_enabled(self) -> bool:
+        return self._redo_recovery_enabled
 
     def _mark_handle_active(self, handle: LockHandle) -> None:
         handle.last_active_at = time.time()
@@ -55,7 +61,10 @@ class LockManager:
         """Start background cleanup and redo recovery."""
         self._running = True
         self._cleanup_task = asyncio.create_task(self._stale_cleanup_loop())
-        self._redo_task = asyncio.create_task(self._recover_pending_redo())
+        if self._redo_recovery_enabled:
+            self._redo_task = asyncio.create_task(self._recover_pending_redo())
+        else:
+            logger.info("Redo recovery disabled by config; skipping pending redo recovery")
 
     async def stop(self) -> None:
         """Stop cleanup and release all active locks."""
@@ -367,9 +376,15 @@ def init_lock_manager(
     agfs: AGFSClient,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
+    redo_recovery_enabled: bool = True,
 ) -> LockManager:
     global _lock_manager
-    _lock_manager = LockManager(agfs=agfs, lock_timeout=lock_timeout, lock_expire=lock_expire)
+    _lock_manager = LockManager(
+        agfs=agfs,
+        lock_timeout=lock_timeout,
+        lock_expire=lock_expire,
+        redo_recovery_enabled=redo_recovery_enabled,
+    )
     return _lock_manager
 
 

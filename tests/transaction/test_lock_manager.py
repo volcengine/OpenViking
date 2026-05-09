@@ -99,3 +99,20 @@ class TestLockManagerBasic:
             await lm._recover_pending_redo()
 
         lm._redo_log.mark_done.assert_not_called()
+
+    async def test_start_skips_redo_recovery_when_disabled(self, client):
+        lm_disabled = LockManager(
+            agfs=client._client.service._agfs_client,
+            lock_timeout=1.0,
+            lock_expire=1.0,
+            redo_recovery_enabled=False,
+        )
+        lm_disabled._recover_pending_redo = AsyncMock()
+
+        await lm_disabled.start()
+        await asyncio.sleep(0)
+
+        assert lm_disabled._redo_task is None
+        lm_disabled._recover_pending_redo.assert_not_called()
+
+        await lm_disabled.stop()
