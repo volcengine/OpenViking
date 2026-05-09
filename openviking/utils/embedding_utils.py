@@ -27,9 +27,6 @@ _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
         "context_type",
-        "created_at",
-        "updated_at",
-        "active_count",
         "level",
         "name",
         "description",

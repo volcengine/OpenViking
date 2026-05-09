@@ -15,6 +15,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import Eq
 from openviking.storage.local_fs import export_ovpack, import_ovpack
+from openviking.utils.embedding_utils import _apply_scalar_overrides
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -92,20 +93,27 @@ class FakeVectorStore:
             "viking://resources/demo": [
                 {
                     "uri": "viking://resources/demo",
+                    "type": "directory",
                     "context_type": "resource",
                     "level": 0,
                     "abstract": "root abstract",
                     "vector": [1, 2, 3],
                     "active_count": 2,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-02T00:00:00+00:00",
                 }
             ],
             "viking://resources/demo/notes.txt": [
                 {
                     "uri": "viking://resources/demo/notes.txt",
+                    "type": "file",
                     "context_type": "resource",
                     "level": 2,
+                    "name": "notes.txt",
                     "abstract": "note summary",
                     "active_count": 7,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-02T00:00:00+00:00",
                     "vector": [4, 5, 6],
                 }
             ],
@@ -135,6 +143,33 @@ def _write_ovpack(path: Path, entries: dict[str, str]) -> None:
             zf.writestr(name, content)
 
 
+def test_import_scalar_overrides_ignore_runtime_fields():
+    class FakeEmbeddingMsg:
+        def __init__(self) -> None:
+            self.context_data: dict[str, object] = {}
+
+    msg = FakeEmbeddingMsg()
+    _apply_scalar_overrides(
+        msg,
+        {
+            "type": "file",
+            "context_type": "resource",
+            "level": 2,
+            "abstract": "portable summary",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-02T00:00:00+00:00",
+            "active_count": 7,
+        },
+    )
+
+    assert msg.context_data == {
+        "type": "file",
+        "context_type": "resource",
+        "level": 2,
+        "abstract": "portable summary",
+    }
+
+
 @pytest.mark.asyncio
 async def test_export_ovpack_writes_v2_manifest_without_derived_files(
     temp_ovpack_path: Path, request_ctx: RequestContext
@@ -156,8 +191,13 @@ async def test_export_ovpack_writes_v2_manifest_without_derived_files(
     assert manifest["format_version"] == 2
     assert manifest["kind"] == "openviking.ovpack"
     assert manifest["vectors"][""][0]["text"] == "root abstract"
-    assert manifest["vectors"]["notes.txt"][0]["scalars"]["active_count"] == 7
-    assert "vector" not in manifest["vectors"]["notes.txt"][0]["scalars"]
+    note_scalars = manifest["vectors"]["notes.txt"][0]["scalars"]
+    assert note_scalars["type"] == "file"
+    assert note_scalars["abstract"] == "note summary"
+    assert "vector" not in note_scalars
+    assert "active_count" not in note_scalars
+    assert "created_at" not in note_scalars
+    assert "updated_at" not in note_scalars
 
 
 @pytest.mark.asyncio

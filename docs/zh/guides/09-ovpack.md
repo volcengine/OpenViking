@@ -101,7 +101,8 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 
 OVPack v2 仍然是标准 ZIP 文件，并在 `<root>/_._ovpack_manifest.json` 中保存
 OpenViking manifest。manifest 记录 `format_version`、内容条目和可迁移的向量标量
-元数据。原始 embedding 向量不会被导出；导入后会在目标环境重新向量化。
+元数据。原始 embedding 向量以及 `created_at`、`updated_at`、`active_count`
+等运行态字段不会被导出；导入后会在目标环境重新向量化并生成运行态状态。
 旧版本没有 manifest 的 OVPack 仍可导入；带 manifest 的包会校验 `kind` 和
 `format_version`，高于当前支持版本的包会被拒绝。`.abstract.md`、`.overview.md`、
 `.relations.json` 等派生语义文件不会作为普通内容导入。

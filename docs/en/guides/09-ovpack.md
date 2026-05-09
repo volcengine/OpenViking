@@ -91,7 +91,9 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 OVPack v2 files are standard ZIP archives with an OpenViking manifest at
 `<root>/_._ovpack_manifest.json`. The manifest records `format_version`,
 content entries, and portable vector scalar metadata. Raw embedding vectors are
-not exported; imports rebuild vectors in the target environment. Legacy OVPack
+not exported. Runtime fields such as `created_at`, `updated_at`, and
+`active_count` are also not exported; imports rebuild vectors and runtime state
+in the target environment. Legacy OVPack
 files without a manifest can still be imported; packages with a manifest validate
 `kind` and `format_version`, and packages newer than this implementation are
 rejected. Derived semantic files such as `.abstract.md`, `.overview.md`, and
