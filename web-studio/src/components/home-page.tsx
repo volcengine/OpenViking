@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { Cell, Label, Pie, PieChart } from 'recharts'
+import HeatMap from '@uiw/react-heat-map'
+import { Area, AreaChart, CartesianGrid, Cell, Label, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
 import gsap from 'gsap'
 import { Brain, Coins, ChevronDown, Copy, Check, Database, ListTodo, Users } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -74,36 +76,115 @@ function truncate(s: string, len: number): string {
 // ---------- category colors ----------
 
 const CATEGORY_COLORS: Record<string, string> = {
-  profile: '#4a7c9b',
-  preferences: '#6b8cce',
-  entities: '#7e9e7e',
-  events: '#c4a882',
-  cases: '#b07e7e',
-  patterns: '#9b8bb5',
-  tools: '#8b9dad',
-  skills: '#a8917a',
+  profile: 'oklch(0.55 0.11 200)',
+  preferences: 'oklch(0.55 0.11 215)',
+  entities: 'oklch(0.55 0.11 230)',
+  events: 'oklch(0.55 0.11 243)',
+  cases: 'oklch(0.55 0.11 255)',
+  patterns: 'oklch(0.55 0.11 268)',
+  tools: 'oklch(0.55 0.11 280)',
+  skills: 'oklch(0.55 0.11 292)',
 }
 
 const CATEGORY_COLORS_DARK: Record<string, string> = {
-  profile: '#6ba0c2',
-  preferences: '#8eaadc',
-  entities: '#a4c4a4',
-  events: '#dcc4a0',
-  cases: '#d0a0a0',
-  patterns: '#b8a8d0',
-  tools: '#a8bcc8',
-  skills: '#c4ad96',
+  profile: 'oklch(0.7 0.11 200)',
+  preferences: 'oklch(0.7 0.11 215)',
+  entities: 'oklch(0.7 0.11 230)',
+  events: 'oklch(0.7 0.11 243)',
+  cases: 'oklch(0.7 0.11 255)',
+  patterns: 'oklch(0.7 0.11 268)',
+  tools: 'oklch(0.7 0.11 280)',
+  skills: 'oklch(0.7 0.11 292)',
 }
 
 const CATEGORY_ORDER = ['profile', 'preferences', 'entities', 'events', 'cases', 'patterns', 'tools', 'skills']
 
+// ---------- contribution heatmap demo data ----------
+
+type HeatMapDayValue = {
+  count: number
+  date: string
+}
+
+const DEMO_HEATMAP_START_DATE = new Date('2025/05/11')
+const DEMO_HEATMAP_END_DATE = new Date('2026/05/09')
+const HEATMAP_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const HEATMAP_WEEK_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
+const HEATMAP_COLORS = {
+  0: 'var(--heatmap-empty)',
+  1: 'oklch(0.85 0.06 243)',
+  4: 'oklch(0.7 0.1 243)',
+  8: 'oklch(0.55 0.134 243)',
+  12: 'oklch(0.4 0.12 243)',
+}
+
+function formatHeatmapDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+
+  return `${year}/${month}/${day}`
+}
+
+function createDemoHeatmapData(): HeatMapDayValue[] {
+  const value: HeatMapDayValue[] = []
+
+  for (
+    const day = new Date(DEMO_HEATMAP_START_DATE);
+    day <= DEMO_HEATMAP_END_DATE;
+    day.setDate(day.getDate() + 1)
+  ) {
+    const index = Math.floor((day.getTime() - DEMO_HEATMAP_START_DATE.getTime()) / 86_400_000)
+    const weekday = day.getDay()
+    const seasonalLift = day.getMonth() >= 0 && day.getMonth() <= 3 ? 2 : 0
+    const weekdayLift = weekday >= 1 && weekday <= 5 ? 1 : 0
+    const wave = (Math.sin(index / 9) + 1) * 2
+    const spike = index % 29 === 0 ? 8 : index % 17 === 0 ? 5 : 0
+    const quiet = weekday === 0 || weekday === 6 || index % 13 === 0
+    const count = quiet ? 0 : Math.round(wave + seasonalLift + weekdayLift + spike)
+
+    value.push({
+      count,
+      date: formatHeatmapDate(day),
+    })
+  }
+
+  return value
+}
+
+const DEMO_HEATMAP_DATA = createDemoHeatmapData()
+const DEMO_HEATMAP_TOTAL = DEMO_HEATMAP_DATA.reduce((total, item) => total + item.count, 0)
+const OVERVIEW_RANGE_START = '2026-04-25'
+const OVERVIEW_RANGE_END = '2026-05-08'
+const TOKEN_TREND_DATA = [
+  { date: '04-25', input: 128000, output: 76000, vector: 42000 },
+  { date: '04-26', input: 106000, output: 63000, vector: 36000 },
+  { date: '04-27', input: 133000, output: 82000, vector: 50000 },
+  { date: '04-28', input: 138000, output: 78000, vector: 47000 },
+  { date: '04-29', input: 121000, output: 72000, vector: 45000 },
+  { date: '04-30', input: 108000, output: 64000, vector: 41000 },
+  { date: '05-01', input: 130000, output: 79000, vector: 44000 },
+  { date: '05-02', input: 114000, output: 68000, vector: 40000 },
+  { date: '05-03', input: 95000, output: 57000, vector: 35000 },
+  { date: '05-04', input: 151000, output: 88000, vector: 51000 },
+  { date: '05-05', input: 116000, output: 66000, vector: 43000 },
+  { date: '05-06', input: 126000, output: 74000, vector: 48000 },
+  { date: '05-07', input: 111000, output: 62000, vector: 39000 },
+  { date: '05-08', input: 129000, output: 77000, vector: 46000 },
+]
+const TOKEN_TREND_KEYS = [
+  { color: 'oklch(0.6 0.12 210)', dataKey: 'input', labelKey: 'tokenTrend.input' },
+  { color: 'oklch(0.5 0.134 243)', dataKey: 'output', labelKey: 'tokenTrend.output' },
+  { color: 'oklch(0.6 0.1 280)', dataKey: 'vector', labelKey: 'tokenTrend.vector' },
+] as const
+
 // ---------- status helpers ----------
 
 const STATUS_COLORS: Record<string, string> = {
-  completed: '#7e9e7e', // sage green
-  running: '#c4a882',   // warm tan
-  failed: '#b07e7e',    // dusty rose
-  pending: '#b0aaa2',   // warm gray
+  completed: 'oklch(0.6 0.12 180)',
+  running: 'oklch(0.7 0.14 75)',
+  failed: 'oklch(0.55 0.2 15)',
+  pending: 'oklch(0.56 0.021 213.5)',
 }
 
 function TaskStatusDot({ status }: { status: string }) {
@@ -292,6 +373,20 @@ function ComponentHealthBar({
   const names = ['queue', 'vikingdb', 'models', 'lock', 'retrieval']
   const systemHealthy = sys.initialized === true
 
+  const queueComponent = asRecord(components.queue)
+  if (Object.keys(queueComponent).length > 0) {
+    components.queue = {
+      ...queueComponent,
+      is_healthy: false,
+      has_errors: true,
+      status: 'Injected queue failure for homepage validation.\nQueue backlog is blocked by a synthetic downstream processing error.',
+      errors: [
+        'Injected queue failure for homepage validation.',
+        'Queue backlog is blocked by a synthetic downstream processing error.',
+      ],
+    }
+  }
+
   const hasComponentIssues = names.some((name) => {
     const comp = asRecord(components[name])
     return comp.has_errors === true || comp.is_healthy !== true
@@ -370,20 +465,20 @@ function ComponentHealthBar({
               className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
               style={
                 overallHealthy && displaySystemHealthy
-                  ? { backgroundColor: 'rgba(126,158,126,0.15)', color: '#7e9e7e' }
-                  : { backgroundColor: 'rgba(176,126,126,0.15)', color: '#b07e7e' }
+                  ? { backgroundColor: 'oklch(0.6 0.12 180 / 0.15)', color: 'oklch(0.6 0.12 180)' }
+                  : { backgroundColor: 'oklch(0.55 0.2 15 / 0.15)', color: 'oklch(0.55 0.2 15)' }
               }
             >
               {overallHealthy && displaySystemHealthy
                 ? (
                   <>
-                    <span className="inline-block size-2 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
+                    <span className="inline-block size-2 rounded-full" style={{ backgroundColor: 'oklch(0.6 0.12 180)' }} />
                     {t('systemHealth.allOperational')}
                   </>
                 )
                 : (
                   <>
-                    <BreathingDot color="#b07e7e" size="size-2" />
+                    <BreathingDot color="oklch(0.55 0.2 15)" size="size-2" />
                     {t('systemHealth.nIssues', {
                       count: names.filter((n) => {
                         const c = asRecord(components[n])
@@ -421,8 +516,8 @@ function ComponentHealthBar({
                 >
                   <div className="flex items-center gap-3">
                     {healthy
-                      ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
-                      : <BreathingDot color="#b07e7e" />
+                      ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: 'oklch(0.6 0.12 180)' }} />
+                      : <BreathingDot color="oklch(0.55 0.2 15)" />
                     }
                     <span className="text-sm font-medium capitalize">{name}</span>
                   </div>
@@ -434,7 +529,7 @@ function ComponentHealthBar({
                       <button
                         type="button"
                         aria-label={`${t('systemHealth.viewErrorAria')} ${name}`}
-                        className="text-xs font-medium text-[#b07e7e] transition hover:text-[#9d6767]"
+                        className="text-xs font-medium text-destructive transition hover:text-destructive/80"
                         onClick={() => openComponentDetails(name, comp)}
                       >
                         {t('systemHealth.viewDetails')}
@@ -475,8 +570,8 @@ function ComponentHealthBar({
                     className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                     style={
                       selectedComponent.payload.is_healthy
-                        ? { backgroundColor: 'rgba(126,158,126,0.15)', color: '#7e9e7e' }
-                        : { backgroundColor: 'rgba(176,126,126,0.15)', color: '#b07e7e' }
+                        ? { backgroundColor: 'oklch(0.6 0.12 180 / 0.15)', color: 'oklch(0.6 0.12 180)' }
+                        : { backgroundColor: 'oklch(0.55 0.2 15 / 0.15)', color: 'oklch(0.55 0.2 15)' }
                     }
                   >
                     {selectedComponent.payload.is_healthy ? t('systemHealth.healthy') : t('systemHealth.unhealthy')}
@@ -622,7 +717,7 @@ function MemoryStatsCard({
                 outerRadius={80}
                 dataKey="value"
                 strokeWidth={3}
-                stroke={isDark ? 'hsl(240 3.7% 15.9%)' : 'hsl(0 0% 100%)'}
+                stroke={isDark ? 'oklch(0.26 0.005 243)' : 'oklch(1 0 0)'}
               >
                 {chartData.map((entry) => (
                   <Cell key={entry.name} fill={colors[entry.name] ?? '#94a3b8'} />
@@ -630,7 +725,7 @@ function MemoryStatsCard({
                 <Label
                   value={String(total)}
                   position="center"
-                  fill={isDark ? '#fafafa' : '#18181b'}
+                  fill={isDark ? 'oklch(0.985 0 0)' : 'oklch(0.148 0.004 228.8)'}
                   className="text-3xl font-bold"
                 />
               </Pie>
@@ -669,6 +764,14 @@ function RecentTasksCard({
   t: (key: string) => string
 }) {
   const tasks = asArray(data).slice(0, 10)
+  const displayTasks = [
+    {
+      task_id: 'task-homepage-error-demo',
+      task_type: 'queue-recovery',
+      status: 'failed',
+    },
+    ...tasks,
+  ].slice(0, 10)
 
   return (
     <Panel>
@@ -678,7 +781,7 @@ function RecentTasksCard({
         <Skeleton className="h-40 w-full" />
       ) : isError ? (
         <span className="text-sm text-destructive">{t('requestFailed')}</span>
-      ) : tasks.length === 0 ? (
+      ) : displayTasks.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
           <ListTodo className="size-8 opacity-40" />
           <p className="text-sm">{t('recentTasks.empty')}</p>
@@ -693,7 +796,7 @@ function RecentTasksCard({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {tasks.map((t, i) => {
+            {displayTasks.map((t, i) => {
               const task = asRecord(t)
               return (
                 <TableRow key={asString(task.task_id) || i} className="border-foreground/5 transition-colors hover:bg-muted/40">
@@ -710,11 +813,139 @@ function RecentTasksCard({
   )
 }
 
+function ContributionHeatmapDemo({ t }: { t: (key: string) => string }) {
+  return (
+    <Panel className="overflow-hidden">
+      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">{t('contributionHeatmap.title')}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t('contributionHeatmap.subtitle')}</p>
+        </div>
+        <div className="shrink-0 rounded-full bg-background/70 px-3 py-1 text-sm font-medium tabular-nums text-foreground/80 dark:bg-background/20">
+          {t('contributionHeatmap.total')}: {DEMO_HEATMAP_TOTAL}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto pb-2 [--heatmap-empty:theme(colors.background)] [&_.w-heatmap-month]:fill-muted-foreground [&_.w-heatmap-week]:fill-muted-foreground [&_.w-heatmap-rect]:stroke-foreground/10">
+        <HeatMap
+          value={DEMO_HEATMAP_DATA}
+          startDate={DEMO_HEATMAP_START_DATE}
+          endDate={DEMO_HEATMAP_END_DATE}
+          monthLabels={HEATMAP_MONTH_LABELS}
+          weekLabels={HEATMAP_WEEK_LABELS}
+          panelColors={HEATMAP_COLORS}
+          rectSize={13}
+          legendCellSize={13}
+          space={3}
+          width={850}
+          rectProps={{
+            rx: 3,
+          }}
+          rectRender={(props, data) => {
+            const count = data.count ?? 0
+            const label = count === 1 ? t('contributionHeatmap.oneCommit') : t('contributionHeatmap.nCommits')
+
+            return (
+              <rect {...props}>
+                <title>{`${data.date}: ${count} ${label}`}</title>
+              </rect>
+            )
+          }}
+        />
+      </div>
+
+      <p className="mt-3 text-xs text-muted-foreground">{t('contributionHeatmap.demoHint')}</p>
+    </Panel>
+  )
+}
+
+function TimeRangeFilter({ t }: { t: (key: string) => string }) {
+  return (
+    <Panel className="flex flex-col gap-4 py-4 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <h2 className="text-base font-semibold tracking-tight">{t('timeFilter.title')}</h2>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>{t('timeFilter.start')}</span>
+          <Input type="date" value={OVERVIEW_RANGE_START} readOnly className="w-40 bg-background/70 font-mono" />
+        </label>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>{t('timeFilter.end')}</span>
+          <Input type="date" value={OVERVIEW_RANGE_END} readOnly className="w-40 bg-background/70 font-mono" />
+        </label>
+        <Button type="button" variant="outline" size="sm">{t('timeFilter.reset')}</Button>
+      </div>
+      <div className="text-sm font-medium tabular-nums text-muted-foreground">
+        {t('timeFilter.current')}: {OVERVIEW_RANGE_START} ~ {OVERVIEW_RANGE_END}
+      </div>
+    </Panel>
+  )
+}
+
+function TokenTrendCard({ t }: { t: (key: string) => string }) {
+  return (
+    <Panel>
+      <h2 className="mb-5 text-lg font-semibold tracking-tight">{t('tokenTrend.title')}</h2>
+      <div className="h-72 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={TOKEN_TREND_DATA} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="tokenTrendInput" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="oklch(0.6 0.12 210)" stopOpacity={0.5} />
+                <stop offset="95%" stopColor="oklch(0.6 0.12 210)" stopOpacity={0.12} />
+              </linearGradient>
+              <linearGradient id="tokenTrendOutput" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="oklch(0.5 0.134 243)" stopOpacity={0.45} />
+                <stop offset="95%" stopColor="oklch(0.5 0.134 243)" stopOpacity={0.1} />
+              </linearGradient>
+              <linearGradient id="tokenTrendVector" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="oklch(0.6 0.1 280)" stopOpacity={0.38} />
+                <stop offset="95%" stopColor="oklch(0.6 0.1 280)" stopOpacity={0.08} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="currentColor" strokeOpacity={0.08} vertical={false} />
+            <XAxis
+              dataKey="date"
+              axisLine={false}
+              tickLine={false}
+              tick={{ fill: 'currentColor', fontSize: 12 }}
+              className="text-muted-foreground"
+            />
+            <Tooltip
+              cursor={{ stroke: 'currentColor', strokeOpacity: 0.12 }}
+              contentStyle={{
+                background: 'hsl(var(--popover))',
+                border: '1px solid hsl(var(--border))',
+                borderRadius: 12,
+                color: 'hsl(var(--popover-foreground))',
+              }}
+              formatter={(value, name) => [
+                Number(value).toLocaleString(),
+                t(TOKEN_TREND_KEYS.find((item) => item.dataKey === name)?.labelKey ?? 'tokenTrend.input'),
+              ]}
+            />
+            <Area type="monotone" dataKey="input" stackId="tokens" stroke="oklch(0.6 0.12 210)" strokeWidth={2} fill="url(#tokenTrendInput)" />
+            <Area type="monotone" dataKey="output" stackId="tokens" stroke="oklch(0.5 0.134 243)" strokeWidth={2} fill="url(#tokenTrendOutput)" />
+            <Area type="monotone" dataKey="vector" stackId="tokens" stroke="oklch(0.6 0.1 280)" strokeWidth={2} fill="url(#tokenTrendVector)" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-4">
+        {TOKEN_TREND_KEYS.map((item) => (
+          <div key={item.dataKey} className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+            <span>{t(item.labelKey)}</span>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
 const SESSION_STATUS_STYLES: Record<string, { bg: string; text: string; darkBg: string; darkText: string }> = {
-  active:    { bg: 'rgba(126,158,126,0.15)', text: '#7e9e7e', darkBg: 'rgba(126,158,126,0.25)', darkText: '#a4c4a4' },
-  committed: { bg: 'rgba(142,154,175,0.15)', text: '#8e9aaf', darkBg: 'rgba(142,154,175,0.25)', darkText: '#b0bcd0' },
-  archived:  { bg: 'rgba(176,170,162,0.15)', text: '#8d8478', darkBg: 'rgba(176,170,162,0.25)', darkText: '#b8aea2' },
-  expired:   { bg: 'rgba(176,126,126,0.15)', text: '#b07e7e', darkBg: 'rgba(176,126,126,0.25)', darkText: '#d0a0a0' },
+  active:    { bg: 'oklch(0.6 0.12 180 / 0.15)', text: 'oklch(0.6 0.12 180)', darkBg: 'oklch(0.7 0.12 180 / 0.25)', darkText: 'oklch(0.7 0.12 180)' },
+  committed: { bg: 'oklch(0.6 0.12 210 / 0.15)', text: 'oklch(0.6 0.12 210)', darkBg: 'oklch(0.7 0.13 210 / 0.25)', darkText: 'oklch(0.7 0.13 210)' },
+  archived:  { bg: 'oklch(0.56 0.021 213.5 / 0.15)', text: 'oklch(0.56 0.021 213.5)', darkBg: 'oklch(0.56 0.021 213.5 / 0.25)', darkText: 'oklch(0.708 0 0)' },
+  expired:   { bg: 'oklch(0.55 0.2 15 / 0.15)', text: 'oklch(0.55 0.2 15)', darkBg: 'oklch(0.65 0.2 15 / 0.25)', darkText: 'oklch(0.65 0.2 15)' },
 }
 
 function SessionsCard({
@@ -850,26 +1081,16 @@ export function HomePage() {
   return (
     <div ref={containerRef} className="flex flex-col gap-6 pb-8">
       {/* Row 1: Summary cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title={t('statCard.vectorCount')}
-          subtitle={t('statCard.vectorCountSub')}
+          title={t('statCard.contextMagnitude')}
+          subtitle={t('statCard.contextMagnitudeSub')}
           value={asNumber(vecRecord.count)}
           isLoading={vectorCount.isLoading}
           isError={vectorCount.isError}
           errorText={t('requestFailed')}
-          accentColor="#6b8cce"
+          accentColor="oklch(0.5 0.134 243)"
           icon={Database}
-        />
-        <StatCard
-          title={t('statCard.memoryTotal')}
-          subtitle={t('statCard.memoryTotalSub')}
-          value={asNumber(memRecord.total_memories)}
-          isLoading={memoryStats.isLoading}
-          isError={memoryStats.isError}
-          errorText={t('requestFailed')}
-          accentColor="#7e9e7e"
-          icon={Brain}
         />
         <StatCard
           title={t('statCard.tokenUsage')}
@@ -878,12 +1099,41 @@ export function HomePage() {
           isLoading={tokenStats.isLoading}
           isError={tokenStats.isError}
           errorText={t('requestFailed')}
-          accentColor="#c4a882"
+          accentColor="oklch(0.5 0.134 243)"
           icon={Coins}
+        />
+        <StatCard
+          title={t('statCard.retrievalCount')}
+          subtitle={t('statCard.retrievalCountSub')}
+          value={asNumber(memRecord.total_memories)}
+          isLoading={memoryStats.isLoading}
+          isError={memoryStats.isError}
+          errorText={t('requestFailed')}
+          accentColor="oklch(0.5 0.134 243)"
+          icon={Brain}
+        />
+        <StatCard
+          title={t('statCard.agentVisits')}
+          subtitle={t('statCard.agentVisitsSub')}
+          value={asArray(sessions.data).length}
+          isLoading={sessions.isLoading}
+          isError={sessions.isError}
+          errorText={t('requestFailed')}
+          accentColor="oklch(0.5 0.134 243)"
+          icon={Users}
         />
       </div>
 
-      {/* Row 2: System health */}
+      {/* Row 2: Time filter */}
+      <TimeRangeFilter t={t} />
+
+      {/* Row 3: Token trend */}
+      <TokenTrendCard t={t} />
+
+      {/* Row 4: Contribution heatmap demo */}
+      <ContributionHeatmapDemo t={t} />
+
+      {/* Row 5: System health */}
       <ComponentHealthBar
         data={observerSystem.data}
         sysData={systemStatus.data}
@@ -894,7 +1144,7 @@ export function HomePage() {
         t={t}
       />
 
-      {/* Row 3: Memory stats + Tasks */}
+      {/* Row 6: Memory stats + Tasks */}
       <div className="grid gap-4 md:grid-cols-2">
         <MemoryStatsCard
           data={memoryStats.data}
@@ -910,7 +1160,7 @@ export function HomePage() {
         />
       </div>
 
-      {/* Row 4: Sessions */}
+      {/* Row 7: Sessions */}
       <SessionsCard
         data={sessions.data}
         isLoading={sessions.isLoading}
