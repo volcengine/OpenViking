@@ -2,7 +2,7 @@
 """Query Jaeger trace by trace ID and pretty-print for debugging.
 
 Usage:
-    python tests/query_trace.py <trace_id> [--env boe|stg|prod] [--detail span_id] [--errors-only] [--raw] [--no-color]
+    python tests/query_trace.py <trace_id> [--detail span_id] [--errors-only] [--raw] [--no-color]
 
 Designed to be LLM-friendly: concise, structured output that won't blow up context windows.
 """
@@ -16,65 +16,52 @@ from pathlib import Path
 from typing import Optional
 
 
-JAEGER_BASE_URL = "https://tls-cn-beijing.volces.com:16686"
+def _load_jaeger_config() -> dict:
+    """Load Jaeger config from .env file.
 
-ENVIRONMENTS = {
-    "boe": {
-        "auth_user": "3771a8fa-f8d5-43be-a6ef-2c64cff33f37",
-        "ak_var": "TLS_OTEL_AK",
-        "sk_var": "TLS_OTEL_SK",
-    },
-    "stg": {
-        "auth_user": "a5cad5d0-8852-4da0-982d-e13757024caa",
-        "ak_var": "TLS_OTEL_AK_STG",
-        "sk_var": "TLS_OTEL_SK_STG",
-    },
-    "prod": {
-        "auth_user": "b859b148-75f4-4913-bd71-bf3a1174d5cf",
-        "ak_var": "TLS_OTEL_AK_PROD",
-        "sk_var": "TLS_OTEL_SK_PROD",
-    },
-}
+    Required .env variables:
+      TLS_OTEL_JAEGER_BASE_URL  - e.g. https://tls-cn-beijing.volces.com:16686
+      TLS_OTEL_JAEGER_AUTH_USER - Basic auth username
+      TLS_OTEL_AK               - Access key
+      TLS_OTEL_SK               - Secret key
+    """
+    from dotenv import load_dotenv
 
-
-def _resolve_config_path() -> Optional[Path]:
-    """Resolve ov.conf path following the standard lookup chain."""
-    # 1. Explicit env var
-    env_path = os.environ.get("OPENVIKING_CONFIG_FILE")
-    if env_path:
-        p = Path(env_path)
+    # Load .env from project root or ~/.env
+    for p in [
+        Path(__file__).resolve().parent.parent / ".env",
+        Path.home() / ".env",
+    ]:
         if p.exists():
-            return p
-    # 2. ~/.openviking/ov.conf
-    p = Path.home() / ".openviking" / "ov.conf"
-    if p.exists():
-        return p
-    # 3. /etc/openviking/ov.conf
-    p = Path("/etc/openviking/ov.conf")
-    if p.exists():
-        return p
-    return None
+            load_dotenv(p)
+            break
 
+    jaeger_base_url = os.environ.get("TLS_OTEL_JAEGER_BASE_URL", "")
+    auth_user = os.environ.get("TLS_OTEL_JAEGER_AUTH_USER", "")
+    ak = os.environ.get("TLS_OTEL_AK", "")
+    sk = os.environ.get("TLS_OTEL_SK", "")
 
-def _load_ak_sk_from_ov_conf() -> Optional[dict]:
-    """Try to load ak/sk from ov.conf telemetry.tracer section."""
-    config_path = _resolve_config_path()
-    if not config_path:
-        return None
-    try:
-        raw = config_path.read_text()
-        raw = os.path.expandvars(raw)
-        data = json.loads(raw)
-    except (json.JSONDecodeError, OSError):
-        return None
+    missing = [
+        k
+        for k, v in [
+            ("TLS_OTEL_JAEGER_BASE_URL", jaeger_base_url),
+            ("TLS_OTEL_JAEGER_AUTH_USER", auth_user),
+            ("TLS_OTEL_AK", ak),
+            ("TLS_OTEL_SK", sk),
+        ]
+        if not v
+    ]
+    if missing:
+        raise SystemExit(
+            f"Missing .env variables: {', '.join(missing)}. Add them to .env or ~/.openviking/.env"
+        )
 
-    tracer = data.get("telemetry", {}).get("tracer", {})
-    ak = tracer.get("ak", "")
-    sk = tracer.get("sk", "")
-    if not ak or not sk:
-        return None
-
-    return {"ak": ak, "sk": sk}
+    return {
+        "jaeger_base_url": jaeger_base_url,
+        "auth_user": auth_user,
+        "ak": ak,
+        "sk": sk,
+    }
 
 
 NOISY_TAGS = {
@@ -92,32 +79,12 @@ NOISY_TAGS = {
 }
 
 
-def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
-    env_config = ENVIRONMENTS.get(env)
-    if not env_config:
-        print(f"Unknown environment: {env}. Choose from: boe, stg, prod", file=sys.stderr)
-        return None
-
-    # auth_user is Jaeger-specific, always from ENVIRONMENTS
-    auth_user = env_config["auth_user"]
-
-    # Try ov.conf for ak/sk first, then fall back to env vars
-    ov_conf_creds = _load_ak_sk_from_ov_conf()
-    if ov_conf_creds:
-        ak = ov_conf_creds["ak"]
-        sk = ov_conf_creds["sk"]
-    else:
-        ak = os.environ.get(env_config["ak_var"])
-        sk = os.environ.get(env_config["sk_var"])
-        if not ak or not sk:
-            missing = [
-                v for v in (env_config["ak_var"], env_config["sk_var"]) if not os.environ.get(v)
-            ]
-            print(
-                f"Missing credentials. Set them via ov.conf (telemetry.tracer) or env vars: {', '.join(missing)}",
-                file=sys.stderr,
-            )
-            return None
+def fetch_trace(trace_id: str) -> Optional[dict]:
+    cfg = _load_jaeger_config()
+    jaeger_base_url = cfg["jaeger_base_url"]
+    auth_user = cfg["auth_user"]
+    ak = cfg["ak"]
+    sk = cfg["sk"]
 
     auth_pass = f"{ak}#{sk}"
     auth_header = base64.b64encode(f"{auth_user}:{auth_pass}".encode()).decode()
@@ -132,7 +99,7 @@ def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
         )
         return None
 
-    url = f"{JAEGER_BASE_URL}/api/traces/{trace_id}"
+    url = f"{jaeger_base_url}/api/traces/{trace_id}"
 
     try:
         import requests
@@ -140,7 +107,7 @@ def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
         resp = requests.get(url, headers={"Authorization": f"Basic {auth_header}"}, timeout=15)
         if resp.status_code == 401:
             print(
-                "Authentication failed (401). Check your TLS_OTEL_AK/SK credentials.",
+                "Authentication failed (401). Check telemetry.tracer ak/sk in ov.conf.",
                 file=sys.stderr,
             )
             return None
@@ -153,7 +120,7 @@ def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.ConnectionError:
-        print(f"Cannot connect to Jaeger at {JAEGER_BASE_URL}. Check network/VPN.", file=sys.stderr)
+        print(f"Cannot connect to Jaeger at {jaeger_base_url}. Check network/VPN.", file=sys.stderr)
         return None
     except Exception as e:
         print(f"Failed to fetch trace: {e}", file=sys.stderr)
@@ -373,9 +340,6 @@ def main():
     parser = argparse.ArgumentParser(description="Query Jaeger trace by trace ID")
     parser.add_argument("trace_id", help="Trace ID (16 or 32 hex chars)")
     parser.add_argument(
-        "--env", default="boe", choices=["boe", "stg", "prod"], help="Environment (default: boe)"
-    )
-    parser.add_argument(
         "--detail", action="append", default=[], help="Span ID to show full detail (can repeat)"
     )
     parser.add_argument(
@@ -387,7 +351,7 @@ def main():
 
     use_color = not args.no_color and sys.stdout.isatty()
 
-    data = fetch_trace(args.trace_id, args.env)
+    data = fetch_trace(args.trace_id)
     if not data:
         sys.exit(1)
 
