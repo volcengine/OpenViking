@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en" data-theme="folio">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Blog Station</title>
+  <meta name="description" content="A small library of essays. Five themes, two languages." />
+
+  <!-- fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Source+Serif+Pro:ital,wght@0,400;0,600;0,700;1,400&family=Crimson+Pro:ital,wght@0,400;0,500;0,600;1,400&family=Archivo:wght@400;500;700;800;900&family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="themes.css" />
+
+  <!-- React + Babel (pinned w/ integrity) -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Order matters: primitives → core → posts → ui → mount.
+       blog-components.jsx initializes window.Blog (registry).
+       shell-core.jsx provides router, i18n, theme helpers.
+       Each post script registers itself on window.Blog.
+       shell-ui.jsx defines the <App>.
+       The mount script renders. -->
+  <script type="text/babel" data-presets="react" src="blog-components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="shell-core.jsx"></script>
+
+  <!-- POSTS — newest first -->
+  <script type="text/babel" data-presets="react" src="posts/kitchen-sink/index.jsx"></script>
+  <script type="text/babel" data-presets="react" src="posts/quiet-signals/index.jsx"></script>
+  <script type="text/babel" data-presets="react" src="posts/strata/index.jsx"></script>
+  <script type="text/babel" data-presets="react" src="posts/horizon/index.jsx"></script>
+  <script type="text/babel" data-presets="react" src="posts/raw-html/index.jsx"></script>
+  <script type="text/babel" data-presets="react" src="posts/garden/index.jsx"></script>
+
+  <script type="text/babel" data-presets="react" src="shell-ui.jsx"></script>
+
+  <!-- Mount. Wait for all babel scripts to evaluate before mounting. -->
+  <script type="text/babel" data-presets="react">
+    (function mount() {
+      // Babel transforms scripts in DOM order, but evaluation is still synchronous after transform.
+      // We just wait for window.BlogApp to exist.
+      function go() {
+        if (typeof window.BlogApp !== 'function') {
+          return setTimeout(go, 16);
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(window.BlogApp));
+      }
+      go();
+    })();
+  </script>
+</body>
+</html>

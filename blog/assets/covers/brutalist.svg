@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <rect width="1600" height="900" fill="#fffd00"></rect>
+  <g fill="#000">
+    <rect x="0" y="0" width="120" height="900"></rect>
+    <rect x="120" y="0" width="1480" height="80"></rect>
+    <rect x="120" y="820" width="1480" height="80"></rect>
+    <rect x="1480" y="80" width="120" height="740"></rect>
+  </g>
+  <g fill="#000" font-family="ui-monospace, &#39;JetBrains Mono&#39;, monospace" font-size="22" letter-spacing="2">
+    <text x="40" y="450" transform="rotate(-90 40 450)">SYSTEM // POST 001</text>
+  </g>
+  <g fill="#fffd00" font-family="ui-monospace, monospace" font-size="14" letter-spacing="3">
+    <text x="160" y="50">[ READ ME ]</text>
+    <text x="1320" y="50">2026.05.09</text>
+    <text x="160" y="870">FILE.TYPE = HTML</text>
+    <text x="1320" y="870">SIG: 0xA17F</text>
+  </g>
+  <g fill="#000" font-family="&#39;Archivo Black&#39;, ui-sans-serif, sans-serif" font-weight="900">
+    <text x="160" y="380" font-size="240" letter-spacing="-8">RAW</text>
+    <text x="160" y="600" font-size="240" letter-spacing="-8">HTML</text>
+  </g>
+  <g fill="#ff006e">
+    <rect x="900" y="200" width="500" height="100"></rect>
+    <rect x="900" y="500" width="500" height="100"></rect>
+  </g>
+  <g fill="#000" font-family="ui-monospace, monospace" font-size="32" font-weight="700">
+    <text x="920" y="265">NO FRAMEWORK.</text>
+    <text x="920" y="565">NO COMPROMISE.</text>
+  </g>
+  <g stroke="#000" stroke-width="3" fill="none">
+    <line x1="160" y1="700" x2="900" y2="700"></line>
+    <line x1="160" y1="720" x2="600" y2="720"></line>
+    <line x1="160" y1="740" x2="780" y2="740"></line>
+  </g>
+</svg>

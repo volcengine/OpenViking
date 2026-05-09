@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+  <rect width="80" height="80" fill="#1a2540"></rect>
+  <circle cx="40" cy="33" r="14" fill="#7da3ff"></circle>
+  <path d="M14 80 Q14 56 40 56 Q66 56 66 80 Z" fill="#7da3ff"></path>
+  <text x="40" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#0e1424" font-weight="700">KT</text>
+</svg>

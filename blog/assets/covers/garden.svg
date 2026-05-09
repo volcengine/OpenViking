@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="gbg" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0" stop-color="#f5efe3"></stop>
+      <stop offset="1" stop-color="#e8dfcc"></stop>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#gbg)"></rect>
+  <g stroke="#6b8a5c" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M400 750 Q380 600 410 480 Q440 360 420 250"></path>
+    <path d="M410 480 Q360 460 320 420"></path>
+    <path d="M420 350 Q470 330 510 290"></path>
+    <path d="M415 580 Q360 560 320 520"></path>
+    <path d="M420 660 Q480 640 520 600"></path>
+  </g>
+  <g fill="#8aa67a" opacity="0.9">
+    <ellipse cx="320" cy="420" rx="40" ry="22" transform="rotate(-25 320 420)"></ellipse>
+    <ellipse cx="510" cy="290" rx="50" ry="26" transform="rotate(20 510 290)"></ellipse>
+    <ellipse cx="320" cy="520" rx="44" ry="22" transform="rotate(-20 320 520)"></ellipse>
+    <ellipse cx="520" cy="600" rx="50" ry="26" transform="rotate(20 520 600)"></ellipse>
+  </g>
+  <g fill="#d4805f">
+    <circle cx="420" cy="250" r="32"></circle>
+    <circle cx="420" cy="250" r="14" fill="#f5efe3"></circle>
+  </g>
+  <g stroke="#6b8a5c" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M1100 800 Q1080 700 1110 620 Q1140 540 1115 460 Q1090 380 1120 320"></path>
+    <path d="M1110 620 Q1180 600 1230 560"></path>
+    <path d="M1115 460 Q1050 440 1010 410"></path>
+    <path d="M1120 320 Q1170 300 1210 260"></path>
+  </g>
+  <g fill="#8aa67a" opacity="0.9">
+    <ellipse cx="1230" cy="560" rx="46" ry="22" transform="rotate(20 1230 560)"></ellipse>
+    <ellipse cx="1010" cy="410" rx="44" ry="22" transform="rotate(-25 1010 410)"></ellipse>
+    <ellipse cx="1210" cy="260" rx="48" ry="22" transform="rotate(20 1210 260)"></ellipse>
+  </g>
+  <g fill="#e6a96b">
+    <circle cx="1120" cy="320" r="28"></circle>
+    <circle cx="1120" cy="320" r="12" fill="#f5efe3"></circle>
+  </g>
+  <g fill="none" stroke="#2b2419" stroke-width="1" opacity="0.5">
+    <path d="M0 880 Q400 870 800 880 T1600 880"></path>
+    <path d="M0 870 Q400 860 800 870 T1600 870"></path>
+  </g>
+  <g font-family="ui-serif, Georgia, serif" fill="#2b2419" font-style="italic">
+    <text x="700" y="450" font-size="64">a small garden</text>
+    <text x="740" y="510" font-size="32" opacity="0.7">tended slowly</text>
+  </g>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+  <rect width="80" height="80" fill="#6b8a5c"></rect>
+  <circle cx="40" cy="32" r="13" fill="#f5efe3"></circle>
+  <path d="M14 80 Q14 54 40 54 Q66 54 66 80 Z" fill="#f5efe3"></path>
+  <text x="40" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#1f1a14" font-weight="700">MR</text>
+</svg>

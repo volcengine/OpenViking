@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <rect width="1600" height="900" fill="#efe8d9"></rect>
+  <g>
+    <rect x="0" y="0" width="1600" height="180" fill="#d97757"></rect>
+    <rect x="0" y="180" width="1600" height="40" fill="#b85a3d"></rect>
+    <rect x="0" y="220" width="1600" height="220" fill="#1f1a14"></rect>
+    <rect x="0" y="440" width="1600" height="80" fill="#f0a868"></rect>
+    <rect x="0" y="520" width="1600" height="280" fill="#efe8d9"></rect>
+    <rect x="0" y="800" width="1600" height="100" fill="#1f1a14"></rect>
+  </g>
+  <g fill="#efe8d9" font-family="ui-serif, Georgia, serif">
+    <text x="80" y="135" font-size="120" font-weight="300" font-style="italic">strata</text>
+  </g>
+  <g fill="#efe8d9" font-family="ui-monospace, monospace" font-size="14" letter-spacing="2">
+    <text x="80" y="270">VOL. 04</text>
+    <text x="80" y="300">— FIELD NOTES —</text>
+    <text x="80" y="380" font-size="48" font-family="ui-serif, Georgia, serif" letter-spacing="0">on the texture</text>
+    <text x="80" y="425" font-size="48" font-family="ui-serif, Georgia, serif" letter-spacing="0" font-style="italic">of attention</text>
+  </g>
+  <g fill="#1f1a14" font-family="ui-monospace, monospace" font-size="11" letter-spacing="2">
+    <text x="80" y="490">2026 / SPRING</text>
+    <text x="1400" y="490">№ 014</text>
+  </g>
+  <g stroke="#1f1a14" stroke-width="1" fill="none">
+    <circle cx="1200" cy="650" r="120"></circle>
+    <circle cx="1200" cy="650" r="80"></circle>
+    <circle cx="1200" cy="650" r="40"></circle>
+  </g>
+</svg>

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <rect width="1600" height="900" fill="#0e1014"></rect>
+  <g stroke="#1f242d" stroke-width="1">
+    <g id="grid">
+      <path d="M0 0 H1600" transform="translate(0,60)"></path><path d="M0 0 H1600" transform="translate(0,120)"></path>
+      <path d="M0 0 H1600" transform="translate(0,180)"></path><path d="M0 0 H1600" transform="translate(0,240)"></path>
+      <path d="M0 0 H1600" transform="translate(0,300)"></path><path d="M0 0 H1600" transform="translate(0,360)"></path>
+      <path d="M0 0 H1600" transform="translate(0,420)"></path><path d="M0 0 H1600" transform="translate(0,480)"></path>
+      <path d="M0 0 H1600" transform="translate(0,540)"></path><path d="M0 0 H1600" transform="translate(0,600)"></path>
+      <path d="M0 0 H1600" transform="translate(0,660)"></path><path d="M0 0 H1600" transform="translate(0,720)"></path>
+      <path d="M0 0 H1600" transform="translate(0,780)"></path><path d="M0 0 H1600" transform="translate(0,840)"></path>
+    </g>
+    <g>
+      <path d="M0 0 V900" transform="translate(80,0)"></path><path d="M0 0 V900" transform="translate(160,0)"></path>
+      <path d="M0 0 V900" transform="translate(240,0)"></path><path d="M0 0 V900" transform="translate(320,0)"></path>
+      <path d="M0 0 V900" transform="translate(400,0)"></path><path d="M0 0 V900" transform="translate(480,0)"></path>
+      <path d="M0 0 V900" transform="translate(560,0)"></path><path d="M0 0 V900" transform="translate(640,0)"></path>
+      <path d="M0 0 V900" transform="translate(720,0)"></path><path d="M0 0 V900" transform="translate(800,0)"></path>
+      <path d="M0 0 V900" transform="translate(880,0)"></path><path d="M0 0 V900" transform="translate(960,0)"></path>
+      <path d="M0 0 V900" transform="translate(1040,0)"></path><path d="M0 0 V900" transform="translate(1120,0)"></path>
+      <path d="M0 0 V900" transform="translate(1200,0)"></path><path d="M0 0 V900" transform="translate(1280,0)"></path>
+      <path d="M0 0 V900" transform="translate(1360,0)"></path><path d="M0 0 V900" transform="translate(1440,0)"></path>
+      <path d="M0 0 V900" transform="translate(1520,0)"></path>
+    </g>
+  </g>
+  <g>
+    <rect x="240" y="180" width="320" height="60" fill="#56d364" opacity="0.85"></rect>
+    <rect x="240" y="240" width="180" height="60" fill="#1a1f29" stroke="#56d364" stroke-width="1.5"></rect>
+    <rect x="640" y="360" width="540" height="60" fill="#1a1f29" stroke="#79c0ff" stroke-width="1.5"></rect>
+    <rect x="640" y="420" width="240" height="60" fill="#79c0ff" opacity="0.4"></rect>
+    <rect x="240" y="540" width="120" height="180" fill="#ff7b72" opacity="0.85"></rect>
+    <rect x="360" y="540" width="60" height="180" fill="#1a1f29" stroke="#ff7b72" stroke-width="1.5"></rect>
+    <rect x="980" y="180" width="280" height="120" fill="#1a1f29" stroke="#d2a8ff" stroke-width="1.5"></rect>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="13" fill="#56d364">
+    <text x="248" y="218">~/blog/post.tsx</text>
+    <text x="248" y="278" fill="#7d8590">// rendered output</text>
+    <text x="648" y="398" fill="#79c0ff">const lang = useLang()</text>
+    <text x="648" y="458" fill="#7d8590">return T({ en, zh })</text>
+    <text x="988" y="218" fill="#d2a8ff">▌ READY</text>
+  </g>
+</svg>
