@@ -22,12 +22,18 @@ logger = get_logger(__name__)
 class PackService:
     """OVPack export/import service."""
 
-    def __init__(self, viking_fs: Optional[VikingFS] = None):
+    def __init__(self, viking_fs: Optional[VikingFS] = None, vector_store=None):
         self._viking_fs = viking_fs
+        self._vector_store = vector_store
 
     def set_viking_fs(self, viking_fs: VikingFS) -> None:
         """Set VikingFS instance (for deferred initialization)."""
         self._viking_fs = viking_fs
+
+    def set_dependencies(self, viking_fs: VikingFS, vector_store=None) -> None:
+        """Set pack service dependencies."""
+        self._viking_fs = viking_fs
+        self._vector_store = vector_store
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -47,7 +53,13 @@ class PackService:
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
-        return await local_export_ovpack(viking_fs, uri, to, ctx=ctx)
+        return await local_export_ovpack(
+            viking_fs,
+            uri,
+            to,
+            ctx=ctx,
+            vector_store=self._vector_store,
+        )
 
     async def import_ovpack(
         self,
@@ -56,14 +68,16 @@ class PackService:
         ctx: RequestContext,
         force: bool = False,
         vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import local .ovpack file to specified parent path.
 
         Args:
             file_path: Local .ovpack file path
             parent: Target parent URI (e.g., viking://user/alice/resources/references/)
-            force: Whether to force overwrite existing resources
+            force: Legacy alias for on_conflict="overwrite"
             vectorize: Whether to trigger vectorization
+            on_conflict: One of "fail", "overwrite", or "skip"
 
         Returns:
             Imported root resource URI
@@ -71,5 +85,11 @@ class PackService:
         viking_fs = self._ensure_initialized()
         parent = validate_viking_uri(parent, field_name="parent")
         return await local_import_ovpack(
-            viking_fs, file_path, parent, force=force, vectorize=vectorize, ctx=ctx
+            viking_fs,
+            file_path,
+            parent,
+            force=force,
+            vectorize=vectorize,
+            on_conflict=on_conflict,
+            ctx=ctx,
         )

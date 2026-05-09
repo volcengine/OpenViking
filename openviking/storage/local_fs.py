@@ -5,10 +5,12 @@ import json
 import os
 import re
 import zipfile
+from typing import Any, Optional
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
@@ -16,10 +18,63 @@ from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".relations.json"})
+OVPACK_FORMAT_VERSION = 2
+OVPACK_KIND = "openviking.ovpack"
+OVPACK_MANIFEST_FILENAME = ".ovpack_manifest.json"
+OVPACK_MANIFEST_ZIP_LEAF = "_._ovpack_manifest.json"
+OVPACK_ON_CONFLICT_VALUES = frozenset({"fail", "overwrite", "skip"})
+
+_IMPORTABLE_SCOPES = frozenset({"resources", "user", "agent"})
+_DERIVED_FILENAMES = frozenset(
+    {".abstract.md", ".overview.md", ".relations.json", OVPACK_MANIFEST_FILENAME}
+)
+_PORTABLE_VECTOR_SCALAR_FIELDS = [
+    "uri",
+    "type",
+    "context_type",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+]
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _strip_uri_trailing_slash(uri: str) -> str:
+    normalized = VikingURI(uri.strip()).uri
+    return normalized if normalized == "viking://" else normalized.rstrip("/")
+
+
+def _join_uri(base_uri: str, rel_path: str) -> str:
+    base_uri = _strip_uri_trailing_slash(base_uri)
+    return f"{base_uri}/{rel_path}" if rel_path else base_uri
+
+
+def _rel_path_for_uri(root_uri: str, uri: str) -> str:
+    root_uri = _strip_uri_trailing_slash(root_uri)
+    uri = _strip_uri_trailing_slash(uri)
+    if uri == root_uri:
+        return ""
+    prefix = f"{root_uri}/"
+    return uri[len(prefix) :] if uri.startswith(prefix) else ""
+
+
+def _leaf_name(uri_or_path: str) -> str:
+    return uri_or_path.rstrip("/").split("/")[-1]
+
+
+def _is_derived_rel_path(rel_path: str) -> bool:
+    return _leaf_name(rel_path) in _DERIVED_FILENAMES
+
+
+def _is_manifest_zip_path(zip_path: str, base_name: str) -> bool:
+    return zip_path == f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}"
 
 
 def _validate_ovpack_member_path(zip_path: str, base_name: str) -> str:
@@ -59,98 +114,401 @@ def ensure_dir_exists(path: str) -> None:
 
 
 def get_ovpack_zip_path(base_name: str, rel_path: str) -> str:
-    """Generate ZIP internal path from relative path, converting components starting with . to _._"""
+    """Generate ZIP internal path from a Viking relative path."""
+    if not rel_path:
+        return f"{base_name}/"
     parts = rel_path.split("/")
-    new_parts = []
-    for p in parts:
-        if p.startswith("."):
-            new_parts.append("_._" + p[1:])
-        else:
-            new_parts.append(p)
-    return f"{base_name}/{'/'.join(new_parts)}"
+    escaped = [("_._" + part[1:]) if part.startswith(".") else part for part in parts]
+    return f"{base_name}/{'/'.join(escaped)}"
 
 
 def get_viking_rel_path_from_zip(zip_path: str) -> str:
-    """Restore Viking relative path from ZIP path, converting components starting with _._ back to ."""
-    # Remove root directory prefix (base_name/)
+    """Restore Viking relative path from ZIP path."""
     parts = zip_path.split("/")
     if len(parts) <= 1:
         return ""
 
-    # Remove first element (base_name)
     rel_parts = parts[1:]
-    new_parts = []
-    for p in rel_parts:
-        if p.startswith("_._"):
-            new_parts.append("." + p[3:])
-        else:
-            new_parts.append(p)
+    restored = [("." + part[3:]) if part.startswith("_._") else part for part in rel_parts]
+    return "/".join(restored)
 
-    return "/".join(new_parts)
+
+def _validate_scope(uri: str, *, operation: str) -> None:
+    parsed = VikingURI(uri)
+    if parsed.scope not in _IMPORTABLE_SCOPES:
+        raise InvalidArgumentError(f"ovpack {operation} is not supported for scope: {parsed.scope}")
+    if parsed.uri == "viking://":
+        raise InvalidArgumentError(f"ovpack {operation} is not supported for root URI")
 
 
 def _validate_import_target_uri(uri: str) -> None:
     """Enforce the same target-policy boundary as direct content writes."""
-    parsed = VikingURI(uri)
-    if parsed.scope not in {"resources", "user", "agent"}:
-        raise InvalidArgumentError(f"ovpack import is not supported for scope: {parsed.scope}")
-
-    name = uri.rstrip("/").split("/")[-1]
+    _validate_scope(uri, operation="import")
+    name = _leaf_name(uri)
     if name in _DERIVED_FILENAMES:
         raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
 
 
-async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:
+def _validate_export_source_uri(uri: str) -> None:
+    _validate_scope(uri, operation="export")
+    name = _leaf_name(uri)
+    if name in _DERIVED_FILENAMES:
+        raise InvalidArgumentError(f"cannot export derived semantic file: {uri}")
+    if is_watch_task_control_uri(uri):
+        raise InvalidArgumentError(f"cannot export watch task control file: {uri}")
+
+
+def _base_name_from_entries(infolist: list[zipfile.ZipInfo]) -> str:
+    for info in infolist:
+        filename = info.filename
+        if filename:
+            base_name = filename.replace("\\", "/").split("/")[0]
+            if base_name:
+                return base_name
+    raise ValueError("Could not determine root directory name from ovpack")
+
+
+def _normalize_on_conflict(on_conflict: Optional[str], force: bool) -> str:
+    if on_conflict is None:
+        return "overwrite" if force else "fail"
+    if on_conflict not in OVPACK_ON_CONFLICT_VALUES:
+        allowed = ", ".join(sorted(OVPACK_ON_CONFLICT_VALUES))
+        raise InvalidArgumentError(
+            f"Invalid on_conflict value: {on_conflict}. Must be one of: {allowed}"
+        )
+    if force and on_conflict != "overwrite":
+        raise InvalidArgumentError(
+            "force=True conflicts with on_conflict values other than 'overwrite'"
+        )
+    return on_conflict
+
+
+def _portable_scalars(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: record[field]
+        for field in _PORTABLE_VECTOR_SCALAR_FIELDS
+        if field != "uri" and record.get(field) is not None
+    }
+
+
+def _record_level(record: dict[str, Any], default: int = 2) -> int:
+    try:
+        return int(record.get("level", default))
+    except (TypeError, ValueError):
+        return default
+
+
+async def _call_vector_filter(vector_store, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
+    if not vector_store or not hasattr(vector_store, "filter"):
+        return []
+
+    kwargs = {
+        "filter": Eq("uri", uri),
+        "limit": 10,
+        "output_fields": _PORTABLE_VECTOR_SCALAR_FIELDS,
+    }
+    try:
+        return await vector_store.filter(**kwargs, ctx=ctx)
+    except TypeError:
+        try:
+            return await vector_store.filter(**kwargs)
+        except Exception as exc:
+            logger.warning(f"Failed to export vector scalars for {uri}: {exc}")
+    except Exception as exc:
+        logger.warning(f"Failed to export vector scalars for {uri}: {exc}")
+    return []
+
+
+async def _read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
+    try:
+        if not await viking_fs.exists(uri, ctx=ctx):
+            return ""
+        content = await viking_fs.read_file(uri, ctx=ctx)
+        return content.decode("utf-8") if isinstance(content, bytes) else content
+    except Exception:
+        return ""
+
+
+async def _directory_vector_texts(viking_fs, uri: str, ctx: RequestContext) -> dict[int, str]:
+    abstract = await _read_text_if_exists(viking_fs, f"{uri}/.abstract.md", ctx)
+    overview = await _read_text_if_exists(viking_fs, f"{uri}/.overview.md", ctx)
+    return {0: abstract, 1: overview}
+
+
+async def _manifest_vector_records(
+    viking_fs,
+    vector_store,
+    uri: str,
+    is_dir: bool,
+    ctx: RequestContext,
+) -> list[dict[str, Any]]:
+    records = await _call_vector_filter(vector_store, uri, ctx)
+    records_by_level = {_record_level(record): record for record in records}
+    texts = await _directory_vector_texts(viking_fs, uri, ctx) if is_dir else {}
+
+    manifest_records: list[dict[str, Any]] = []
+    for level in sorted(records_by_level):
+        item = {
+            "level": level,
+            "scalars": _portable_scalars(records_by_level[level]),
+        }
+        text = texts.get(level)
+        if text:
+            item["text"] = text
+        manifest_records.append(item)
+
+    if is_dir:
+        abstract = texts.get(0, "")
+        for level, text in texts.items():
+            if text and level not in records_by_level:
+                manifest_records.append(
+                    {
+                        "level": level,
+                        "text": text,
+                        "scalars": {
+                            "context_type": context_type_for_uri(uri),
+                            "level": level,
+                            "abstract": abstract,
+                        },
+                    }
+                )
+
+    return sorted(manifest_records, key=lambda item: int(item.get("level", 2)))
+
+
+async def _build_manifest(
+    viking_fs,
+    vector_store,
+    root_uri: str,
+    base_name: str,
+    entries: list[dict[str, Any]],
+    ctx: RequestContext,
+) -> dict[str, Any]:
+    manifest_entries = [{"path": "", "kind": "directory"}]
+    vectors: dict[str, list[dict[str, Any]]] = {}
+
+    root_vectors = await _manifest_vector_records(
+        viking_fs, vector_store, root_uri, is_dir=True, ctx=ctx
+    )
+    if root_vectors:
+        vectors[""] = root_vectors
+
+    for entry in entries:
+        rel_path = entry["rel_path"]
+        is_dir = bool(entry.get("isDir"))
+        manifest_entries.append(
+            {
+                "path": rel_path,
+                "kind": "directory" if is_dir else "file",
+                "size": entry.get("size", 0) if not is_dir else 0,
+            }
+        )
+        records = await _manifest_vector_records(
+            viking_fs,
+            vector_store,
+            _join_uri(root_uri, rel_path),
+            is_dir=is_dir,
+            ctx=ctx,
+        )
+        if records:
+            vectors[rel_path] = records
+
+    return {
+        "kind": OVPACK_KIND,
+        "format_version": OVPACK_FORMAT_VERSION,
+        "root": {
+            "name": base_name,
+            "uri": root_uri,
+            "scope": VikingURI(root_uri).scope,
+        },
+        "entries": manifest_entries,
+        "vectors": vectors,
+    }
+
+
+def _read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
+    manifest_path = f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}"
+    try:
+        raw = zf.read(manifest_path)
+    except KeyError:
+        return {}
+
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Invalid ovpack manifest in {manifest_path}")
+
+    version = manifest.get("format_version")
+    if version and int(version) > OVPACK_FORMAT_VERSION:
+        raise ValueError(
+            f"Unsupported ovpack format_version {version}; "
+            f"this OpenViking supports up to {OVPACK_FORMAT_VERSION}"
+        )
+    if manifest.get("kind") and manifest.get("kind") != OVPACK_KIND:
+        raise ValueError(f"Invalid ovpack manifest kind: {manifest.get('kind')}")
+    return manifest
+
+
+def _manifest_records_by_level(
+    manifest: dict[str, Any], rel_path: str
+) -> dict[int, dict[str, Any]]:
+    vectors = manifest.get("vectors") if isinstance(manifest, dict) else None
+    records = vectors.get(rel_path, []) if isinstance(vectors, dict) else []
+    if not isinstance(records, list):
+        return {}
+
+    by_level: dict[int, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            level = int(record.get("level", 2))
+        except (TypeError, ValueError):
+            continue
+        by_level[level] = record
+    return by_level
+
+
+def _manifest_scalar_overrides(
+    manifest: dict[str, Any], rel_path: str
+) -> dict[int, dict[str, Any]]:
+    overrides: dict[int, dict[str, Any]] = {}
+    for level, record in _manifest_records_by_level(manifest, rel_path).items():
+        scalars = record.get("scalars")
+        if isinstance(scalars, dict):
+            overrides[level] = dict(scalars)
+    return overrides
+
+
+def _validated_import_members(
+    infolist: list[zipfile.ZipInfo], base_name: str, root_uri: str
+) -> list[tuple[zipfile.ZipInfo, str, str, str]]:
+    members: list[tuple[zipfile.ZipInfo, str, str, str]] = []
+    for info in infolist:
+        zip_path = info.filename
+        if not zip_path:
+            continue
+
+        safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+        if _is_manifest_zip_path(safe_zip_path, base_name):
+            members.append((info, safe_zip_path, "manifest", ""))
+            continue
+
+        kind = "directory" if safe_zip_path.endswith("/") else "file"
+        rel_path = get_viking_rel_path_from_zip(
+            safe_zip_path.rstrip("/") if kind == "directory" else safe_zip_path
+        )
+        target_uri = _join_uri(root_uri, rel_path)
+        _validate_import_target_uri(target_uri)
+        members.append((info, safe_zip_path, kind, rel_path))
+
+    return members
+
+
+async def _root_exists(viking_fs, root_uri: str, ctx: RequestContext) -> bool:
+    try:
+        await viking_fs.ls(root_uri, ctx=ctx)
+        return True
+    except NotFoundError:
+        return False
+    except FileNotFoundError:
+        return False
+
+
+async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> None:
+    try:
+        await viking_fs.stat(parent, ctx=ctx)
+    except Exception:
+        await viking_fs.mkdir(parent, ctx=ctx)
+
+
+async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
+    if not hasattr(viking_fs, "rm"):
+        logger.warning(f"[local_fs] Cannot remove existing resource without rm(): {root_uri}")
+        return
+    try:
+        await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
+    except NotFoundError:
+        return
+    except FileNotFoundError:
+        return
+
+
+def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [entry for entry in entries if not _is_derived_rel_path(entry.get("rel_path", ""))]
+
+
+async def _enqueue_direct_vectorization(
+    viking_fs,
+    uri: str,
+    ctx: RequestContext,
+    manifest: Optional[dict[str, Any]] = None,
+) -> None:
+    manifest = manifest or {}
     entries = await viking_fs.tree(uri, node_limit=100000, level_limit=1000, ctx=ctx)
     dir_uris = {uri}
-    file_entries: list[tuple[str, str, str]] = []
+    file_entries: list[tuple[str, str, str, str]] = []
     for entry in entries:
         entry_uri = entry.get("uri")
         if not entry_uri:
             continue
+        rel_path = entry.get("rel_path") or _rel_path_for_uri(uri, entry_uri)
         if entry.get("isDir"):
             dir_uris.add(entry_uri)
             continue
-        name = entry.get("name", "")
+        name = entry.get("name", "") or _leaf_name(rel_path)
         if name.startswith("."):
             continue
-        parent_uri = VikingURI(entry_uri).parent.uri
-        file_entries.append((entry_uri, parent_uri, name))
+        parent = VikingURI(entry_uri).parent
+        if parent:
+            file_entries.append((entry_uri, parent.uri, name, rel_path))
 
     async def index_dir(dir_uri: str) -> None:
-        abstract_uri = f"{dir_uri}/.abstract.md"
-        overview_uri = f"{dir_uri}/.overview.md"
-        abstract = ""
-        overview = ""
-        try:
-            if await viking_fs.exists(abstract_uri, ctx=ctx):
-                content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-                abstract = content.decode("utf-8") if isinstance(content, bytes) else content
-            if await viking_fs.exists(overview_uri, ctx=ctx):
-                content = await viking_fs.read_file(overview_uri, ctx=ctx)
-                overview = content.decode("utf-8") if isinstance(content, bytes) else content
-        except Exception:
+        rel_path = _rel_path_for_uri(uri, dir_uri)
+        records_by_level = _manifest_records_by_level(manifest, rel_path)
+        scalar_overrides = _manifest_scalar_overrides(manifest, rel_path)
+        abstract = str(records_by_level.get(0, {}).get("text") or "")
+        overview = str(records_by_level.get(1, {}).get("text") or "")
+
+        if not abstract:
+            abstract = await _read_text_if_exists(viking_fs, f"{dir_uri}/.abstract.md", ctx)
+        if not overview:
+            overview = await _read_text_if_exists(viking_fs, f"{dir_uri}/.overview.md", ctx)
+
+        if not abstract and not overview and not scalar_overrides:
             return
         await vectorize_directory_meta(
-            dir_uri, abstract, overview, context_type=context_type_for_uri(dir_uri), ctx=ctx
+            dir_uri,
+            abstract,
+            overview,
+            context_type=context_type_for_uri(dir_uri),
+            ctx=ctx,
+            include_overview=bool(overview),
+            scalar_overrides=scalar_overrides,
         )
 
-    async def index_file(file_uri: str, parent_uri: str, name: str) -> None:
+    async def index_file(file_uri: str, parent_uri: str, name: str, rel_path: str) -> None:
+        overrides = _manifest_scalar_overrides(manifest, rel_path)
+        scalar_override = overrides.get(2) or next(iter(overrides.values()), {})
+        summary = str(scalar_override.get("abstract") or "")
         await vectorize_file(
             file_path=file_uri,
-            summary_dict={"name": name},
+            summary_dict={"name": name, "summary": summary},
             parent_uri=parent_uri,
             context_type=context_type_for_uri(file_uri),
             ctx=ctx,
+            scalar_override=scalar_override,
         )
 
     await asyncio.gather(*(index_dir(dir_uri) for dir_uri in dir_uris))
     await asyncio.gather(
         *(
-            index_file(file_uri, parent_uri, file_name)
-            for file_uri, parent_uri, file_name in file_entries
+            index_file(file_uri, parent_uri, file_name, rel_path)
+            for file_uri, parent_uri, file_name, rel_path in file_entries
         )
     )
 
@@ -162,6 +520,7 @@ async def import_ovpack(
     ctx: RequestContext,
     force: bool = False,
     vectorize: bool = True,
+    on_conflict: Optional[str] = None,
 ) -> str:
     """
     Import .ovpack file to the specified parent path.
@@ -170,8 +529,9 @@ async def import_ovpack(
         viking_fs: VikingFS instance
         file_path: Local .ovpack file path
         parent: Target parent URI (e.g., viking://resources/...)
-        force: Whether to force overwrite existing resource (default: False)
+        force: Legacy alias for on_conflict="overwrite"
         vectorize: Whether to trigger vectorization (default: True)
+        on_conflict: One of "fail", "overwrite", or "skip"
 
     Returns:
         Root resource URI after import
@@ -179,100 +539,69 @@ async def import_ovpack(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    parent = parent.strip().rstrip("/")
+    parent = _strip_uri_trailing_slash(parent)
+    _validate_scope(parent, operation="import")
+    conflict_action = _normalize_on_conflict(on_conflict, force)
 
-    try:
-        await viking_fs.stat(parent, ctx=ctx)
-    except Exception:
-        # Parent directory does not exist, create it
-        await viking_fs.mkdir(parent, ctx=ctx)
+    await _ensure_parent_exists(viking_fs, parent, ctx)
 
     with zipfile.ZipFile(file_path, "r") as zf:
-        # 1. Get root directory name from ZIP and perform initial validation
         infolist = zf.infolist()
         if not infolist:
             raise ValueError("Empty ovpack file")
 
-        # Extract root directory name (assuming first path component is root name)
-        first_path = infolist[0].filename
-        # Normalize path separators to handle Windows-created ZIPs
-        first_path = first_path.replace("\\", "/")
-        base_name = first_path.split("/")[0]
-        if not base_name:
-            raise ValueError("Could not determine root directory name from ovpack")
-
-        root_uri = f"{parent}/{base_name}"
+        base_name = _base_name_from_entries(infolist)
+        root_uri = _join_uri(parent, base_name)
         _validate_import_target_uri(root_uri)
+        manifest = _read_manifest(zf, base_name)
+        manifest_root = manifest.get("root") if isinstance(manifest.get("root"), dict) else {}
+        if manifest_root.get("name") and manifest_root.get("name") != base_name:
+            logger.warning(
+                f"[local_fs] Manifest root name ({manifest_root.get('name')}) "
+                f"does not match zip root ({base_name})"
+            )
 
-        # 2. Conflict check
-        try:
-            await viking_fs.ls(root_uri, ctx=ctx)
-            if not force:
+        members = _validated_import_members(infolist, base_name, root_uri)
+
+        if await _root_exists(viking_fs, root_uri, ctx):
+            if conflict_action == "skip":
+                logger.info(f"[local_fs] Skipped existing resource at {root_uri}")
+                return root_uri
+            if conflict_action == "fail":
                 raise FileExistsError(
-                    f"Resource already exists at {root_uri}. Use force=True to overwrite."
+                    f"Resource already exists at {root_uri}. "
+                    "Use on_conflict='overwrite' to replace it."
                 )
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
-        except NotFoundError:
-            # Path does not exist, safe to import
-            pass
+            await _remove_existing_root(viking_fs, root_uri, ctx)
 
-        # 3. Validate core metadata _._meta.json (originally .meta.json)
-        meta_zip_path = f"{base_name}/_._meta.json"
-        try:
-            meta_content = zf.read(meta_zip_path)
-            meta_data = json.loads(meta_content.decode("utf-8"))
-            if "uri" in meta_data and not meta_data["uri"].endswith(base_name):
-                logger.warning(
-                    f"[local_fs] URI in _._meta.json ({meta_data['uri']}) mismatch with base_name ({base_name})"
-                )
-        except KeyError:
-            logger.warning(
-                f"[local_fs] _._meta.json not found in {file_path}, importing without validation"
-            )
-        except json.JSONDecodeError:
-            raise ValueError(f"Invalid JSON in {meta_zip_path}")
-
-        # 4. Execute import
-        for info in infolist:
-            zip_path = info.filename
-            if not zip_path:
+        for _, safe_zip_path, kind, rel_path in members:
+            if kind == "manifest":
+                continue
+            if kind == "directory":
+                await viking_fs.mkdir(_join_uri(root_uri, rel_path), exist_ok=True, ctx=ctx)
                 continue
 
-            # Validate before normalization so backslash paths are rejected
-            safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
-            # Normalize path separators to handle Windows-created ZIPs
-            safe_zip_path = safe_zip_path.replace("\\", "/")
-
-            # Handle directory entries
-            if safe_zip_path.endswith("/"):
-                rel_path = get_viking_rel_path_from_zip(safe_zip_path.rstrip("/"))
-                target_dir_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
-                await viking_fs.mkdir(target_dir_uri, exist_ok=True, ctx=ctx)
-                continue
-
-            # Handle file entries
-            rel_path = get_viking_rel_path_from_zip(safe_zip_path)
-            target_file_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
-            _validate_import_target_uri(target_file_uri)
-
-            try:
-                data = zf.read(safe_zip_path)
-                await viking_fs.write_file_bytes(target_file_uri, data, ctx=ctx)
-            except Exception as e:
-                logger.error(f"Failed to import {zip_path} to {target_file_uri}: {e}")
-                if not force:  # In non-force mode, stop on error
-                    raise e
+            target_file_uri = _join_uri(root_uri, rel_path)
+            data = zf.read(safe_zip_path)
+            await viking_fs.write_file_bytes(target_file_uri, data, ctx=ctx)
 
     logger.info(f"[local_fs] Successfully imported {file_path} to {root_uri}")
 
     if vectorize:
-        await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx)
+        await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx, manifest=manifest)
         logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
 
     return root_uri
 
 
-async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> str:
+async def export_ovpack(
+    viking_fs,
+    uri: str,
+    to: str,
+    ctx: RequestContext,
+    vector_store=None,
+) -> str:
     """
     Export the specified context path as a .ovpack file.
 
@@ -280,6 +609,7 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
         viking_fs: VikingFS instance
         uri: Viking URI
         to: Target file path (can be an existing directory or a path ending with .ovpack)
+        vector_store: Optional vector store used to export portable scalar metadata
 
     Returns:
         Exported file path
@@ -287,13 +617,13 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
     Raises:
         ValueError: If export size exceeds limits (65536 files or 2GB total size)
     """
-    # Safety limits
     MAX_FILES = 65536
     MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
-    base_name = uri.strip().rstrip("/").split("/")[-1]
-    if not base_name:
-        base_name = "export"
+    uri = _strip_uri_trailing_slash(uri)
+    _validate_export_source_uri(uri)
+
+    base_name = _leaf_name(uri) or "export"
 
     if os.path.isdir(to):
         to = os.path.join(to, f"{base_name}.ovpack")
@@ -302,9 +632,8 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
 
     ensure_dir_exists(to)
 
-    entries = await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx)
+    entries = _exportable_entries(await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx))
 
-    # Check file count limit
     file_count = sum(1 for entry in entries if not entry.get("isDir"))
     if file_count > MAX_FILES:
         raise ValueError(
@@ -312,14 +641,7 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
             f"Please export a smaller directory."
         )
 
-    # Calculate total size and check limit
-    total_size = 0
-    for entry in entries:
-        if not entry.get("isDir"):
-            # Get file size from entry if available
-            size = entry.get("size", 0)
-            total_size += size
-
+    total_size = sum(entry.get("size", 0) for entry in entries if not entry.get("isDir"))
     if total_size > MAX_TOTAL_SIZE:
         size_mb = total_size / (1024 * 1024)
         limit_mb = MAX_TOTAL_SIZE / (1024 * 1024)
@@ -328,9 +650,14 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
             f"Please export a smaller directory."
         )
 
+    manifest = await _build_manifest(viking_fs, vector_store, uri, base_name, entries, ctx)
+
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        # Write root directory entry
         zf.writestr(base_name + "/", "")
+        zf.writestr(
+            f"{base_name}/{OVPACK_MANIFEST_ZIP_LEAF}",
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
+        )
 
         for entry in entries:
             rel_path = entry["rel_path"]
@@ -339,12 +666,12 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
             if entry.get("isDir"):
                 zf.writestr(zip_path + "/", "")
             else:
-                full_uri = f"{uri}/{rel_path}"
+                full_uri = _join_uri(uri, rel_path)
                 try:
                     data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
                     zf.writestr(zip_path, data)
-                except Exception as e:
-                    logger.warning(f"Failed to export file {full_uri}: {e}")
+                except Exception as exc:
+                    logger.warning(f"Failed to export file {full_uri}: {exc}")
 
     logger.info(f"[local_fs] Exported {uri} to {to}")
     return to

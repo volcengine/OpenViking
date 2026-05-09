@@ -4,6 +4,7 @@
 
 import os
 import tempfile
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
@@ -32,7 +33,8 @@ class ImportRequest(BaseModel):
     Attributes:
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         parent: Parent URI under which the imported pack will be placed.
-        force: Whether to overwrite existing content if needed.
+        force: Legacy alias for on_conflict="overwrite".
+        on_conflict: Conflict policy: fail, overwrite, or skip.
         vectorize: Whether to build vectors for imported content.
     """
 
@@ -41,6 +43,7 @@ class ImportRequest(BaseModel):
     temp_file_id: str
     parent: str
     force: bool = False
+    on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
     vectorize: bool = True
 
 
@@ -112,6 +115,7 @@ async def import_ovpack(
             ctx=ctx,
             force=body.force,
             vectorize=body.vectorize,
+            on_conflict=body.on_conflict,
         )
     except Exception:
         await store.mark_failed(resolved, ctx)

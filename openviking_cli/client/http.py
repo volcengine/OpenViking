@@ -928,6 +928,7 @@ class AsyncHTTPClient(BaseClient):
         parent: str,
         force: bool = False,
         vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         parent = VikingURI.normalize(parent)
@@ -936,6 +937,8 @@ class AsyncHTTPClient(BaseClient):
             "force": force,
             "vectorize": vectorize,
         }
+        if on_conflict is not None:
+            request_data["on_conflict"] = on_conflict
 
         file_path_obj = Path(file_path)
         if not file_path_obj.exists():

@@ -707,6 +707,7 @@ impl HttpClient {
         parent: &str,
         force: bool,
         vectorize: bool,
+        on_conflict: Option<&str>,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -721,10 +722,12 @@ impl HttpClient {
         }
 
         let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let conflict_policy = on_conflict.unwrap_or(if force { "overwrite" } else { "fail" });
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
             "parent": parent,
             "force": force,
+            "on_conflict": conflict_policy,
             "vectorize": vectorize,
         });
         self.post("/api/v1/pack/import", &body).await

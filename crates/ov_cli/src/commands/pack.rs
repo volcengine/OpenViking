@@ -26,13 +26,14 @@ pub async fn import(
     file_path: &str,
     target: &str,
     force: bool,
+    on_conflict: Option<&str>,
     no_vectorize: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let vectorize = !no_vectorize;
     let result = client
-        .import_ovpack(file_path, target, force, vectorize)
+        .import_ovpack(file_path, target, force, vectorize, on_conflict)
         .await?;
     output_success(&result, format, compact);
     Ok(())

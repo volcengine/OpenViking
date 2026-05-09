@@ -503,6 +503,9 @@ enum Commands {
         /// Overwrite when conflicts exist
         #[arg(long)]
         force: bool,
+        /// Conflict policy: fail, overwrite, or skip
+        #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
+        on_conflict: Option<String>,
         /// Disable vectorization after import
         #[arg(long)]
         no_vectorize: bool,
@@ -1062,8 +1065,12 @@ async fn main() {
             file_path,
             target_uri,
             force,
+            on_conflict,
             no_vectorize,
-        } => handlers::handle_import(file_path, target_uri, force, no_vectorize, ctx).await,
+        } => {
+            handlers::handle_import(file_path, target_uri, force, on_conflict, no_vectorize, ctx)
+                .await
+        }
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await

@@ -299,7 +299,12 @@ class BaseClient(ABC):
 
     @abstractmethod
     async def import_ovpack(
-        self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        parent: str,
+        force: bool = False,
+        vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         ...

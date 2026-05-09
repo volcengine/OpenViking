@@ -519,10 +519,16 @@ class LocalClient(BaseClient):
         parent: str,
         force: bool = False,
         vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         return await self._service.pack.import_ovpack(
-            file_path, parent, ctx=self._ctx, force=force, vectorize=vectorize
+            file_path,
+            parent,
+            ctx=self._ctx,
+            force=force,
+            vectorize=vectorize,
+            on_conflict=on_conflict,
         )
 
     # ============= Debug =============

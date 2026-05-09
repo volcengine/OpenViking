@@ -42,6 +42,9 @@ openviking import ./exports/my-project.ovpack viking://resources/imported/
 # Force overwrite
 openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
 
+# Explicit conflict policy
+openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
+
 # Skip vectorization (faster)
 openviking import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
 ```
@@ -57,7 +60,7 @@ async def import_example():
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            force=True,
+            on_conflict="overwrite",
             vectorize=True
         )
         print(f"Import successful: {imported_uri}")
@@ -86,10 +89,19 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
+    \"on_conflict\": \"overwrite\",
     \"vectorize\": true
   }"
 ```
+
+## Format Notes
+
+OVPack v2 files are standard ZIP archives with an OpenViking manifest at
+`<root>/_._ovpack_manifest.json`. The manifest records `format_version`,
+content entries, and portable vector scalar metadata. Raw embedding vectors are
+not exported; imports rebuild vectors in the target environment. Derived
+semantic files such as `.abstract.md`, `.overview.md`, and `.relations.json` are
+not imported as normal content.
 
 ## Memory Import and Export
 
@@ -139,7 +151,7 @@ async def export_import_user_memories():
         await client.import_ovpack(
             file_path="./exports/user-memories.ovpack",
             parent="viking://user/default/",
-            force=True,
+            on_conflict="overwrite",
             vectorize=True,
         )
     finally:
@@ -156,7 +168,7 @@ async def export_import_agent_memories():
         await client.import_ovpack(
             file_path="./exports/agent-memories.ovpack",
             parent="viking://agent/default/",
-            force=True,
+            on_conflict="overwrite",
             vectorize=True,
         )
     finally:
@@ -237,4 +249,4 @@ A: Yes! OVPack is a standard ZIP format and can be opened with any compression t
 A: Use `--no-vectorize` for fast import, then vectorize later.
 
 **Q: How to handle duplicate resources during import?**
-A: Use `--force` to overwrite existing resources.
+A: Use `--on-conflict overwrite` to replace existing resources, or `--on-conflict skip` to keep them. `--force` remains as a shorthand for overwrite.

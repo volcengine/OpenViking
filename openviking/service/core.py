@@ -334,7 +334,10 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
-        self._pack_service.set_viking_fs(self._viking_fs)
+        self._pack_service.set_dependencies(
+            viking_fs=self._viking_fs,
+            vector_store=self._vikingdb_manager,
+        )
         self._search_service.set_viking_fs(self._viking_fs)
         self._resource_service.set_dependencies(
             vikingdb=self._vikingdb_manager,

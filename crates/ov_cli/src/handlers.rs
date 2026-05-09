@@ -169,6 +169,7 @@ pub async fn handle_import(
     file_path: String,
     target_uri: String,
     force: bool,
+    on_conflict: Option<String>,
     no_vectorize: bool,
     ctx: CliContext,
 ) -> Result<()> {
@@ -178,6 +179,7 @@ pub async fn handle_import(
         &file_path,
         &target_uri,
         force,
+        on_conflict.as_deref(),
         no_vectorize,
         ctx.output_format,
         ctx.compact,

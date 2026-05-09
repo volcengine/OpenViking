@@ -409,10 +409,23 @@ class SyncHTTPClient:
         return run_async(self._async_client.export_ovpack(uri, to))
 
     def import_ovpack(
-        self, file_path: str, target: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        target: str,
+        force: bool = False,
+        vectorize: bool = True,
+        on_conflict: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
-        return run_async(self._async_client.import_ovpack(file_path, target, force, vectorize))
+        return run_async(
+            self._async_client.import_ovpack(
+                file_path,
+                target,
+                force=force,
+                vectorize=vectorize,
+                on_conflict=on_conflict,
+            )
+        )
 
     # ============= Admin =============
 

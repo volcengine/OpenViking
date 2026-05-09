@@ -1075,7 +1075,8 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 |------|------|------|--------|------|
 | temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp_upload) 获取） |
 | parent | string | 是 | - | 目标父级 URI（导入到此处） |
-| force | bool | 否 | False | 是否覆盖已有资源 |
+| force | bool | 否 | False | `on_conflict=overwrite` 的兼容别名 |
+| on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 | vectorize | bool | 否 | True | 是否触发向量化 |
 
 **权限要求**：ROOT 或 ADMIN
@@ -1105,7 +1106,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
+    \"on_conflict\": \"overwrite\",
     \"vectorize\": true
   }"
 ```
@@ -1130,6 +1131,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/
 
 # 强制覆盖已有内容
 ov import ./exports/my-project.ovpack viking://resources/imported/ --force
+
+# 显式冲突策略
+ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
 
 # 不进行向量化
 ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
