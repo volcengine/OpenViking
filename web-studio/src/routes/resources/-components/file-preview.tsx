@@ -1,19 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import hljs from 'highlight.js/lib/core'
-import bash from 'highlight.js/lib/languages/bash'
-import cpp from 'highlight.js/lib/languages/cpp'
-import css from 'highlight.js/lib/languages/css'
-import go from 'highlight.js/lib/languages/go'
-import java from 'highlight.js/lib/languages/java'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import markdown from 'highlight.js/lib/languages/markdown'
-import python from 'highlight.js/lib/languages/python'
-import rust from 'highlight.js/lib/languages/rust'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { X } from 'lucide-react'
@@ -26,20 +12,61 @@ import { formatSize } from '../-lib/normalize'
 import { useVikingFilePreview } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('cpp', cpp)
-hljs.registerLanguage('css', css)
-hljs.registerLanguage('go', go)
-hljs.registerLanguage('java', java)
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('markdown', markdown)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('rust', rust)
-hljs.registerLanguage('sql', sql)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('yaml', yaml)
+const languageLoaders: Record<string, () => Promise<{ default: Parameters<typeof hljs.registerLanguage>[1] }>> = {
+  bash: () => import('highlight.js/lib/languages/bash'),
+  c: () => import('highlight.js/lib/languages/c'),
+  cpp: () => import('highlight.js/lib/languages/cpp'),
+  csharp: () => import('highlight.js/lib/languages/csharp'),
+  css: () => import('highlight.js/lib/languages/css'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  diff: () => import('highlight.js/lib/languages/diff'),
+  dockerfile: () => import('highlight.js/lib/languages/dockerfile'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
+  erlang: () => import('highlight.js/lib/languages/erlang'),
+  go: () => import('highlight.js/lib/languages/go'),
+  graphql: () => import('highlight.js/lib/languages/graphql'),
+  haskell: () => import('highlight.js/lib/languages/haskell'),
+  ini: () => import('highlight.js/lib/languages/ini'),
+  java: () => import('highlight.js/lib/languages/java'),
+  javascript: () => import('highlight.js/lib/languages/javascript'),
+  json: () => import('highlight.js/lib/languages/json'),
+  kotlin: () => import('highlight.js/lib/languages/kotlin'),
+  latex: () => import('highlight.js/lib/languages/latex'),
+  less: () => import('highlight.js/lib/languages/less'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  makefile: () => import('highlight.js/lib/languages/makefile'),
+  markdown: () => import('highlight.js/lib/languages/markdown'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  objectivec: () => import('highlight.js/lib/languages/objectivec'),
+  perl: () => import('highlight.js/lib/languages/perl'),
+  php: () => import('highlight.js/lib/languages/php'),
+  plaintext: () => import('highlight.js/lib/languages/plaintext'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
+  python: () => import('highlight.js/lib/languages/python'),
+  r: () => import('highlight.js/lib/languages/r'),
+  ruby: () => import('highlight.js/lib/languages/ruby'),
+  rust: () => import('highlight.js/lib/languages/rust'),
+  scala: () => import('highlight.js/lib/languages/scala'),
+  scss: () => import('highlight.js/lib/languages/scss'),
+  shell: () => import('highlight.js/lib/languages/shell'),
+  sql: () => import('highlight.js/lib/languages/sql'),
+  swift: () => import('highlight.js/lib/languages/swift'),
+  typescript: () => import('highlight.js/lib/languages/typescript'),
+  wasm: () => import('highlight.js/lib/languages/wasm'),
+  xml: () => import('highlight.js/lib/languages/xml'),
+  yaml: () => import('highlight.js/lib/languages/yaml'),
+}
+
+const loadedLanguages = new Set<string>()
+
+async function ensureLanguage(lang: string): Promise<void> {
+  if (loadedLanguages.has(lang)) return
+  const loader = languageLoaders[lang]
+  if (!loader) return
+  const mod = await loader()
+  hljs.registerLanguage(lang, mod.default)
+  loadedLanguages.add(lang)
+}
 
 interface FilePreviewProps {
   file: VikingFsEntry | null
@@ -115,20 +142,55 @@ function detectCodeLanguage(filename: string): string | null {
   const lower = filename.toLowerCase()
   const ext = lower.includes('.') ? lower.split('.').pop() || '' : ''
 
-  if (['ts', 'tsx'].includes(ext)) return 'typescript'
-  if (['js', 'jsx', 'mjs', 'cjs'].includes(ext)) return 'javascript'
-  if (['py'].includes(ext)) return 'python'
-  if (['go'].includes(ext)) return 'go'
-  if (['rs'].includes(ext)) return 'rust'
-  if (['java'].includes(ext)) return 'java'
-  if (['c', 'h', 'hpp', 'cpp', 'cc'].includes(ext)) return 'cpp'
-  if (['json'].includes(ext)) return 'json'
-  if (['yml', 'yaml'].includes(ext)) return 'yaml'
-  if (['md', 'markdown'].includes(ext)) return 'markdown'
-  if (['html', 'xml', 'svg'].includes(ext)) return 'xml'
-  if (['css', 'scss', 'less'].includes(ext)) return 'css'
-  if (['sql'].includes(ext)) return 'sql'
-  if (['sh', 'bash', 'zsh'].includes(ext)) return 'bash'
+  const extMap: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript',
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    py: 'python', pyw: 'python',
+    go: 'go',
+    rs: 'rust',
+    java: 'java',
+    c: 'c', h: 'c',
+    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
+    cs: 'csharp',
+    json: 'json',
+    yml: 'yaml', yaml: 'yaml',
+    md: 'markdown', markdown: 'markdown',
+    html: 'xml', xml: 'xml', svg: 'xml', xhtml: 'xml',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    sql: 'sql',
+    sh: 'bash', bash: 'bash', zsh: 'bash',
+    toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    dockerfile: 'dockerfile',
+    dart: 'dart',
+    kt: 'kotlin', kts: 'kotlin',
+    swift: 'swift',
+    rb: 'ruby', rake: 'ruby', gemspec: 'ruby',
+    php: 'php',
+    lua: 'lua',
+    r: 'r', rmd: 'r',
+    scala: 'scala',
+    ex: 'elixir', exs: 'elixir',
+    erl: 'erlang', hrl: 'erlang',
+    hs: 'haskell', lhs: 'haskell',
+    m: 'objectivec', mm: 'objectivec',
+    pl: 'perl', pm: 'perl',
+    proto: 'protobuf',
+    graphql: 'graphql', gql: 'graphql',
+    tex: 'latex', latex: 'latex',
+    makefile: 'makefile',
+    nginx: 'nginx',
+    wasm: 'wasm', wat: 'wasm',
+    diff: 'diff', patch: 'diff',
+  }
+
+  if (ext && extMap[ext]) return extMap[ext]
+
+  const basename = lower.split('/').pop() || ''
+  if (basename === 'dockerfile' || basename.startsWith('dockerfile.')) return 'dockerfile'
+  if (basename === 'makefile' || basename === 'gnumakefile') return 'makefile'
+  if (basename === '.bashrc' || basename === '.zshrc' || basename === '.bash_profile') return 'bash'
 
   return null
 }
@@ -160,26 +222,42 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
     return `${toDownloadUrl(file.uri)}&_t=${encodeURIComponent(file.modTime || Date.now().toString())}`
   }, [file, preview?.fileType])
 
-  const highlightedCodeHtml = useMemo(() => {
-    if (!preview || preview.fileType !== 'code') {
-      return ''
+  const [highlightedCodeHtml, setHighlightedCodeHtml] = useState('')
+
+  const needsHighlight = preview?.fileType === 'code' || (preview?.fileType === 'markdown' && markdownMode === 'source')
+
+  useEffect(() => {
+    if (!preview || !needsHighlight) {
+      setHighlightedCodeHtml('')
+      return
     }
 
     const content = preview.content || ''
     if (!content) {
-      return ''
+      setHighlightedCodeHtml('')
+      return
     }
 
+    let cancelled = false
     const language = detectCodeLanguage(file?.name || '')
-    try {
-      if (language) {
-        return hljs.highlight(content, { language }).value
+
+    const run = async () => {
+      try {
+        if (language) {
+          await ensureLanguage(language)
+          if (cancelled) return
+          setHighlightedCodeHtml(hljs.highlight(content, { language }).value)
+        } else {
+          setHighlightedCodeHtml(hljs.highlightAuto(content).value)
+        }
+      } catch {
+        if (!cancelled) setHighlightedCodeHtml(escapeHtml(content))
       }
-      return hljs.highlightAuto(content).value
-    } catch {
-      return escapeHtml(content)
     }
-  }, [preview, file?.name])
+
+    void run()
+    return () => { cancelled = true }
+  }, [preview, file?.name, needsHighlight])
 
   useEffect(() => {
     let alive = true
@@ -348,7 +426,9 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
         ) : null}
 
         {!previewQuery.isLoading && preview?.fileType === 'markdown' && preview.shouldAutoRead && markdownMode === 'source' ? (
-          <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/20 p-3 text-xs leading-6">{preview.content || '(empty file)'}</pre>
+          <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
+            <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(preview.content || '(empty file)') }} />
+          </pre>
         ) : null}
 
         {!previewQuery.isLoading && preview?.fileType === 'code' && preview.shouldAutoRead ? (
