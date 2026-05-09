@@ -343,11 +343,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
-        # Register new page_ids (100+) after URI resolution
+        # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
                 for uri in op.uris:
-                    self._page_id_map.register_new(uri)
+                    self._page_id_map.register_new(uri, page_id=op.page_id)
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
         resolved_links = self._resolve_links(operations, upsert_operations)
