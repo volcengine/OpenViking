@@ -1066,7 +1066,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 **处理流程**：
 1. 验证用户权限
 2. 解析上传的 `.ovpack` 文件
-3. 校验 manifest 元数据、路径、文件集合、文件大小和 checksum
+3. 校验 manifest 元数据、路径、文件和目录集合、文件大小和 checksum
 4. 应用 `on_conflict`
 5. 导入资源到目标位置，并重建向量
 
@@ -1092,7 +1092,8 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack
 - `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
 - `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。
 - 默认拒绝没有 manifest 的包，因为这类包无法提供内容完整性校验。
-- 带 manifest entries 的包如果缺少内容文件、混入额外文件、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
+- 带 manifest entries 的包如果缺少内容文件或目录、混入额外文件或目录、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
+- manifest `format_version` 不是当前支持版本的包会被拒绝。
 
 #### 3. 使用示例
 

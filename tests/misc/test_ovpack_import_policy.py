@@ -230,6 +230,44 @@ async def test_import_ovpack_rejects_manifest_file_hash_mismatch(
 
 
 @pytest.mark.asyncio
+async def test_import_ovpack_rejects_legacy_manifest_version(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
+    manifest["format_version"] = 1
+    _write_ovpack_with_manifest(temp_ovpack_path, "demo", {"notes.txt": "hello"}, manifest=manifest)
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"Unsupported ovpack format_version 1"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_manifest_unexpected_directory(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            "demo/": "",
+            "demo/_._ovpack_manifest.json": json.dumps(manifest),
+            "demo/notes.txt": "hello",
+            "demo/empty/": "",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
+    with pytest.raises(InvalidArgumentError, match=r"entries do not match manifest") as exc_info:
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+
+    assert exc_info.value.details["unexpected_directories"] == ["empty"]
+    assert fake_fs.written_files == []
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_rejects_session_scope_targets(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):

@@ -191,7 +191,7 @@ my-project/_._ovpack_manifest.json
 字段说明：
 
 - `kind` 固定为 `openviking.ovpack`。
-- `format_version` 当前为 `2`。高于当前支持版本的包会被拒绝。
+- `format_version` 当前为 `2`。低于或高于当前支持版本的包都会被拒绝。
 - `root.name` 是导入时创建的 root 名称。
 - `entries[].path` 是相对 root 的路径。`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`。
@@ -217,7 +217,7 @@ created_at, updated_at, active_count
 1. ZIP 路径必须在同一个 root 下，不能包含绝对路径、反斜杠、盘符或 `..`。
 2. 必须存在 `<root>/_._ovpack_manifest.json`。
 3. manifest 必须是合法 JSON，`kind` 和 `format_version` 必须可识别。
-4. `entries` 中声明的文件集合必须和 ZIP 内容文件一致。
+4. `entries` 中声明的文件和目录集合必须和 ZIP 内容一致。
 5. 每个文件的 `size` 和 `sha256` 必须匹配实际内容。
 6. v2 包必须带 `content_sha256`，并且整体 checksum 必须匹配。
 7. 派生语义文件不会作为普通内容导入。
@@ -246,8 +246,9 @@ INVALID_ARGUMENT: ovpack file sha256 does not match manifest
 
 开发期间生成过的 v2 预览包如果缺少 `content_sha256`，也会被拒绝。处理方式同样是重新导出。
 
-未来版本包如果 `format_version` 高于当前实现支持版本，会返回不支持的版本错误。此时应升级
-OpenViking，或由支持该版本的环境重新导出成当前支持的格式。
+如果 manifest 的 `format_version` 不是当前支持版本，会返回不支持的版本错误。低版本不会自动
+兼容；处理方式是在可信环境中重新导出为当前支持格式。未来版本包则应升级 OpenViking，或由
+支持该版本的环境重新导出成当前支持的格式。
 
 ## 记忆迁移
 
@@ -314,8 +315,8 @@ ov import ./shared-docs.ovpack viking://resources/team-shared/
 | `Missing ovpack manifest` | 旧版无 manifest 包 | 在可信环境重新导出。 |
 | `Missing ovpack manifest content_sha256` | 开发期 v2 预览包缺少整体 checksum | 重新导出。 |
 | `sha256 does not match manifest` | 文件内容和 manifest 不一致 | 丢弃该包，或从可信源重新导出。 |
-| `file entries do not match manifest` | ZIP 中缺文件或混入额外文件 | 丢弃该包，或重新导出。 |
-| `Unsupported ovpack format_version` | 包由未来版本生成 | 升级 OpenViking 或重新导出为当前支持版本。 |
+| `ovpack entries do not match manifest` | ZIP 中缺文件/目录，或混入额外文件/目录 | 丢弃该包，或重新导出。 |
+| `Unsupported ovpack format_version` | 包格式版本不是当前支持版本 | 升级 OpenViking 或重新导出为当前支持版本。 |
 | `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |
 
 ## 常见问题

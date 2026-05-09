@@ -383,10 +383,10 @@ def _read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
             field="format_version",
             value=version,
         )
-    if version_int > OVPACK_FORMAT_VERSION:
+    if version_int != OVPACK_FORMAT_VERSION:
         raise _invalid_manifest(
             f"Unsupported ovpack format_version {version}; "
-            f"this OpenViking supports up to {OVPACK_FORMAT_VERSION}",
+            f"this OpenViking requires {OVPACK_FORMAT_VERSION}",
             manifest_path,
             format_version=version_int,
             supported_format_version=OVPACK_FORMAT_VERSION,
@@ -479,13 +479,6 @@ def _manifest_entries_by_path(manifest: dict[str, Any]) -> dict[str, dict[str, A
     return by_path
 
 
-def _manifest_format_version(manifest: dict[str, Any]) -> int:
-    try:
-        return int(manifest.get("format_version", OVPACK_FORMAT_VERSION))
-    except (TypeError, ValueError):
-        return OVPACK_FORMAT_VERSION
-
-
 def _manifest_content_sha256(file_entries_by_path: dict[str, dict[str, Any]]) -> str:
     content_entries: list[dict[str, Any]] = []
     for rel_path, entry in sorted(file_entries_by_path.items()):
@@ -534,6 +527,26 @@ def _zip_file_members_by_path(
     return files
 
 
+def _zip_directory_members_by_path(infolist: list[zipfile.ZipInfo], base_name: str) -> set[str]:
+    directories: set[str] = set()
+    for info in infolist:
+        zip_path = info.filename
+        if not zip_path:
+            continue
+        safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+        if not safe_zip_path.endswith("/"):
+            continue
+
+        rel_path = get_viking_rel_path_from_zip(safe_zip_path.rstrip("/"))
+        if rel_path in directories:
+            raise InvalidArgumentError(
+                "Duplicate ovpack directory entry",
+                details={"path": rel_path},
+            )
+        directories.add(rel_path)
+    return directories
+
+
 def _validate_manifest_content(
     zf: zipfile.ZipFile,
     manifest: dict[str, Any],
@@ -552,36 +565,46 @@ def _validate_manifest_content(
         for rel_path, entry in manifest_entries.items()
         if entry.get("kind") == "file"
     }
+    manifest_directories = {
+        rel_path for rel_path, entry in manifest_entries.items() if entry.get("kind") == "directory"
+    }
     zip_files = _zip_file_members_by_path(infolist, base_name)
+    zip_directories = _zip_directory_members_by_path(infolist, base_name)
 
     missing_files = sorted(set(manifest_files) - set(zip_files))
     unexpected_files = sorted(set(zip_files) - set(manifest_files))
-    if missing_files or unexpected_files:
+    missing_directories = sorted(manifest_directories - zip_directories)
+    unexpected_directories = sorted(zip_directories - manifest_directories)
+    if missing_files or unexpected_files or missing_directories or unexpected_directories:
         raise InvalidArgumentError(
-            "ovpack file entries do not match manifest",
+            "ovpack entries do not match manifest",
             details={
                 "missing_files": missing_files,
                 "unexpected_files": unexpected_files,
+                "missing_directories": missing_directories,
+                "unexpected_directories": unexpected_directories,
             },
         )
 
     expected_content_sha256 = manifest.get("content_sha256")
-    if expected_content_sha256 is None and _manifest_format_version(manifest) >= 2:
+    if expected_content_sha256 is None:
         raise InvalidArgumentError(
             "Missing ovpack manifest content_sha256",
             details={"field": "content_sha256"},
         )
-    if expected_content_sha256 is not None:
-        expected_content_sha256 = _normalize_sha256(expected_content_sha256, field="content_sha256")
-        actual_content_sha256 = _manifest_content_sha256(manifest_files)
-        if actual_content_sha256 != expected_content_sha256:
-            raise InvalidArgumentError(
-                "ovpack manifest content_sha256 mismatch",
-                details={
-                    "expected": expected_content_sha256,
-                    "actual": actual_content_sha256,
-                },
-            )
+    expected_content_sha256 = _normalize_sha256(
+        expected_content_sha256,
+        field="content_sha256",
+    )
+    actual_content_sha256 = _manifest_content_sha256(manifest_files)
+    if actual_content_sha256 != expected_content_sha256:
+        raise InvalidArgumentError(
+            "ovpack manifest content_sha256 mismatch",
+            details={
+                "expected": expected_content_sha256,
+                "actual": actual_content_sha256,
+            },
+        )
 
     for rel_path, (_, safe_zip_path) in sorted(zip_files.items()):
         entry = manifest_files[rel_path]

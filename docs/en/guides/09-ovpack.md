@@ -125,10 +125,10 @@ Example manifest for a package exported from `viking://resources/demo/`:
 }
 ```
 
-For packages with manifest entries, import validates the ZIP file set, per-file
-`size`, per-file `sha256`, and top-level `content_sha256` before writing any
-resources. Missing, extra, or modified content files, and missing or mismatched
-v2 `content_sha256`, are rejected. This is an integrity check for the package
+For packages with manifest entries, import validates the ZIP file and directory
+set, per-file `size`, per-file `sha256`, and top-level `content_sha256` before
+writing any resources. Missing, extra, or modified content entries, and missing
+or mismatched v2 `content_sha256`, are rejected. This is an integrity check for the package
 contents, not a signature or authentication mechanism if both the manifest and
 content can be rewritten.
 
@@ -137,7 +137,8 @@ Raw embedding vectors are not exported. Runtime fields such as `created_at`,
 and runtime state in the target environment. Packages without a manifest are
 rejected by default because OpenViking cannot verify their file set or content
 checksums. Packages with a manifest validate `kind` and `format_version`, and
-packages newer than this implementation are rejected. Derived semantic files such
+packages whose format version is not the current supported version are rejected.
+Derived semantic files such
 as `.abstract.md`, `.overview.md`, and `.relations.json` are not imported as
 normal content.
 

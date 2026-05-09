@@ -3,7 +3,9 @@
 
 """Import/export tests"""
 
+import hashlib
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -116,8 +118,18 @@ class TestImportOvpack:
 
     @staticmethod
     def _build_ovpack(zip_path: Path, entries: dict[str, str]) -> None:
+        manifest = {
+            "kind": "openviking.ovpack",
+            "format_version": 2,
+            "root": {"name": "pkg"},
+            "entries": [{"path": "", "kind": "directory"}],
+            "content_sha256": hashlib.sha256(b"[]").hexdigest(),
+            "vectors": {},
+        }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("pkg/", "")
+            zf.writestr("pkg/_._ovpack_manifest.json", json.dumps(manifest))
             for name, content in entries.items():
                 zf.writestr(name, content)
         zip_path.write_bytes(buffer.getvalue())
@@ -127,35 +139,30 @@ class TestImportOvpack:
         [
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "pkg/../../escape.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "/abs/path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "C:/drive/path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "pkg\\windows\\path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "other/file.txt": "pwned",
                 },
                 "Invalid ovpack entry root",

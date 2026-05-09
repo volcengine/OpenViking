@@ -1066,7 +1066,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 **Processing Flow**:
 1. Verify user permissions
 2. Parse uploaded `.ovpack` file
-3. Validate manifest metadata, paths, file set, file sizes, and checksums
+3. Validate manifest metadata, paths, file and directory sets, file sizes, and checksums
 4. Apply `on_conflict`
 5. Import resources to target location and rebuild vectors
 
@@ -1092,7 +1092,8 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
 - `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents.
 - Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
-- Packages with manifest entries are rejected if content files are missing, extra files are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
+- Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
+- Packages whose manifest `format_version` is not the current supported version are rejected.
 
 #### 3. Usage Examples
 
