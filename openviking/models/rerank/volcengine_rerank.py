@@ -125,10 +125,41 @@ class RerankClient(RerankBase):
                 timeout=30,
             )
 
-            result = response.json()
-            # print(f"[RerankClient] Raw response: {result}")
-            if "result" not in result or "data" not in result["result"]:
-                logger.warning(f"[RerankClient] Unexpected response format: {result}")
+            try:
+                result = response.json()
+            except Exception:
+                logger.warning(
+                    "[RerankClient] Non-JSON response: status=%s body=%s",
+                    response.status_code,
+                    response.text[:1000],
+                )
+                return None
+
+            if not isinstance(result, dict):
+                logger.warning(
+                    "[RerankClient] Unexpected response type: status=%s type=%s body=%s",
+                    response.status_code,
+                    type(result).__name__,
+                    str(result)[:1000],
+                )
+                return None
+
+            result_payload = result.get("result")
+            if not isinstance(result_payload, dict):
+                logger.warning(
+                    "[RerankClient] Unexpected response payload: status=%s result_type=%s body=%s",
+                    response.status_code,
+                    type(result_payload).__name__,
+                    str(result)[:1000],
+                )
+                return None
+
+            if "data" not in result_payload:
+                logger.warning(
+                    "[RerankClient] Missing rerank data field: status=%s body=%s",
+                    response.status_code,
+                    str(result)[:1000],
+                )
                 return None
 
             # Update token usage tracking (estimate, VikingDB doesn't provide token info)
@@ -140,7 +171,7 @@ class RerankClient(RerankBase):
             )
 
             # Each document is a separate group, data array returns scores for each group sequentially
-            data = result["result"]["data"]
+            data = result_payload["data"]
             if len(data) != len(documents):
                 logger.warning(
                     "[RerankClient] Unexpected rerank result length: expected=%s actual=%s",
