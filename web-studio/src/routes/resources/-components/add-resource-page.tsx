@@ -119,6 +119,13 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
     setSelectedFiles((prev) => prev.filter((file) => file.id !== id))
   }, [])
 
+  const handleRemoteUrlChange = useCallback((value: string) => {
+    if (remotePhase === 'done') {
+      resetRemote()
+    }
+    setRemoteUrl(value)
+  }, [remotePhase, resetRemote])
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: addFiles,
     multiple: true,
@@ -265,8 +272,8 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
               id="add-resource-remote-url"
               placeholder={t('remoteUrl.placeholder')}
               value={displayRemoteUrl}
-              onChange={(e) => setRemoteUrl(e.target.value)}
-              disabled={remotePhase !== 'idle'}
+              onChange={(e) => handleRemoteUrlChange(e.target.value)}
+              disabled={remotePhase === 'processing'}
             />
             <p className="text-xs text-muted-foreground">{t('remoteUrl.hint')}</p>
           </div>
@@ -423,7 +430,7 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
           onClick={handleSubmit}
           disabled={!canSubmit || (activeMode === 'remote' && remotePhase === 'processing')}
         >
-          {activeMode === 'upload' ? t('startProcessing') : remotePhase === 'processing' ? t('uploading') : t('submit')}
+          {activeMode === 'remote' && remotePhase === 'processing' ? t('uploading') : t('startProcessing')}
         </Button>
       </div>
 

@@ -280,7 +280,6 @@ const zhCN = {
     remoteUrl: '远程资源地址',
     'remoteUrl.placeholder': 'https://github.com/org/repo',
     'remoteUrl.hint': 'HTTP(S) 链接、Git 仓库地址或其他远程资源地址。',
-    submit: '添加资源',
     strict: '严格模式',
     'strict.hint': '开启时，服务器会拒绝不支持或无法识别类型的文件，而非静默跳过。',
     directlyUploadMedia: '直接上传媒体文件',

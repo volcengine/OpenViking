@@ -280,7 +280,6 @@ const en = {
     remoteUrl: 'Remote URL',
     'remoteUrl.placeholder': 'https://github.com/org/repo',
     'remoteUrl.hint': 'HTTP(S) URL, Git repository, or other remote resource address.',
-    submit: 'Add Resource',
     strict: 'Strict Mode',
     'strict.hint': 'When enabled, the server will reject files with unsupported or unrecognized types instead of skipping them silently.',
     directlyUploadMedia: 'Directly Upload Media',
