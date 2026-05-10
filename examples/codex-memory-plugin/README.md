@@ -7,53 +7,55 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
-- **Idle sweep on `Stop`**: opportunistically commit OV sessions whose Codex session has been silent past the idle TTL (default 30 min) — best-effort session-end signal because Codex has no `SessionEnd` hook today.
-- **MCP runtime bootstrap is lazy**: the MCP launcher (`start-memory-server.mjs`) installs runtime deps on first MCP invocation. We do **not** register a `SessionStart` hook, so short reconnects don't re-trigger `npm ci`.
+- **Commit on `SessionStart` with `source=clear`**: when the user runs `/clear`, the previous OpenViking session is committed before Codex orphans it. `source=startup` and `source=resume` are no-ops (short reconnects re-fire SessionStart and we don't want to commit a still-active session).
+- **MCP runtime bootstrap is lazy**: the MCP launcher (`start-memory-server.mjs`) installs runtime deps on first MCP invocation, not in a hook.
 
 It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `openviking_forget`, `openviking_health`) for manual use.
 
 ## Architecture
 
 ```
-                ┌──────────────────────────────────────┐
-                │                Codex                 │
-                └──────┬───────────────┬────────────┬──┘
-                       │               │            │
-                UserPromptSubmit      Stop      PreCompact
-                       │               │            │
-                ┌──────▼─────┐  ┌──────▼─────┐  ┌──▼─────────────┐
-                │ auto-      │  │ auto-      │  │ pre-compact-   │
-                │ recall.mjs │  │ capture.mjs│  │ capture.mjs    │
-                │ (search)   │  │ (append +  │  │ (commit +      │
-                │            │  │ idle-sweep)│  │ reset session) │
-                └──────┬─────┘  └──────┬─────┘  └──────┬─────────┘
-                       │               │               │
-                       │       ┌───────▼───────────────▼────┐
-                       └──────►│      OpenViking server     │
-                               │ /api/v1/search/find        │
-                               │ /api/v1/sessions           │
-                               │ /api/v1/sessions/{id}/     │
-                               │   messages | commit        │
-                               │ /api/v1/content/read       │
-                               └────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │                            Codex                             │
+   └──┬─────────────────┬────────────────┬───────────────────┬────┘
+      │                 │                │                   │
+ SessionStart      UserPromptSubmit    Stop              PreCompact
+ (source=clear)         │              (per turn)            │
+      │                 │                │                   │
+ ┌────▼──────────┐ ┌────▼──────┐ ┌──────▼──────┐ ┌──────────▼──────┐
+ │ session-start │ │ auto-     │ │ auto-       │ │ pre-compact-    │
+ │ -commit.mjs   │ │ recall.mjs│ │ capture.mjs │ │ capture.mjs     │
+ │ (commit prior │ │ (search)  │ │ (append +   │ │ (commit + reset │
+ │ orphan only   │ │           │ │ no commit)  │ │ ovSessionId)    │
+ │ on /clear)    │ │           │ │             │ │                 │
+ └────┬──────────┘ └────┬──────┘ └──────┬──────┘ └──────────┬──────┘
+      │                 │                │                   │
+      │             ┌───▼────────────────▼───────────────────▼──┐
+      └────────────►│           OpenViking server               │
+                    │ /api/v1/search/find                       │
+                    │ /api/v1/sessions [+/{id}/{messages,commit}]│
+                    │ /api/v1/content/read                      │
+                    └───────────────────────────────────────────┘
 
-  ┌──────────────────────────────────────┐
-  │  MCP Server (memory-server.ts)       │
-  │  Tools for explicit use:             │
-  │  • openviking_recall                 │
-  │  • openviking_store                  │
-  │  • openviking_forget                 │
-  │  • openviking_health                 │
-  │  Lazily npm ci's its runtime on      │
-  │  first launch (not on SessionStart). │
-  └──────────────────────────────────────┘
+   ┌──────────────────────────────────────┐
+   │  MCP Server (memory-server.ts)       │
+   │  Tools for explicit use:             │
+   │  • openviking_recall                 │
+   │  • openviking_store                  │
+   │  • openviking_forget                 │
+   │  • openviking_health                 │
+   │  Lazily npm ci's its runtime on      │
+   │  first launch.                       │
+   └──────────────────────────────────────┘
 ```
 
 ## How It Works
 
-### Why no `SessionStart` hook
+### Why the SessionStart hook is `source=clear`-only
 
-Codex fires `SessionStart` on every short reconnect and resume — not just genuine new sessions. Registering a hook that runs `npm ci` on every `SessionStart` is the wrong shape: it would reinstall the runtime on every reconnect, and short reconnects don't need a memory boundary. Instead we **lazily bootstrap** the MCP runtime in `scripts/start-memory-server.mjs` the first time codex actually launches the MCP server. The bootstrap is content-hashed and idempotent (`scripts/runtime-common.mjs`), so subsequent launches are no-ops.
+Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process or `/new`), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is being orphaned to a new session_id). Only `source=clear` is a deterministic "context is about to disappear for a previous session" signal. `startup` and `resume` are also fired on short reconnects, so committing on those would corrupt still-active sessions.
+
+`session-start-commit.mjs` therefore exits early on every source except `clear`. On `clear`, it commits any state file whose `codexSessionId` differs from the new session_id (those state files are orphaned by `/clear`). MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
 
 ### Auto-recall (every UserPromptSubmit)
 
@@ -71,10 +73,6 @@ Codex's `Stop` fires per turn, not at session end. So `auto-capture.mjs` keeps *
 
 We do **not** call `/commit` per turn — committing extracts memories, and per-turn extraction would over-fragment the memory tree and waste OV's extractor.
 
-### Idle sweep (best-effort session-end commit)
-
-Codex has no `SessionEnd` hook today (the schema only ships `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`, `PostCompact`, and tool-use events). To still produce memories from sessions that exit gracefully without compacting, every `Stop` invocation also runs an idle sweep at the end: any tracked codex session whose state file is older than `IDLE_TTL` (default 30 min, override with `OPENVIKING_CODEX_IDLE_TTL_MS`) gets committed and its state file removed.
-
 ### PreCompact (deterministic commit)
 
 `PreCompact` fires before Codex summarizes. `pre-compact-capture.mjs` does:
@@ -82,6 +80,12 @@ Codex has no `SessionEnd` hook today (the schema only ships `SessionStart`, `Use
 1. **Catch-up**: append any transcript turns Stop hasn't captured yet (race-safe via `capturedTurnCount`).
 2. **Commit** the long-lived OV session for this Codex `session_id` so OV's extractor runs against the full pre-compact transcript.
 3. **Reset** state: clear `ovSessionId` so the next `Stop` opens a fresh OV session for the post-compact half. `capturedTurnCount` stays so we don't re-capture pre-compact turns.
+
+### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
+
+Codex fires no hook on process exit. `/compact` (PreCompact) and `/clear` (SessionStart with `source=clear`) are the only deterministic "context disappearing" signals. If you `/exit` (or Ctrl+C, or kill the process) without first running `/compact`, the OpenViking session for that codex session_id stays open with messages but never has memories extracted. It will, however, be committed the next time you run `/clear` from any codex session on the same machine — which sweeps all orphaned state files.
+
+If you care about preserving memory from a particular session before exiting: run `/compact` first, or have the model call the `openviking_store` MCP tool with the conclusions you want kept. (We considered an idle-timer-based commit on `Stop` but it produces false-commits for sessions that are merely paused, so this plugin does not include one.)
 
 ### MCP tools (explicit, on demand)
 
@@ -93,11 +97,12 @@ Codex's hook output schema differs from Claude Code's. Notably:
 
 | Hook | Input field of interest | Output channel for context injection |
 |------|------------------------|--------------------------------------|
+| `SessionStart`   | `source` (`startup`/`resume`/`clear`), `session_id` | `hookSpecificOutput.additionalContext` |
 | `UserPromptSubmit` | `prompt`                                    | `hookSpecificOutput.additionalContext` |
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 
-> Note: this plugin no longer registers `SessionStart`. Codex fires it on short reconnects too, and the MCP runtime install belongs in `start-memory-server.mjs` (lazy on first MCP call), not in a per-reconnect hook.
+> Note: this plugin only acts on `SessionStart` when `source=clear`. The other sources (`startup` / `resume`) are no-ops because codex re-fires them on short reconnects.
 
 Unlike Claude Code, **Codex does not support `decision: "approve"`**; only `decision: "block"`. A no-op is `{}` (which is what these scripts emit when there's nothing to add).
 

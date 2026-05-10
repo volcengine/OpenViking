@@ -11,12 +11,10 @@
  *      session and remember it in state. Do NOT commit per turn.
  *   2. Read transcript_path, parse JSONL rollout, append every new
  *      user/assistant turn since last capture via add_message.
- *   3. Idle sweep: any OTHER codex session whose state file is older than
- *      IDLE_TTL gets committed and cleared. This is a best-effort
- *      session-end signal because codex has no SessionEnd hook today.
  *
- * The PreCompact hook is the deterministic commit path; this idle sweep
- * is the catch-all for graceful exits.
+ * Commit happens in two other places, never here:
+ *   - PreCompact hook (deterministic, before context compaction)
+ *   - SessionStart hook with source=clear (when user runs /clear)
  *
  * Stop output schema accepts {} as a no-op.
  */
@@ -24,12 +22,10 @@
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { clearState, listStates, loadState, saveState } from "./session-state.mjs";
+import { loadState, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
-
-const IDLE_TTL_MS = Math.max(60_000, Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS) || 30 * 60_000);
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -177,43 +173,6 @@ function countExtracted(commit) {
 }
 
 // ---------------------------------------------------------------------------
-// Idle sweep — best-effort session-end commit (codex has no SessionEnd hook)
-// ---------------------------------------------------------------------------
-
-async function sweepIdleSessions(currentSessionId) {
-  const states = await listStates();
-  const now = Date.now();
-  let sweptCount = 0;
-  let sweptExtracted = 0;
-
-  for (const s of states) {
-    if (!s?.codexSessionId || s.codexSessionId === currentSessionId) continue;
-    const idleMs = now - (typeof s.lastUpdatedAt === "number" ? s.lastUpdatedAt : 0);
-    if (idleMs < IDLE_TTL_MS) continue;
-
-    if (s.ovSessionId) {
-      const commit = await commitOvSession(s.ovSessionId);
-      const extracted = countExtracted(commit);
-      log("idle_sweep_commit", {
-        codexSessionId: s.codexSessionId,
-        ovSessionId: s.ovSessionId,
-        idleMs,
-        extracted,
-      });
-      sweptExtracted += extracted;
-    } else {
-      log("idle_sweep_clear", { codexSessionId: s.codexSessionId, idleMs });
-    }
-    await clearState(s.codexSessionId);
-    sweptCount += 1;
-  }
-
-  if (sweptCount > 0) {
-    log("idle_sweep_done", { sweptCount, sweptExtracted });
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -270,7 +229,6 @@ async function main() {
   }
 
   await saveState(state);
-  await sweepIdleSessions(sessionId);
 
   if (added > 0) {
     noop(`appended ${added} turn(s) to OpenViking session ${state.ovSessionId}`);

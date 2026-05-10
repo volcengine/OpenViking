@@ -122,35 +122,38 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 Expect: `appended 2 turn(s) to OpenViking session <NEW_UUID>` — different
 from step 4's UUID.
 
-## 6. Idle-sweep — graceful-exit commit
+## 6. SessionStart(source=clear) — orphan commit on `/clear`
 
-The sweep only commits sessions whose state file is older than the idle TTL
-(default 30 min). For verification we shorten the TTL to 1 second:
+`/clear` orphans the previous session and starts a new one. The
+SessionStart hook commits any state files whose codexSessionId differs
+from the new one.
 
 ```bash
-# Backdate the verify-sess state to force-stale it
-python3 -c "
-import json, sys
-p = '$STATE_DIR/state/verify-sess.json'
-s = json.load(open(p))
-s['lastUpdatedAt'] = 1
-open(p, 'w').write(json.dumps(s))
-"
-
-# Run a Stop for a brand-new session_id; idle-sweep at the tail commits the stale one
-echo '{"session_id":"sweep-trigger","transcript_path":"/tmp/empty-nonexistent.jsonl"}' \
-  | OPENVIKING_CODEX_IDLE_TTL_MS=60000 \
-    OPENVIKING_CONFIG_FILE=$OV_CONF \
+# Simulate /clear: the new SessionStart payload carries a brand-new session_id
+echo '{"session_id":"clear-after-verify","source":"clear","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/auto-capture.mjs
-
-ls $STATE_DIR/state/
-# verify-sess.json is gone; only sweep-trigger.json remains
+    node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-OV side: the post-compact `<NEW_UUID>` from step 5 is now archived (its
-`messages.jsonl` is size 0; `history/archive_001/` exists).
+Expect: `/clear: committed N prior OpenViking session(s), …`. After this
+the state dir contains nothing except (optionally) the just-cleared
+session's fresh state. OV side: the post-compact `<NEW_UUID>` from step
+5 is now archived (`messages.jsonl` size 0, `history/archive_001/`
+exists).
+
+Verify the negative path too — `source=startup` and `source=resume` MUST
+be no-ops:
+
+```bash
+echo '{"session_id":"x","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/session-start-commit.mjs
+# Expect: {} (no commit; short reconnects fire startup/resume too)
+```
 
 ## 7. Memory extraction landed in user namespace
 
