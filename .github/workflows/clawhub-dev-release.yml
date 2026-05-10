@@ -343,6 +343,7 @@ jobs:
           clawhub package publish "$SOURCE_URL" \
             --site https://clawhub.ai \
             --registry https://clawhub.ai \
+            --family code-plugin \
             --version "$VERSION" \
             --tags "$TAGS" \
             --source-repo "$SOURCE_REPO" \
@@ -377,6 +378,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install npm CLI with trusted publishing support
+        run: |
+          set -euo pipefail
+          npm_cli_version="11.14.1"
+          curl -fsSL "https://registry.npmjs.org/npm/-/npm-${npm_cli_version}.tgz" -o "$RUNNER_TEMP/npm.tgz"
+          mkdir -p "$RUNNER_TEMP/npm-cli"
+          tar -xzf "$RUNNER_TEMP/npm.tgz" -C "$RUNNER_TEMP/npm-cli" --strip-components=1
+          echo "NPM_CLI=$RUNNER_TEMP/npm-cli/bin/npm-cli.js" >> "$GITHUB_ENV"
+          node "$RUNNER_TEMP/npm-cli/bin/npm-cli.js" --version
+
       - name: Download npm package tarball
         uses: actions/download-artifact@v4
         with:
@@ -409,4 +420,4 @@ jobs:
             echo "Publishing with npm trusted publishing (GitHub OIDC)."
           fi
 
-          npm publish "$tarball" --access public --tag "$NPM_TAG" --provenance --registry https://registry.npmjs.org
+          node "$NPM_CLI" publish "$tarball" --access public --tag "$NPM_TAG" --provenance --registry https://registry.npmjs.org
