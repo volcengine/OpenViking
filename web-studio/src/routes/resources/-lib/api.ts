@@ -1,4 +1,4 @@
-import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postSearchFind } from '#/lib/ov-client'
+import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postContentWrite, postSearchFind } from '#/lib/ov-client'
 
 import { fileNameFromUri, formatModTime, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
 import type {
@@ -136,6 +136,23 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       modTimestamp: null,
       abstract: '',
     }
+  }
+}
+
+export async function saveFileContent(uri: string, content: string): Promise<void> {
+  try {
+    await getOvResult(
+      postContentWrite({
+        body: {
+          uri,
+          content,
+          mode: 'overwrite',
+          wait: true,
+        },
+      }),
+    )
+  } catch (error) {
+    throw toVikingApiError(error)
   }
 }
 
