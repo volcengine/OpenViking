@@ -119,19 +119,8 @@ function RequestLogsRoute() {
     : undefined
 
   return (
-    <div className='mx-auto flex w-full max-w-7xl flex-col gap-5'>
-      <div className='flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between'>
-        <div className='space-y-2'>
-          <div className='flex items-center gap-2 text-sm font-medium text-muted-foreground'>
-            <ActivityIcon className='size-4' />
-            <span>{t('eyebrow')}</span>
-          </div>
-          <div>
-            <h1 className='text-2xl font-semibold tracking-tight md:text-3xl'>{t('title')}</h1>
-            <p className='mt-2 max-w-2xl text-sm text-muted-foreground'>{t('description')}</p>
-          </div>
-        </div>
-
+    <div className='flex w-full min-w-0 flex-col gap-5'>
+      <div className='flex justify-end'>
         <Button variant='outline' onClick={clearRequestLogs} disabled={logs.length === 0}>
           <EraserIcon />
           {t('clear')}
