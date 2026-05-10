@@ -1,4 +1,4 @@
-# Verification SOP — codex plugin (v0.3.0)
+# Verification SOP — codex plugin (v0.4.0)
 
 End-to-end smoke test against a live OpenViking server. Run this whenever the
 hook scripts change. Takes ~3 minutes; the only async wait is OV's memory
@@ -122,37 +122,99 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 Expect: `appended 2 turn(s) to OpenViking session <NEW_UUID>` — different
 from step 4's UUID.
 
-## 6. SessionStart(source=clear) — orphan commit on `/clear`
+## 6. SessionStart — active-window heuristic + idle-TTL sweep
 
-`/clear` orphans the previous session and starts a new one. The
-SessionStart hook commits any state files whose codexSessionId differs
-from the new one.
+`source=startup` and `source=clear` both run the same logic
+(matcher = `clear|startup`). `source=resume` is the only hard no-op.
+See `DESIGN.md` §3 + §5 for the full decision tree.
+
+### 6a. `1 active` → commit
+
+After step 5, the `verify-sess` state file is fresh (touched within the
+last 2 min) and is the only state file other than the new session_id.
+Heuristic should commit it.
 
 ```bash
-# Simulate /clear: the new SessionStart payload carries a brand-new session_id
-echo '{"session_id":"clear-after-verify","source":"clear","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `/clear: committed N prior OpenViking session(s), …`. After this
-the state dir contains nothing except (optionally) the just-cleared
-session's fresh state. OV side: the post-compact `<NEW_UUID>` from step
-5 is now archived (`messages.jsonl` size 0, `history/archive_001/`
-exists).
+Expect: `SessionStart(startup): committed 1 OpenViking session(s) (heuristic=1, idle=0), N memory item(s) extracted`.
+After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
-Verify the negative path too — `source=startup` and `source=resume` MUST
-be no-ops:
+### 6b. `0 active` → no-op
 
 ```bash
-echo '{"session_id":"x","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+# State dir empty (after 6a). Fire SessionStart-startup again.
+echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
-# Expect: {} (no commit; short reconnects fire startup/resume too)
+# Expect: {} (no orphan to commit)
+```
+
+### 6c. `≥2 active` → skip; rely on idle TTL
+
+```bash
+# Manufacture two fresh state files for different session_ids (no ovSessionId
+# so no real commit needed, just exercise the skip-path log).
+NOW=$(node -e 'console.log(Date.now())')
+mkdir -p "$STATE_DIR/state"
+cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
+{"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
+EOF
+cat > "$STATE_DIR/state/sess-bbb.json" <<EOF
+{"codexSessionId":"sess-bbb","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
+EOF
+
+OPENVIKING_DEBUG=1 \
+echo '{"session_id":"sess-ccc","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    OPENVIKING_DEBUG=1 \
+    node $PLUGIN/scripts/session-start-commit.mjs
+```
+
+Expect: `{}` on stdout. In `~/.openviking/logs/codex-hooks.log` look for
+`"branch":">=2_active","action":"skip; rely on idle TTL"`. The two state
+files are still present — the skip path does not clear them.
+
+### 6d. Idle-TTL sweep at the tail
+
+```bash
+# Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
+OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
+cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
+{"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$OLD,"lastUpdatedAt":$OLD}
+EOF
+
+echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/session-start-commit.mjs
+```
+
+Expect: log shows `idle_sweep` for `sess-aaa` (committed and cleared).
+`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is gone.
+If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
+just `sess-bbb` (1 active) and commits it — that's expected and shows the
+heuristic + sweep working together.
+
+### 6e. `source=resume` → hard no-op (no commit, no sweep)
+
+```bash
+echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/session-start-commit.mjs
+# Expect: {} — resume neither commits nor sweeps; short reconnects fire resume too.
 ```
 
 ## 7. Memory extraction landed in user namespace

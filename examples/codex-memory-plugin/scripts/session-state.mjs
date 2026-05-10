@@ -9,7 +9,7 @@
  * State directory: $OPENVIKING_CODEX_STATE_DIR or ~/.openviking/codex-plugin-state
  */
 
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -52,7 +52,12 @@ export async function saveState(state) {
   if (!state || !state.codexSessionId) return;
   await mkdir(getStateDir(), { recursive: true });
   const next = { ...state, lastUpdatedAt: Date.now() };
-  await writeFile(statePath(state.codexSessionId), JSON.stringify(next));
+  // Atomic write (tmpfile + rename) so a crash mid-write can't leave a
+  // truncated/corrupt state file. See DESIGN.md "State file schema".
+  const final = statePath(state.codexSessionId);
+  const tmp = `${final}.tmp`;
+  await writeFile(tmp, JSON.stringify(next));
+  await rename(tmp, final);
 }
 
 export async function clearState(codexSessionId) {
@@ -67,6 +72,8 @@ export async function listStates() {
     const files = await readdir(dir);
     const out = [];
     for (const file of files) {
+      // .json only — atomic writes briefly create `<id>.json.tmp`, skipped
+      // by this check (endsWith(".json") is false for ".json.tmp").
       if (!file.endsWith(".json")) continue;
       try {
         const raw = await readFile(join(dir, file), "utf-8");

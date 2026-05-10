@@ -1,7 +1,7 @@
 {
   "name": "openviking-memory",
-  "version": "0.3.1",
-  "description": "Long-term semantic memory for Codex, powered by OpenViking. Recall on UserPromptSubmit, incremental add_message on Stop (per turn), commit on PreCompact, and commit on SessionStart with source=clear (when /clear orphans the prior session).",
+  "version": "0.4.0",
+  "description": "Long-term semantic memory for Codex, powered by OpenViking. Recall on UserPromptSubmit, incremental add_message on Stop (per turn), commit on PreCompact, and active-window heuristic + idle-TTL sweep on SessionStart (source=startup|clear).",
   "author": {
     "name": "OpenViking",
     "url": "https://github.com/volcengine/OpenViking"

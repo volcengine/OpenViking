@@ -14,9 +14,14 @@
  *
  * Commit happens in two other places, never here:
  *   - PreCompact hook (deterministic, before context compaction)
- *   - SessionStart hook with source=clear (when user runs /clear)
+ *   - SessionStart hook (active-window heuristic + idle-TTL sweep at tail)
  *
  * Stop output schema accepts {} as a no-op.
+ *
+ * Note: we deliberately do NOT run an idle-TTL sweep here. State-write-on-
+ * every-turn already gives us the freshness signal we need; running the
+ * sweep once per session start (in session-start-commit.mjs) is the right
+ * cadence. See DESIGN.md §5 ("Sweep trigger").
  */
 
 import { readFile } from "node:fs/promises";
@@ -207,6 +212,20 @@ async function main() {
 
   const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
+
+  // Post-compact transcript-shrink defense: codex's /compact may rewrite or
+  // truncate transcript_path. If allTurns has fewer entries than we cached,
+  // our slice math would underflow and silently drop turns. Reset the
+  // counter so the next slice captures everything in the new transcript.
+  // See DESIGN.md "Post-compact transcript shrink".
+  if (allTurns.length < state.capturedTurnCount) {
+    log("transcript_shrink_detected", {
+      cached: state.capturedTurnCount,
+      observed: allTurns.length,
+    });
+    state.capturedTurnCount = 0;
+  }
+
   const newTurns = allTurns.slice(state.capturedTurnCount);
 
   log("transcript_parse", {
@@ -229,6 +248,8 @@ async function main() {
   }
 
   await saveState(state);
+
+  // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
 
   if (added > 0) {
     noop(`appended ${added} turn(s) to OpenViking session ${state.ovSessionId}`);

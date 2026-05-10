@@ -3,17 +3,31 @@
 /**
  * SessionStart hook for Codex.
  *
- * The ONLY action this script takes is on `source === "clear"`:
- *   /clear in Codex creates a new session (with the new session_id in this
- *   payload) and orphans the previous in-memory transcript. We treat that
- *   as a deterministic "context is about to disappear" signal and commit
- *   any pending OpenViking sessions for *other* codex session_ids.
+ * Triggers (matcher = "clear|startup" in hooks.json):
+ *   - source=startup → fresh codex CLI / `/new` / zouk daemon spawn-without-sessionId
+ *   - source=clear   → `/clear` (orphans the current process's previous session)
+ *   - source=resume  → `/resume` or short reconnect (HARD no-op for commit)
  *
- * For `source === "startup"` and `source === "resume"`, this hook is a
- * no-op. Codex re-fires SessionStart on short reconnects and resume, and
- * we don't want to commit during a still-active session.
+ * Behavior (see DESIGN.md §3 — "SessionStart source=startup, heuristic"):
+ *   On `startup` or `clear`, run the active-window heuristic over state files
+ *   excluding the new session_id:
+ *     - 0 recently-active     → no-op
+ *     - 1 recently-active     → commit it (the just-ended session)
+ *     - ≥2 recently-active    → skip; rely on idle TTL
+ *   "Recently-active" means lastUpdatedAt within ACTIVE_WINDOW_MS (default 2 min).
  *
- * SessionStart output schema accepts {} as a no-op.
+ *   At the tail (regardless of which branch above ran), run an idle-TTL sweep:
+ *   any state file (including the new session_id, but in practice it's just
+ *   been created and is fresh) older than IDLE_TTL_MS (default 30 min) gets
+ *   committed and cleared. This catches SIGTERM/Ctrl+C/`/exit` exits and
+ *   crashes that left state files orphaned.
+ *
+ * Commit failure handling:
+ *   On any /commit failure (OV unreachable, non-2xx, timeout) we DO NOT call
+ *   clearState — we keep the state file with ovSessionId still set so the
+ *   next sweep retries. A transient OV outage shouldn't lose memory.
+ *
+ * Output schema accepts {} as a no-op.
  */
 
 import { loadConfig } from "./config.mjs";
@@ -22,6 +36,16 @@ import { clearState, listStates } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
+
+const ACTIVE_WINDOW_MS = (() => {
+  const v = Number(process.env.OPENVIKING_CODEX_ACTIVE_WINDOW_MS);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 120_000;
+})();
+
+const IDLE_TTL_MS = (() => {
+  const v = Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1_800_000;
+})();
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -72,6 +96,43 @@ async function commitOvSession(ovSessionId) {
   );
 }
 
+/**
+ * Commit and clear a single state file. On commit failure, preserve state
+ * (don't call clearState) so the next sweep retries.
+ *
+ * Returns { committed: bool, extracted: number }.
+ */
+async function commitAndClear(state, reason) {
+  if (state.ovSessionId) {
+    const commit = await commitOvSession(state.ovSessionId);
+    if (!commit) {
+      logError("commit_failed_keep_state", {
+        reason,
+        codexSessionId: state.codexSessionId,
+        ovSessionId: state.ovSessionId,
+      });
+      return { committed: false, extracted: 0 };
+    }
+    const extracted = countExtracted(commit);
+    log("commit", {
+      reason,
+      codexSessionId: state.codexSessionId,
+      ovSessionId: state.ovSessionId,
+      extracted,
+      archived: commit.archived ?? false,
+      taskId: commit.task_id,
+      status: commit.status,
+    });
+    await clearState(state.codexSessionId);
+    return { committed: true, extracted };
+  }
+  // No OV session attached — nothing to commit on the server, but the local
+  // state file is still stale and should be removed.
+  log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
+  await clearState(state.codexSessionId);
+  return { committed: true, extracted: 0 };
+}
+
 async function main() {
   let input;
   try {
@@ -86,50 +147,111 @@ async function main() {
 
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
-  log("start", { source, newSessionId });
+  log("start", { source, newSessionId, activeWindowMs: ACTIVE_WINDOW_MS, idleTtlMs: IDLE_TTL_MS });
 
-  if (source !== "clear") {
-    log("skip", { stage: "source_check", reason: `source=${source} (only 'clear' triggers commit)` });
+  // resume is a hard no-op — we don't even sweep, because resume re-fires on
+  // short reconnects and we'd otherwise sweep on every reconnect blip.
+  if (source !== "startup" && source !== "clear") {
+    log("skip", { stage: "source_check", reason: `source=${source} (only startup|clear act)` });
     noop();
     return;
   }
 
   const health = await fetchJSON("/health");
   if (!health) {
-    logError("health_check", "server unreachable; cannot commit");
+    logError("health_check", "server unreachable; skipping commit + sweep");
     noop();
     return;
   }
 
+  const now = Date.now();
   const states = await listStates();
-  let committedCount = 0;
-  let totalExtracted = 0;
 
-  for (const s of states) {
-    if (!s?.codexSessionId || s.codexSessionId === newSessionId) continue;
-    if (s.ovSessionId) {
-      const commit = await commitOvSession(s.ovSessionId);
-      const extracted = countExtracted(commit);
-      log("commit_orphan", {
-        codexSessionId: s.codexSessionId,
-        ovSessionId: s.ovSessionId,
-        extracted,
-      });
-      totalExtracted += extracted;
-    } else {
-      log("clear_orphan_no_ov", { codexSessionId: s.codexSessionId });
+  // -------------------------------------------------------------------------
+  // Active-window heuristic (DESIGN.md §3)
+  // -------------------------------------------------------------------------
+  const otherStates = states.filter(
+    (s) => s?.codexSessionId && s.codexSessionId !== newSessionId,
+  );
+
+  const recentlyActive = otherStates.filter(
+    (s) => typeof s.lastUpdatedAt === "number"
+      && (now - s.lastUpdatedAt) <= ACTIVE_WINDOW_MS,
+  );
+
+  let heuristicCommitted = 0;
+  let heuristicExtracted = 0;
+  const skippedSessionIds = new Set();
+
+  if (recentlyActive.length === 0) {
+    log("heuristic", { branch: "0_active", action: "noop", otherStates: otherStates.length });
+  } else if (recentlyActive.length === 1) {
+    const target = recentlyActive[0];
+    log("heuristic", {
+      branch: "1_active",
+      action: "commit",
+      codexSessionId: target.codexSessionId,
+      ovSessionId: target.ovSessionId,
+    });
+    const r = await commitAndClear(target, "heuristic_1_active");
+    if (r.committed) {
+      heuristicCommitted += 1;
+      heuristicExtracted += r.extracted;
     }
-    await clearState(s.codexSessionId);
-    committedCount += 1;
+  } else {
+    log("heuristic", {
+      branch: ">=2_active",
+      action: "skip; rely on idle TTL",
+      activeCount: recentlyActive.length,
+      activeIds: recentlyActive.map((s) => s.codexSessionId),
+    });
+    for (const s of recentlyActive) skippedSessionIds.add(s.codexSessionId);
   }
 
-  if (committedCount > 0) {
-    log("done", { committedCount, totalExtracted });
+  // -------------------------------------------------------------------------
+  // Idle TTL sweep (tail) — applies to ALL state files including ones we just
+  // skipped above (≥2 active path). We re-list because the heuristic branch
+  // may have removed entries.
+  // -------------------------------------------------------------------------
+  const postHeuristic = await listStates();
+  let idleCommitted = 0;
+  let idleExtracted = 0;
+
+  for (const s of postHeuristic) {
+    if (!s?.codexSessionId) continue;
+    if (typeof s.lastUpdatedAt !== "number") continue;
+    if ((now - s.lastUpdatedAt) <= IDLE_TTL_MS) continue;
+    log("idle_sweep", {
+      codexSessionId: s.codexSessionId,
+      ovSessionId: s.ovSessionId,
+      ageMs: now - s.lastUpdatedAt,
+    });
+    const r = await commitAndClear(s, "idle_ttl");
+    if (r.committed) {
+      idleCommitted += 1;
+      idleExtracted += r.extracted;
+    }
+  }
+
+  const totalCommitted = heuristicCommitted + idleCommitted;
+  const totalExtracted = heuristicExtracted + idleExtracted;
+
+  log("done", {
+    source,
+    heuristicCommitted,
+    idleCommitted,
+    totalCommitted,
+    totalExtracted,
+    skipped: [...skippedSessionIds],
+  });
+
+  if (totalCommitted > 0) {
     noop(
-      `/clear: committed ${committedCount} prior OpenViking session(s), ${totalExtracted} memory item(s) extracted`,
+      `SessionStart(${source}): committed ${totalCommitted} OpenViking session(s) (` +
+        `heuristic=${heuristicCommitted}, idle=${idleCommitted}), ` +
+        `${totalExtracted} memory item(s) extracted`,
     );
   } else {
-    log("done", { committedCount: 0, totalExtracted: 0 });
     noop();
   }
 }

@@ -226,13 +226,25 @@ async function main() {
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
   );
+
+  // Commit failure handling (see DESIGN.md "Commit failure"): if /commit
+  // fails (server unreachable, non-2xx, timeout) we MUST NOT reset
+  // ovSessionId — keep state intact so the next sweep / SessionStart can
+  // retry. A transient OV outage shouldn't lose a session's memory.
+  if (!commit) {
+    logError("commit_failed_keep_state", { ovSessionId });
+    await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
+    noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
+    return;
+  }
+
   const extracted = countExtracted(commit);
   log("commit", {
     ovSessionId,
     extracted,
-    archived: commit?.archived ?? false,
-    taskId: commit?.task_id,
-    status: commit?.status,
+    archived: commit.archived ?? false,
+    taskId: commit.task_id,
+    status: commit.status,
   });
 
   // Reset OV session for the post-compact half. Keep capturedTurnCount so
@@ -241,9 +253,7 @@ async function main() {
   await saveState(state);
 
   noop(
-    commit
-      ? `pre-compact commit: ${ovSessionId} → ${extracted} memory item(s) extracted${commit.archived ? " (archived)" : ""}`
-      : `pre-compact commit attempted on ${ovSessionId}; result unavailable`,
+    `pre-compact commit: ${ovSessionId} → ${extracted} memory item(s) extracted${commit.archived ? " (archived)" : ""}`,
   );
 }
 

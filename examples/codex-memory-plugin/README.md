@@ -7,7 +7,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
-- **Commit on `SessionStart` with `source=clear`**: when the user runs `/clear`, the previous OpenViking session is committed before Codex orphans it. `source=startup` and `source=resume` are no-ops (short reconnects re-fire SessionStart and we don't want to commit a still-active session).
+- **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` is a hard no-op (short reconnects re-fire `resume` and we don't want to commit a still-active session). See `DESIGN.md` for the full decision tree.
 - **MCP runtime bootstrap is lazy**: the MCP launcher (`start-memory-server.mjs`) installs runtime deps on first MCP invocation, not in a hook.
 
 It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `openviking_forget`, `openviking_health`) for manual use.
@@ -20,14 +20,14 @@ It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `op
    └──┬─────────────────┬────────────────┬───────────────────┬────┘
       │                 │                │                   │
  SessionStart      UserPromptSubmit    Stop              PreCompact
- (source=clear)         │              (per turn)            │
+ (startup|clear)        │              (per turn)            │
       │                 │                │                   │
  ┌────▼──────────┐ ┌────▼──────┐ ┌──────▼──────┐ ┌──────────▼──────┐
  │ session-start │ │ auto-     │ │ auto-       │ │ pre-compact-    │
  │ -commit.mjs   │ │ recall.mjs│ │ capture.mjs │ │ capture.mjs     │
- │ (commit prior │ │ (search)  │ │ (append +   │ │ (commit + reset │
- │ orphan only   │ │           │ │ no commit)  │ │ ovSessionId)    │
- │ on /clear)    │ │           │ │             │ │                 │
+ │ (active-win   │ │ (search)  │ │ (append +   │ │ (commit + reset │
+ │ heuristic +   │ │           │ │ no commit)  │ │ ovSessionId)    │
+ │ idle TTL)     │ │           │ │             │ │                 │
  └────┬──────────┘ └────┬──────┘ └──────┬──────┘ └──────────┬──────┘
       │                 │                │                   │
       │             ┌───▼────────────────▼───────────────────▼──┐
@@ -51,13 +51,25 @@ It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `op
 
 ## How It Works
 
-### Why the SessionStart hook is `source=clear`-only
+> See [`DESIGN.md`](./DESIGN.md) for the commit decision tree — it's the source of truth for *which* OpenViking session is sealed by *which* hook event.
 
-Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process or `/new`), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is being orphaned to a new session_id). Only `source=clear` is a deterministic "context is about to disappear for a previous session" signal. `startup` and `resume` are also fired on short reconnects, so committing on those would corrupt still-active sessions.
+### SessionStart commit logic (source=startup|clear, heuristic + idle TTL)
 
-We pin this in two layers: `hooks.json` registers `SessionStart` with `matcher: "clear"` so codex's dispatcher only invokes the script on `source=clear` (the matcher is matched against the SessionStart `source` field — see [`codex-rs/hooks/src/events/session_start.rs`](https://github.com/openai/codex/blob/main/codex-rs/hooks/src/events/session_start.rs)). And `session-start-commit.mjs` itself also early-returns on any other source as defense-in-depth.
+Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process / `/new` / zouk daemon spawn-without-sessionId), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is orphaned and a new session_id is created). `resume` is the *only* source we treat as a hard no-op; on `startup` and `clear` we run the same active-window heuristic.
 
-On `clear`, the script commits any state file whose `codexSessionId` differs from the new session_id (those state files are orphaned by `/clear`). MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
+`hooks.json` registers `SessionStart` with `matcher: "clear|startup"` so codex's dispatcher invokes the script on both sources (the matcher is matched against the SessionStart `source` field — see [`codex-rs/hooks/src/events/session_start.rs`](https://github.com/openai/codex/blob/main/codex-rs/hooks/src/events/session_start.rs)). `session-start-commit.mjs` gates internally on `source ∈ {startup, clear}` as defense-in-depth.
+
+On `startup` or `clear`, the script:
+
+1. Counts state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
+   - **0 active** → no-op (no orphan to commit)
+   - **1 active** → commit it (the just-ended session)
+   - **≥2 active** → skip; rely on idle TTL (we can't tell which one ended)
+2. **Idle-TTL sweep at the tail**: any state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared. This catches `SIGTERM` / Ctrl+C / `/exit` exits and crashes that left state files orphaned. The sweep runs *only* at SessionStart — the Stop hook deliberately does not sweep, because state-write-on-every-turn already gives us the freshness signal.
+
+On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry. A transient OV outage shouldn't lose memory.
+
+MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
 
 ### Auto-recall (every UserPromptSubmit)
 
@@ -85,9 +97,14 @@ We do **not** call `/commit` per turn — committing extracts memories, and per-
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
-Codex fires no hook on process exit. `/compact` (PreCompact) and `/clear` (SessionStart with `source=clear`) are the only deterministic "context disappearing" signals. If you `/exit` (or Ctrl+C, or kill the process) without first running `/compact`, the OpenViking session for that codex session_id stays open with messages but never has memories extracted. It will, however, be committed the next time you run `/clear` from any codex session on the same machine — which sweeps all orphaned state files.
+Codex fires no hook on process exit. `/compact` (PreCompact) is the only fully-deterministic "context disappearing" signal. If you `/exit` (or Ctrl+C, or kill the process) without first running `/compact`, the OpenViking session for that codex session_id stays open with messages but never has memories extracted in that moment.
 
-If you care about preserving memory from a particular session before exiting: run `/compact` first, or have the model call the `openviking_store` MCP tool with the conclusions you want kept. (We considered an idle-timer-based commit on `Stop` but it produces false-commits for sessions that are merely paused, so this plugin does not include one.)
+Two fallbacks recover the orphan:
+
+1. **Idle-TTL sweep**: the next `SessionStart` (source=startup|clear) on the same machine commits any state file older than 30 min (`OPENVIKING_CODEX_IDLE_TTL_MS`). So as long as you start another codex session within ~30 min, the orphan is reclaimed.
+2. **Active-window heuristic**: if you run `/new` or `/clear` shortly after the orphaned session was last touched, the heuristic catches it as the unique "recently-active" state and commits it deterministically.
+
+The remaining limitation: if you never start another codex on this machine, no sweep runs and the OV session stays open server-side. If you care about preserving memory from a particular session before exiting, run `/compact` first or call `openviking_store` with the conclusions you want kept.
 
 ### MCP tools (explicit, on demand)
 
@@ -104,7 +121,7 @@ Codex's hook output schema differs from Claude Code's. Notably:
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 
-> Note: this plugin only acts on `SessionStart` when `source=clear`. The other sources (`startup` / `resume`) are no-ops because codex re-fires them on short reconnects.
+> Note: this plugin acts on `SessionStart` when `source=startup` or `source=clear` (matcher `clear|startup`). `source=resume` is a no-op because codex re-fires it on short reconnects.
 
 Unlike Claude Code, **Codex does not support `decision: "approve"`**; only `decision: "block"`. A no-op is `{}` (which is what these scripts emit when there's nothing to add).
 
@@ -283,6 +300,9 @@ Connection settings (URL, account, user, api_key) come from `ovcli.conf` plus st
 - `OPENVIKING_ACCOUNT`: override account
 - `OPENVIKING_USER`: override user
 - `OPENVIKING_AGENT_ID`: override agent identity
+- `OPENVIKING_CODEX_STATE_DIR`: state file directory (default `~/.openviking/codex-plugin-state`)
+- `OPENVIKING_CODEX_ACTIVE_WINDOW_MS`: SessionStart active-window threshold in ms (default `120000` = 2 min)
+- `OPENVIKING_CODEX_IDLE_TTL_MS`: SessionStart idle-TTL sweep threshold in ms (default `1800000` = 30 min)
 
 ## Hook timeouts
 
