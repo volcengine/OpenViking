@@ -6,6 +6,7 @@ SERVER_HEALTH_URL="${SERVER_URL}/health"
 SERVER_READY_URL="${SERVER_URL}/ready"
 CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
+CONSOLE_PARAMETERS="${OPENVIKING_CONSOLE_PARAMETERS:-""}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
 HEALTH_MAX_ATTEMPTS="${OPENVIKING_HEALTH_MAX_ATTEMPTS:-120}"
 READY_MAX_ATTEMPTS="${OPENVIKING_READY_MAX_ATTEMPTS:-300}"
@@ -154,10 +155,15 @@ until curl -fsS "${SERVER_READY_URL}" 2>/dev/null | grep -q '"status":"ready"'; 
 done
 echo "[openviking-console-entrypoint] openviking-server is ready"
 
+if [ -n "${CONSOLE_PARAMETERS}" ]; then
+    echo "[openviking-console-entrypoint] Starting console with extra parameter: ${CONSOLE_PARAMETERS}"
+fi
+
 python -m openviking.console.bootstrap \
     --host "${CONSOLE_HOST}" \
     --port "${CONSOLE_PORT}" \
-    --openviking-url "${SERVER_URL}" &
+    --openviking-url "${SERVER_URL}" \
+    ${CONSOLE_PARAMETERS} &
 CONSOLE_PID=$!
 
 while kill -0 "${SERVER_PID}" 2>/dev/null && kill -0 "${CONSOLE_PID}" 2>/dev/null; do
