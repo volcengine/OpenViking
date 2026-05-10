@@ -299,7 +299,7 @@ jobs:
           node-version: 22
 
       - name: Install ClawHub CLI
-        run: npm install -g openclaw@latest
+        run: npm install -g clawhub@latest
 
       - name: Write ClawHub token config
         env:
@@ -376,9 +376,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Use npm with trusted publishing support
-        run: npm install -g npm@latest
 
       - name: Download npm package tarball
         uses: actions/download-artifact@v4
