@@ -115,9 +115,7 @@ function RetrievalPage() {
   }, [])
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
-      <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">{t('title')}</h1>
-
+    <div className="flex w-full min-w-0 flex-col gap-5">
       {/* Search input */}
       <div className="flex items-center gap-2 rounded-lg border bg-card px-4 py-3">
         <input

@@ -40,7 +40,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
+  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
@@ -194,7 +194,10 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
   const deleteSession = useDeleteSession()
 
   const activeSessionId = useRouterState({
-    select: (s) => (s.location.search as Record<string, string>)?.s ?? null,
+    select: (s) => {
+      const search = s.location.search as { s?: string }
+      return search.s ?? null
+    },
   })
 
   React.useEffect(() => {
@@ -310,9 +313,17 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       className='flex h-svh overflow-hidden bg-sidebar'
     >
       <Sidebar variant='sidebar' collapsible='icon' className='!border-r-0'>
+        <SidebarHeader className='border-b border-sidebar-border/70 p-2'>
+          <div className='flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center'>
+            <span className='truncate px-2 text-base font-semibold group-data-[collapsible=icon]:hidden'>
+              {t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}
+            </span>
+            <SidebarTrigger className='hidden shrink-0 md:inline-flex' />
+          </div>
+        </SidebarHeader>
+
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel className='text-base justify-center'>{t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {NAV_ITEMS.map((item) => {
@@ -395,11 +406,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className='min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0'>
-        <header className='flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-background pl-2 pr-4 backdrop-blur-md md:pr-6'>
-          <div className='flex min-w-0 items-center gap-4'>
-            <SidebarTrigger className='shrink-0' />
-          </div>
-
+        <header className='flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6'>
+          <SidebarTrigger className='mr-auto shrink-0 md:hidden' />
           <div className='flex items-center gap-1'>
             <Badge variant={serverModeBadge.variant} className='mr-1'>
               {t(serverModeBadge.labelKey, { ns: 'common' })}
