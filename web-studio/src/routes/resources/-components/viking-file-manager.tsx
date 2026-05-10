@@ -384,9 +384,11 @@ export function VikingFileManager({
               <div className="min-h-0 flex-1">
                 <FileTree
                   currentUri={currentUri}
+                  selectedFileUri={selectedFile?.uri ?? null}
                   expandedKeys={expandedKeys}
                   onExpandedKeysChange={setExpandedKeys}
                   onSelectDirectory={updateUri}
+                  onSelectFile={setSelectedFile}
                 />
               </div>
             </section>
