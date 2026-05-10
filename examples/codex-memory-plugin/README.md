@@ -55,7 +55,9 @@ It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `op
 
 Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process or `/new`), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is being orphaned to a new session_id). Only `source=clear` is a deterministic "context is about to disappear for a previous session" signal. `startup` and `resume` are also fired on short reconnects, so committing on those would corrupt still-active sessions.
 
-`session-start-commit.mjs` therefore exits early on every source except `clear`. On `clear`, it commits any state file whose `codexSessionId` differs from the new session_id (those state files are orphaned by `/clear`). MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
+We pin this in two layers: `hooks.json` registers `SessionStart` with `matcher: "clear"` so codex's dispatcher only invokes the script on `source=clear` (the matcher is matched against the SessionStart `source` field — see [`codex-rs/hooks/src/events/session_start.rs`](https://github.com/openai/codex/blob/main/codex-rs/hooks/src/events/session_start.rs)). And `session-start-commit.mjs` itself also early-returns on any other source as defense-in-depth.
+
+On `clear`, the script commits any state file whose `codexSessionId` differs from the new session_id (those state files are orphaned by `/clear`). MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
 
 ### Auto-recall (every UserPromptSubmit)
 
