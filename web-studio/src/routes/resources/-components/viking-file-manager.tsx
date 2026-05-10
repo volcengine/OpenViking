@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 
-import { Alert, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -146,8 +146,8 @@ export function VikingFileManager({
   })
   const { invalidateList } = useInvalidateVikingFs()
   const completedTaskIdsRef = useRef<Set<string>>(new Set())
-  const [processingNoticeVisible, setProcessingNoticeVisible] = useState(false)
   const processingNoticeShownRef = useRef(false)
+  const processingToastIdRef = useRef<string | number | null>(null)
 
   const entries = useMemo(
     () => listQuery.data?.entries || [],
@@ -175,7 +175,10 @@ export function VikingFileManager({
   useEffect(() => {
     if (!hasActiveTasks) {
       processingNoticeShownRef.current = false
-      setProcessingNoticeVisible(false)
+      if (processingToastIdRef.current !== null) {
+        toast.dismiss(processingToastIdRef.current)
+        processingToastIdRef.current = null
+      }
       return
     }
 
@@ -184,13 +187,37 @@ export function VikingFileManager({
     }
 
     processingNoticeShownRef.current = true
-    setProcessingNoticeVisible(true)
-    const timer = window.setTimeout(() => {
-      setProcessingNoticeVisible(false)
-    }, 2500)
-
-    return () => window.clearTimeout(timer)
+    processingToastIdRef.current = toast(
+      <div className="max-w-[min(94vw,720px)] text-sm leading-5">
+        <span>{`${t('processingNotice.prefix')} `}</span>
+        <button
+          type="button"
+          className="inline p-0 font-medium text-foreground underline underline-offset-4 transition-colors hover:text-primary"
+          onClick={() => setTaskDialogOpen(true)}
+        >
+          {t('processingNotice.action')}
+        </button>
+        <span>{` ${t('processingNotice.suffix')}`}</span>
+      </div>,
+      {
+      position: 'top-center',
+      duration: 2500,
+      className: 'w-auto max-w-[min(94vw,720px)]',
+      onAutoClose: () => {
+        processingToastIdRef.current = null
+      },
+      onDismiss: () => {
+        processingToastIdRef.current = null
+      },
+      },
+    )
   }, [hasActiveTasks])
+
+  useEffect(() => () => {
+    if (processingToastIdRef.current !== null) {
+      toast.dismiss(processingToastIdRef.current)
+    }
+  }, [])
 
   const handleGoParent = () => {
     updateUri(parentUri(currentUri))
@@ -310,26 +337,6 @@ export function VikingFileManager({
     </div>
   )
 
-  const processingNotice = hasActiveTasks && processingNoticeVisible ? (
-    <div className="pointer-events-none absolute top-2.5 inset-x-0 z-10 flex justify-center px-4">
-      <Alert className="pointer-events-auto w-auto max-w-[460px] border bg-background px-4 py-2 shadow-md">
-        <AlertTitle className="text-center text-xs leading-5 font-normal text-foreground sm:text-sm">
-          {t('processingNotice.prefix')}
-          {' '}
-          <button
-            type="button"
-            className="underline underline-offset-3 hover:text-primary"
-            onClick={() => setTaskDialogOpen(true)}
-          >
-            {t('processingNotice.action')}
-          </button>
-          {' '}
-          {t('processingNotice.suffix')}
-        </AlertTitle>
-      </Alert>
-    </div>
-  ) : null
-
   return (
     <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100vh-3.5rem)] flex-col md:-mx-6">
       <div className="flex min-h-0 flex-1">
@@ -393,7 +400,6 @@ export function VikingFileManager({
         {showPreview ? (
           <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
-            {processingNotice}
             <div className="mx-auto min-h-0 w-full max-w-5xl flex-1">
               <FilePreview
                 file={selectedFile}
@@ -405,7 +411,6 @@ export function VikingFileManager({
         ) : (
           <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
-            {processingNotice}
             <div className="min-h-0 flex-1 overflow-auto">
               {entries.length === 0 && !listQuery.isLoading ? (
                 <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
