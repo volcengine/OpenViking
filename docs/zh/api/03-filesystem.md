@@ -465,11 +465,14 @@ openviking stat viking://resources/my-project/docs/api.md
     "mode": 33188,
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
+    "isLocked": false,
     "uri": "viking://resources/docs/api.md"
   },
   "time": 0.1
 }
 ```
+
+`isLocked` 字段反映路径当前是否被 path lock 持有：路径自身存在有效的 `.path.ovlock`，或者任一祖先目录持有 SUBTREE 锁。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
 
 ---
 
