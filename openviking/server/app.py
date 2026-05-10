@@ -320,7 +320,30 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # Add HTTP observability middleware first (metrics, tracing)
+    # Body dump middleware must be registered BEFORE observability so it ends up
+    # nested inside the trace span (in Starlette, middleware added later wraps
+    # earlier-added ones — so earlier registration = inner layer).
+    if config.observability.dump_body.enabled:
+        from openviking.server.body_dump_middleware import (
+            create_dump_http_body_middleware,
+        )
+
+        _dump_body_fn = create_dump_http_body_middleware(
+            max_bytes=config.observability.dump_body.max_bytes,
+        )
+
+        @app.middleware("http")
+        async def dump_http_body(request: Request, call_next: Callable):
+            return await _dump_body_fn(request, call_next)
+
+        logger.info(
+            "HTTP body dump middleware enabled (max_bytes=%d) — bodies will be "
+            "attached to trace spans. Disable in production via "
+            "server.observability.dump_body.enabled=false.",
+            config.observability.dump_body.max_bytes,
+        )
+
+    # Add HTTP observability middleware (metrics, tracing).
     # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
     # We want timing to be the outermost layer to measure the full request duration.
     from openviking.observability.http_observability_middleware import (

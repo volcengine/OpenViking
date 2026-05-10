@@ -104,6 +104,20 @@ class UsageAuditConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TraceDumpBodyConfig(BaseModel):
+    """HTTP body dump configuration.
+
+    Attaches request/response bodies as attributes on the active trace span so
+    they can be inspected in trace UIs. Off by default — bodies may contain
+    secrets and high-cardinality content.
+    """
+
+    enabled: bool = False
+    max_bytes: int = 4096
+
+    model_config = {"extra": "forbid"}
+
+
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
@@ -111,6 +125,7 @@ class ObservabilityConfig(BaseModel):
     usage_audit: UsageAuditConfig = Field(default_factory=UsageAuditConfig)
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+    dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
 
     model_config = {"extra": "forbid"}
 
