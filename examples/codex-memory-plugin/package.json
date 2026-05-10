@@ -1,7 +1,7 @@
 {
   "name": "codex-openviking-memory",
-  "version": "0.1.0",
-  "description": "OpenViking memory MCP server for Codex",
+  "version": "0.2.0",
+  "description": "OpenViking memory plugin for Codex — hooks (recall/capture/pre-compact) + MCP server for explicit memory operations.",
   "type": "module",
   "scripts": {
     "build": "tsc",

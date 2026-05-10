@@ -1,14 +1,32 @@
 {
   "name": "openviking-memory",
-  "description": "Explicit OpenViking memory tools for Codex via MCP.",
+  "version": "0.2.0",
+  "description": "Long-term semantic memory for Codex, powered by OpenViking. Auto-recall on UserPromptSubmit, auto-capture on Stop, and full-session capture before context compaction.",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": [
+    "memory",
+    "openviking",
+    "semantic-search",
+    "long-term-memory",
+    "context-engine",
+    "codex"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "OpenViking Memory",
-    "shortDescription": "OpenViking memory tools for Codex",
-    "longDescription": "Adds explicit OpenViking MCP tools for manual memory recall, store, forget, and health checks.",
+    "shortDescription": "Long-term semantic memory for Codex",
+    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories before each user turn, capture user/assistant turns on Stop, and commit the full transcript before PreCompact wipes context. Also exposes explicit MCP tools (openviking_recall, openviking_store, openviking_forget, openviking_health) for manual use.",
     "developerName": "OpenViking",
-    "category": "productivity",
+    "category": "Productivity",
     "capabilities": [
       "Memory recall",
+      "Auto memory capture",
       "Manual memory storage",
       "Manual memory deletion"
     ],
