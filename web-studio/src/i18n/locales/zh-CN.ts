@@ -236,7 +236,7 @@ const zhCN = {
     description: '上传本地文件到服务器，文件类型通过 magic bytes 自动检测。',
     dropzone: {
       title: '拖拽文件到此处，或点击选择文件',
-      hint: '每次只能上传一个文件。',
+      hint: '每次最多上传 10 个文件。',
       supportedFormats: '支持 PDF、Word、PPTX、Excel、Markdown、代码文件、图片等',
     },
     fileInfo: {
@@ -247,21 +247,23 @@ const zhCN = {
       remove: '移除',
     },
     targetUri: '目标 URI',
+    'targetUri.placeholder': 'viking://resources/',
     'targetUri.hint': '选择资源的存储位置，默认为 viking://resources/。',
     'targetUri.browse': '浏览',
     advancedOptions: '高级选项',
     upload: '上传文件',
-    'upload.progress': '正在上传... {{progress}}%',
     'upload.processing': '文件已上传，正在处理中...',
     uploading: '上传中…',
     result: {
       success: '上传完成！',
       skippedFiles: '{{count}} 个文件被跳过（不支持的格式）',
     },
-    continueUpload: '继续上传',
     cancelUpload: '取消',
+    startProcessing: '开始处理',
     success: '资源添加成功',
     fileBlocked: '"{{name}}" 不是支持的文件类型。',
+    fileTooLarge: '"{{name}}" 超过 {{size}} 文件大小限制。',
+    tooManyFiles: '仅保留前 {{count}} 个文件，其余已忽略。',
     error: '请求失败',
     dirPicker: {
       title: '选择目录',
@@ -305,6 +307,7 @@ const zhCN = {
       parent: '返回父级',
       refresh: '刷新目录',
       search: '搜索 ⌘K',
+      processingTasks: '文件处理任务',
       upload: '上传',
     },
     emptyState: {
@@ -314,6 +317,26 @@ const zhCN = {
     uploadDialog: {
       title: '上传',
       description: '添加本地文件或远程资源到当前上下文资源库。',
+    },
+    processingNotice: {
+      prefix: '文件正在处理中，点击',
+      action: '文件处理任务',
+      suffix: '查看处理进度与结果。',
+    },
+    processingTasks: {
+      title: '文件处理任务',
+      empty: '暂无处理任务',
+      toggleError: '展开或收起错误详情',
+      columns: {
+        fileName: '文件名',
+        status: '状态',
+        size: '大小',
+      },
+      status: {
+        processing: '处理中',
+        success: '处理成功',
+        failed: '处理失败',
+      },
     },
     searchPalette: {
       placeholder: '搜索文件和目录...',
