@@ -236,7 +236,7 @@ const en = {
     description: 'Upload a local file to the server. File type is auto-detected via magic bytes.',
     dropzone: {
       title: 'Drag & drop a file here, or click to select',
-      hint: 'Only one file at a time.',
+      hint: 'Up to 10 files at a time.',
       supportedFormats: 'Supports PDF, Word, PPTX, Excel, Markdown, code files, images, and more',
     },
     fileInfo: {
@@ -247,21 +247,23 @@ const en = {
       remove: 'Remove',
     },
     targetUri: 'Target URI',
+    'targetUri.placeholder': 'viking://resources/',
     'targetUri.hint': 'Choose where to store this resource. Defaults to viking://resources/.',
     'targetUri.browse': 'Browse',
     advancedOptions: 'Advanced Options',
     upload: 'Upload File',
-    'upload.progress': 'Uploading... {{progress}}%',
     'upload.processing': 'File uploaded, processing...',
     uploading: 'Uploading\u2026',
     result: {
       success: 'Upload complete!',
       skippedFiles: '{{count}} file(s) skipped (unsupported format)',
     },
-    continueUpload: 'Continue Uploading',
     cancelUpload: 'Cancel',
+    startProcessing: 'Start Processing',
     success: 'Resource added successfully',
     fileBlocked: '"{{name}}" is not a supported file type.',
+    fileTooLarge: '"{{name}}" exceeds the {{size}} file size limit.',
+    tooManyFiles: 'Only the first {{count}} files were kept.',
     error: 'Request Failed',
     dirPicker: {
       title: 'Select Directory',
@@ -278,7 +280,6 @@ const en = {
     remoteUrl: 'Remote URL',
     'remoteUrl.placeholder': 'https://github.com/org/repo',
     'remoteUrl.hint': 'HTTP(S) URL, Git repository, or other remote resource address.',
-    submit: 'Add Resource',
     strict: 'Strict Mode',
     'strict.hint': 'When enabled, the server will reject files with unsupported or unrecognized types instead of skipping them silently.',
     directlyUploadMedia: 'Directly Upload Media',
@@ -305,6 +306,7 @@ const en = {
       parent: 'Go to Parent',
       refresh: 'Refresh Directory',
       search: 'Search ⌘K',
+      processingTasks: 'File Processing Tasks',
       upload: 'Upload',
     },
     emptyState: {
@@ -314,6 +316,26 @@ const en = {
     uploadDialog: {
       title: 'Upload',
       description: 'Add a local file or remote resource to the context resource library.',
+    },
+    processingNotice: {
+      prefix: 'Files are being processed.',
+      action: 'File Processing Tasks',
+      suffix: 'shows progress and results.',
+    },
+    processingTasks: {
+      title: 'File Processing Tasks',
+      empty: 'No processing tasks',
+      toggleError: 'Toggle error details',
+      columns: {
+        fileName: 'File Name',
+        status: 'Status',
+        size: 'Size',
+      },
+      status: {
+        processing: 'Processing',
+        success: 'Processed',
+        failed: 'Processing failed',
+      },
     },
     searchPalette: {
       placeholder: 'Search files and directories...',
