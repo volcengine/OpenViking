@@ -7,24 +7,46 @@ import {
   postResources,
   postResourcesTempUpload,
 } from '#/lib/ov-client'
+import { parseUploadError } from '#/routes/resources/-lib/upload'
 
-export type UploadPhase = 'idle' | 'uploading' | 'processing' | 'done'
+export type ResourceUploadTaskStatus =
+  | 'pending'
+  | 'uploading'
+  | 'processing'
+  | 'success'
+  | 'failed'
 
-export type UploadState = {
-  phase: UploadPhase
-  progress: number
-  skippedFiles: string[]
-  error: string | null
-  fileName: string | null
+export type ResourceUploadTask = {
+  id: string
+  source: 'local' | 'remote'
+  fileName: string
   fileSize: number | null
   fileType: string | null
-  remoteUrl: string
-  mode: 'upload' | 'remote'
+  status: ResourceUploadTaskStatus
+  progress: number | null
+  createdAt: number
+  finishedAt: number | null
+  errorCode: string | null
+  errorMessage: string | null
+  rootUri: string | null
 }
 
-export type UploadStartParams = {
+export type RemoteUploadPhase = 'idle' | 'processing' | 'done'
+
+export type RemoteUploadState = {
+  phase: RemoteUploadPhase
+  skippedFiles: string[]
+  error: string | null
+  remoteUrl: string
+}
+
+export type UploadBatchItem = {
   file: File
   fileType: string | null
+}
+
+export type UploadBatchParams = {
+  files: UploadBatchItem[]
   commonBody: Record<string, unknown>
 }
 
@@ -34,23 +56,20 @@ export type RemoteStartParams = {
 }
 
 type ResourceUploadContextValue = {
-  state: UploadState
-  startUpload: (params: UploadStartParams) => void
+  tasks: ResourceUploadTask[]
+  remoteState: RemoteUploadState
+  enqueueUploads: (params: UploadBatchParams) => void
   startRemote: (params: RemoteStartParams) => void
-  reset: () => void
-  isActive: boolean
+  resetRemote: () => void
+  hasActiveTasks: boolean
+  activeTaskCount: number
 }
 
-const INITIAL_STATE: UploadState = {
+const INITIAL_REMOTE_STATE: RemoteUploadState = {
   phase: 'idle',
-  progress: 0,
   skippedFiles: [],
   error: null,
-  fileName: null,
-  fileSize: null,
-  fileType: null,
   remoteUrl: '',
-  mode: 'upload',
 }
 
 const ResourceUploadContext = React.createContext<ResourceUploadContextValue | null>(null)
@@ -69,6 +88,35 @@ function getErrorMessage(error: unknown): string {
   return String(error)
 }
 
+function createTaskId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function createRemoteTaskName(url: string): string {
+  const trimmed = url.trim()
+  const sshMatch = trimmed.match(/^git@[^:]+:([^/]+\/[^/]+?)(?:\.git)?$/)
+  if (sshMatch) {
+    return sshMatch[1]
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    if (parts.length >= 2 && parsed.hostname.includes('github.com')) {
+      return `${parts[0]}/${parts[1].replace(/\.git$/, '')}`
+    }
+    if (parts.length > 0) {
+      return parts[parts.length - 1].replace(/\.git$/, '')
+    }
+    return parsed.hostname
+  } catch {
+    return trimmed
+  }
+}
+
 export function useResourceUpload(): ResourceUploadContextValue {
   const context = React.useContext(ResourceUploadContext)
   if (!context) {
@@ -78,115 +126,158 @@ export function useResourceUpload(): ResourceUploadContextValue {
 }
 
 export function ResourceUploadProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = React.useState<UploadState>(INITIAL_STATE)
-  const abortRef = React.useRef<AbortController | null>(null)
+  const [tasks, setTasks] = React.useState<ResourceUploadTask[]>([])
+  const [remoteState, setRemoteState] = React.useState<RemoteUploadState>(INITIAL_REMOTE_STATE)
+  const remoteAbortRef = React.useRef<AbortController | null>(null)
+  const uploadQueueRef = React.useRef<Promise<void>>(Promise.resolve())
 
-  const startUpload = React.useCallback((params: UploadStartParams) => {
-    if (abortRef.current) return
-
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    setState({
-      phase: 'uploading',
-      progress: 0,
-      skippedFiles: [],
-      error: null,
-      fileName: params.file.name,
-      fileSize: params.file.size,
-      fileType: params.fileType,
-      remoteUrl: '',
-      mode: 'upload',
-    })
-
-    void (async () => {
-      try {
-        const uploadResult = await getOvResult(
-          postResourcesTempUpload({
-            body: {
-              file: params.file,
-              telemetry: true,
-            },
-            onUploadProgress: (event: { loaded: number; total?: number }) => {
-              if (event.total) {
-                setState(prev => ({
-                  ...prev,
-                  progress: Math.round((event.loaded / event.total!) * 100),
-                }))
-              }
-            },
-            signal: controller.signal,
-          }),
-        )
-
-        const tempFileId = isRecord(uploadResult)
-          ? uploadResult.temp_file_id
-          : undefined
-        if (typeof tempFileId !== 'string' || !tempFileId.trim()) {
-          throw new Error('Temp upload did not return temp_file_id.')
-        }
-
-        setState(prev => ({ ...prev, phase: 'processing' }))
-
-        const addResult = await getOvResult(
-          postResources({
-            body: {
-              ...params.commonBody,
-              temp_file_id: tempFileId,
-              source_name: params.file.name,
-            } as Parameters<typeof postResources>[0]['body'],
-            signal: controller.signal,
-          }),
-        )
-
-        // Check for processing errors
-        if (isRecord(addResult) && addResult.status === 'error') {
-          const errors = Array.isArray(addResult.errors) ? (addResult.errors as string[]) : []
-          throw new Error(errors.join('; ') || 'Processing failed')
-        }
-
-        const warnings = isRecord(addResult) && Array.isArray(addResult.warnings)
-          ? (addResult.warnings as string[])
-          : []
-
-        setState(prev => ({
-          ...prev,
-          phase: 'done',
-          progress: 100,
-          skippedFiles: warnings,
-        }))
-        toast.success(params.file.name)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const message = getErrorMessage(err)
-        setState(prev => ({
-          ...prev,
-          phase: 'idle',
-          error: message,
-        }))
-        toast.error(message, { duration: 5000 })
-      } finally {
-        abortRef.current = null
-      }
-    })()
+  const updateTask = React.useCallback((
+    taskId: string,
+    updater: (task: ResourceUploadTask) => ResourceUploadTask,
+  ) => {
+    setTasks((prev) => prev.map((task) => (task.id === taskId ? updater(task) : task)))
   }, [])
 
+  const processFileUpload = React.useCallback(async (
+    taskId: string,
+    params: UploadBatchItem,
+    commonBody: Record<string, unknown>,
+  ) => {
+    try {
+      updateTask(taskId, (task) => ({
+        ...task,
+        status: 'uploading',
+        progress: 0,
+      }))
+
+      const uploadResult = await getOvResult(
+        postResourcesTempUpload({
+          body: {
+            file: params.file,
+            telemetry: true,
+          },
+          onUploadProgress: (event: { loaded: number; total?: number }) => {
+            const total = event.total
+            if (!total) return
+            updateTask(taskId, (task) => ({
+              ...task,
+              status: 'uploading',
+              progress: Math.round((event.loaded / total) * 100),
+            }))
+          },
+        }),
+      )
+
+      const tempFileId = isRecord(uploadResult)
+        ? uploadResult.temp_file_id
+        : undefined
+      if (typeof tempFileId !== 'string' || !tempFileId.trim()) {
+        throw new Error('Temp upload did not return temp_file_id.')
+      }
+
+      updateTask(taskId, (task) => ({
+        ...task,
+        status: 'processing',
+        progress: null,
+      }))
+
+      const addResult = await getOvResult(
+        postResources({
+          body: {
+            ...commonBody,
+            temp_file_id: tempFileId,
+            source_name: params.file.name,
+          } as Parameters<typeof postResources>[0]['body'],
+        }),
+      )
+
+      if (isRecord(addResult) && addResult.status === 'error') {
+        const errors = Array.isArray(addResult.errors) ? (addResult.errors as string[]) : []
+        throw new Error(errors.join('; ') || 'Processing failed')
+      }
+
+      const rootUri = isRecord(addResult) && typeof addResult.root_uri === 'string'
+        ? addResult.root_uri
+        : null
+
+      updateTask(taskId, (task) => ({
+        ...task,
+        status: 'success',
+        progress: 100,
+        finishedAt: Date.now(),
+        rootUri,
+      }))
+      toast.success(params.file.name)
+    } catch (error) {
+      const { errorCode, errorMessage } = parseUploadError(getErrorMessage(error))
+      updateTask(taskId, (task) => ({
+        ...task,
+        status: 'failed',
+        progress: null,
+        finishedAt: Date.now(),
+        errorCode,
+        errorMessage,
+      }))
+      toast.error(errorMessage, { duration: 5000 })
+    }
+  }, [updateTask])
+
+  const enqueueUploads = React.useCallback((params: UploadBatchParams) => {
+    if (params.files.length === 0) return
+
+    const createdAt = Date.now()
+    const nextTasks = params.files.map((item, index) => ({
+      id: createTaskId(),
+      source: 'local' as const,
+      fileName: item.file.name,
+      fileSize: item.file.size,
+      fileType: item.fileType,
+      status: 'pending' as const,
+      progress: 0,
+      createdAt: createdAt + index,
+      finishedAt: null,
+      errorCode: null,
+      errorMessage: null,
+      rootUri: null,
+    }))
+
+    setTasks((prev) => [...nextTasks, ...prev])
+
+    for (const [index, item] of params.files.entries()) {
+      const task = nextTasks[index]
+      uploadQueueRef.current = uploadQueueRef.current.then(() =>
+        processFileUpload(task.id, item, params.commonBody),
+      )
+    }
+  }, [processFileUpload])
+
   const startRemote = React.useCallback((params: RemoteStartParams) => {
-    if (abortRef.current) return
+    if (remoteAbortRef.current) return
 
     const controller = new AbortController()
-    abortRef.current = controller
+    remoteAbortRef.current = controller
+    const taskId = createTaskId()
 
-    setState({
-      phase: 'processing',
-      progress: 0,
-      skippedFiles: [],
-      error: null,
-      fileName: null,
+    setTasks((prev) => [{
+      id: taskId,
+      source: 'remote',
+      fileName: createRemoteTaskName(params.url),
       fileSize: null,
       fileType: null,
+      status: 'processing',
+      progress: null,
+      createdAt: Date.now(),
+      finishedAt: null,
+      errorCode: null,
+      errorMessage: null,
+      rootUri: null,
+    }, ...prev])
+
+    setRemoteState({
+      phase: 'processing',
+      skippedFiles: [],
+      error: null,
       remoteUrl: params.url,
-      mode: 'remote',
     })
 
     void (async () => {
@@ -201,7 +292,6 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
           }),
         )
 
-        // Check for processing errors
         if (isRecord(result) && result.status === 'error') {
           const errors = Array.isArray(result.errors) ? (result.errors as string[]) : []
           throw new Error(errors.join('; ') || 'Processing failed')
@@ -210,41 +300,93 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
         const warnings = isRecord(result) && Array.isArray(result.warnings)
           ? (result.warnings as string[])
           : []
+        const rootUri = isRecord(result) && typeof result.root_uri === 'string'
+          ? result.root_uri
+          : null
 
-        setState(prev => ({
-          ...prev,
+        updateTask(taskId, (task) => ({
+          ...task,
+          status: 'success',
+          progress: 100,
+          finishedAt: Date.now(),
+          rootUri,
+        }))
+
+        setRemoteState({
           phase: 'done',
           skippedFiles: warnings,
-        }))
+          error: null,
+          remoteUrl: params.url,
+        })
         toast.success(params.url)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const message = getErrorMessage(err)
-        setState(prev => ({
-          ...prev,
-          phase: 'idle',
-          error: message,
+      } catch (error) {
+        if (controller.signal.aborted) {
+          updateTask(taskId, (task) => ({
+            ...task,
+            status: 'failed',
+            progress: null,
+            finishedAt: Date.now(),
+            errorCode: 'CANCELED',
+            errorMessage: 'Canceled',
+          }))
+          return
+        }
+        const message = getErrorMessage(error)
+        const { errorCode, errorMessage } = parseUploadError(message)
+
+        updateTask(taskId, (task) => ({
+          ...task,
+          status: 'failed',
+          progress: null,
+          finishedAt: Date.now(),
+          errorCode,
+          errorMessage,
         }))
-        toast.error(message, { duration: 5000 })
+
+        setRemoteState({
+          phase: 'idle',
+          skippedFiles: [],
+          error: message,
+          remoteUrl: params.url,
+        })
+        toast.error(errorMessage, { duration: 5000 })
       } finally {
-        abortRef.current = null
+        remoteAbortRef.current = null
       }
     })()
-  }, [])
+  }, [updateTask])
 
-  const reset = React.useCallback(() => {
-    if (abortRef.current) {
-      abortRef.current.abort()
-      abortRef.current = null
+  const resetRemote = React.useCallback(() => {
+    if (remoteAbortRef.current) {
+      remoteAbortRef.current.abort()
+      remoteAbortRef.current = null
     }
-    setState(INITIAL_STATE)
+    setRemoteState(INITIAL_REMOTE_STATE)
   }, [])
 
-  const isActive = state.phase === 'uploading' || state.phase === 'processing'
+  const activeTaskCount = React.useMemo(
+    () => tasks.filter((task) => task.status === 'pending' || task.status === 'uploading' || task.status === 'processing').length,
+    [tasks],
+  )
+  const hasActiveTasks = activeTaskCount > 0
 
   const value = React.useMemo<ResourceUploadContextValue>(() => ({
-    state, startUpload, startRemote, reset, isActive,
-  }), [state, startUpload, startRemote, reset, isActive])
+    tasks,
+    remoteState,
+    enqueueUploads,
+    startRemote,
+    resetRemote,
+    hasActiveTasks,
+    activeTaskCount,
+  }), [
+    tasks,
+    remoteState,
+    enqueueUploads,
+    startRemote,
+    resetRemote,
+    hasActiveTasks,
+    activeTaskCount,
+  ])
 
   return (
     <ResourceUploadContext.Provider value={value}>

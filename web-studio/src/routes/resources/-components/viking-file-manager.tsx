@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Alert, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -10,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import { useResourceUpload } from '#/hooks/use-resource-upload'
 
 import { normalizeDirUri, normalizeFileUri, parentUri } from '../-lib/normalize'
 import { useInvalidateVikingFs, useVikingFsList } from '../-hooks/viking-fm'
@@ -19,6 +21,7 @@ import { FileList } from './file-list'
 import { FilePreview } from './file-preview'
 import { FileTree } from './file-tree'
 import { FindPalette } from './find-palette'
+import { UploadTaskDialog } from './upload-task-dialog'
 
 interface VikingFileManagerProps {
   initialUri?: string
@@ -57,6 +60,7 @@ export function VikingFileManager({
   onUriChange,
 }: VikingFileManagerProps) {
   const { t } = useTranslation('resources')
+  const { tasks, hasActiveTasks } = useResourceUpload()
   const [currentUri, setCurrentUri] = useState(
     normalizeDirUri(initialUri || 'viking://'),
   )
@@ -66,6 +70,7 @@ export function VikingFileManager({
   const [selectedFile, setSelectedFile] = useState<VikingFsEntry | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [uploadDialogOpen, setUploadDialogOpen] = useState(initialUploadOpen ?? false)
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
 
   useEffect(() => {
     const normalized = normalizeDirUri(initialUri || 'viking://')
@@ -79,7 +84,6 @@ export function VikingFileManager({
     })
   }, [initialUri])
 
-  // Auto-select file from initialFile prop
   useEffect(() => {
     if (!initialFile) return
     const fileUri = normalizeFileUri(initialFile)
@@ -96,7 +100,6 @@ export function VikingFileManager({
     })
   }, [initialFile])
 
-  // Cmd+K to open palette
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -142,11 +145,52 @@ export function VikingFileManager({
     nodeLimit: 500,
   })
   const { invalidateList } = useInvalidateVikingFs()
+  const completedTaskIdsRef = useRef<Set<string>>(new Set())
+  const [processingNoticeVisible, setProcessingNoticeVisible] = useState(false)
+  const processingNoticeShownRef = useRef(false)
 
   const entries = useMemo(
     () => listQuery.data?.entries || [],
     [listQuery.data?.entries],
   )
+
+  useEffect(() => {
+    const nextCompletedIds = new Set(completedTaskIdsRef.current)
+    let hasNewSuccess = false
+
+    for (const task of tasks) {
+      if (task.status === 'success' && !nextCompletedIds.has(task.id)) {
+        nextCompletedIds.add(task.id)
+        hasNewSuccess = true
+      }
+    }
+
+    completedTaskIdsRef.current = nextCompletedIds
+
+    if (hasNewSuccess) {
+      void invalidateList()
+    }
+  }, [invalidateList, tasks])
+
+  useEffect(() => {
+    if (!hasActiveTasks) {
+      processingNoticeShownRef.current = false
+      setProcessingNoticeVisible(false)
+      return
+    }
+
+    if (processingNoticeShownRef.current) {
+      return
+    }
+
+    processingNoticeShownRef.current = true
+    setProcessingNoticeVisible(true)
+    const timer = window.setTimeout(() => {
+      setProcessingNoticeVisible(false)
+    }, 2500)
+
+    return () => window.clearTimeout(timer)
+  }, [hasActiveTasks])
 
   const handleGoParent = () => {
     updateUri(parentUri(currentUri))
@@ -159,7 +203,6 @@ export function VikingFileManager({
 
   const handleUploadSubmitted = () => {
     setUploadDialogOpen(false)
-    void invalidateList()
   }
 
   useEffect(() => {
@@ -211,7 +254,6 @@ export function VikingFileManager({
     document.addEventListener('mouseup', onUp)
   }, [])
 
-  // --- Toolbar ---
   const toolbar = (
     <div className="flex h-10 items-center gap-1 border-b px-3">
       {!showTree && (
@@ -242,20 +284,54 @@ export function VikingFileManager({
           </span>
         ))}
       </nav>
-      <Button
-        type="button"
-        size="sm"
-        className="ml-auto h-8 gap-1.5"
-        onClick={() => setUploadDialogOpen(true)}
-      >
-        <Upload className="size-4" />
-        {t('toolbar.upload')}
-      </Button>
+      {!showTree ? (
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="h-8"
+            onClick={() => setTaskDialogOpen(true)}
+          >
+            {t('toolbar.processingTasks')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="h-8 gap-1.5"
+            onClick={() => setUploadDialogOpen(true)}
+          >
+            <Upload className="size-4" />
+            {t('toolbar.upload')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 
+  const processingNotice = hasActiveTasks && processingNoticeVisible ? (
+    <div className="pointer-events-none absolute top-2.5 inset-x-0 z-10 flex justify-center px-4">
+      <Alert className="pointer-events-auto w-auto max-w-[460px] border bg-background px-4 py-2 shadow-md">
+        <AlertTitle className="text-center text-xs leading-5 font-normal text-foreground sm:text-sm">
+          {t('processingNotice.prefix')}
+          {' '}
+          <button
+            type="button"
+            className="underline underline-offset-3 hover:text-primary"
+            onClick={() => setTaskDialogOpen(true)}
+          >
+            {t('processingNotice.action')}
+          </button>
+          {' '}
+          {t('processingNotice.suffix')}
+        </AlertTitle>
+      </Alert>
+    </div>
+  ) : null
+
   return (
-    <div className="-mx-4 -mt-6 -mb-4 md:-mx-6 flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100vh-3.5rem)] flex-col md:-mx-6">
       <div className="flex min-h-0 flex-1">
         {showTree && (
           <>
@@ -267,24 +343,36 @@ export function VikingFileManager({
                 <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
                   <RefreshCcw className="size-4" />
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="ml-1 h-8 gap-1.5"
-                  onClick={() => setUploadDialogOpen(true)}
-                >
-                  <Upload className="size-4" />
-                  {t('toolbar.upload')}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="ml-auto size-7"
-                  title={t('toolbar.search')}
-                  onClick={() => setPaletteOpen(true)}
-                >
-                  <Search className="size-4" />
-                </Button>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="h-8"
+                    onClick={() => setTaskDialogOpen(true)}
+                  >
+                    {t('toolbar.processingTasks')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 gap-1.5"
+                    onClick={() => setUploadDialogOpen(true)}
+                  >
+                    <Upload className="size-4" />
+                    {t('toolbar.upload')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    title={t('toolbar.search')}
+                    onClick={() => setPaletteOpen(true)}
+                  >
+                    <Search className="size-4" />
+                  </Button>
+                </div>
               </div>
               <div className="min-h-0 flex-1">
                 <FileTree
@@ -303,8 +391,9 @@ export function VikingFileManager({
         )}
 
         {showPreview ? (
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
+            {processingNotice}
             <div className="mx-auto min-h-0 w-full max-w-5xl flex-1">
               <FilePreview
                 file={selectedFile}
@@ -314,8 +403,9 @@ export function VikingFileManager({
             </div>
           </section>
         ) : (
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
+            {processingNotice}
             <div className="min-h-0 flex-1 overflow-auto">
               {entries.length === 0 && !listQuery.isLoading ? (
                 <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
@@ -358,6 +448,12 @@ export function VikingFileManager({
           </div>
         </DialogContent>
       </Dialog>
+
+      <UploadTaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        tasks={tasks}
+      />
     </div>
   )
 }
