@@ -113,3 +113,28 @@ class TestPageIdMap:
         # Link from edited page (f=100) to existing page (t=2)
         assert pim.resolve(100) == "viking://a"
         assert pim.resolve(id_b) == "viking://b"
+
+    def test_multi_user_operation_same_page_id(self):
+        """Multi-user mode: one operation produces 2 URIs but same page_id.
+        Only the first URI gets the LLM-declared page_id; the second is an alias."""
+        pim = PageIdMap()
+        # LLM creates event with page_id=100, operation resolves to 2 URIs
+        pim.register_new("viking://user/Melanie/events/charity_race.md", page_id=100)
+        pim.register_alias("viking://user/Caroline/events/charity_race.md", 100)
+        # resolve(100) returns the primary URI
+        assert pim.resolve(100) == "viking://user/Melanie/events/charity_race.md"
+        # get_id works for both URIs
+        assert pim.get_id("viking://user/Melanie/events/charity_race.md") == 100
+        assert pim.get_id("viking://user/Caroline/events/charity_race.md") == 100
+
+    def test_multi_user_no_page_id_shift(self):
+        """Verify that multi-user operations don't shift subsequent page_ids."""
+        pim = PageIdMap()
+        # First event: page_id=100, 2 URIs
+        pim.register_new("viking://user/Melanie/events/event1.md", page_id=100)
+        pim.register_alias("viking://user/Caroline/events/event1.md", 100)
+        # Second event: page_id=101
+        pim.register_new("viking://user/Melanie/events/event2.md", page_id=101)
+        # page_id=100 and 101 resolve correctly, no shifting
+        assert pim.resolve(100) == "viking://user/Melanie/events/event1.md"
+        assert pim.resolve(101) == "viking://user/Melanie/events/event2.md"

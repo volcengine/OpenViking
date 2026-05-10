@@ -344,10 +344,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
+        # A single operation may produce multiple URIs (multi-user mode).
+        # The LLM-declared page_id maps to the first URI; remaining URIs are aliases.
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
-                for uri in op.uris:
-                    self._page_id_map.register_new(uri, page_id=op.page_id)
+                if op.uris:
+                    self._page_id_map.register_new(op.uris[0], page_id=op.page_id)
+                    # Register remaining URIs as aliases pointing to the same page_id
+                    for uri in op.uris[1:]:
+                        self._page_id_map.register_alias(uri, op.page_id)
 
         # Debug: log page_id map state before resolving links
         tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")

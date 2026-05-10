@@ -89,6 +89,18 @@ class PageIdMap:
             candidate += 1
         return candidate
 
+    def register_alias(self, uri: str, page_id: int) -> None:
+        """Register a URI as an alias for an existing page_id.
+
+        Used when a single operation produces multiple URIs (multi-user mode).
+        The alias URI maps back to the same page_id, so resolve(page_id)
+        returns the primary URI. get_id(alias_uri) returns the page_id.
+        """
+        if uri in self._uri_to_ids:
+            return  # URI already registered
+        self._uri_to_ids[uri] = {page_id}
+        logger.debug(f"PageIdMap: registered alias {uri} -> page_id={page_id}")
+
     def resolve(self, page_id: int) -> Optional[str]:
         """Resolve page_id to URI."""
         return self._id_to_uri.get(page_id)
