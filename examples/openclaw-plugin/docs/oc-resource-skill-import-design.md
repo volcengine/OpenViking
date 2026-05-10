@@ -1,5 +1,7 @@
 # [RFC] OpenClaw Plugin 支持通过 OpenViking 导入/查询 Resource 与 Skill
 
+> 当前实现已调整：Agent 可见工具不再使用统一的 `ov_import(kind=...)`，而是拆为 `add_resource` 和 `add_skill`；手动 slash command 也对应拆为 `/add-resource` 和 `/add-skill`，不再保留 `/ov-import`。
+
 ## 背景
 
 当前 `examples/openclaw-plugin` 已经承担 OpenClaw 与 OpenViking 的 context-engine 集成，包括 session context、memory recall/store/forget、archive expand，以及 local/remote OpenViking runtime 管理。
@@ -15,10 +17,10 @@
 
 1. 在 OpenClaw 中支持通过插件导入 OpenViking resource。
 2. 在 OpenClaw 中支持通过插件导入 OpenViking skill。
-3. 为简化使用，对外合并为一个统一入口：
-   - LLM tool：`ov_import`
-   - slash command：`/ov-import`
-4. 通过参数 `kind: "resource" | "skill"` 区分导入类型，默认 `resource`。
+3. 对外拆成两个明确入口：
+   - resource：LLM tool `add_resource`，slash command `/add-resource`
+   - skill：LLM tool `add_skill`，slash command `/add-skill`
+4. 不再通过 `kind: "resource" | "skill"` 在一个入口里分流。
 5. 保持 HTTP server 的本地路径安全边界：不把本地路径直接发给 OpenViking 服务端。
 6. 底层仍复用 `OpenVikingClient.addResource()` / `OpenVikingClient.addSkill()`，避免在 resource 和 skill 之间复制上传逻辑。
 7. 导入后提供检索入口，让用户能在 OpenClaw 内确认和消费已导入 resource 与 skill。
@@ -73,68 +75,47 @@ HTTP 安全边界是：直接通过 HTTP 调 `/api/v1/skills` 时，不能传宿
 
 ## 设计方案
 
-### 1. 对外合并为一个入口
+### 1. 对外拆成两个入口
 
-为简化用户和 LLM 的使用成本，对外只暴露一个导入入口：
+Resource 和 skill 的落点、参数和服务端 API 不同，对外暴露两个入口：
 
-- LLM tool：`ov_import`
-- slash command：`/ov-import`
+- resource：LLM tool `add_resource`，slash command `/add-resource`
+- skill：LLM tool `add_skill`，slash command `/add-skill`
 
-使用 `kind` 参数区分导入类型：
-
-```ts
-kind?: "resource" | "skill";
-```
-
-默认：
-
-```ts
-kind = "resource";
-```
-
-这样最常见的 resource 导入不需要额外指定类型：
+Resource 导入：
 
 ```text
-/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/add-resource ./README.md --to viking://resources/openviking-readme --wait
 ```
 
-导入 skill 时显式指定：
+Skill 导入：
 
 ```text
-/ov-import ./skills/install-openviking-memory --kind skill --wait
+/add-skill ./skills/install-openviking-memory --wait
 ```
 
-### 2. 为什么不拆成两个入口
+### 2. 为什么拆成两个入口
 
-最初也可以设计为：
+- 工具名直接对应 OV 已有能力名：`add_resource` / `add_skill`
+- schema 不再混入 `kind`、`data`、`to`、`parent` 这类互斥参数
+- 用户手动命令也不再靠 `--kind skill` 切换语义
+- 底层仍复用 `OpenVikingClient.addResource()` / `addSkill()`，不复制上传逻辑
 
-- `ov_resource_import`
-- `ov_skill_import`
-
-但讨论后更倾向统一入口，原因是：
-
-- 用户只需要记一个命令：`/ov-import`
-- LLM 只需要学习一个工具：`ov_import`
-- 默认 resource 符合更常见的导入场景
-- `kind=skill` 仍然是显式选择，不依赖完全自动猜测
-- 底层实现仍然区分 resource 与 skill，不牺牲语义清晰度
-
-换句话说：对外入口合并，对内处理分流。
+换句话说：对外和对内都保持 resource / skill 分离。
 
 ### 3. LLM Tool 参数设计
 
 新增工具：
 
 ```text
-ov_import
+add_resource
+add_skill
 ```
 
 参数：
 
 ```ts
 {
-  kind?: "resource" | "skill"; // default: resource
-
   // resource 或 skill path 模式共用
   source?: string; // local path, directory path, public URL, Git URL
 
@@ -155,13 +136,12 @@ ov_import
 
 校验规则：
 
-- `kind` 为空时按 `resource`。
-- `kind=resource`：
+- `add_resource`：
   - 必须提供 `source`
   - `source` 可为本地路径、目录、远程 URL 或 Git URL
   - `to` 与 `parent` 互斥
   - 忽略或拒绝 `data`
-- `kind=skill`：
+- `add_skill`：
   - 必须提供 `source` 或 `data`
   - `source` 可为本地 `SKILL.md`、skill 目录或 zip
   - `data` 可为 raw `SKILL.md` 或 MCP tool dict
@@ -180,7 +160,7 @@ Resource 的导入路径由 `to` 或 `parent` 控制，二者互斥：
 推荐用户在希望得到稳定引用 URI 时使用 `to`：
 
 ```text
-/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/add-resource ./README.md --to viking://resources/openviking-readme --wait
 ```
 
 结果会尽量落到：
@@ -192,7 +172,7 @@ viking://resources/openviking-readme
 如果只想把资源放到某个集合下，可使用 `parent`：
 
 ```text
-/ov-import ./README.md --parent viking://resources/docs --wait
+/add-resource ./README.md --parent viking://resources/docs --wait
 ```
 
 结果会落在类似：
@@ -206,26 +186,27 @@ viking://resources/docs/README
 新增命令：
 
 ```text
-/ov-import <source> [--kind resource|skill] [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]
+/add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]
+/add-skill <source> [--wait] [--timeout SEC]
 ```
 
-默认 resource：
+导入 resource：
 
 ```text
-/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/add-resource ./README.md --to viking://resources/openviking-readme --wait
 ```
 
 导入远程 resource：
 
 ```text
-/ov-import https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --reason "OpenViking source docs"
+/add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --reason "OpenViking source docs"
 ```
 
 导入 skill：
 
 ```text
-/ov-import ./skills/install-openviking-memory --kind skill --wait
-/ov-import ./SKILL.md --kind skill --wait
+/add-skill ./skills/install-openviking-memory --wait
+/add-skill ./SKILL.md --wait
 ```
 
 Slash command 暂不支持 raw multi-line `SKILL.md` 或 MCP dict JSON；如果需要导入这些结构化数据，使用 LLM tool 的 `data` 参数。
@@ -249,13 +230,11 @@ preserveStructure?: boolean;
 - `addResource(input)`
 - `addSkill(input)`
 
-`ov_import` 工具和 `/ov-import` 命令根据 `kind` 分流：
+`add_resource` 和 `add_skill` 分别调用底层 client 方法：
 
 ```ts
-if (kind === "skill") {
-  return client.addSkill(...);
-}
-return client.addResource(...);
+add_resource -> client.addResource(...)
+add_skill -> client.addSkill(...)
 ```
 
 本地文件/目录流程：
@@ -293,7 +272,7 @@ raw SKILL.md or MCP dict
 
 ### 8. 导入后的检索入口：memory_search
 
-只提供 `ov_import` 会让体验不闭环：用户可以把 resource 或 skill 导入 OpenViking，但在 OpenClaw 内不一定知道如何检索、读取或验证导入结果。
+只提供导入工具会让体验不闭环：用户可以把 resource 或 skill 导入 OpenViking，但在 OpenClaw 内不一定知道如何检索、读取或验证导入结果。
 
 因此建议同时讨论一个轻量检索入口：
 
@@ -306,9 +285,9 @@ raw SKILL.md or MCP dict
 2. 返回 resource 的 `root_uri` 或 skill 的 `uri`。
 3. 用户或 LLM 可以立刻按返回 URI 检索。
 
-#### ov_import 返回建议
+#### add_resource 返回建议
 
-`ov_import` 导入 resource 后，结果中应包含：
+`add_resource` 导入 resource 后，结果中应包含：
 
 - `root_uri`
 - `status`
@@ -324,7 +303,7 @@ Processing: completed
 Try: /memory-search "OpenViking install" --uri viking://resources/openviking-readme
 ```
 
-`ov_import` 导入 skill 后也应返回 skill URI，并给出 skill 检索建议：
+`add_skill` 导入 skill 后也应返回 skill URI，并给出 skill 检索建议：
 
 ```text
 Imported OpenViking skill: viking://agent/skills/install-openviking-memory
@@ -541,19 +520,16 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
   - raw `SKILL.md` 通过 `data` 直传
   - MCP tool dict 通过 `data` 直传
 
-覆盖 `ov_import`：
+覆盖 `add_resource` / `add_skill`：
 
-- 注册单个 tool：`ov_import`
-- 注册单个 command：`/ov-import`
-- `kind` 默认 `resource`
-- `kind=skill` 正确分流到 `addSkill`
-- `--kind skill`
+- 注册 tool：`add_resource` / `add_skill`
+- 注册 command：`/add-resource` / `/add-skill`
 - quoted args
 - `--flag`
 - `--key value`
 - `--key=value`
 - `--to` 与 `--parent` 冲突
-- `kind=skill` 时拒绝 `to`、`parent`、`reason`、`instruction`
+- `/add-skill` 拒绝 `to`、`parent`、`reason`、`instruction`
 
 覆盖 `memory_search`：
 
@@ -567,9 +543,9 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 ### Manual smoke
 
 ```text
-/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/add-resource ./README.md --to viking://resources/openviking-readme --wait
 /memory-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-import ./skills/install-openviking-memory --kind skill --wait
+/add-skill ./skills/install-openviking-memory --wait
 /memory-search "install OpenViking memory" --uri viking://agent/skills
 ```
 
@@ -585,13 +561,13 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 
 ## 待讨论问题
 
-1. `ov_import` 是否应默认 `wait=false`？
+1. `add_resource` / `add_skill` 是否应默认 `wait=false`？
    - 当前建议默认不等待，只有用户显式要求“等待处理完成”或传 `wait=true` 时才等待。
-2. `kind=skill` 时 resource-only 参数应直接报错，还是静默忽略？
+2. `/add-skill` 遇到 resource-only 参数应直接报错，还是静默忽略？
    - 当前建议直接报错，避免用户误以为 `to/parent` 对 skill 生效。
 3. 是否需要插件侧自动识别 skill？
-   - 可选增强：当本地文件名为 `SKILL.md` 或目录包含 `SKILL.md` 时自动设置 `kind=skill`。
-   - 但当前建议先使用显式 `--kind skill`，默认 resource，行为更可解释。
+   - 可选增强：当本地文件名为 `SKILL.md` 或目录包含 `SKILL.md` 时提示用户使用 `/add-skill` 或 agent tool `add_skill`。
+   - 当前建议先使用显式 `/add-skill`，避免在 `/add-resource` 中自动猜测并改变用户意图。
 4. 导入本地大目录前是否需要确认机制？
    - 当前方案先不加确认；后续可基于文件数量/zip 大小增加保护。
 5. `memory_search` v1 是否默认检索 `viking://resources` 和 `viking://agent/skills`？

@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import contextEnginePlugin, {
-  parseOvImportCommandArgs,
+  parseAddResourceCommandArgs,
+  parseAddSkillCommandArgs,
   parseMemorySearchCommandArgs,
   tokenizeCommandArgs,
 } from "../../index.js";
@@ -335,20 +339,41 @@ describe("Tool: ov_archive_expand (behavioral)", () => {
   });
 });
 
-describe("Tool: ov_import and memory_search (registration)", () => {
-  it("registers unified import tool with expected parameters", () => {
+describe("Tool: add_resource, add_skill, and memory_search (registration)", () => {
+  it("registers add_resource tool with expected parameters", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const tool = tools.get("ov_import");
+    const tool = tools.get("add_resource");
     expect(tool).toBeDefined();
     expect(tool!.description).toContain("explicitly asks");
+    expect(tool!.description).toContain("[media attached: /path");
+    expect(tool!.description).toContain("Do not invent OpenViking upload REST endpoints");
     const props = (tool!.parameters as any).properties;
-    expect(props).toHaveProperty("kind");
     expect(props).toHaveProperty("source");
-    expect(props).toHaveProperty("data");
+    expect(props.source.description).toContain("OpenClaw media attachment path");
     expect(props).toHaveProperty("to");
     expect(props).toHaveProperty("parent");
+    expect(props).toHaveProperty("reason");
+    expect(props).toHaveProperty("instruction");
     expect(props).toHaveProperty("wait");
+  });
+
+  it("registers add_skill tool with expected parameters", () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("add_skill");
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain("explicitly asks");
+    expect(tool!.description).toContain("into OpenViking");
+    expect(tool!.description).toContain("SKILL.md");
+    expect(tool!.description).toContain("MCP tool dict");
+    const props = (tool!.parameters as any).properties;
+    expect(props).toHaveProperty("source");
+    expect(props).toHaveProperty("data");
+    expect(props).toHaveProperty("wait");
+    expect(props).toHaveProperty("timeout");
+    expect(props).not.toHaveProperty("to");
+    expect(props).not.toHaveProperty("parent");
   });
 
   it("registers memory_search tool with natural-language trigger guidance", () => {
@@ -536,21 +561,19 @@ describe("OpenViking import command parsing", () => {
 
   it("preserves Windows path backslashes in slash-command args", () => {
     expect(
-      parseOvImportCommandArgs(String.raw`C:\Users\alice\skill-dir --kind skill --wait`),
+      parseAddSkillCommandArgs(String.raw`C:\Users\alice\skill-dir --wait`),
     ).toMatchObject({
-      kind: "skill",
       source: String.raw`C:\Users\alice\skill-dir`,
       wait: true,
     });
   });
 
-  it("parses ov-import resource flags with resource default", () => {
+  it("parses add-resource flags", () => {
     expect(
-      parseOvImportCommandArgs(
+      parseAddResourceCommandArgs(
         `./README.md --to viking://resources/readme --reason "project docs" --instruction='summarize APIs' --wait`,
       ),
     ).toMatchObject({
-      kind: "resource",
       source: "./README.md",
       to: "viking://resources/readme",
       reason: "project docs",
@@ -561,11 +584,10 @@ describe("OpenViking import command parsing", () => {
 
   it("keeps unquoted space-containing import sources intact", () => {
     expect(
-      parseOvImportCommandArgs(
+      parseAddResourceCommandArgs(
         `My Docs/README.md --to viking://resources/readme`,
       ),
     ).toMatchObject({
-      kind: "resource",
       source: "My Docs/README.md",
       to: "viking://resources/readme",
     });
@@ -573,13 +595,12 @@ describe("OpenViking import command parsing", () => {
 
   it("rejects resource import with both to and parent", () => {
     expect(() =>
-      parseOvImportCommandArgs("./README.md --to viking://resources/a --parent viking://resources"),
+      parseAddResourceCommandArgs("./README.md --to viking://resources/a --parent viking://resources"),
     ).toThrow("Cannot specify both");
   });
 
-  it("parses ov-import skill flags", () => {
-    expect(parseOvImportCommandArgs("./skills/demo --kind skill --wait --timeout=30")).toMatchObject({
-      kind: "skill",
+  it("parses add-skill flags", () => {
+    expect(parseAddSkillCommandArgs("./skills/demo --wait --timeout=30")).toMatchObject({
       source: "./skills/demo",
       wait: true,
       timeout: 30,
@@ -588,7 +609,7 @@ describe("OpenViking import command parsing", () => {
 
   it("rejects resource-only flags for skill imports", () => {
     expect(() =>
-      parseOvImportCommandArgs("./skills/demo --kind skill --to viking://resources/nope"),
+      parseAddSkillCommandArgs("./skills/demo --to viking://resources/nope"),
     ).toThrow("resource-only");
   });
 });
@@ -611,18 +632,22 @@ describe("OpenViking memory_search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 7 tools", () => {
+  it("registers all 8 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(7);
+    expect(api.registerTool).toHaveBeenCalledTimes(8);
   });
 
-  it("registers import and search commands", () => {
+  it("registers add and search commands", () => {
     const { commands, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(commands.get("ov-import")).toMatchObject({
+    expect(commands.get("add-resource")).toMatchObject({
       acceptsArgs: true,
-      description: "Import a resource or skill into OpenViking.",
+      description: "Add a resource into OpenViking.",
+    });
+    expect(commands.get("add-skill")).toMatchObject({
+      acceptsArgs: true,
+      description: "Add a skill into OpenViking.",
     });
     expect(commands.get("memory-search")).toMatchObject({
       acceptsArgs: true,
@@ -630,18 +655,23 @@ describe("Plugin registration", () => {
     });
   });
 
-  it("import and search commands return usage errors when args are missing", async () => {
+  it("add and search commands return usage errors when args are missing", async () => {
     const { commands, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const resource = await commands.get("ov-import")!.handler({
+    const resource = await commands.get("add-resource")!.handler({
       args: "",
-      commandBody: "/ov-import",
+      commandBody: "/add-resource",
+    });
+    const skill = await commands.get("add-skill")!.handler({
+      args: "",
+      commandBody: "/add-skill",
     });
     const search = await commands.get("memory-search")!.handler({
       args: "",
       commandBody: "/memory-search",
     });
-    expect(resource.text).toContain("Usage: /ov-import");
+    expect(resource.text).toContain("Usage: /add-resource");
+    expect(skill.text).toContain("Usage: /add-skill");
     expect(search.text).toContain("Usage: /memory-search");
   });
 
@@ -702,7 +732,7 @@ describe("Plugin registration", () => {
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
   });
 
-  it("import tool propagates configured tenant headers for resource imports", async () => {
+  it("add_resource propagates configured tenant headers", async () => {
     const fetchMock = vi.fn(async () =>
       okResponse({ root_uri: "viking://resources/shared-docs", status: "success" }),
     );
@@ -716,9 +746,8 @@ describe("Plugin registration", () => {
     };
     contextEnginePlugin.register(api as any);
 
-    const tool = tools.get("ov_import")!;
-    await tool.execute("tc-import", {
-      kind: "resource",
+    const tool = tools.get("add_resource")!;
+    await tool.execute("tc-add-resource", {
       source: "https://example.com/docs",
       to: "viking://resources/shared-docs",
       wait: true,
@@ -728,6 +757,67 @@ describe("Plugin registration", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
     expect(headers.get("X-OpenViking-User")).toBe("alice");
+  });
+
+  it("add_resource uploads local media attachment paths as resources", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "openclaw-media-"));
+    const filePath = join(tempDir, "大秦-TOP20.xlsx");
+    await writeFile(filePath, "spreadsheet bytes");
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(okResponse({ temp_file_id: "upload_sheet.xlsx" }))
+      .mockResolvedValueOnce(okResponse({ root_uri: "viking://resources/sheet", status: "success" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { tools, api } = setupPlugin();
+      contextEnginePlugin.register(api as any);
+
+      const tool = tools.get("add_resource")!;
+      const result = await tool.execute("tc-add-resource-local-media", {
+        source: filePath,
+        wait: true,
+      }) as ToolResult;
+
+      expect(result.content[0]!.text).toContain("Imported OpenViking resource");
+      expect(fetchMock.mock.calls[0]![0]).toBe("http://127.0.0.1:1933/api/v1/resources/temp_upload");
+      expect(fetchMock.mock.calls[1]![0]).toBe("http://127.0.0.1:1933/api/v1/resources");
+      const body = JSON.parse(String(fetchMock.mock.calls[1]![1]!.body));
+      expect(body).toMatchObject({
+        temp_file_id: "upload_sheet.xlsx",
+        wait: true,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("add_skill posts skill imports to the skills API", async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ uri: "viking://agent/skills/demo", name: "demo" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+
+    const tool = tools.get("add_skill")!;
+    const result = await tool.execute("tc-add-skill", {
+      data: "name: demo\n",
+      wait: true,
+      timeout: 30,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Imported OpenViking skill");
+    const [url, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/skills")) as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1933/api/v1/skills");
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      data: "name: demo\n",
+      wait: true,
+      timeout: 30,
+    });
   });
 
   it("slash commands honor bypassSessionPatterns", async () => {
