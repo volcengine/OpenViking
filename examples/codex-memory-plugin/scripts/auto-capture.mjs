@@ -1,43 +1,42 @@
 #!/usr/bin/env node
 
 /**
- * Auto-Capture Hook Script for Codex.
+ * Stop hook for Codex (turn end).
  *
- * Triggered by the Stop hook.
- * Codex passes `last_assistant_message`, `transcript_path`, `session_id`, `turn_id` on stdin.
+ * Codex passes JSON on stdin including session_id, transcript_path,
+ * last_assistant_message. Stop fires per turn — NOT at session end.
  *
  * Strategy:
- *   1. Use `last_assistant_message` directly when available (cheap path).
- *   2. Fall back to incrementally parsing `transcript_path` (rollout JSONL).
+ *   1. For this codex session_id, lazily create one long-lived OpenViking
+ *      session and remember it in state. Do NOT commit per turn.
+ *   2. Read transcript_path, parse JSONL rollout, append every new
+ *      user/assistant turn since last capture via add_message.
+ *   3. Idle sweep: any OTHER codex session whose state file is older than
+ *      IDLE_TTL gets committed and cleared. This is a best-effort
+ *      session-end signal because codex has no SessionEnd hook today.
  *
- * Each captured turn opens a short-lived OpenViking session, posts the text,
- * extracts memories, then deletes the session. State per session_id tracks
- * how many transcript turns we've already consumed so we don't re-capture.
+ * The PreCompact hook is the deterministic commit path; this idle sweep
+ * is the catch-all for graceful exits.
  *
- * Codex Stop output schema does NOT support `decision: "approve"`. A no-op is `{}`.
+ * Stop output schema accepts {} as a no-op.
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { clearState, listStates, loadState, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
 
-const STATE_DIR = join(tmpdir(), "openviking-codex-capture-state");
+const IDLE_TTL_MS = Math.max(60_000, Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS) || 30 * 60_000);
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
 function noop(message) {
-  if (message) {
-    output({ systemMessage: message });
-  } else {
-    output({});
-  }
+  output(message ? { systemMessage: message } : {});
 }
 
 async function fetchJSON(path, init = {}) {
@@ -62,88 +61,6 @@ async function fetchJSON(path, init = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// State (per session_id, tracks last transcript turn index)
-// ---------------------------------------------------------------------------
-
-function stateFilePath(sessionId) {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(STATE_DIR, `${safe}.json`);
-}
-
-async function loadState(sessionId) {
-  try {
-    const data = await readFile(stateFilePath(sessionId), "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return { capturedTurnCount: 0, lastAssistantMessageHash: null };
-  }
-}
-
-async function saveState(sessionId, state) {
-  try {
-    await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(stateFilePath(sessionId), JSON.stringify(state));
-  } catch { /* best effort */ }
-}
-
-// ---------------------------------------------------------------------------
-// Capture decision
-// ---------------------------------------------------------------------------
-
-const MEMORY_TRIGGERS = [
-  /remember|preference|prefer|important|decision|decided|always|never/i,
-  /记住|偏好|喜欢|喜爱|崇拜|讨厌|害怕|重要|决定|总是|永远|优先|习惯|爱好|擅长|最爱|不喜欢/i,
-  /[\w.-]+@[\w.-]+\.\w+/,
-  /\+\d{10,}/,
-  /(?:我|my)\s*(?:是|叫|名字|name|住在|live|来自|from|生日|birthday|电话|phone|邮箱|email)/i,
-  /(?:我|i)\s*(?:喜欢|崇拜|讨厌|害怕|擅长|不会|爱|恨|想要|需要|希望|觉得|认为|相信)/i,
-  /(?:favorite|favourite|love|hate|enjoy|dislike|admire|idol|fan of)/i,
-];
-
-const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
-const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
-const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
-const CJK_CHAR_RE = /[぀-ヿ㐀-鿿豈-﫿가-힯]/;
-
-function sanitize(text) {
-  return text
-    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
-    .replace(/\u0000/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function shouldCapture(text) {
-  const normalized = sanitize(text);
-  if (!normalized) return { capture: false, reason: "empty", text: "" };
-
-  const compact = normalized.replace(/\s+/g, "");
-  const minLen = CJK_CHAR_RE.test(compact) ? 4 : 10;
-  if (compact.length < minLen || normalized.length > cfg.captureMaxLength) {
-    return { capture: false, reason: "length_out_of_range", text: normalized };
-  }
-
-  if (COMMAND_TEXT_RE.test(normalized)) {
-    return { capture: false, reason: "command", text: normalized };
-  }
-
-  if (NON_CONTENT_TEXT_RE.test(normalized)) {
-    return { capture: false, reason: "non_content", text: normalized };
-  }
-
-  if (cfg.captureMode === "keyword") {
-    for (const trigger of MEMORY_TRIGGERS) {
-      if (trigger.test(normalized)) {
-        return { capture: true, reason: `trigger:${trigger}`, text: normalized };
-      }
-    }
-    return { capture: false, reason: "no_trigger", text: normalized };
-  }
-
-  return { capture: true, reason: "semantic", text: normalized };
-}
-
-// ---------------------------------------------------------------------------
 // Transcript parsing (JSONL rollout)
 // ---------------------------------------------------------------------------
 
@@ -164,7 +81,6 @@ function parseTranscript(content) {
     const data = JSON.parse(content);
     if (Array.isArray(data)) return data;
   } catch { /* not a JSON array */ }
-
   const lines = content.split("\n").filter((l) => l.trim());
   const out = [];
   for (const line of lines) {
@@ -177,7 +93,6 @@ function extractTurns(rolloutEntries) {
   const turns = [];
   for (const entry of rolloutEntries) {
     if (!entry || typeof entry !== "object") continue;
-    // Codex rollout entries can be wrapped in payload.
     const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
     let role = payload.role;
     let text = "";
@@ -194,54 +109,108 @@ function extractTurns(rolloutEntries) {
     }
 
     if (role !== "user" && role !== "assistant") continue;
-    if (text.trim()) turns.push({ role, text: text.trim() });
+    const trimmed = text.trim();
+    if (!trimmed) continue;
+
+    const capped = trimmed.length > cfg.captureMaxLength
+      ? trimmed.slice(0, cfg.captureMaxLength)
+      : trimmed;
+    turns.push({ role, text: capped });
   }
   return turns;
 }
 
+async function readTranscriptTurns(transcriptPath) {
+  if (!transcriptPath) return [];
+  try {
+    const raw = await readFile(transcriptPath, "utf-8");
+    if (!raw.trim()) return [];
+    return extractTurns(parseTranscript(raw));
+  } catch (err) {
+    logError("transcript_read", err);
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Capture
+// OpenViking session ops
 // ---------------------------------------------------------------------------
 
-async function captureToOpenViking(text) {
-  const sessionResult = await fetchJSON("/api/v1/sessions", {
+async function ensureOvSession(state) {
+  if (state.ovSessionId) return state.ovSessionId;
+  const created = await fetchJSON("/api/v1/sessions", {
     method: "POST",
     body: JSON.stringify({}),
   });
-  if (!sessionResult?.session_id) return { ok: false, reason: "session_create_failed" };
+  if (!created?.session_id) return null;
+  state.ovSessionId = created.session_id;
+  return state.ovSessionId;
+}
 
-  const ovSessionId = sessionResult.session_id;
+async function appendTurns(ovSessionId, turns) {
+  for (const turn of turns) {
+    await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ role: turn.role, content: turn.text }),
+    });
+  }
+}
 
-  await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-    method: "POST",
-    body: JSON.stringify({ role: "user", content: text }),
-  });
-
-  const commit = await fetchJSON(
+async function commitOvSession(ovSessionId) {
+  if (!ovSessionId) return null;
+  return fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
   );
-
-  const extractedCount = commit?.memories_extracted && typeof commit.memories_extracted === "object"
-    ? Object.values(commit.memories_extracted).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0)
-    : (typeof commit?.memories_extracted === "number" ? commit.memories_extracted : 0);
-
-  return {
-    ok: true,
-    count: extractedCount,
-    ovSessionId,
-    archived: commit?.archived ?? false,
-    taskId: commit?.task_id,
-    status: commit?.status,
-  };
 }
 
-function fastHash(text) {
-  let h = 0;
-  for (let i = 0; i < text.length; i++) {
-    h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+function countExtracted(commit) {
+  if (!commit?.memories_extracted) return 0;
+  if (typeof commit.memories_extracted === "number") return commit.memories_extracted;
+  if (typeof commit.memories_extracted === "object") {
+    return Object.values(commit.memories_extracted).reduce(
+      (a, b) => a + (typeof b === "number" ? b : 0),
+      0,
+    );
   }
-  return String(h);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Idle sweep — best-effort session-end commit (codex has no SessionEnd hook)
+// ---------------------------------------------------------------------------
+
+async function sweepIdleSessions(currentSessionId) {
+  const states = await listStates();
+  const now = Date.now();
+  let sweptCount = 0;
+  let sweptExtracted = 0;
+
+  for (const s of states) {
+    if (!s?.codexSessionId || s.codexSessionId === currentSessionId) continue;
+    const idleMs = now - (typeof s.lastUpdatedAt === "number" ? s.lastUpdatedAt : 0);
+    if (idleMs < IDLE_TTL_MS) continue;
+
+    if (s.ovSessionId) {
+      const commit = await commitOvSession(s.ovSessionId);
+      const extracted = countExtracted(commit);
+      log("idle_sweep_commit", {
+        codexSessionId: s.codexSessionId,
+        ovSessionId: s.ovSessionId,
+        idleMs,
+        extracted,
+      });
+      sweptExtracted += extracted;
+    } else {
+      log("idle_sweep_clear", { codexSessionId: s.codexSessionId, idleMs });
+    }
+    await clearState(s.codexSessionId);
+    sweptCount += 1;
+  }
+
+  if (sweptCount > 0) {
+    log("idle_sweep_done", { sweptCount, sweptExtracted });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,12 +237,7 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
-  const lastAssistantMessage = input.last_assistant_message || null;
-  log("start", {
-    sessionId,
-    transcriptPath,
-    hasLastAssistantMessage: Boolean(lastAssistantMessage),
-  });
+  log("start", { sessionId, transcriptPath });
 
   const health = await fetchJSON("/health");
   if (!health) {
@@ -283,93 +247,36 @@ async function main() {
   }
 
   const state = await loadState(sessionId);
-  let totalCaptured = 0;
-  let totalExtracted = 0;
+  const allTurns = await readTranscriptTurns(transcriptPath);
+  const newTurns = allTurns.slice(state.capturedTurnCount);
 
-  // Strategy A: capture user turns from transcript (incremental).
-  if (transcriptPath) {
-    let raw;
-    try {
-      raw = await readFile(transcriptPath, "utf-8");
-    } catch (err) {
-      logError("transcript_read", err);
-      raw = null;
-    }
+  log("transcript_parse", {
+    totalTurns: allTurns.length,
+    previouslyCaptured: state.capturedTurnCount,
+    newTurns: newTurns.length,
+  });
 
-    if (raw && raw.trim()) {
-      const entries = parseTranscript(raw);
-      const allTurns = extractTurns(entries);
-      const newTurns = allTurns.slice(state.capturedTurnCount);
-      const captureTurns = cfg.captureAssistantTurns
-        ? newTurns
-        : newTurns.filter((t) => t.role === "user");
-
-      log("transcript_parse", {
-        totalTurns: allTurns.length,
-        previouslyCaptured: state.capturedTurnCount,
-        newTurns: newTurns.length,
-        captureTurns: captureTurns.length,
-      });
-
-      if (captureTurns.length > 0) {
-        const turnText = captureTurns.map((t) => `[${t.role}]: ${t.text}`).join("\n");
-        const decision = shouldCapture(turnText);
-        log("should_capture_transcript", { capture: decision.capture, reason: decision.reason });
-        if (decision.capture) {
-          const result = await captureToOpenViking(decision.text);
-          log("openviking_capture_transcript", {
-            sessionCreated: result.ok,
-            ovSessionId: result.ovSessionId,
-            extracted: result.count || 0,
-          });
-          if (result.ok) {
-            totalCaptured += captureTurns.length;
-            totalExtracted += result.count || 0;
-          }
-        }
-      }
-
-      state.capturedTurnCount = allTurns.length;
-    }
-  }
-
-  // Strategy B: capture last_assistant_message (independent of transcript availability).
-  // Only when (a) we want assistant turns or (b) transcript was unavailable.
-  if (cfg.captureLastAssistantOnStop && lastAssistantMessage) {
-    const hash = fastHash(lastAssistantMessage);
-    if (hash !== state.lastAssistantMessageHash) {
-      const decision = shouldCapture(lastAssistantMessage);
-      log("should_capture_last_assistant", { capture: decision.capture, reason: decision.reason });
-      if (decision.capture) {
-        const result = await captureToOpenViking(decision.text);
-        log("openviking_capture_last_assistant", {
-          sessionCreated: result.ok,
-          ovSessionId: result.ovSessionId,
-          extracted: result.count || 0,
-        });
-        if (result.ok) {
-          totalCaptured += 1;
-          totalExtracted += result.count || 0;
-        }
-      }
-      state.lastAssistantMessageHash = hash;
+  let added = 0;
+  if (newTurns.length > 0) {
+    const ovSessionId = await ensureOvSession(state);
+    if (!ovSessionId) {
+      logError("ensure_ov_session", "failed to create OV session");
     } else {
-      log("skip", { stage: "last_assistant_dedup", reason: "same hash as last capture" });
+      await appendTurns(ovSessionId, newTurns);
+      added = newTurns.length;
+      state.capturedTurnCount = allTurns.length;
+      log("appended", { ovSessionId, added });
     }
   }
 
-  await saveState(sessionId, state);
+  await saveState(state);
+  await sweepIdleSessions(sessionId);
 
-  if (totalExtracted > 0) {
-    log("done", { captured: totalCaptured, extracted: totalExtracted });
-    noop(`captured ${totalCaptured} turn(s), extracted ${totalExtracted} memory item(s)`);
-    return;
+  if (added > 0) {
+    noop(`appended ${added} turn(s) to OpenViking session ${state.ovSessionId}`);
+  } else {
+    noop();
   }
-
-  if (totalCaptured > 0) {
-    log("done", { captured: totalCaptured, extracted: 0 });
-  }
-  noop();
 }
 
 main().catch((err) => { logError("uncaught", err); noop(); });

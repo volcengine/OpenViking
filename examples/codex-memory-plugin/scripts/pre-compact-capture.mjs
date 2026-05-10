@@ -1,43 +1,38 @@
 #!/usr/bin/env node
 
 /**
- * Pre-Compact Hook Script for Codex.
+ * PreCompact hook for Codex.
  *
- * Triggered by the PreCompact hook. Codex passes:
- *   { session_id, transcript_path, cwd, hook_event_name: "PreCompact",
- *     model, trigger: "manual"|"auto", turn_id }
+ * Codex is about to summarize/compact the conversation. We commit the
+ * long-lived OpenViking session for this codex session_id (Stop hooks
+ * have already been appending turns), which triggers OV's memory
+ * extractor on the full pre-compact transcript.
  *
- * Codex is about to summarize / compact the conversation, dropping detail.
- * Before that happens, we open ONE OpenViking session, push every uncaptured
- * turn from the rollout in order, and commit. This produces a structured
- * extraction that survives compaction.
+ * Catch-up: if the transcript has new turns the Stop hook hasn't
+ * appended yet, we append them before committing.
  *
- * PreCompact output schema (codex-rs/hooks/schema/generated/pre-compact.command.output.schema.json)
- * does NOT support `decision`. Valid keys: continue, stopReason, suppressOutput, systemMessage.
- * No-op output is `{}`.
+ * After commit, we clear ovSessionId from state but keep
+ * capturedTurnCount so post-compact Stop hooks don't re-capture pre-
+ * compact turns. The next Stop will create a fresh OV session for the
+ * post-compact half of the conversation.
+ *
+ * PreCompact output schema accepts {} as a no-op.
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { loadState, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
-
-const STATE_DIR = join(tmpdir(), "openviking-codex-capture-state");
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
 function noop(message) {
-  if (message) {
-    output({ systemMessage: message });
-  } else {
-    output({});
-  }
+  output(message ? { systemMessage: message } : {});
 }
 
 async function fetchJSON(path, init = {}) {
@@ -59,27 +54,6 @@ async function fetchJSON(path, init = {}) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-function stateFilePath(sessionId) {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(STATE_DIR, `${safe}.json`);
-}
-
-async function loadState(sessionId) {
-  try {
-    const data = await readFile(stateFilePath(sessionId), "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return { capturedTurnCount: 0, lastAssistantMessageHash: null, compactedAt: null };
-  }
-}
-
-async function saveState(sessionId, state) {
-  try {
-    await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(stateFilePath(sessionId), JSON.stringify(state));
-  } catch { /* best effort */ }
 }
 
 function extractTextFromContent(content) {
@@ -127,39 +101,59 @@ function extractTurns(entries) {
     }
 
     if (role !== "user" && role !== "assistant") continue;
-    if (text.trim()) turns.push({ role, text: text.trim() });
+    const trimmed = text.trim();
+    if (!trimmed) continue;
+
+    const capped = trimmed.length > cfg.captureMaxLength
+      ? trimmed.slice(0, cfg.captureMaxLength)
+      : trimmed;
+    turns.push({ role, text: capped });
   }
   return turns;
 }
 
-async function commitFullSession(turns) {
+async function readTranscriptTurns(transcriptPath) {
+  if (!transcriptPath) return [];
+  try {
+    const raw = await readFile(transcriptPath, "utf-8");
+    if (!raw.trim()) return [];
+    return extractTurns(parseTranscript(raw));
+  } catch (err) {
+    logError("transcript_read", err);
+    return [];
+  }
+}
+
+async function ensureOvSession(state) {
+  if (state.ovSessionId) return state.ovSessionId;
   const created = await fetchJSON("/api/v1/sessions", {
     method: "POST",
     body: JSON.stringify({}),
   });
-  if (!created?.session_id) return { ok: false, reason: "session_create_failed" };
-  const ovSessionId = created.session_id;
+  if (!created?.session_id) return null;
+  state.ovSessionId = created.session_id;
+  return state.ovSessionId;
+}
 
+async function appendTurns(ovSessionId, turns) {
   for (const turn of turns) {
     await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ role: turn.role, content: turn.text }),
     });
   }
+}
 
-  const commit = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-
-  return {
-    ok: true,
-    ovSessionId,
-    extracted: commit?.memories_extracted || null,
-    archived: commit?.archived ?? false,
-    taskId: commit?.task_id,
-    status: commit?.status,
-  };
+function countExtracted(commit) {
+  if (!commit?.memories_extracted) return 0;
+  if (typeof commit.memories_extracted === "number") return commit.memories_extracted;
+  if (typeof commit.memories_extracted === "object") {
+    return Object.values(commit.memories_extracted).reduce(
+      (a, b) => a + (typeof b === "number" ? b : 0),
+      0,
+    );
+  }
+  return 0;
 }
 
 async function main() {
@@ -192,60 +186,65 @@ async function main() {
     return;
   }
 
-  if (!transcriptPath) {
-    log("skip", { stage: "input_check", reason: "no transcript_path" });
-    noop();
-    return;
-  }
-
-  let raw;
-  try {
-    raw = await readFile(transcriptPath, "utf-8");
-  } catch (err) {
-    logError("transcript_read", err);
-    noop();
-    return;
-  }
-  if (!raw.trim()) {
-    log("skip", { stage: "transcript_read", reason: "empty" });
-    noop();
-    return;
-  }
-
-  const entries = parseTranscript(raw);
-  const allTurns = extractTurns(entries);
-  log("transcript_parse", { totalTurns: allTurns.length });
-
-  if (allTurns.length === 0) {
-    noop();
-    return;
-  }
-
-  // Truncate over-long turns rather than dropping them — compaction is a one-shot.
-  const trimmed = allTurns.map((turn) => ({
-    role: turn.role,
-    text: turn.text.length > cfg.captureMaxLength
-      ? turn.text.slice(0, cfg.captureMaxLength)
-      : turn.text,
-  }));
-
-  const result = await commitFullSession(trimmed);
-  log("commit_full_session", result);
-
-  // Mark transcript as fully consumed so Stop hook stops re-capturing.
   const state = await loadState(sessionId);
-  state.capturedTurnCount = allTurns.length;
-  state.compactedAt = Date.now();
-  await saveState(sessionId, state);
+  const allTurns = await readTranscriptTurns(transcriptPath);
+  const newTurns = allTurns.slice(state.capturedTurnCount);
 
-  if (result.ok) {
-    const mem = result.extracted && typeof result.extracted === "object"
-      ? Object.values(result.extracted).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0)
-      : 0;
-    noop(`pre-compact commit: ${trimmed.length} turns sent to OpenViking, ${mem} memory item(s) extracted${result.archived ? " (archived)" : ""}`);
-  } else {
+  log("transcript_parse", {
+    totalTurns: allTurns.length,
+    previouslyCaptured: state.capturedTurnCount,
+    newTurns: newTurns.length,
+  });
+
+  if (allTurns.length === 0 && !state.ovSessionId) {
+    log("skip", { stage: "nothing_to_commit", reason: "no transcript and no open OV session" });
     noop();
+    return;
   }
+
+  if (newTurns.length > 0) {
+    const ovSessionId = await ensureOvSession(state);
+    if (!ovSessionId) {
+      logError("ensure_ov_session", "failed to create OV session for catch-up");
+      noop();
+      return;
+    }
+    await appendTurns(ovSessionId, newTurns);
+    state.capturedTurnCount = allTurns.length;
+    log("appended_catchup", { ovSessionId, added: newTurns.length });
+  }
+
+  if (!state.ovSessionId) {
+    log("skip", { stage: "commit", reason: "no OV session for this codex session" });
+    await saveState(state);
+    noop();
+    return;
+  }
+
+  const ovSessionId = state.ovSessionId;
+  const commit = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+  const extracted = countExtracted(commit);
+  log("commit", {
+    ovSessionId,
+    extracted,
+    archived: commit?.archived ?? false,
+    taskId: commit?.task_id,
+    status: commit?.status,
+  });
+
+  // Reset OV session for the post-compact half. Keep capturedTurnCount so
+  // we don't re-capture pre-compact turns when Stop fires next.
+  state.ovSessionId = null;
+  await saveState(state);
+
+  noop(
+    commit
+      ? `pre-compact commit: ${ovSessionId} → ${extracted} memory item(s) extracted${commit.archived ? " (archived)" : ""}`
+      : `pre-compact commit attempted on ${ovSessionId}; result unavailable`,
+  );
 }
 
 main().catch((err) => { logError("uncaught", err); noop(); });

@@ -1,7 +1,7 @@
 {
   "name": "openviking-memory",
-  "version": "0.2.0",
-  "description": "Long-term semantic memory for Codex, powered by OpenViking. Auto-recall on UserPromptSubmit, auto-capture on Stop, and full-session capture before context compaction.",
+  "version": "0.3.0",
+  "description": "Long-term semantic memory for Codex, powered by OpenViking. Recall on UserPromptSubmit, incremental add_message on Stop (per turn), commit on PreCompact, with idle-sweep commit for graceful exits.",
   "author": {
     "name": "OpenViking",
     "url": "https://github.com/volcengine/OpenViking"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "OpenViking Memory",
     "shortDescription": "Long-term semantic memory for Codex",
-    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories before each user turn, capture user/assistant turns on Stop, and commit the full transcript before PreCompact wipes context. Also exposes explicit MCP tools (openviking_recall, openviking_store, openviking_forget, openviking_health) for manual use.",
+    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit; on every Stop (turn end) append the new user/assistant turns to a long-lived OpenViking session keyed by codex session_id; on PreCompact commit that session so OV's extractor produces durable memories before context is summarized. A best-effort idle-sweep on Stop also commits sessions that exit gracefully without compacting. Also exposes explicit MCP tools (openviking_recall, openviking_store, openviking_forget, openviking_health) for manual use.",
     "developerName": "OpenViking",
     "category": "Productivity",
     "capabilities": [

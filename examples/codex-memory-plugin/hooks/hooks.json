@@ -1,17 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/bootstrap-runtime.mjs\"",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "matcher": "*",
@@ -31,7 +19,7 @@
           {
             "type": "command",
             "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/auto-capture.mjs\"",
-            "timeout": 45
+            "timeout": 30
           }
         ]
       }
