@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/openviking",
+  "name": "@openviking/openclaw-plugin",
   "version": "2026.5.8",
   "displayName": "OpenViking",
   "description": "OpenClaw context-engine plugin — OpenViking AI memory, long-term memory, knowledge base, semantic search, RAG, context engine. 长期记忆 · 知识库 · 语义检索 · 上下文引擎",
@@ -48,7 +48,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/volcengine/OpenViking"
+    "url": "git+https://github.com/volcengine/OpenViking.git"
   },
   "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin",
   "license": "MIT",

@@ -1,10 +1,9 @@
-name: ClawHub release (OpenViking plugin)
+name: OpenViking OpenClaw plugin release
 
-# Publishes examples/openclaw-plugin to ClawHub. The publish branch
-# intentionally does not commit dist/; this workflow builds and npm-packs the
-# plugin into a generated package branch, then lets ClawHub's official reusable
-# workflow perform trusted publishing from that package source while preserving
-# the original workflow commit as source metadata.
+# Publishes examples/openclaw-plugin as @openviking/openclaw-plugin. The
+# publish branch intentionally does not commit dist/; this workflow builds and
+# npm-packs the plugin into a generated package branch, then publishes the same
+# packed package to ClawHub and npm.
 
 on:
   workflow_dispatch:
@@ -25,6 +24,16 @@ on:
         description: "Changelog text for this release."
         required: false
         default: "OpenViking plugin release via OIDC trusted publishing."
+      publish_clawhub:
+        description: "Publish to ClawHub."
+        required: false
+        type: boolean
+        default: true
+      publish_npm:
+        description: "Publish to npm as @openviking/openclaw-plugin."
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -194,6 +203,8 @@ jobs:
           echo "resolved_version=${{ steps.resolve.outputs.version }}"
           echo "channel=${{ github.event.inputs.channel || 'auto' }}"
           echo "resolved_tags=${{ steps.resolve.outputs.tags }}"
+          echo "publish_clawhub=${{ inputs.publish_clawhub }}"
+          echo "publish_npm=${{ inputs.publish_npm }}"
           echo "changelog=${{ github.event.inputs.changelog || 'OpenViking plugin release via OIDC trusted publishing.' }}"
 
   prepare-package-source:
@@ -206,6 +217,7 @@ jobs:
     outputs:
       package_branch: ${{ steps.package_branch.outputs.branch }}
       source_url: ${{ steps.package_branch.outputs.source_url }}
+      tarball_name: ${{ steps.pack.outputs.tarball_name }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -235,9 +247,18 @@ jobs:
             echo "::error title=Pack failed::npm pack did not produce a tgz file."
             exit 1
           fi
+          echo "tarball_path=$tarball" >> "$GITHUB_OUTPUT"
+          echo "tarball_name=$(basename "$tarball")" >> "$GITHUB_OUTPUT"
           tar -xzf "$tarball" -C "$package_dir"
           echo "package_dir=$package_dir/package" >> "$GITHUB_OUTPUT"
           find "$package_dir/package" -maxdepth 3 -type f | sort
+
+      - name: Upload npm package tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: openviking-plugin-tarball
+          path: ${{ steps.pack.outputs.tarball_path }}
+          if-no-files-found: error
 
       - name: Push generated package branch
         id: package_branch
@@ -249,7 +270,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch --orphan "$BRANCH"
+          git switch --discard-changes --orphan "$BRANCH"
           git rm -r --cached . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a "$PACKAGE_DIR"/. .
@@ -261,8 +282,9 @@ jobs:
           echo "source_url=$source_url" >> "$GITHUB_OUTPUT"
           echo "source_url=$source_url"
 
-  publish:
+  publish-clawhub:
     name: Publish to ClawHub (official trusted workflow)
+    if: ${{ inputs.publish_clawhub }}
     needs:
       - guard
       - prepare-package-source
@@ -279,3 +301,59 @@ jobs:
       source_repo: ${{ github.repository }}
       source_commit: ${{ github.sha }}
       source_ref: ${{ github.ref }}
+
+  publish-npm:
+    name: Publish to npm
+    if: ${{ inputs.publish_npm }}
+    needs:
+      - guard
+      - prepare-package-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@openviking/openclaw-plugin
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@latest
+
+      - name: Download npm package tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: openviking-plugin-tarball
+          path: ${{ runner.temp }}/openviking-plugin-tarball
+
+      - name: Publish package to npm
+        working-directory: ${{ runner.temp }}/openviking-plugin-tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ needs.guard.outputs.tags }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find . -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [ -z "$tarball" ]; then
+            echo "::error title=Missing tarball::The openviking-plugin-tarball artifact did not contain a .tgz file."
+            exit 1
+          fi
+
+          if npm view "@openviking/openclaw-plugin@$VERSION" version >/dev/null 2>&1; then
+            echo "::error title=npm version already exists::@openviking/openclaw-plugin@$VERSION is already published."
+            exit 1
+          fi
+
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+            echo "Publishing with NPM_TOKEN."
+          else
+            echo "Publishing with npm trusted publishing (GitHub OIDC)."
+          fi
+
+          npm publish "$tarball" --access public --tag "$NPM_TAG" --provenance --registry https://registry.npmjs.org
