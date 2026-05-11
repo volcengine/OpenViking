@@ -10,10 +10,10 @@ from typing import Optional
 
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
-from openviking.storage.local_fs import backup_ovpack as local_backup_ovpack
-from openviking.storage.local_fs import export_ovpack as local_export_ovpack
-from openviking.storage.local_fs import import_ovpack as local_import_ovpack
-from openviking.storage.local_fs import restore_ovpack as local_restore_ovpack
+from openviking.storage.ovpack.operations import backup_ovpack as local_backup_ovpack
+from openviking.storage.ovpack.operations import export_ovpack as local_export_ovpack
+from openviking.storage.ovpack.operations import import_ovpack as local_import_ovpack
+from openviking.storage.ovpack.operations import restore_ovpack as local_restore_ovpack
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger

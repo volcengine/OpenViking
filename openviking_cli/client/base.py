@@ -331,6 +331,11 @@ class BaseClient(ABC):
     # ============= Debug =============
 
     @abstractmethod
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        ...
+
+    @abstractmethod
     async def health(self) -> bool:
         """Quick health check."""
         ...

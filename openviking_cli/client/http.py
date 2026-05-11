@@ -1026,6 +1026,14 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Debug =============
 
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        response = await self._http.post(
+            "/api/v1/system/consistency",
+            json={"uri": VikingURI.normalize(uri)},
+        )
+        return self._handle_response(response)
+
     async def health(self) -> bool:
         """Check server health."""
         try:

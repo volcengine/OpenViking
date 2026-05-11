@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.local_fs import backup_ovpack, export_ovpack, import_ovpack, restore_ovpack
+from openviking.storage.ovpack.operations import (
+    backup_ovpack,
+    export_ovpack,
+    import_ovpack,
+    restore_ovpack,
+)
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -172,6 +177,23 @@ class FakeVectorStore:
 
     async def filter(self, **kwargs):
         uri = kwargs["filter"].value
+        if uri == "viking://resources/demo":
+            return [
+                {
+                    "uri": uri,
+                    "context_type": "resource",
+                    "level": 0,
+                    "abstract": "root abstract",
+                    "vector": [0.4, 0.5, 0.6],
+                },
+                {
+                    "uri": uri,
+                    "context_type": "resource",
+                    "level": 1,
+                    "abstract": "root overview",
+                    "vector": [0.7, 0.8, 0.9],
+                },
+            ]
         if uri == "viking://resources/demo/notes.txt":
             return [
                 {
@@ -188,6 +210,25 @@ class FakeVectorStore:
     async def upsert(self, data, ctx=None):
         self.upserts.append(dict(data))
         return data.get("id", "")
+
+
+class IncompleteVectorStore(FakeVectorStore):
+    async def filter(self, **kwargs):
+        return []
+
+
+class HybridIndexVectorStore(FakeVectorStore):
+    _index_name = "context_idx"
+
+    def _get_default_backend(self):
+        return self
+
+    def _get_collection(self):
+        return self
+
+    def get_index_meta_data(self, index_name):
+        assert index_name == self._index_name
+        return {"VectorIndex": {"IndexType": "flat_hybrid"}}
 
 
 @pytest.fixture
@@ -445,7 +486,9 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
     async def capture_vectorize_file(**kwargs):
         vectorized_files.append(kwargs)
 
-    monkeypatch.setattr("openviking.storage.local_fs.vectorize_file", capture_vectorize_file)
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations.vectorize_file", capture_vectorize_file
+    )
 
     await restore_ovpack(FakeRestoreVectorVikingFS(), str(temp_ovpack_path), request_ctx)
 
@@ -459,6 +502,52 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
 
 
 @pytest.mark.asyncio
+async def test_export_include_vectors_rejects_missing_index_records(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match=r"incomplete OpenViking vector index snapshot",
+    ) as exc_info:
+        await export_ovpack(
+            FakeExportVikingFS(),
+            "viking://resources/demo",
+            str(temp_ovpack_path),
+            ctx=request_ctx,
+            vector_store=IncompleteVectorStore(),
+            include_vectors=True,
+        )
+
+    assert set(exc_info.value.details["missing_records"]) == {
+        ".#level=0",
+        ".#level=1",
+        "notes.txt#level=2",
+    }
+    assert not temp_ovpack_path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_export_include_vectors_rejects_hybrid_index_snapshot(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match=r"only support pure dense",
+    ) as exc_info:
+        await export_ovpack(
+            FakeExportVikingFS(),
+            "viking://resources/demo",
+            str(temp_ovpack_path),
+            ctx=request_ctx,
+            vector_store=HybridIndexVectorStore(),
+            include_vectors=True,
+        )
+
+    assert exc_info.value.details["reason"] == "current vector index type is hybrid"
+    assert not temp_ovpack_path.read_bytes()
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_restores_required_dense_vector_snapshot(
     temp_ovpack_path: Path, request_ctx: RequestContext, monkeypatch: pytest.MonkeyPatch
 ):
@@ -469,11 +558,11 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
         "dimensions": 3,
     }
     monkeypatch.setattr(
-        "openviking.storage.local_fs._embedding_snapshot_metadata",
+        "openviking.storage.ovpack.vectors.embedding_snapshot_metadata",
         lambda dimensions: {**embedding_metadata, "dimensions": dimensions},
     )
     monkeypatch.setattr(
-        "openviking.storage.local_fs._current_embedding_metadata",
+        "openviking.storage.ovpack.vectors.current_embedding_metadata",
         lambda: embedding_metadata,
     )
 
@@ -502,13 +591,17 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
 
     assert result == "viking://resources/imported/demo"
     assert fake_fs.tree_calls == []
-    assert len(vector_store.upserts) == 1
-    assert vector_store.upserts[0]["uri"] == "viking://resources/imported/demo/notes.txt"
-    assert vector_store.upserts[0]["vector"] == pytest.approx([0.1, 0.2, 0.3])
-    assert vector_store.upserts[0]["tags"] == ["snapshot"]
-    assert vector_store.upserts[0]["created_at"]
-    assert vector_store.upserts[0]["updated_at"]
-    assert vector_store.upserts[0]["active_count"] == 0
+    assert len(vector_store.upserts) == 3
+    note_record = next(
+        record
+        for record in vector_store.upserts
+        if record["uri"] == "viking://resources/imported/demo/notes.txt"
+    )
+    assert note_record["vector"] == pytest.approx([0.1, 0.2, 0.3])
+    assert note_record["tags"] == ["snapshot"]
+    assert note_record["created_at"]
+    assert note_record["updated_at"]
+    assert note_record["active_count"] == 0
 
 
 @pytest.mark.asyncio

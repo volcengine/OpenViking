@@ -26,6 +26,17 @@ pub async fn status(client: &HttpClient, output_format: OutputFormat, compact: b
     Ok(())
 }
 
+pub async fn consistency(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.consistency(uri).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn health(
     client: &HttpClient,
     output_format: OutputFormat,

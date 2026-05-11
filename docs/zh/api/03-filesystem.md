@@ -994,7 +994,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 - 导出的 ZIP 会包含 `<root>/_._ovpack_manifest.json`，这是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。
 - `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
-- `_._ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_._ovpack/dense.f32` 保存 dense float32 向量快照和 embedding 元数据。
+- `_._ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_._ovpack/dense.f32` 保存纯 dense float32 向量快照和 embedding 元数据；底层 `VectorIndex.IndexType` 为 hybrid 时不支持向量快照导出。
 - `id`、`uri`、`account_id`、`created_at`、`updated_at`、`active_count` 等运行态字段会在目标环境重新生成，不从包内恢复。
 - OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
@@ -1010,7 +1010,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | string | 是 | - | 要导出的 Viking URI |
-| include_vectors | boolean | 否 | false | 当存在可导出向量和 embedding 元数据时，导出 dense 向量快照 |
+| include_vectors | boolean | 否 | false | 导出纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝 |
 
 **权限要求**：ROOT 或 ADMIN
 
@@ -1200,7 +1200,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 
 将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
 `resources`、`user`、`agent`、`session`，不包含 `temp`、`queue` 等内部运行态数据。
-设置 `include_vectors=true` 时，会额外导出兼容的 dense 向量快照。
+设置 `include_vectors=true` 时，会额外导出兼容的纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝导出向量快照。
 
 ```
 POST /api/v1/pack/backup

@@ -80,8 +80,37 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 
 Compatibility checks compare the package embedding provider, model, input,
 query/document parameters, and dimensions with the current environment. OVPack
-only stores dense vector snapshots; sparse vectors are still rebuilt by the
-target environment.
+vector snapshots currently support pure dense indexes only. If the underlying
+`VectorIndex.IndexType` is hybrid, `--include-vectors` fails the export. When
+importing into a hybrid-index environment, `auto` recomputes vectors and
+`require` fails.
+
+Before exporting a dense vector snapshot, OpenViking runs a data consistency
+check. It verifies that content expected to be in the vector index already has
+matching index records. Missing records fail the export so the package does not
+carry an incomplete index snapshot.
+
+You can call the consistency check directly when debugging data state:
+
+```bash
+ov consistency viking://resources/my-project
+```
+
+Python SDK:
+
+```python
+report = await client.check_consistency("viking://resources/my-project")
+print(report["ok"], report["missing_records"])
+```
+
+HTTP API:
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
 
 ### Full Backup and Restore
 
@@ -302,9 +331,10 @@ id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
 created_at, updated_at, active_count
 ```
 
-With `--include-vectors`, export also stores dense vectors and embedding
+With `--include-vectors`, export also stores pure-dense vectors and embedding
 metadata. Even when import restores dense snapshots, runtime fields are rebuilt
-from the target URI, target account, and current time.
+from the target URI, target account, and current time. Hybrid indexes do not
+currently support vector snapshot export.
 
 ## Import Validation
 
@@ -423,6 +453,7 @@ re-export from an environment that can read that version.
 | `Top-level scope ovpack packages must be imported to viking://` | A top-level scope package was imported to a non-root parent | Import to `viking://`. |
 | `Backup ovpack packages must be restored` | A backup package was imported with regular import | Use `ov restore`. |
 | `Resource already exists` | Target root already exists | Use `--on-conflict overwrite` or `--on-conflict skip`. |
+| `incomplete OpenViking vector index snapshot` | `--include-vectors` found missing index records in the export range | Run `ov consistency <uri>` to locate the issue, then wait for processing or reindex. |
 | `dense vector snapshot is incompatible` | Package embedding metadata does not match current config | Use `--vector-mode recompute`, or switch to a compatible config. |
 
 ## FAQ

@@ -603,6 +603,13 @@ class LocalClient(BaseClient):
 
     # ============= Debug =============
 
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return await self._service.check_consistency(
+            uri=uri,
+            ctx=self._ctx,
+        )
+
     async def health(self) -> bool:
         """Check service health."""
         return True  # Local service is always healthy if initialized

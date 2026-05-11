@@ -72,7 +72,33 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 | `require` | 必须恢复兼容 dense 快照；没有快照、快照不完整、模型或维度不兼容都会报错。 |
 
 兼容性校验会比较包内记录的 embedding provider、model、input、query/document 参数和维度。
-OVPack 只保存 dense 向量快照；sparse 向量仍由目标环境重建。
+当前 OVPack 向量快照只支持纯 dense 索引；如果底层向量索引的 `VectorIndex.IndexType` 是 hybrid，`--include-vectors` 会直接拒绝导出。导入到 hybrid index 环境时，`auto` 会重新向量化，`require` 会报错。
+
+导出 dense 向量快照前，OpenViking 会先做数据一致性检查。也就是检查导出范围内按系统规则
+应该进入向量索引的内容，是否已经有对应索引记录。缺失时会拒绝导出，避免生成不完整的
+迁移包。
+
+可以单独调用一致性检查来调试当前数据状态：
+
+```bash
+ov consistency viking://resources/my-project
+```
+
+Python SDK：
+
+```python
+report = await client.check_consistency("viking://resources/my-project")
+print(report["ok"], report["missing_records"])
+```
+
+HTTP API：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
 
 ### 全量备份和恢复
 
@@ -287,8 +313,9 @@ id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
 created_at, updated_at, active_count
 ```
 
-如果使用 `--include-vectors`，会额外导出 dense 向量和 embedding 元数据。导入时即使恢复
-dense 快照，也会按目标 URI、目标账号和当前时间重建运行态字段。
+如果使用 `--include-vectors`，会额外导出纯 dense 向量和 embedding 元数据。导入时即使恢复
+dense 快照，也会按目标 URI、目标账号和当前时间重建运行态字段。hybrid index 当前不支持
+向量快照导出。
 
 ## 导入校验
 
@@ -403,6 +430,7 @@ viking://session/sess_123
 | `Top-level scope ovpack packages must be imported to viking://` | 将顶级 scope 包导入了非根父目录 | 改为导入 `viking://`。 |
 | `Backup ovpack packages must be restored` | 用普通 import 导入 backup 包 | 使用 `ov restore`。 |
 | `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |
+| `incomplete OpenViking vector index snapshot` | 使用 `--include-vectors` 时，导出范围内应索引内容缺少索引记录 | 先执行 `ov consistency <uri>` 定位问题，再等待处理完成或重新 reindex。 |
 | `dense vector snapshot is incompatible` | 包内 embedding 元数据和当前配置不一致 | 用 `--vector-mode recompute`，或换到兼容配置。 |
 
 ## 常见问题

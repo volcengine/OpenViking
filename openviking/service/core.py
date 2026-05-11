@@ -25,6 +25,7 @@ from openviking.service.task_tracker import set_task_tracker
 from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -416,6 +417,35 @@ class OpenVikingService:
             wait=wait,
             ctx=effective_ctx,
         )
+
+    async def check_consistency(
+        self,
+        *,
+        uri: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        if not self._initialized:
+            await self.initialize()
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        entries = await self._viking_fs.tree(
+            uri,
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=effective_ctx,
+        )
+        report = await check_index_consistency(
+            self._viking_fs,
+            self._vikingdb_manager,
+            uri,
+            entries,
+            effective_ctx,
+        )
+        return report.to_dict()
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""

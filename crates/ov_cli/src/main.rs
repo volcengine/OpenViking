@@ -572,6 +572,11 @@ enum Commands {
     },
     /// [Status] All OpenViking Server components status
     Status,
+    /// [Status] Check filesystem and vector-index consistency for a URI subtree
+    Consistency {
+        /// Viking URI to check
+        uri: String,
+    },
     /// [Status] Observe OpenViking Server components status
     Observer {
         #[command(subcommand)]
@@ -1129,6 +1134,16 @@ async fn main() {
         Commands::Status => {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
+        }
+        Commands::Consistency { uri } => {
+            let client = ctx.get_client();
+            commands::system::consistency(
+                &client,
+                &uri,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         Commands::Health => handlers::handle_health(ctx).await,
         Commands::System { action } => handlers::handle_system(action, ctx).await,

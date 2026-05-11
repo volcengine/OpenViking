@@ -638,6 +638,11 @@ class AsyncOpenViking:
 
     # ============= Debug methods =============
 
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        await self._ensure_initialized()
+        return await self._client.check_consistency(uri)
+
     def get_status(self) -> Union[SystemStatus, Dict[str, Any]]:
         """Get system status.
 

@@ -994,7 +994,7 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 - The exported ZIP contains `<root>/_._ovpack_manifest.json`, the escaped ZIP name for `.ovpack_manifest.json`.
 - `entries[].path` is relative to the exported root; `""` means the root directory itself.
 - File entries include `size` and `sha256`; `content_sha256` covers the sorted file list of `path`, `size`, and `sha256`.
-- `_._ovpack/index_records.jsonl` stores portable index scalar fields. With `include_vectors=true`, `_._ovpack/dense.f32` stores a dense float32 vector snapshot plus embedding metadata.
+- `_._ovpack/index_records.jsonl` stores portable index scalar fields. With `include_vectors=true`, `_._ovpack/dense.f32` stores a pure-dense float32 vector snapshot plus embedding metadata; vector indexes whose `VectorIndex.IndexType` is hybrid do not support vector snapshot export.
 - Runtime fields such as `id`, `uri`, `account_id`, `created_at`, `updated_at`, and `active_count` are regenerated in the target environment and are not restored from the package.
 - OVPack does not add package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
@@ -1010,7 +1010,7 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | string | Yes | - | Viking URI to export |
-| include_vectors | boolean | No | false | Include a dense vector snapshot when exportable vectors and embedding metadata are available |
+| include_vectors | boolean | No | false | Include a pure-dense vector snapshot; hybrid index types are rejected |
 
 **Permission Requirements**: ROOT or ADMIN
 
@@ -1201,7 +1201,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 Back up public scope roots as a restore-only `.ovpack` file. The backup includes
 `resources`, `user`, `agent`, and `session`; it excludes internal runtime data
 such as `temp` and `queue`. Set `include_vectors=true` to include compatible
-dense vector snapshots.
+pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 
 ```
 POST /api/v1/pack/backup

@@ -460,6 +460,10 @@ class SyncHTTPClient:
             )
         )
 
+    def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return run_async(self._async_client.check_consistency(uri))
+
     # ============= Admin =============
 
     def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
