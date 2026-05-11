@@ -358,7 +358,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         resolved.resolved_links = resolved_links
         return resolved
 
-
     def _resolve_links(
         self, operations, upsert_operations: List[ResolvedOperation]
     ) -> List[StoredLink]:
@@ -411,17 +410,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         async def execute_single_tool_call(idx: int, tool_call):
             """Execute a single tool call."""
             result = await self.context_provider.execute_tool(tool_call)
-            # Annotate read results with page_id for link extraction
-            if tool_call.name == "read" and self._page_id_map:
-                uri = tool_call.arguments.get("uri", "")
-                if uri:
-                    has_error = isinstance(result, dict) and "error" in result
-                    if not has_error:
-                        page_id = self._page_id_map.get_page_id(uri)
-                        if isinstance(result, dict):
-                            result["page_id"] = page_id
-                        elif isinstance(result, str):
-                            result = f"[page_id: {page_id}]\n{result}"
             return idx, tool_call, result
 
         action_tasks = [
@@ -630,7 +618,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Calculate call_id based on existing tool messages
         call_id_seq = len([m for m in messages if m.get("role") == "tool"]) + 1000
         for uri, parsed in refetch_uris.items():
-            # Add as read tool call + result
             add_tool_call_pair_to_messages(
                 messages=messages,
                 call_id=call_id_seq,
