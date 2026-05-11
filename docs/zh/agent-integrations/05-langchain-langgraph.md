@@ -40,9 +40,11 @@ tools = create_openviking_tools(
 
 仓库内提供了可直接运行的最小示例：
 
-- `examples/langchain-rag/quick_app.py`
-- `examples/langchain-context-backend/quick_app.py`
-- `examples/langgraph-agent/quick_app.py`
-- `tests/integration/langchain_langgraph/live_e2e.py`
+- `examples/langchain-langgraph/langchain/rag/quick_app.py`
+- `examples/langchain-langgraph/langchain/context-backend/quick_app.py`
+- `examples/langchain-langgraph/langchain/message-history/quick_app.py`
+- `examples/langchain-langgraph/langgraph/agent/quick_app.py`
+- `examples/langchain-langgraph/langgraph/agent/live_app.py`
+- `examples/langchain-langgraph/langgraph/middleware/quick_app.py`
 
 更完整的英文说明见 [LangChain and LangGraph](../../en/agent-integrations/05-langchain-langgraph.md)。

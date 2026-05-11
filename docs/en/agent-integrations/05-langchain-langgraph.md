@@ -85,7 +85,6 @@ chain = with_openviking_context(
     commit_policy=OpenVikingCommitPolicy(
         mode="pending_tokens",
         pending_token_threshold=8_000,
-        keep_recent_count=10,
     ),
 )
 
@@ -188,7 +187,6 @@ middleware = OpenVikingContextMiddleware(
     commit_policy=OpenVikingCommitPolicy(
         mode="pending_tokens",
         pending_token_threshold=8_000,
-        keep_recent_count=10,
     ),
 )
 
@@ -212,19 +210,19 @@ The repository includes small deterministic examples that exercise real LangChai
 From the repository root:
 
 ```bash
-uv run --extra langgraph python examples/langchain-rag/quick_app.py
-uv run --extra langgraph python examples/langchain-context-backend/quick_app.py
-uv run --extra langgraph python examples/langchain-message-history/quick_app.py
-uv run --extra langgraph python examples/langgraph-agent/quick_app.py
-uv run --extra langgraph python examples/langgraph-middleware/quick_app.py
+uv run --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
+uv run --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
+uv run --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
+uv run --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
+uv run --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
 ```
 
 The examples cover:
 
-- [LangChain RAG quick app](../../../examples/langchain-rag/quick_app.py): LangChain RAG with `OpenVikingRetriever`.
-- [LangChain context backend quick app](../../../examples/langchain-context-backend/quick_app.py): LangChain session context injection with `with_openviking_context()`.
-- [LangChain message history quick app](../../../examples/langchain-message-history/quick_app.py): LangChain chat history backed by `OpenVikingChatMessageHistory`.
-- [LangGraph agent quick app](../../../examples/langgraph-agent/quick_app.py): LangGraph workflow using OpenViking tools and `OpenVikingStore`.
-- [LangGraph middleware quick app](../../../examples/langgraph-middleware/quick_app.py): LangGraph context injection and capture with `OpenVikingContextMiddleware`.
+- [LangChain RAG quick app](../../../examples/langchain-langgraph/langchain/rag/quick_app.py): LangChain RAG with `OpenVikingRetriever`.
+- [LangChain context backend quick app](../../../examples/langchain-langgraph/langchain/context-backend/quick_app.py): LangChain session context injection with `with_openviking_context()`.
+- [LangChain message history quick app](../../../examples/langchain-langgraph/langchain/message-history/quick_app.py): LangChain chat history backed by `OpenVikingChatMessageHistory`.
+- [LangGraph agent quick app](../../../examples/langchain-langgraph/langgraph/agent/quick_app.py): LangGraph workflow using OpenViking tools and `OpenVikingStore`.
+- [LangGraph middleware quick app](../../../examples/langchain-langgraph/langgraph/middleware/quick_app.py): LangGraph context injection and capture with `OpenVikingContextMiddleware`.
 
-For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](../../../examples/langgraph-agent/live_app.py).
+For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](../../../examples/langchain-langgraph/langgraph/agent/live_app.py).

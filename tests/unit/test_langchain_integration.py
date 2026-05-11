@@ -482,7 +482,7 @@ def test_archive_grep_pattern_uses_backend_safe_token_regex():
     assert "(?=" not in _archive_grep_pattern("hidden cobalt archive")
 
 
-def test_commit_policy_keeps_recent_messages():
+def test_commit_policy_commits_when_threshold_is_reached():
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(
         session_id="commit-session",
@@ -490,7 +490,6 @@ def test_commit_policy_keeps_recent_messages():
         commit_policy=OpenVikingCommitPolicy(
             mode="pending_tokens",
             pending_token_threshold=1,
-            keep_recent_count=1,
         ),
     )
 
@@ -502,10 +501,10 @@ def test_commit_policy_keeps_recent_messages():
     )
 
     assert client.archives["commit-session"]
-    assert len(client.sessions["commit-session"]) == 1
+    assert client.sessions["commit-session"] == []
 
 
-def test_history_suppresses_orphan_tool_results_after_retention():
+def test_history_is_empty_after_commit_archives_tool_messages():
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(
         session_id="orphan-tool-session",
@@ -513,7 +512,6 @@ def test_history_suppresses_orphan_tool_results_after_retention():
         commit_policy=OpenVikingCommitPolicy(
             mode="pending_tokens",
             pending_token_threshold=1,
-            keep_recent_count=1,
         ),
     )
 
@@ -538,9 +536,7 @@ def test_history_suppresses_orphan_tool_results_after_retention():
         ]
     )
 
-    assert len(client.sessions["orphan-tool-session"]) == 1
-    retained = openviking_message_to_langchain(client.sessions["orphan-tool-session"][0])
-    assert isinstance(retained[0], ToolMessage)
+    assert client.sessions["orphan-tool-session"] == []
     assert history.messages == []
 
 
@@ -726,8 +722,11 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
         },
         runtime=None,
     )
-    assert len(client.sessions["middleware-session"]) == 2
-    assistant_parts = client.sessions["middleware-session"][1]["parts"]
+    assert client.sessions["middleware-session"] == []
+    assert client.archives["middleware-session"]
+    archived_messages = client.archives["middleware-session"][0]["messages"]
+    assert len(archived_messages) == 2
+    assistant_parts = archived_messages[1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
 
 

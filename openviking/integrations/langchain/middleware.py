@@ -70,7 +70,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         capture_on_after_agent: bool = True,
         commit_on_after_agent: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
-        keep_recent_count: int = 10,
         recall_header: str = "Relevant OpenViking context:",
         include_active_messages: bool = False,
     ):
@@ -123,10 +122,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         self.capture_on_after_agent = capture_on_after_agent
         self.commit_policy = commit_policy
         if commit_on_after_agent and self.commit_policy is None:
-            self.commit_policy = OpenVikingCommitPolicy(
-                mode="always",
-                keep_recent_count=keep_recent_count,
-            )
+            self.commit_policy = OpenVikingCommitPolicy(mode="always")
         self.recall_header = recall_header
         self._captured_signatures: dict[str, tuple[str, ...]] = {}
         self._pending_context_parts: dict[str, list[dict[str, Any]]] = {}

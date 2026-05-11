@@ -81,7 +81,7 @@ def test_true_live_langchain_context_backend_e2e():
         assert len(context["messages"]) >= 4
         assert code in str(context).lower()
 
-        commit = client.commit_session(session_id, keep_recent_count=0)
+        commit = client.commit_session(session_id)
         _wait_for_commit_task(client, commit)
         archive_id = _archive_id_from_commit(commit)
         assert archive_id
@@ -219,7 +219,7 @@ def test_true_live_langgraph_middleware_e2e():
         ]
         assert code in str(context).lower()
 
-        commit = client.commit_session(session_id, keep_recent_count=0)
+        commit = client.commit_session(session_id)
         _wait_for_commit_task(client, commit)
         archive_id = _archive_id_from_commit(commit)
         assert archive_id

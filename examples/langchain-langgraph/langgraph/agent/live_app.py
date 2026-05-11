@@ -179,7 +179,7 @@ def main() -> str:
         print(answer)
         if code not in answer.lower():
             raise RuntimeError(f"Expected {code!r} in live answer: {answer!r}")
-        commit = client.commit_session(session_id, keep_recent_count=0)
+        commit = client.commit_session(session_id)
         wait_for_commit_task(client, commit)
         return answer
     finally:

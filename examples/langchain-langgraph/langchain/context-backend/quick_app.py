@@ -34,7 +34,6 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
         commit_policy=OpenVikingCommitPolicy(
             mode="pending_tokens",
             pending_token_threshold=1_000,
-            keep_recent_count=4,
         ),
     )
 

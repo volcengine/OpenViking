@@ -48,7 +48,6 @@ class OpenVikingCommitPolicy:
 
     mode: Literal["never", "always", "pending_tokens"] = "never"
     pending_token_threshold: int = 8_000
-    keep_recent_count: int = 10
 
 
 def ensure_client(connection: OpenVikingConnection) -> Any:
@@ -94,7 +93,6 @@ def maybe_commit_session(
             client,
             "commit_session",
             session_id=session_id,
-            keep_recent_count=policy.keep_recent_count,
         )
     if policy.mode != "pending_tokens":
         raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
@@ -114,7 +112,6 @@ def maybe_commit_session(
         client,
         "commit_session",
         session_id=session_id,
-        keep_recent_count=policy.keep_recent_count,
     )
 
 

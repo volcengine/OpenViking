@@ -172,7 +172,6 @@ def create_openviking_tools(
         messages: str | list[dict[str, Any]],
         session_id: str | None = None,
         commit: bool = True,
-        keep_recent_count: int = 0,
     ) -> str:
         """Store a conversation turn in an OpenViking session and optionally commit it."""
 
@@ -199,7 +198,6 @@ def create_openviking_tools(
                 active_client,
                 "commit_session",
                 session_id=session_id,
-                keep_recent_count=keep_recent_count,
             )
         return compact_json(result)
 

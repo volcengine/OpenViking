@@ -250,7 +250,6 @@ class InMemoryOpenVikingClient:
             "session_id": session_id,
             "message_count": len(self.sessions.get(session_id, [])),
             "pending_tokens": self.pending_tokens.get(session_id, 0),
-            "keep_recent_count": 0,
         }
 
     def get_session_context(
@@ -292,38 +291,34 @@ class InMemoryOpenVikingClient:
     def commit_session(
         self,
         session_id: str,
-        keep_recent_count: int = 0,
         **_: Any,
     ) -> dict[str, Any]:
         messages = list(self.sessions.get(session_id, []))
-        keep = max(0, keep_recent_count)
-        archived_messages = messages[:-keep] if keep else messages
-        retained_messages = messages[-keep:] if keep else []
         archive_id = f"archive_{len(self.archives[session_id]) + 1:03d}"
-        overview = "\n".join(_message_text(message) for message in archived_messages)
-        if archived_messages:
+        overview = "\n".join(_message_text(message) for message in messages)
+        if messages:
             archive_uri = f"viking://session/{session_id}/history/{archive_id}"
             self.archives[session_id].append(
                 {
                     "archive_id": archive_id,
                     "abstract": overview[:240],
                     "overview": overview,
-                    "messages": archived_messages,
+                    "messages": messages,
                 }
             )
             self.records[f"{archive_uri}/messages.jsonl"] = (
-                "\n".join(_message_text(message) for message in archived_messages) + "\n"
+                "\n".join(_message_text(message) for message in messages) + "\n"
             )
             self.records[f"{archive_uri}/.abstract.md"] = overview[:240]
             self.records[f"{archive_uri}/.overview.md"] = overview
             self.records[f"{archive_uri}/.done"] = "{}"
-        self.sessions[session_id] = retained_messages
+        self.sessions[session_id] = []
         self.pending_tokens[session_id] = 0
         return {
             "session_id": session_id,
             "status": "completed",
-            "archive_id": archive_id if archived_messages else None,
-            "archived": bool(archived_messages),
+            "archive_id": archive_id if messages else None,
+            "archived": bool(messages),
         }
 
     def delete_session(self, session_id: str) -> None:
