@@ -1632,6 +1632,30 @@ class VikingFS:
     _INTERNAL_NAMES = {"_system", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
+    # ls() deterministic ordering helpers.
+    # When deterministic ordering is enabled we must collect *all* eligible
+    # entries before sorting + truncating, otherwise the truncation window
+    # would not be stable. To avoid pathological cost on huge directories we
+    # cap the scan to max(node_limit * _LS_SCAN_FACTOR, _LS_SCAN_FLOOR) raw
+    # AGFS entries, which is enough to keep the top-N deterministic for any
+    # reasonable node_limit while bounding the per-entry work (uri build +
+    # access check + datetime parse).
+    _LS_SCAN_FACTOR = 4
+    _LS_SCAN_FLOOR = 4096
+
+    @staticmethod
+    def _ls_sort_key(entry: Dict[str, Any]) -> tuple:
+        """Deterministic sort key: files first, then case-folded name.
+
+        Falls back to the raw name to disambiguate entries that happen to
+        share a case-folded form (e.g. "Foo" vs "foo"), keeping the order
+        total and stable across calls.
+        """
+        name = entry.get("name", "") or ""
+        # bool(isDir) is True for directories; sorting ascending puts False
+        # (files) before True (directories) -> files come first.
+        return (bool(entry.get("isDir")), name.casefold(), name)
+
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
@@ -2172,6 +2196,7 @@ class VikingFS:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        enable_sort: bool = False,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -2183,6 +2208,13 @@ class VikingFS:
             abs_limit: int = 256
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            enable_sort: bool = False (default). When True, entries are
+                returned in a deterministic order (files first, then
+                case-folded name asc) and the truncation window is stable
+                across calls. When False (default), entries follow the raw
+                AGFS order and are truncated by the original
+                "break on node_limit" rule (faster on huge dirs but not
+                idempotent under truncation).
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -2192,9 +2224,18 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         if output == "original":
-            return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_original(
+                uri, show_all_hidden, node_limit, enable_sort=enable_sort, ctx=ctx
+            )
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_agent(
+                uri,
+                abs_limit,
+                show_all_hidden,
+                node_limit,
+                enable_sort=enable_sort,
+                ctx=ctx,
+            )
         else:
             raise ValueError(f"Invalid output format: {output}")
 
@@ -2204,6 +2245,7 @@ class VikingFS:
         abs_limit: int,
         show_all_hidden: bool,
         node_limit: int = 1000,
+        enable_sort: bool = False,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
@@ -2215,9 +2257,18 @@ class VikingFS:
             raise NotFoundError(uri, "directory")
         # basic info
         now = datetime.now(timezone.utc)
-        all_entries = []
-        for entry in entries:
-            if len(all_entries) >= node_limit:
+        # When sorting is enabled we need to collect all eligible entries
+        # before sort+truncate, so cap the scan to keep cost bounded on huge
+        # directories. When disabled, fall back to the legacy "break on
+        # node_limit" behaviour which is faster but not idempotent.
+        if enable_sort:
+            scan_cap = max(node_limit * self._LS_SCAN_FACTOR, self._LS_SCAN_FLOOR)
+            raw = entries[:scan_cap]
+        else:
+            raw = entries
+        filtered: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not enable_sort and len(filtered) >= node_limit:
                 break
             name = entry.get("name", "")
             raw_time = entry.get("modTime", "")
@@ -2237,16 +2288,26 @@ class VikingFS:
                 "size": 0 if is_dir else entry.get("size", 0),
                 "isDir": is_dir,
                 "modTime": format_simplified(parsed_time, now),
+                # Carry the raw name so the deterministic sort key is stable
+                # regardless of any later URI rewriting.
+                "name": name,
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
             if is_dir:
-                all_entries.append(new_entry)
+                filtered.append(new_entry)
             elif not name.startswith("."):
-                all_entries.append(new_entry)
+                filtered.append(new_entry)
             elif show_all_hidden:
-                all_entries.append(new_entry)
-        # call abstract in parallel 6 threads
+                filtered.append(new_entry)
+        if enable_sort:
+            # Deterministic order: files first, case-folded name asc.
+            filtered.sort(key=self._ls_sort_key)
+            all_entries = filtered[:node_limit]
+        else:
+            all_entries = filtered
+        # call abstract in parallel 6 threads (only on the kept window to
+        # avoid wasting IO on truncated entries).
         await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
         return all_entries
 
@@ -2255,6 +2316,7 @@ class VikingFS:
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        enable_sort: bool = False,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
@@ -2263,9 +2325,14 @@ class VikingFS:
         try:
             entries = self._ls_entries(path)
             # AGFS returns read-only structure, need to create new dict
-            all_entries = []
-            for entry in entries:
-                if len(all_entries) >= node_limit:
+            if enable_sort:
+                scan_cap = max(node_limit * self._LS_SCAN_FACTOR, self._LS_SCAN_FLOOR)
+                raw = entries[:scan_cap]
+            else:
+                raw = entries
+            filtered: List[Dict[str, Any]] = []
+            for entry in raw:
+                if not enable_sort and len(filtered) >= node_limit:
                     break
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
@@ -2273,12 +2340,16 @@ class VikingFS:
                 if not self._is_accessible(new_entry["uri"], real_ctx):
                     continue
                 if entry.get("isDir"):
-                    all_entries.append(new_entry)
+                    filtered.append(new_entry)
                 elif not name.startswith("."):
-                    all_entries.append(new_entry)
+                    filtered.append(new_entry)
                 elif show_all_hidden:
-                    all_entries.append(new_entry)
-            return all_entries
+                    filtered.append(new_entry)
+            if enable_sort:
+                # Deterministic order: files first, case-folded name asc.
+                filtered.sort(key=self._ls_sort_key)
+                return filtered[:node_limit]
+            return filtered
         except Exception:
             raise NotFoundError(uri, "directory")
 

@@ -11,6 +11,7 @@ pub async fn ls(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    enable_sort: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -23,6 +24,7 @@ pub async fn ls(
             abs_limit,
             show_all_hidden,
             node_limit,
+            enable_sort,
         )
         .await?;
     output_success(&result, output_format, compact);

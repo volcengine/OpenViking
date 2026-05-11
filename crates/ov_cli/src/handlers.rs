@@ -902,6 +902,7 @@ pub async fn handle_ls(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    enable_sort: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![
@@ -918,6 +919,9 @@ pub async fn handle_ls(
     if show_all_hidden {
         params.push("-a".to_string());
     }
+    if enable_sort {
+        params.push("--enable-sort".to_string());
+    }
     print_command_echo("ov ls", &params.join(" "), ctx.config.echo_command);
 
     let client = ctx.get_client();
@@ -931,6 +935,7 @@ pub async fn handle_ls(
         abs_limit,
         show_all_hidden,
         node_limit,
+        enable_sort,
         ctx.output_format,
         ctx.compact,
     )

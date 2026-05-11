@@ -240,6 +240,7 @@ impl HttpClient {
         abs_limit: i32,
         show_all_hidden: bool,
         node_limit: i32,
+        enable_sort: bool,
     ) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
@@ -249,6 +250,7 @@ impl HttpClient {
             ("abs_limit".to_string(), abs_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
+            ("enable_sort".to_string(), enable_sort.to_string()),
         ];
         self.get("/api/v1/fs/ls", &params).await
     }

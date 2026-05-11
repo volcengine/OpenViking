@@ -256,6 +256,11 @@ enum Commands {
             default_value = "256"
         )]
         node_limit: i32,
+        /// Return entries in deterministic order (files first, then case-folded
+        /// name asc) and apply a stable truncation window. Defaults to false:
+        /// entries follow the raw AGFS order. Only affects non-recursive ls.
+        #[arg(long = "enable-sort", default_value_t = false)]
+        enable_sort: bool,
     },
     /// [Data] Get directory tree
     Tree {
@@ -1102,7 +1107,8 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+            enable_sort,
+        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, enable_sort, ctx).await,
         Commands::Tree {
             uri,
             abs_limit,
