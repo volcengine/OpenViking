@@ -274,24 +274,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if value is None:
                 continue
 
-            # 统一转为列表，并按主键字段去重（防止 LLM 输出重复条目）
             items = value if isinstance(value, list) else [value]
-            seen_keys: set = set()
-            deduped_items = []
-            for item in items:
-                key_field = next(
-                    (f.name for f in schema.fields if f.merge_op.value == "immutable"),
-                    None,
-                )
-                key_val = dict(item).get(key_field) if key_field else None
-                dedup_key = (memory_type, key_val) if key_val else None
-                if dedup_key and dedup_key in seen_keys:
-                    tracer.info(f"[resolve_operations] dedup: skipping duplicate {memory_type} key={key_val}")
-                    continue
-                if dedup_key:
-                    seen_keys.add(dedup_key)
-                deduped_items.append(item)
-            items = deduped_items
 
             for item in items:
                 # 转换为 dict
