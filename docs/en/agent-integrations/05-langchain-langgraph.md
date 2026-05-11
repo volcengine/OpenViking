@@ -203,6 +203,8 @@ If your graph passes only the latest request and relies on OpenViking for the se
 
 LangGraph `thread_id` is the natural OpenViking `session_id`. Reuse the same ID for both systems when you also configure a LangGraph checkpointer. OpenViking handles semantic context and memory; the checkpointer handles exact graph execution resume. Provide `session_id_resolver` if your graph uses a custom thread/session identifier.
 
+The middleware requires a session identifier. If no `thread_id`, `session_id`, or custom resolver is available, it raises `ValueError` instead of writing to a shared default session.
+
 ## Try The Examples
 
 The repository includes small deterministic examples that exercise real LangChain and LangGraph application flows without requiring model credentials or a running OpenViking server. They use an OpenViking-compatible in-memory test client so you can see how the adapters fit into an agent app before connecting to a real backend.

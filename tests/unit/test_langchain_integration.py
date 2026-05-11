@@ -578,15 +578,52 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
-def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root():
+@pytest.mark.parametrize(
+    ("root_uri", "shorthand_prefix", "canonical_prefix"),
+    [
+        (
+            "viking://user/memories/langgraph_store",
+            "viking://user/memories",
+            "viking://user/default/memories",
+        ),
+        (
+            "viking://user/memories/langgraph_store",
+            "viking://user/memories",
+            "viking://user/default/agent/support/memories",
+        ),
+        (
+            "viking://agent/memories/langgraph_store",
+            "viking://agent/memories",
+            "viking://agent/support/memories",
+        ),
+        (
+            "viking://agent/memories/langgraph_store",
+            "viking://agent/memories",
+            "viking://agent/support/user/default/memories",
+        ),
+        (
+            "viking://agent/skills/langgraph_store",
+            "viking://agent/skills",
+            "viking://agent/support/user/default/skills",
+        ),
+    ],
+    ids=[
+        "user-memory",
+        "user-memory-isolated-by-agent",
+        "agent-memory",
+        "agent-memory-isolated-by-user",
+        "agent-skills-isolated-by-user",
+    ],
+)
+def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root(
+    root_uri,
+    shorthand_prefix,
+    canonical_prefix,
+):
     class CanonicalizingClient(InMemoryOpenVikingClient):
         def _canonicalize(self, value):
             if isinstance(value, str):
-                return value.replace(
-                    "viking://user/memories/",
-                    "viking://user/default/memories/",
-                    1,
-                )
+                return value.replace(f"{shorthand_prefix}/", f"{canonical_prefix}/", 1)
             if isinstance(value, list):
                 return [self._canonicalize(item) for item in value]
             return value
@@ -607,7 +644,7 @@ def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root():
             return super().rm(self._canonicalize(uri), recursive=recursive)
 
     client = CanonicalizingClient()
-    store = OpenVikingStore(client=client, root_uri="viking://user/memories/langgraph_store")
+    store = OpenVikingStore(client=client, root_uri=root_uri)
 
     store.put(("users", "ada"), "preferences", {"color": "azure"})
 
@@ -616,6 +653,26 @@ def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root():
     assert semantic[0].namespace == ("users", "ada")
     assert semantic[0].key == "preferences"
     assert semantic[0].value["color"] == "azure"
+
+
+def test_langgraph_store_ignores_unrelated_canonical_result_uris():
+    store = OpenVikingStore(
+        client=InMemoryOpenVikingClient(),
+        root_uri="viking://user/memories/langgraph_store",
+    )
+
+    assert (
+        store._parse_index_uri(
+            "viking://user/default/agent/support/memories/other_store/index/users/ada.md"
+        )
+        is None
+    )
+    assert (
+        store._parse_index_uri(
+            "viking://agent/support/user/default/memories/langgraph_store/index/users/ada.md"
+        )
+        is None
+    )
 
 
 def test_langgraph_store_waits_for_indexing_by_default():
@@ -815,6 +872,47 @@ def test_langgraph_middleware_uses_runtime_thread_id():
         Runtime(),
     )
     assert len(client.sessions["runtime-thread"]) == 2
+
+
+def test_langgraph_middleware_requires_explicit_session_id():
+    client = InMemoryOpenVikingClient(
+        {"viking://user/memories/profile.md": "Shared fallback should never be used."}
+    )
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        target_uri="viking://user/memories",
+    )
+
+    class Request:
+        state = {}
+        runtime = None
+        messages = [HumanMessage(content="What context?")]
+        system_message = None
+
+        def override(self, **overrides):
+            new_request = Request()
+            new_request.messages = overrides.get("messages", self.messages)
+            new_request.system_message = overrides.get("system_message", self.system_message)
+            return new_request
+
+    def handler(request):
+        return AIMessage(content="ok")
+
+    with pytest.raises(ValueError, match="thread_id"):
+        middleware.wrap_model_call(Request(), handler)
+
+    with pytest.raises(ValueError, match="session_id"):
+        middleware.after_agent(
+            {
+                "messages": [
+                    HumanMessage(content="Remember this."),
+                    AIMessage(content="Stored."),
+                ]
+            },
+            runtime=None,
+        )
+
+    assert "langgraph-default" not in client.sessions
 
 
 def test_langgraph_middleware_captures_cumulative_state_once():

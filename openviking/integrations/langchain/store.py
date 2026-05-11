@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import quote, unquote
 
-from openviking.core.namespace import uri_parts
+from openviking.core.namespace import UriClassification, classify_uri
 from openviking.integrations.langchain.client import (
     OpenVikingConnection,
     call_openviking,
@@ -41,11 +41,6 @@ else:
     _LANGGRAPH_IMPORT_ERROR = None
 
 logger = logging.getLogger(__name__)
-
-_SHORTHAND_CONTENT_SEGMENTS = {
-    "user": {"memories"},
-    "agent": {"memories", "skills"},
-}
 
 
 class OpenVikingStore(BaseStore):
@@ -436,32 +431,38 @@ def _parse_canonicalized_record_uri(
     collection: str,
     suffix: str,
 ) -> tuple[tuple[str, ...], str] | None:
-    root_parts = uri_parts(root_uri)
-    if not _is_identity_relative_root(root_parts):
+    root = classify_uri(root_uri)
+    root_tail = _identity_relative_root_tail(root)
+    if root_tail is None:
         return None
 
-    candidate_parts = uri_parts(uri)
-    if len(candidate_parts) < len(root_parts) + 2:
-        return None
-    canonical_root_parts = [root_parts[0], candidate_parts[1], *root_parts[1:]]
-    if candidate_parts[: len(canonical_root_parts)] != canonical_root_parts:
-        return None
-    if candidate_parts[len(canonical_root_parts)] != collection:
+    candidate = classify_uri(uri)
+    if candidate.scope != root.scope or candidate.content_index is None:
         return None
 
-    rel_parts = candidate_parts[len(canonical_root_parts) + 1 :]
+    candidate_tail = candidate.parts[candidate.content_index :]
+    if len(candidate_tail) < len(root_tail) + 2:
+        return None
+    if candidate_tail[: len(root_tail)] != root_tail:
+        return None
+
+    collection_index = len(root_tail)
+    if candidate_tail[collection_index] != collection:
+        return None
+
+    rel_parts = list(candidate_tail[collection_index + 1 :])
     if not rel_parts or not rel_parts[-1].endswith(suffix):
         return None
     rel_parts = [*rel_parts[:-1], rel_parts[-1][: -len(suffix)]]
     return _parse_record_parts(rel_parts)
 
 
-def _is_identity_relative_root(parts: list[str]) -> bool:
-    return (
-        len(parts) >= 2
-        and parts[0] in _SHORTHAND_CONTENT_SEGMENTS
-        and parts[1] in _SHORTHAND_CONTENT_SEGMENTS[parts[0]]
-    )
+def _identity_relative_root_tail(classification: UriClassification) -> tuple[str, ...] | None:
+    if classification.scope not in {"user", "agent"}:
+        return None
+    if classification.content_index != 1:
+        return None
+    return classification.parts[classification.content_index :]
 
 
 def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:

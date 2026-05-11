@@ -33,7 +33,7 @@ tools = create_openviking_tools(
 - 使用 `OpenVikingRetriever` 把 OpenViking 检索结果接入 LangChain RAG。
 - 使用 `create_openviking_tools()` 暴露 `viking_find`、`viking_search`、`viking_browse`、`viking_read`、`viking_grep`、`viking_store` 等工具。
 - 使用 `with_openviking_context(...)` 在 LangChain runnable 前自动装配 OpenViking session context，并在模型调用后捕获对话。
-- 使用 `OpenVikingContextMiddleware` 在 LangGraph agent 中注入上下文、捕获消息，并按 commit policy 触发 session commit。
+- 使用 `OpenVikingContextMiddleware` 在 LangGraph agent 中注入上下文、捕获消息，并按 commit policy 触发 session commit。该 middleware 需要明确的 `thread_id`、`session_id` 或自定义 `session_id_resolver`，不会回退到共享默认 session。
 - 使用 `OpenVikingStore` 作为 LangGraph `BaseStore`，把跨线程记忆存入 OpenViking。
 
 ## 示例

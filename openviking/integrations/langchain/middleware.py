@@ -41,6 +41,12 @@ from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
 logger = logging.getLogger(__name__)
 
+_SESSION_ID_ERROR = (
+    "OpenVikingContextMiddleware requires a LangGraph session id. Pass "
+    'config={"configurable": {"thread_id": "..."}}, set state["session_id"], '
+    "or provide session_id_resolver."
+)
+
 
 class OpenVikingContextMiddleware(AgentMiddleware):
     """Inject OpenViking recall into LangGraph agent model calls.
@@ -202,7 +208,10 @@ class OpenVikingContextMiddleware(AgentMiddleware):
 
     def _resolve_session_id(self, state: dict[str, Any], runtime: Any) -> str:
         if self.session_id_resolver:
-            return self.session_id_resolver(state, runtime)
+            resolved = _normalize_session_id(self.session_id_resolver(state, runtime))
+            if resolved:
+                return resolved
+            raise ValueError(_SESSION_ID_ERROR)
         candidates = [
             state.get("thread_id"),
             state.get("session_id"),
@@ -211,9 +220,10 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             _nested_get(getattr(runtime, "config", None), "configurable", "session_id"),
         ]
         for candidate in candidates:
-            if candidate:
-                return str(candidate)
-        return "langgraph-default"
+            resolved = _normalize_session_id(candidate)
+            if resolved:
+                return resolved
+        raise ValueError(_SESSION_ID_ERROR)
 
     def _ensure_session(self, client: Any, session_id: str) -> None:
         try:
@@ -233,6 +243,13 @@ def _nested_get(value: Any, *keys: str) -> Any:
         else:
             current = getattr(current, key, None)
     return current
+
+
+def _normalize_session_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _message_role(message: Any) -> str:
