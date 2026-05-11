@@ -112,6 +112,16 @@ class OverviewOnlyExportVikingFS(FakeExportVikingFS):
 
 
 class ReservedPathExportVikingFS(FakeExportVikingFS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.binary_files.update(
+            {
+                "viking://resources/demo/.ovpack/foo.txt": b"hello",
+                "viking://resources/demo/.notes.txt": b"dot",
+                "viking://resources/demo/_._notes.txt": b"escaped-looking",
+            }
+        )
+
     async def tree(
         self,
         uri: str,
@@ -133,6 +143,18 @@ class ReservedPathExportVikingFS(FakeExportVikingFS):
                 "uri": "viking://resources/demo/.ovpack/foo.txt",
                 "isDir": False,
                 "size": 5,
+            },
+            {
+                "rel_path": ".notes.txt",
+                "uri": "viking://resources/demo/.notes.txt",
+                "isDir": False,
+                "size": 3,
+            },
+            {
+                "rel_path": "_._notes.txt",
+                "uri": "viking://resources/demo/_._notes.txt",
+                "isDir": False,
+                "size": 15,
             },
         ]
 
@@ -333,7 +355,7 @@ def _set_manifest_index(
     data = _index_records_bytes(records)
     manifest["index"] = {
         "records": {
-            "path": "_._ovpack/index_records.jsonl",
+            "path": "_ovpack/index_records.jsonl",
             "count": len(records),
             "sha256": hashlib.sha256(data).hexdigest(),
         }
@@ -388,11 +410,14 @@ def _write_ovpack_with_manifest(
     index_data = _set_manifest_index(manifest, index_records)
     entries = {
         f"{root_name}/": "",
-        f"{root_name}/_._ovpack/": "",
-        f"{root_name}/_._ovpack/index_records.jsonl": index_data.decode("utf-8"),
-        f"{root_name}/_._ovpack_manifest.json": json.dumps(manifest),
+        f"{root_name}/files/": "",
+        f"{root_name}/_ovpack/": "",
+        f"{root_name}/_ovpack/index_records.jsonl": index_data.decode("utf-8"),
+        f"{root_name}/_ovpack/manifest.json": json.dumps(manifest),
     }
-    entries.update({f"{root_name}/{rel_path}": content for rel_path, content in files.items()})
+    entries.update(
+        {f"{root_name}/files/{rel_path}": content for rel_path, content in files.items()}
+    )
     _write_ovpack(path, entries)
 
 
@@ -404,8 +429,8 @@ def _rewrite_ovpack_index(
     with zipfile.ZipFile(path, "r") as zf:
         members = {info.filename: zf.read(info.filename) for info in zf.infolist()}
 
-    manifest_path = f"{root_name}/_._ovpack_manifest.json"
-    index_path = f"{root_name}/_._ovpack/index_records.jsonl"
+    manifest_path = f"{root_name}/_ovpack/manifest.json"
+    index_path = f"{root_name}/_ovpack/index_records.jsonl"
     manifest = json.loads(members[manifest_path].decode("utf-8"))
     index_data = _set_manifest_index(manifest, index_records)
     members[manifest_path] = json.dumps(manifest).encode("utf-8")
@@ -420,7 +445,7 @@ def _rewrite_ovpack_manifest(path: Path, root_name: str, mutate) -> None:
     with zipfile.ZipFile(path, "r") as zf:
         members = {info.filename: zf.read(info.filename) for info in zf.infolist()}
 
-    manifest_path = f"{root_name}/_._ovpack_manifest.json"
+    manifest_path = f"{root_name}/_ovpack/manifest.json"
     manifest = json.loads(members[manifest_path].decode("utf-8"))
     mutate(manifest)
     members[manifest_path] = json.dumps(manifest).encode("utf-8")
@@ -467,14 +492,14 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         names = set(zf.namelist())
-        manifest = json.loads(zf.read("demo/_._ovpack_manifest.json").decode("utf-8"))
+        manifest = json.loads(zf.read("demo/_ovpack/manifest.json").decode("utf-8"))
         index_records = [
             json.loads(line)
-            for line in zf.read("demo/_._ovpack/index_records.jsonl").decode("utf-8").splitlines()
+            for line in zf.read("demo/_ovpack/index_records.jsonl").decode("utf-8").splitlines()
         ]
 
-    assert "demo/notes.txt" in names
-    assert "demo/_._overview.md" in names
+    assert "demo/files/notes.txt" in names
+    assert "demo/files/.overview.md" in names
     assert manifest["format_version"] == 2
     assert manifest["kind"] == "openviking.ovpack"
     note_entry = next(entry for entry in manifest["entries"] if entry["path"] == "notes.txt")
@@ -505,10 +530,10 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         names = set(zf.namelist())
-        manifest = json.loads(zf.read("openviking-backup/_._ovpack_manifest.json").decode("utf-8"))
+        manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
-    assert "openviking-backup/resources/README.md" in names
-    assert "openviking-backup/session/sess_1/_._meta.json" in names
+    assert "openviking-backup/files/resources/README.md" in names
+    assert "openviking-backup/files/session/sess_1/.meta.json" in names
     assert manifest["root"] == {
         "name": "openviking-backup",
         "uri": "viking://",
@@ -617,7 +642,7 @@ async def test_export_include_vectors_allows_overview_without_abstract(
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         index_records = [
             json.loads(line)
-            for line in zf.read("demo/_._ovpack/index_records.jsonl").decode("utf-8").splitlines()
+            for line in zf.read("demo/_ovpack/index_records.jsonl").decode("utf-8").splitlines()
         ]
 
     root_levels = {record["level"] for record in index_records if record["path"] == ""}
@@ -625,24 +650,44 @@ async def test_export_include_vectors_allows_overview_without_abstract(
 
 
 @pytest.mark.asyncio
-async def test_ovpack_rejects_reserved_internal_user_paths(
-    temp_ovpack_path: Path, request_ctx: RequestContext
+async def test_ovpack_roundtrips_dot_and_escaped_looking_user_paths(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    with pytest.raises(InvalidArgumentError, match=r"reserved ovpack path") as export_exc:
-        await export_ovpack(
-            ReservedPathExportVikingFS(),
-            "viking://resources/demo",
-            str(temp_ovpack_path),
-            ctx=request_ctx,
-        )
-    assert export_exc.value.details["path"] == ".ovpack"
-    assert not temp_ovpack_path.read_bytes()
+    async def noop_vectorization(*args, **kwargs):
+        return None
 
-    _write_ovpack_with_manifest(temp_ovpack_path, "demo", {".ovpack/foo.txt": "hello"})
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
+        noop_vectorization,
+    )
+
+    await export_ovpack(
+        ReservedPathExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("demo/_ovpack/manifest.json").decode("utf-8"))
+
+    assert "demo/files/.ovpack/foo.txt" in names
+    assert "demo/files/.notes.txt" in names
+    assert "demo/files/_._notes.txt" in names
+    manifest_paths = {entry["path"] for entry in manifest["entries"]}
+    assert {".ovpack", ".ovpack/foo.txt", ".notes.txt", "_._notes.txt"} <= manifest_paths
+
     fake_fs = FakeVikingFS()
-    with pytest.raises(InvalidArgumentError, match=r"reserved ovpack path"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
-    assert fake_fs.written_files == []
+    await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources/imported", request_ctx)
+
+    assert fake_fs.written_files == [
+        "viking://resources/imported/demo/.ovpack/foo.txt",
+        "viking://resources/imported/demo/.notes.txt",
+        "viking://resources/imported/demo/_._notes.txt",
+    ]
 
 
 @pytest.mark.asyncio
@@ -695,7 +740,7 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
     )
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
-        assert "demo/_._ovpack/dense.f32" in set(zf.namelist())
+        assert "demo/_ovpack/dense.f32" in set(zf.namelist())
 
     fake_fs = FakeVikingFS()
     vector_store = FakeVectorStore()
@@ -730,8 +775,8 @@ async def test_import_legacy_ovpack_without_manifest_is_rejected(
     _write_ovpack(
         temp_ovpack_path,
         {
-            "demo/_._overview.md": "ATTACKER_OVERVIEW",
-            "demo/notes.txt": "hello",
+            "demo/files/.overview.md": "ATTACKER_OVERVIEW",
+            "demo/files/notes.txt": "hello",
         },
     )
     fake_fs = FakeVikingFS()
@@ -785,11 +830,12 @@ async def test_import_ovpack_rejects_manifest_unexpected_directory(
         temp_ovpack_path,
         {
             "demo/": "",
-            "demo/_._ovpack/": "",
-            "demo/_._ovpack/index_records.jsonl": "",
-            "demo/_._ovpack_manifest.json": json.dumps(manifest),
-            "demo/notes.txt": "hello",
-            "demo/empty/": "",
+            "demo/files/": "",
+            "demo/_ovpack/": "",
+            "demo/_ovpack/index_records.jsonl": "",
+            "demo/_ovpack/manifest.json": json.dumps(manifest),
+            "demo/files/notes.txt": "hello",
+            "demo/files/empty/": "",
         },
     )
     fake_fs = FakeVikingFS()

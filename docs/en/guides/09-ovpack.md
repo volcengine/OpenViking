@@ -231,24 +231,19 @@ OVPack v2 is a standard ZIP archive with one package root directory:
 
 ```text
 my-project/
-my-project/notes.txt
-my-project/_._abstract.md
-my-project/_._overview.md
-my-project/_._ovpack/
-my-project/_._ovpack/index_records.jsonl
-my-project/_._ovpack/dense.f32              # only with --include-vectors and exportable vectors
-my-project/_._ovpack_manifest.json
+my-project/files/
+my-project/files/notes.txt
+my-project/files/.abstract.md
+my-project/files/.overview.md
+my-project/_ovpack/
+my-project/_ovpack/index_records.jsonl
+my-project/_ovpack/dense.f32                # only with --include-vectors and exportable vectors
+my-project/_ovpack/manifest.json
 ```
 
-OpenViking escapes ordinary dotfiles in ZIP paths with the `_._` prefix:
-
-| OpenViking file | ZIP path |
-| --- | --- |
-| `.abstract.md` | `_._abstract.md` |
-| `.overview.md` | `_._overview.md` |
-| `.meta.json` | `_._meta.json` |
-
-`_._ovpack/` and `_._ovpack_manifest.json` are OVPack internal reserved paths. To avoid collisions with `_._` escaping, user content cannot contain `.ovpack/`, `_._ovpack/`, `.ovpack_manifest.json`, or `_._ovpack_manifest.json`.
+`files/` stores user content with the same relative paths used by OpenViking.
+Dotfiles are no longer escaped with `_._`. `_ovpack/` stores OVPack internal
+metadata and is not imported as user content.
 
 The manifest stores package structure, file checksums, and checksums for
 internal index files. It does not inline per-file index records:
@@ -274,12 +269,12 @@ internal index files. It does not inline per-file index records:
   "content_sha256": "b2a6e9582119c7510d68e3446de3e71a486934bf450d68f65596259ed1cf7997",
   "index": {
     "records": {
-      "path": "_._ovpack/index_records.jsonl",
+      "path": "_ovpack/index_records.jsonl",
       "count": 2,
       "sha256": "..."
     },
     "dense": {
-      "path": "_._ovpack/dense.f32",
+      "path": "_ovpack/dense.f32",
       "count": 1,
       "dtype": "float32",
       "byte_order": "little",
@@ -346,13 +341,13 @@ currently support vector snapshot export.
 Import validates the entire package before writing package content. Core checks:
 
 1. ZIP members must be under one package root and cannot contain absolute paths, backslashes, drive letters, or `..`.
-2. `<root>/_._ovpack_manifest.json` must exist.
+2. `<root>/_ovpack/manifest.json` must exist.
 3. `kind` must be `openviking.ovpack`, and `format_version` must equal the currently supported version.
 4. `root.name` must match the ZIP root, and the leaf of `root.uri` must also match `root.name`.
 5. The file set and directory set declared by the manifest must exactly match ZIP content.
 6. Each file `size` and `sha256` must match actual content.
 7. `content_sha256` must match the sorted file inventory.
-8. `_._ovpack/index_records.jsonl` and optional `_._ovpack/dense.f32` must match manifest hashes, counts, and dimensions.
+8. `_ovpack/index_records.jsonl` and optional `_ovpack/dense.f32` must match manifest hashes, counts, and dimensions.
 9. Source scope and target scope must match; structured scopes such as `user`, `agent`, and `session` also keep root depth stable.
 10. No package content is written before validation passes; conflict handling also runs before writes.
 

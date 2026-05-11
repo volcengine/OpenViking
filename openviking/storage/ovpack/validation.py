@@ -11,8 +11,10 @@ from typing import Any
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
     OVPACK_INDEX_RECORDS_PATH,
+    OVPACK_MANIFEST_ZIP_LEAF,
     get_viking_rel_path_from_zip,
     internal_zip_path,
+    is_content_zip_path,
     is_internal_zip_path,
     is_manifest_zip_path,
     join_uri,
@@ -73,6 +75,11 @@ def _zip_file_members_by_path(
             or safe_zip_path.endswith("/")
         ):
             continue
+        if not is_content_zip_path(safe_zip_path, base_name):
+            raise InvalidArgumentError(
+                "Unexpected ovpack member outside files directory",
+                details={"path": safe_zip_path},
+            )
 
         rel_path = get_viking_rel_path_from_zip(safe_zip_path)
         if rel_path in files:
@@ -91,12 +98,20 @@ def _zip_directory_members_by_path(infolist: list[zipfile.ZipInfo], base_name: s
         if not zip_path:
             continue
         safe_zip_path = validate_ovpack_member_path(zip_path, base_name)
-        if is_internal_zip_path(safe_zip_path.rstrip("/"), base_name):
+        stripped_zip_path = safe_zip_path.rstrip("/")
+        if is_internal_zip_path(stripped_zip_path, base_name):
+            continue
+        if stripped_zip_path == base_name:
             continue
         if not safe_zip_path.endswith("/"):
             continue
+        if not is_content_zip_path(stripped_zip_path, base_name):
+            raise InvalidArgumentError(
+                "Unexpected ovpack directory outside files directory",
+                details={"path": safe_zip_path},
+            )
 
-        rel_path = get_viking_rel_path_from_zip(safe_zip_path.rstrip("/"))
+        rel_path = get_viking_rel_path_from_zip(stripped_zip_path)
         if rel_path in directories:
             raise InvalidArgumentError(
                 "Duplicate ovpack directory entry",
@@ -327,6 +342,7 @@ def _validate_internal_members(
     manifest: dict[str, Any],
 ) -> None:
     expected_files = {
+        internal_zip_path(base_name, OVPACK_MANIFEST_ZIP_LEAF),
         internal_zip_path(base_name, OVPACK_INDEX_RECORDS_PATH),
     }
     if manifest_dense_info(manifest) is not None:
@@ -467,12 +483,20 @@ def validated_import_members(
             continue
 
         safe_zip_path = validate_ovpack_member_path(zip_path, base_name)
+        stripped_zip_path = safe_zip_path.rstrip("/")
         if is_manifest_zip_path(safe_zip_path, base_name):
             members.append((info, safe_zip_path, "manifest", ""))
             continue
-        if is_internal_zip_path(safe_zip_path.rstrip("/"), base_name):
+        if is_internal_zip_path(stripped_zip_path, base_name):
             members.append((info, safe_zip_path, "internal", ""))
             continue
+        if stripped_zip_path == base_name:
+            continue
+        if not is_content_zip_path(stripped_zip_path, base_name):
+            raise InvalidArgumentError(
+                "Unexpected ovpack member outside files directory",
+                details={"path": safe_zip_path},
+            )
 
         kind = "directory" if safe_zip_path.endswith("/") else "file"
         rel_path = get_viking_rel_path_from_zip(

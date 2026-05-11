@@ -21,10 +21,10 @@ from openviking_cli.utils.uri import VikingURI
 
 OVPACK_FORMAT_VERSION = 2
 OVPACK_KIND = "openviking.ovpack"
-OVPACK_MANIFEST_FILENAME = ".ovpack_manifest.json"
-OVPACK_MANIFEST_ZIP_LEAF = "_._ovpack_manifest.json"
-OVPACK_INTERNAL_DIR = "_._ovpack"
-OVPACK_INTERNAL_SOURCE_DIR = ".ovpack"
+OVPACK_INTERNAL_DIR = "_ovpack"
+OVPACK_FILES_DIR = "files"
+OVPACK_MANIFEST_FILENAME = "manifest.json"
+OVPACK_MANIFEST_ZIP_LEAF = f"{OVPACK_INTERNAL_DIR}/{OVPACK_MANIFEST_FILENAME}"
 OVPACK_INDEX_RECORDS_FILENAME = "index_records.jsonl"
 OVPACK_INDEX_RECORDS_PATH = f"{OVPACK_INTERNAL_DIR}/{OVPACK_INDEX_RECORDS_FILENAME}"
 OVPACK_DENSE_FILENAME = "dense.f32"
@@ -33,8 +33,6 @@ OVPACK_ON_CONFLICT_VALUES = frozenset({"fail", "overwrite", "skip"})
 OVPACK_VECTOR_MODE_VALUES = frozenset({"auto", "recompute", "require"})
 OVPACK_BACKUP_NAME = "openviking-backup"
 OVPACK_BACKUP_TYPE = "backup"
-OVPACK_RESERVED_REL_PATH_PARTS = frozenset({OVPACK_INTERNAL_SOURCE_DIR, OVPACK_INTERNAL_DIR})
-OVPACK_RESERVED_FILENAMES = frozenset({OVPACK_MANIFEST_FILENAME, OVPACK_MANIFEST_ZIP_LEAF})
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -68,24 +66,29 @@ def is_internal_zip_path(zip_path: str, base_name: str) -> bool:
     )
 
 
+def is_content_zip_path(zip_path: str, base_name: str) -> bool:
+    return zip_path == f"{base_name}/{OVPACK_FILES_DIR}" or zip_path.startswith(
+        f"{base_name}/{OVPACK_FILES_DIR}/"
+    )
+
+
 def internal_zip_path(base_name: str, internal_path: str) -> str:
     return f"{base_name}/{internal_path}"
 
 
-def rel_path_parts(rel_path: str) -> tuple[str, ...]:
-    """Return normalized slash-separated relative path parts."""
-    return tuple(part for part in rel_path.split("/") if part)
-
-
-def is_ovpack_reserved_rel_path(rel_path: str) -> bool:
-    """Return whether a user relative path collides with OVPack internals."""
-    parts = rel_path_parts(rel_path)
-    if not parts:
-        return False
-    return (
-        any(part in OVPACK_RESERVED_REL_PATH_PARTS for part in parts)
-        or parts[-1] in OVPACK_RESERVED_FILENAMES
-    )
+def validate_ovpack_rel_path(rel_path: str, *, allow_root: bool = True) -> None:
+    """Validate a user relative path stored under the ZIP files/ namespace."""
+    if rel_path == "":
+        if allow_root:
+            return
+        raise InvalidArgumentError("Invalid ovpack relative path", details={"path": rel_path})
+    if "\\" in rel_path or rel_path.startswith("/") or _DRIVE_RE.match(rel_path):
+        raise InvalidArgumentError("Unsafe ovpack relative path", details={"path": rel_path})
+    if _UNSAFE_PATH_RE.search(rel_path):
+        raise InvalidArgumentError("Unsafe ovpack relative path", details={"path": rel_path})
+    parts = rel_path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise InvalidArgumentError("Unsafe ovpack relative path", details={"path": rel_path})
 
 
 def validate_ovpack_member_path(zip_path: str, base_name: str) -> str:
@@ -126,22 +129,22 @@ def ensure_dir_exists(path: str) -> None:
 
 def get_ovpack_zip_path(base_name: str, rel_path: str) -> str:
     """Generate ZIP internal path from a Viking relative path."""
+    validate_ovpack_rel_path(rel_path)
     if not rel_path:
-        return f"{base_name}/"
-    parts = rel_path.split("/")
-    escaped = [("_._" + part[1:]) if part.startswith(".") else part for part in parts]
-    return f"{base_name}/{'/'.join(escaped)}"
+        return f"{base_name}/{OVPACK_FILES_DIR}/"
+    return f"{base_name}/{OVPACK_FILES_DIR}/{rel_path}"
 
 
 def get_viking_rel_path_from_zip(zip_path: str) -> str:
     """Restore Viking relative path from ZIP path."""
     parts = zip_path.split("/")
-    if len(parts) <= 1:
+    if len(parts) < 2 or parts[1] != OVPACK_FILES_DIR:
+        raise ValueError(f"Invalid ovpack content path: {zip_path!r}")
+    if len(parts) == 2:
         return ""
-
-    rel_parts = parts[1:]
-    restored = [("." + part[3:]) if part.startswith("_._") else part for part in rel_parts]
-    return "/".join(restored)
+    rel_path = "/".join(parts[2:])
+    validate_ovpack_rel_path(rel_path)
+    return rel_path
 
 
 def normalize_on_conflict(on_conflict: Optional[str]) -> str:

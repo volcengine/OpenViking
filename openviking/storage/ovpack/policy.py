@@ -10,10 +10,10 @@ from openviking.core.namespace import uri_depth, uri_parts
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_TYPE,
-    is_ovpack_reserved_rel_path,
     join_uri,
     leaf_name,
     strip_uri_trailing_slash,
+    validate_ovpack_rel_path,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
@@ -30,11 +30,13 @@ def is_excluded_rel_path(rel_path: str) -> bool:
 
 
 def validate_ovpack_user_rel_path(rel_path: str, *, operation: str) -> None:
-    if is_ovpack_reserved_rel_path(rel_path):
+    try:
+        validate_ovpack_rel_path(rel_path)
+    except InvalidArgumentError as exc:
         raise InvalidArgumentError(
-            f"cannot {operation} reserved ovpack path",
+            f"cannot {operation} unsafe ovpack path",
             details={"path": rel_path},
-        )
+        ) from exc
 
 
 def _scope_relative_path(uri: str) -> str:

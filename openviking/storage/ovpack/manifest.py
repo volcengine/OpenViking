@@ -15,8 +15,8 @@ from openviking.storage.ovpack.format import (
     OVPACK_INDEX_RECORDS_PATH,
     OVPACK_KIND,
     OVPACK_MANIFEST_ZIP_LEAF,
-    is_ovpack_reserved_rel_path,
     normalize_sha256,
+    validate_ovpack_rel_path,
 )
 from openviking.storage.ovpack.policy import manifest_root_uri
 from openviking_cli.exceptions import InvalidArgumentError
@@ -144,11 +144,7 @@ def manifest_entries_by_path(manifest: dict[str, Any]) -> dict[str, dict[str, An
                 "Invalid ovpack manifest entry path",
                 details={"index": index},
             )
-        if is_ovpack_reserved_rel_path(rel_path):
-            raise InvalidArgumentError(
-                "ovpack manifest entry uses reserved path",
-                details={"path": rel_path},
-            )
+        validate_ovpack_rel_path(rel_path)
         if kind not in {"directory", "file"}:
             raise InvalidArgumentError(
                 "Invalid ovpack manifest entry kind",

@@ -14,6 +14,7 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_NAME,
     OVPACK_BACKUP_TYPE,
+    OVPACK_FILES_DIR,
     OVPACK_INDEX_RECORDS_PATH,
     OVPACK_INTERNAL_DIR,
     OVPACK_MANIFEST_ZIP_LEAF,
@@ -384,13 +385,15 @@ async def _write_ovpack_archive(
 
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         zf.writestr(base_name + "/", "")
+        zf.writestr(f"{base_name}/{OVPACK_FILES_DIR}/", "")
 
-        for entry in entries:
+        content_entries = [entry for entry in entries if entry["rel_path"] != ""]
+        for entry in content_entries:
             rel_path = entry["rel_path"]
             zip_path = get_ovpack_zip_path(base_name, rel_path)
 
             if entry.get("isDir"):
-                zf.writestr(zip_path + "/", "")
+                zf.writestr(zip_path.rstrip("/") + "/", "")
             else:
                 full_uri = entry.get("uri") or join_uri(root_uri, rel_path)
                 try:

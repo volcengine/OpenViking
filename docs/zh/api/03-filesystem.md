@@ -991,11 +991,11 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 5. 以文件流形式返回
 
 **格式说明**：
-- 导出的 ZIP 会包含 `<root>/_._ovpack_manifest.json`，这是 `.ovpack_manifest.json` 在 ZIP 内的转义名称。
+- 导出的 ZIP 会把用户内容原样放在 `<root>/files/` 下，并把内部元数据放在 `<root>/_ovpack/` 下。
+- manifest 位于 `<root>/_ovpack/manifest.json`。
 - `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
-- `_._ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_._ovpack/dense.f32` 保存纯 dense float32 向量快照和 embedding 元数据；底层 `VectorIndex.IndexType` 为 hybrid 时不支持向量快照导出。
-- `.ovpack/`、`_._ovpack/`、`.ovpack_manifest.json`、`_._ovpack_manifest.json` 是 OVPack 保留路径，不能作为用户内容导出或导入。
+- `_ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_ovpack/dense.f32` 保存纯 dense float32 向量快照和 embedding 元数据；底层 `VectorIndex.IndexType` 为 hybrid 时不支持向量快照导出。
 - `id`、`uri`、`account_id`、`created_at`、`updated_at`、`active_count` 等运行态字段会在目标环境重新生成，不从包内恢复。
 - OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 

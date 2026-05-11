@@ -131,7 +131,7 @@ class TestImportOvpack:
             "content_sha256": hashlib.sha256(b"[]").hexdigest(),
             "index": {
                 "records": {
-                    "path": "_._ovpack/index_records.jsonl",
+                    "path": "_ovpack/index_records.jsonl",
                     "count": 0,
                     "sha256": hashlib.sha256(index_records).hexdigest(),
                 }
@@ -140,9 +140,10 @@ class TestImportOvpack:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
             zf.writestr("pkg/", "")
-            zf.writestr("pkg/_._ovpack/", "")
-            zf.writestr("pkg/_._ovpack/index_records.jsonl", index_records)
-            zf.writestr("pkg/_._ovpack_manifest.json", json.dumps(manifest))
+            zf.writestr("pkg/files/", "")
+            zf.writestr("pkg/_ovpack/", "")
+            zf.writestr("pkg/_ovpack/index_records.jsonl", index_records)
+            zf.writestr("pkg/_ovpack/manifest.json", json.dumps(manifest))
             for name, content in entries.items():
                 zf.writestr(name, content)
         zip_path.write_bytes(buffer.getvalue())
