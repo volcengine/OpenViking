@@ -34,6 +34,19 @@ class OVCLIConfig(BaseModel):
     timeout: float = 60.0
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
+    git_credentials: Optional[Dict[str, str]] = None
+    """Mapping of hostname → personal access token for private git repos.
+
+    Example::
+
+        {
+          "github.com": "ghp_xxxx",
+          "gitlab.example.com": "glpat-yyyy"
+        }
+
+    Tokens are injected into HTTPS clone URLs so git can authenticate without
+    requiring the user to configure SSH keys or a ``~/.netrc`` file.
+    """
 
     model_config = {"extra": "forbid"}
 

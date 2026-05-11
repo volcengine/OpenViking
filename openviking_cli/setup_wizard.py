@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.git_credentials import save_git_credentials
 from openviking_cli.utils.ollama import (
     check_ollama_running,
     get_ollama_models,
@@ -1090,6 +1091,37 @@ def _wizard_server() -> dict[str, Any] | None:
     return {"host": "0.0.0.0", "root_api_key": root_api_key}
 
 
+def _wizard_git_credentials() -> None:
+    """Optional step: configure git tokens for private repository access.
+
+    Prompts the user to store host-to-token mappings in ``~/.openviking/ovcli.conf``
+    so that ``ov add-resource <private-repo-url>`` can authenticate automatically.
+    """
+    print(f"\n  {_bold('Private Git repository credentials')} {_dim('(optional)')}")
+    print(
+        f"  {_dim('Store tokens so `ov add-resource` can access private GitHub / GitLab repos.')}"
+    )
+
+    if not _prompt_confirm("Configure credentials now?", default=False):
+        return
+
+    while True:
+        print()
+        host = _prompt_required_input("Hostname", default="github.com")
+        token = _prompt_api_key("Token")
+        if not token:
+            print(f"  {_red('Token is required — skipping this entry.')}")
+        else:
+            try:
+                saved_path = save_git_credentials(host, token)
+                print(f"  {_green('OK')} Token for {_cyan(host)} saved to {_dim(str(saved_path))}")
+            except OSError as exc:
+                print(f"  {_red(f'Failed to save credentials: {exc}')}")
+
+        if not _prompt_confirm("Add another?", default=False):
+            break
+
+
 def _wizard_custom() -> dict[str, Any] | None:
     """Custom configuration - point user to example config."""
     config_path = _config_path()
@@ -1194,6 +1226,9 @@ def run_init() -> int:
         return 1
 
     print(f"  {_green('OK')} Configuration written to the default config location\n")
+
+    # Optional: configure git credentials for private repos
+    _wizard_git_credentials()
 
     # Post-init tips
     print(f"  {_bold('Next steps:')}")

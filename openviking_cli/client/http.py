@@ -41,6 +41,7 @@ from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
+from openviking_cli.utils.git_credentials import get_token_for_url, inject_token
 from openviking_cli.utils.uri import VikingURI
 
 # Error code to exception class mapping
@@ -194,8 +195,11 @@ class AsyncHTTPClient(BaseClient):
         self._timeout = timeout
         self._extra_headers = extra_headers
         self._upload_mode = None
-        if should_load_cli_config and cli_config is not None and cli_config.upload is not None:
-            self._upload_mode = cli_config.upload.mode
+        self._git_credentials = None
+        if should_load_cli_config and cli_config is not None:
+            if cli_config.upload is not None:
+                self._upload_mode = cli_config.upload.mode
+            self._git_credentials = cli_config.git_credentials
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -419,7 +423,12 @@ class AsyncHTTPClient(BaseClient):
             else:
                 request_data["path"] = path
         else:
-            request_data["path"] = path
+            # Possibly a remote URL — inject a git token if one is configured.
+            effective_path = path
+            token = get_token_for_url(path, credentials=self._git_credentials)
+            if token:
+                effective_path = inject_token(path, token)
+            request_data["path"] = effective_path
 
         response = await self._http.post(
             "/api/v1/resources",

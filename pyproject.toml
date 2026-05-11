@@ -279,4 +279,5 @@ line-ending = "auto"
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio",
 ]

@@ -39,12 +39,84 @@ def _exec_binary(binary: str, argv: list[str]) -> None:
         os.execv(binary, [binary] + argv)
 
 
+def _cmd_configure_git_credentials(args: list[str]) -> int:
+    """Handle: ov configure git-credentials [--host HOST] [--token TOKEN]
+
+    Prompts interactively for any missing values and writes to ovcli.conf.
+    """
+    from openviking_cli.utils.git_credentials import save_git_credentials
+    from openviking_cli.setup_wizard import _bold, _green, _prompt_api_key, _prompt_required_input
+
+    host: str | None = None
+    token: str | None = None
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--host" and i + 1 < len(args):
+            host = args[i + 1]
+            i += 2
+        elif args[i] == "--token" and i + 1 < len(args):
+            token = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    print(f"\n  {_bold('Git Credentials Setup')}")
+    print("  Store a personal access token so `ov add-resource` can clone private repos.\n")
+
+    if host is None:
+        host = _prompt_required_input("Hostname", default="github.com")
+    if token is None:
+        token = _prompt_api_key(f"Token for {host}")
+
+    if not host or not token:
+        print("  Error: both host and token are required.", file=sys.stderr)
+        return 1
+
+    path = save_git_credentials(host, token)
+    print(f"\n  {_green('OK')} Saved token for {host!r} to {path}\n")
+    return 0
+
+
+def _preprocess_add_resource_token(argv: list[str]) -> list[str]:
+    """Extract ``--token VALUE`` from add-resource args, inject token into URL.
+
+    Returns a new argv list with the token injected into the URL and
+    ``--token VALUE`` removed, ready to pass to the Rust binary.
+    If no ``--token`` flag is present the original list is returned unchanged.
+    """
+    from openviking_cli.utils.git_credentials import inject_token, is_git_url
+
+    token: str | None = None
+    token_indices: list[int] = []
+
+    for i, arg in enumerate(argv):
+        if arg == "--token" and i + 1 < len(argv):
+            token = argv[i + 1]
+            token_indices = [i, i + 1]
+            break
+
+    if not token:
+        return argv
+
+    # Remove --token VALUE from the arg list
+    new_argv = [a for i, a in enumerate(argv) if i not in token_indices]
+
+    # Inject the token into the first git URL argument
+    for i, arg in enumerate(new_argv):
+        if is_git_url(arg):
+            new_argv[i] = inject_token(arg, token)
+            break
+
+    return new_argv
+
+
 def main():
     """
     极简入口点：查找 ov 二进制并执行
 
     按优先级查找：
-    0. Python-native 子命令（doctor）
+    0. Python-native 子命令（doctor, configure git-credentials）
     1. ./target/release/ov（开发环境）
     2. Wheel 自带：{package_dir}/openviking/bin/ov
     3. PATH 查找：系统全局安装的 ov
@@ -54,6 +126,19 @@ def main():
         from openviking_cli.doctor import main as doctor_main
 
         sys.exit(doctor_main())
+
+    # 0b. ov configure git-credentials
+    if (
+        len(sys.argv) > 2
+        and sys.argv[1] == "configure"
+        and sys.argv[2] == "git-credentials"
+    ):
+        sys.exit(_cmd_configure_git_credentials(sys.argv[3:]))
+
+    # 0c. ov add-resource --token <TOKEN> <URL>  (or any ordering)
+    #     Preprocess: inject token into URL, strip --token flag, then exec Rust.
+    if len(sys.argv) > 1 and sys.argv[1] == "add-resource" and "--token" in sys.argv:
+        sys.argv = [sys.argv[0]] + _preprocess_add_resource_token(sys.argv[1:])
     # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
