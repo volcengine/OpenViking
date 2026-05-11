@@ -36,7 +36,8 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
         {"color": "azure", "framework": "langgraph"},
     )
     find_tool = next(
-        tool for tool in create_openviking_tools(client=client, profile="retrieval")
+        tool
+        for tool in create_openviking_tools(client=client, profile="retrieval")
         if tool.name == "viking_find"
     )
     model = FakeListChatModel(

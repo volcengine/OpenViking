@@ -522,9 +522,13 @@ def _grep_match_text(match: Any) -> str:
 def _archive_sections(payload: dict[str, Any]) -> list[tuple[str, str]]:
     sections: list[tuple[str, str]] = []
     if payload.get("overview"):
-        sections.append((f"archive:{payload.get('archive_id', 'archive')}:overview", payload["overview"]))
+        sections.append(
+            (f"archive:{payload.get('archive_id', 'archive')}:overview", payload["overview"])
+        )
     if payload.get("abstract"):
-        sections.append((f"archive:{payload.get('archive_id', 'archive')}:abstract", payload["abstract"]))
+        sections.append(
+            (f"archive:{payload.get('archive_id', 'archive')}:abstract", payload["abstract"])
+        )
     if payload.get("latest_archive_overview"):
         sections.append(("latest_archive_overview", payload["latest_archive_overview"]))
     for archive in payload.get("pre_archive_abstracts") or []:

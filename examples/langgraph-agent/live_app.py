@@ -204,8 +204,7 @@ def wait_for_commit_task(client, commit: dict[str, object]) -> None:
             raise RuntimeError(f"OpenViking commit task failed: {task}")
         time.sleep(0.5)
     raise RuntimeError(
-        f"OpenViking commit task did not complete: {commit['task_id']}; "
-        f"last_task={last_task}"
+        f"OpenViking commit task did not complete: {commit['task_id']}; last_task={last_task}"
     )
 
 

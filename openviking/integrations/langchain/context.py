@@ -195,11 +195,7 @@ class OpenVikingSessionContextAssembler:
 
         if not sections:
             return ""
-        return (
-            f"{OPENVIKING_CONTEXT_MARKER}\n"
-            + "\n\n".join(sections)
-            + "\n</openviking_context>"
-        )
+        return f"{OPENVIKING_CONTEXT_MARKER}\n" + "\n\n".join(sections) + "\n</openviking_context>"
 
 
 def with_openviking_context(
@@ -285,9 +281,7 @@ def with_openviking_context(
                 id=session_id_config_key,
                 annotation=str,
                 name="Session ID",
-                description=(
-                    "Required OpenViking session ID for dynamic chat history and recall."
-                ),
+                description=("Required OpenViking session ID for dynamic chat history and recall."),
                 default="",
                 is_shared=True,
             )

@@ -50,9 +50,7 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
 
 
 def _format_docs(docs) -> str:
-    return "\n\n".join(
-        f"{doc.metadata.get('openviking_uri')}\n{doc.page_content}" for doc in docs
-    )
+    return "\n\n".join(f"{doc.metadata.get('openviking_uri')}\n{doc.page_content}" for doc in docs)
 
 
 def main() -> str:
