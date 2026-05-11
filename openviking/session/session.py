@@ -705,8 +705,8 @@ class Session:
         task = tracker.create(
             "session_commit",
             resource_id=self.session_id,
-            owner_account_id=self.ctx.account_id,
-            owner_user_id=self.ctx.user.user_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
         )
 
         asyncio.create_task(
@@ -773,10 +773,12 @@ class Session:
                     task_id,
                     f"Previous archive archive_{archive_index - 1:03d} failed; "
                     "cannot continue session commit",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
                 )
                 return
 
-            tracker.start(task_id)
+            tracker.start(task_id, account_id=self.ctx.account_id, user_id=self.ctx.user.user_id)
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
@@ -979,6 +981,8 @@ class Session:
                         },
                     },
                 },
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except Exception as e:
@@ -989,7 +993,9 @@ class Session:
                 stage="memory_extraction",
                 error=str(e),
             )
-            tracker.fail(task_id, str(e))
+            tracker.fail(
+                task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
+            )
             logger.exception(f"Memory extraction failed for session {self.session_id}")
 
     async def _write_done_file(

@@ -1629,7 +1629,7 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    _INTERNAL_NAMES = {"_system", ".path.ovlock"}
+    _INTERNAL_NAMES = {"_system", "tasks", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
