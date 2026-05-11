@@ -49,7 +49,7 @@ fi
 echo ""
 
 echo "1.2. Observer queue status..."
-if $OV_BIN observer queue; then
+if $OV_BIN --sudo observer queue; then
     print_success "Observer queue status retrieved"
 else
     print_error "Observer queue status failed"
@@ -57,7 +57,7 @@ fi
 echo ""
 
 echo "1.3. Observer system status..."
-if $OV_BIN observer system; then
+if $OV_BIN --sudo observer system; then
     print_success "Observer system status retrieved"
 else
     print_error "Observer system status failed"

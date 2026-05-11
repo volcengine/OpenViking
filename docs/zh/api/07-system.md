@@ -430,6 +430,8 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 
 Observer API 提供详细的组件级监控。
 
+启用服务端认证后，Observer 端点属于特权监控面。在 `api_key` 模式下，它们需要 `ADMIN`/`ROOT` 上下文；在 `trusted` 模式下，部署边界已经受信任，因此 Observer 端点仍可使用。若 CLI 已配置 `root_api_key` 且需要发送 root key，请使用 `ov --sudo observer ...`。
+
 ### observer.queue
 
 #### 1. API 实现介绍
@@ -474,7 +476,7 @@ print(client.observer.queue)
 **CLI**
 
 ```bash
-ov observer queue
+ov --sudo observer queue
 ```
 
 **响应示例**
@@ -541,7 +543,7 @@ print(client.observer.vikingdb().status)      # 状态表字符串
 **CLI**
 
 ```bash
-ov observer vikingdb
+ov --sudo observer vikingdb
 ```
 
 **响应示例**
@@ -605,7 +607,7 @@ print(client.observer.models)
 **CLI**
 
 ```bash
-ov observer models
+ov --sudo observer models
 ```
 
 **响应示例**
@@ -789,7 +791,7 @@ print(client.observer.system())
 **CLI**
 
 ```bash
-ov observer system
+ov --sudo observer system
 ```
 
 **响应示例**
