@@ -93,7 +93,7 @@ carry an incomplete index snapshot.
 You can call the consistency check directly when debugging data state:
 
 ```bash
-ov consistency viking://resources/my-project
+ov system consistency viking://resources/my-project
 ```
 
 The API returns only a summary and at most 20 missing records. It does not return
@@ -453,7 +453,7 @@ re-export from an environment that can read that version.
 | `Top-level scope ovpack packages must be imported to viking://` | A top-level scope package was imported to a non-root parent | Import to `viking://`. |
 | `Backup ovpack packages must be restored` | A backup package was imported with regular import | Use `ov restore`. |
 | `Resource already exists` | Target root already exists | Use `--on-conflict overwrite` or `--on-conflict skip`. |
-| `incomplete OpenViking vector index snapshot` | `--include-vectors` found missing index records in the export range | Run `ov consistency <uri>` to locate the issue, then wait for processing or reindex. |
+| `incomplete OpenViking vector index snapshot` | `--include-vectors` found missing index records in the export range | Run `ov system consistency <uri>` to locate the issue, then wait for processing or reindex. |
 | `dense vector snapshot is incompatible` | Package embedding metadata does not match current config | Use `--vector-mode recompute`, or switch to a compatible config. |
 
 ## FAQ

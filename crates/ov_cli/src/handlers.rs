@@ -251,6 +251,9 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
         }
+        SystemCommands::Consistency { uri } => {
+            commands::system::consistency(&client, &uri, ctx.output_format, ctx.compact).await
+        }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
     }
 }

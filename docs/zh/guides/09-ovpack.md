@@ -81,7 +81,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 可以单独调用一致性检查来调试当前数据状态：
 
 ```bash
-ov consistency viking://resources/my-project
+ov system consistency viking://resources/my-project
 ```
 
 接口只返回摘要和最多 20 条缺失记录，不返回完整 expected 列表。`--include-vectors`
@@ -428,7 +428,7 @@ viking://session/sess_123
 | `Top-level scope ovpack packages must be imported to viking://` | 将顶级 scope 包导入了非根父目录 | 改为导入 `viking://`。 |
 | `Backup ovpack packages must be restored` | 用普通 import 导入 backup 包 | 使用 `ov restore`。 |
 | `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |
-| `incomplete OpenViking vector index snapshot` | 使用 `--include-vectors` 时，导出范围内应索引内容缺少索引记录 | 先执行 `ov consistency <uri>` 定位问题，再等待处理完成或重新 reindex。 |
+| `incomplete OpenViking vector index snapshot` | 使用 `--include-vectors` 时，导出范围内应索引内容缺少索引记录 | 先执行 `ov system consistency <uri>` 定位问题，再等待处理完成或重新 reindex。 |
 | `dense vector snapshot is incompatible` | 包内 embedding 元数据和当前配置不一致 | 用 `--vector-mode recompute`，或换到兼容配置。 |
 
 ## 常见问题

@@ -211,7 +211,7 @@ print(report["missing_records"])
 **CLI**
 
 ```bash
-ov consistency viking://resources/my-project
+ov system consistency viking://resources/my-project
 ```
 
 **响应示例**
