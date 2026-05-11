@@ -25,7 +25,18 @@ router = APIRouter(prefix="/api/v1/pack", tags=["pack"])
 class ExportRequest(BaseModel):
     """Request model for export."""
 
+    model_config = ConfigDict(extra="forbid")
+
     uri: str
+    include_vectors: bool = False
+
+
+class BackupRequest(BaseModel):
+    """Request model for backup export."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    include_vectors: bool = False
 
 
 class ImportRequest(BaseModel):
@@ -42,6 +53,7 @@ class ImportRequest(BaseModel):
     temp_file_id: str
     parent: str
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
+    vector_mode: Optional[Literal["auto", "recompute", "require"]] = None
 
 
 class RestoreRequest(BaseModel):
@@ -51,6 +63,7 @@ class RestoreRequest(BaseModel):
 
     temp_file_id: str
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
+    vector_mode: Optional[Literal["auto", "recompute", "require"]] = None
 
 
 @router.post("/export")
@@ -72,7 +85,12 @@ async def export_ovpack(
 
     try:
         # Export to temp file
-        await service.pack.export_ovpack(uri, temp_file, ctx=ctx)
+        await service.pack.export_ovpack(
+            uri,
+            temp_file,
+            ctx=ctx,
+            include_vectors=body.include_vectors,
+        )
 
         # Determine filename from URI
         base_name = uri.strip().rstrip("/").split("/")[-1]
@@ -106,6 +124,7 @@ async def export_ovpack(
 @require_auth_root_or_admin
 async def backup_ovpack(
     request: Request,
+    body: BackupRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Back up all public OpenViking scopes as a restore-only .ovpack file."""
@@ -114,7 +133,11 @@ async def backup_ovpack(
     temp_file = os.path.join(temp_dir, f"backup_{os.urandom(16).hex()}.ovpack")
 
     try:
-        await service.pack.backup_ovpack(temp_file, ctx=ctx)
+        await service.pack.backup_ovpack(
+            temp_file,
+            ctx=ctx,
+            include_vectors=bool(body.include_vectors) if body is not None else False,
+        )
 
         def cleanup():
             if os.path.exists(temp_file):
@@ -156,6 +179,7 @@ async def import_ovpack(
             parent,
             ctx=ctx,
             on_conflict=body.on_conflict,
+            vector_mode=body.vector_mode,
         )
     except Exception:
         await store.mark_failed(resolved, ctx)
@@ -185,6 +209,7 @@ async def restore_ovpack(
             resolved.local_path,
             ctx=ctx,
             on_conflict=body.on_conflict,
+            vector_mode=body.vector_mode,
         )
     except Exception:
         await store.mark_failed(resolved, ctx)

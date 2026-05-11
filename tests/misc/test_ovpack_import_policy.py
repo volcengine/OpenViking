@@ -151,6 +151,45 @@ class FakeBackupVikingFS:
         return self.binary_files[uri]
 
 
+class FakeRestoreVectorVikingFS(FakeVikingFS):
+    async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
+        self.tree_calls.append(uri)
+        if uri == "viking://resources":
+            return [
+                {
+                    "rel_path": "README.md",
+                    "uri": "viking://resources/README.md",
+                    "isDir": False,
+                    "name": "README.md",
+                }
+            ]
+        return []
+
+
+class FakeVectorStore:
+    def __init__(self) -> None:
+        self.upserts: list[dict[str, object]] = []
+
+    async def filter(self, **kwargs):
+        uri = kwargs["filter"].value
+        if uri == "viking://resources/demo/notes.txt":
+            return [
+                {
+                    "uri": uri,
+                    "context_type": "resource",
+                    "level": 2,
+                    "abstract": "note summary",
+                    "tags": ["snapshot"],
+                    "vector": [0.1, 0.2, 0.3],
+                }
+            ]
+        return []
+
+    async def upsert(self, data, ctx=None):
+        self.upserts.append(dict(data))
+        return data.get("id", "")
+
+
 @pytest.fixture
 def request_ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("acct", "alice", "agent1"), role=Role.USER)
@@ -183,6 +222,31 @@ def _content_sha256(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _index_records_bytes(records: list[dict[str, object]]) -> bytes:
+    if not records:
+        return b""
+    lines = [
+        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for record in records
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _set_manifest_index(
+    manifest: dict[str, object], records: list[dict[str, object]] | None = None
+) -> bytes:
+    records = records or []
+    data = _index_records_bytes(records)
+    manifest["index"] = {
+        "records": {
+            "path": "_._ovpack/index_records.jsonl",
+            "count": len(records),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    }
+    return data
+
+
 def _manifest_for_files(root_name: str, files: dict[str, str]) -> dict[str, object]:
     entries: list[dict[str, object]] = [{"path": "", "kind": "directory"}]
     content_entries: list[dict[str, object]] = []
@@ -203,7 +267,7 @@ def _manifest_for_files(root_name: str, files: dict[str, str]) -> dict[str, obje
             }
         )
 
-    return {
+    manifest: dict[str, object] = {
         "kind": "openviking.ovpack",
         "format_version": 2,
         "root": {
@@ -213,8 +277,9 @@ def _manifest_for_files(root_name: str, files: dict[str, str]) -> dict[str, obje
         },
         "entries": entries,
         "content_sha256": _content_sha256(content_entries),
-        "vectors": {},
     }
+    _set_manifest_index(manifest)
+    return manifest
 
 
 def _write_ovpack_with_manifest(
@@ -223,14 +288,52 @@ def _write_ovpack_with_manifest(
     files: dict[str, str],
     *,
     manifest: dict[str, object] | None = None,
+    index_records: list[dict[str, object]] | None = None,
 ) -> None:
     manifest = manifest or _manifest_for_files(root_name, files)
+    index_data = _set_manifest_index(manifest, index_records)
     entries = {
         f"{root_name}/": "",
+        f"{root_name}/_._ovpack/": "",
+        f"{root_name}/_._ovpack/index_records.jsonl": index_data.decode("utf-8"),
         f"{root_name}/_._ovpack_manifest.json": json.dumps(manifest),
     }
     entries.update({f"{root_name}/{rel_path}": content for rel_path, content in files.items()})
     _write_ovpack(path, entries)
+
+
+def _rewrite_ovpack_index(
+    path: Path,
+    root_name: str,
+    index_records: list[dict[str, object]],
+) -> None:
+    with zipfile.ZipFile(path, "r") as zf:
+        members = {info.filename: zf.read(info.filename) for info in zf.infolist()}
+
+    manifest_path = f"{root_name}/_._ovpack_manifest.json"
+    index_path = f"{root_name}/_._ovpack/index_records.jsonl"
+    manifest = json.loads(members[manifest_path].decode("utf-8"))
+    index_data = _set_manifest_index(manifest, index_records)
+    members[manifest_path] = json.dumps(manifest).encode("utf-8")
+    members[index_path] = index_data
+
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+
+def _rewrite_ovpack_manifest(path: Path, root_name: str, mutate) -> None:
+    with zipfile.ZipFile(path, "r") as zf:
+        members = {info.filename: zf.read(info.filename) for info in zf.infolist()}
+
+    manifest_path = f"{root_name}/_._ovpack_manifest.json"
+    manifest = json.loads(members[manifest_path].decode("utf-8"))
+    mutate(manifest)
+    members[manifest_path] = json.dumps(manifest).encode("utf-8")
+
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
 
 
 @pytest.mark.asyncio
@@ -247,6 +350,10 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         names = set(zf.namelist())
         manifest = json.loads(zf.read("demo/_._ovpack_manifest.json").decode("utf-8"))
+        index_records = [
+            json.loads(line)
+            for line in zf.read("demo/_._ovpack/index_records.jsonl").decode("utf-8").splitlines()
+        ]
 
     assert "demo/notes.txt" in names
     assert "demo/_._overview.md" in names
@@ -265,7 +372,9 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
             {"path": "notes.txt", "size": 5, "sha256": note_sha256},
         ]
     )
-    assert manifest["vectors"][""][0]["text"] == "root abstract"
+    assert manifest["index"]["records"]["count"] == len(index_records)
+    assert index_records[0]["path"] == ""
+    assert index_records[0]["text"] == "root abstract"
 
 
 @pytest.mark.asyncio
@@ -300,6 +409,106 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "viking://session/sess_1/.meta.json",
     ]
     assert fake_fs.tree_calls == ["viking://resources", "viking://user", "viking://agent"]
+
+
+@pytest.mark.asyncio
+async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
+    temp_ovpack_path: Path, request_ctx: RequestContext, monkeypatch: pytest.MonkeyPatch
+):
+    await backup_ovpack(
+        FakeBackupVikingFS(),
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    _rewrite_ovpack_index(
+        temp_ovpack_path,
+        "openviking-backup",
+        [
+            {
+                "record_id": "r000001",
+                "path": "resources/README.md",
+                "kind": "file",
+                "level": 2,
+                "text": "portable summary",
+                "scalars": {
+                    "abstract": "portable summary",
+                    "description": "portable description",
+                    "tags": ["portable"],
+                },
+            }
+        ],
+    )
+
+    vectorized_files: list[dict[str, object]] = []
+
+    async def capture_vectorize_file(**kwargs):
+        vectorized_files.append(kwargs)
+
+    monkeypatch.setattr("openviking.storage.local_fs.vectorize_file", capture_vectorize_file)
+
+    await restore_ovpack(FakeRestoreVectorVikingFS(), str(temp_ovpack_path), request_ctx)
+
+    assert len(vectorized_files) == 1
+    assert vectorized_files[0]["file_path"] == "viking://resources/README.md"
+    assert vectorized_files[0]["summary_dict"] == {
+        "name": "README.md",
+        "summary": "portable summary",
+    }
+    assert vectorized_files[0]["scalar_override"]["tags"] == ["portable"]
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_restores_required_dense_vector_snapshot(
+    temp_ovpack_path: Path, request_ctx: RequestContext, monkeypatch: pytest.MonkeyPatch
+):
+    embedding_metadata = {
+        "provider": "test",
+        "model": "demo",
+        "input": "text",
+        "dimensions": 3,
+    }
+    monkeypatch.setattr(
+        "openviking.storage.local_fs._embedding_snapshot_metadata",
+        lambda dimensions: {**embedding_metadata, "dimensions": dimensions},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.local_fs._current_embedding_metadata",
+        lambda: embedding_metadata,
+    )
+
+    await export_ovpack(
+        FakeExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+        vector_store=FakeVectorStore(),
+        include_vectors=True,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        assert "demo/_._ovpack/dense.f32" in set(zf.namelist())
+
+    fake_fs = FakeVikingFS()
+    vector_store = FakeVectorStore()
+    result = await import_ovpack(
+        fake_fs,
+        str(temp_ovpack_path),
+        "viking://resources/imported",
+        request_ctx,
+        vector_mode="require",
+        vector_store=vector_store,
+    )
+
+    assert result == "viking://resources/imported/demo"
+    assert fake_fs.tree_calls == []
+    assert len(vector_store.upserts) == 1
+    assert vector_store.upserts[0]["uri"] == "viking://resources/imported/demo/notes.txt"
+    assert vector_store.upserts[0]["vector"] == pytest.approx([0.1, 0.2, 0.3])
+    assert vector_store.upserts[0]["tags"] == ["snapshot"]
+    assert vector_store.upserts[0]["created_at"]
+    assert vector_store.upserts[0]["updated_at"]
+    assert vector_store.upserts[0]["active_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -364,6 +573,8 @@ async def test_import_ovpack_rejects_manifest_unexpected_directory(
         temp_ovpack_path,
         {
             "demo/": "",
+            "demo/_._ovpack/": "",
+            "demo/_._ovpack/index_records.jsonl": "",
             "demo/_._ovpack_manifest.json": json.dumps(manifest),
             "demo/notes.txt": "hello",
             "demo/empty/": "",
@@ -460,3 +671,14 @@ async def test_import_top_level_scope_package_requires_root_target(
     assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == (
         "viking://resources"
     )
+
+    _write_ovpack_with_manifest(
+        temp_ovpack_path,
+        "renamed",
+        {"README.md": "hello"},
+        manifest=manifest,
+    )
+    with pytest.raises(InvalidArgumentError, match=r"root name does not match zip root"):
+        await import_ovpack(
+            FakeVikingFS(), str(temp_ovpack_path), "viking://resources", request_ctx
+        )

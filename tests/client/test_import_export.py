@@ -118,17 +118,30 @@ class TestImportOvpack:
 
     @staticmethod
     def _build_ovpack(zip_path: Path, entries: dict[str, str]) -> None:
+        index_records = b""
         manifest = {
             "kind": "openviking.ovpack",
             "format_version": 2,
-            "root": {"name": "pkg"},
+            "root": {
+                "name": "pkg",
+                "uri": "viking://resources/pkg",
+                "scope": "resources",
+            },
             "entries": [{"path": "", "kind": "directory"}],
             "content_sha256": hashlib.sha256(b"[]").hexdigest(),
-            "vectors": {},
+            "index": {
+                "records": {
+                    "path": "_._ovpack/index_records.jsonl",
+                    "count": 0,
+                    "sha256": hashlib.sha256(index_records).hexdigest(),
+                }
+            },
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
             zf.writestr("pkg/", "")
+            zf.writestr("pkg/_._ovpack/", "")
+            zf.writestr("pkg/_._ovpack/index_records.jsonl", index_records)
             zf.writestr("pkg/_._ovpack_manifest.json", json.dumps(manifest))
             for name, content in entries.items():
                 zf.writestr(name, content)

@@ -1,10 +1,10 @@
+use crate::CliContext;
+use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
 use crate::tui;
-use crate::CliContext;
-use crate::PrivacyCommands;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -59,12 +59,20 @@ pub async fn handle_add_resource(
 
     // Check that only one of --to, --parent, or --parent-auto-create is set
     let mut exclusive_count = 0;
-    if to.is_some() { exclusive_count += 1; }
-    if parent.is_some() { exclusive_count += 1; }
-    if parent_auto_create.is_some() { exclusive_count += 1; }
+    if to.is_some() {
+        exclusive_count += 1;
+    }
+    if parent.is_some() {
+        exclusive_count += 1;
+    }
+    if parent_auto_create.is_some() {
+        exclusive_count += 1;
+    }
 
     if exclusive_count > 1 {
-        eprintln!("Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time.");
+        eprintln!(
+            "Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time."
+        );
         std::process::exit(1);
     }
 
@@ -160,20 +168,41 @@ pub async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) ->
     commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
 }
 
-pub async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<()> {
+pub async fn handle_export(
+    uri: String,
+    to: String,
+    include_vectors: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact).await
+    commands::pack::export(
+        &client,
+        &uri,
+        &to,
+        include_vectors,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
-pub async fn handle_backup(to: String, ctx: CliContext) -> Result<()> {
+pub async fn handle_backup(to: String, include_vectors: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::pack::backup(&client, &to, ctx.output_format, ctx.compact).await
+    commands::pack::backup(
+        &client,
+        &to,
+        include_vectors,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_import(
     file_path: String,
     target_uri: String,
     on_conflict: Option<String>,
+    vector_mode: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -182,6 +211,7 @@ pub async fn handle_import(
         &file_path,
         &target_uri,
         on_conflict.as_deref(),
+        vector_mode.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -191,6 +221,7 @@ pub async fn handle_import(
 pub async fn handle_restore(
     file_path: String,
     on_conflict: Option<String>,
+    vector_mode: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -198,6 +229,7 @@ pub async fn handle_restore(
         &client,
         &file_path,
         on_conflict.as_deref(),
+        vector_mode.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -356,8 +388,22 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListUsers { account_id, limit, name, role } => {
-            commands::admin::list_users(&client, &account_id, limit, name, role, ctx.output_format, ctx.compact).await
+        AdminCommands::ListUsers {
+            account_id,
+            limit,
+            name,
+            role,
+        } => {
+            commands::admin::list_users(
+                &client,
+                &account_id,
+                limit,
+                name,
+                role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         AdminCommands::ListAgents { account_id } => {
             commands::admin::list_agents(&client, &account_id, ctx.output_format, ctx.compact).await
@@ -424,14 +470,16 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
         PrivacyCommands::Get {
             category,
             target_key,
-        } => commands::privacy::get_current(
-            &client,
-            &category,
-            &target_key,
-            ctx.output_format,
-            ctx.compact,
-        )
-        .await,
+        } => {
+            commands::privacy::get_current(
+                &client,
+                &category,
+                &target_key,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::Upsert {
             category,
             target_key,
@@ -458,46 +506,52 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
         PrivacyCommands::Versions {
             category,
             target_key,
-        } => commands::privacy::list_versions(
-            &client,
-            &category,
-            &target_key,
-            ctx.output_format,
-            ctx.compact,
-        )
-        .await,
+        } => {
+            commands::privacy::list_versions(
+                &client,
+                &category,
+                &target_key,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::Version {
             category,
             target_key,
             version,
-        } => commands::privacy::get_version(
-            &client,
-            &category,
-            &target_key,
-            version,
-            ctx.output_format,
-            ctx.compact,
-        )
-        .await,
+        } => {
+            commands::privacy::get_version(
+                &client,
+                &category,
+                &target_key,
+                version,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::Activate {
             category,
             target_key,
             version,
-        } => commands::privacy::activate(
-            &client,
-            &category,
-            &target_key,
-            version,
-            ctx.output_format,
-            ctx.compact,
-        )
-        .await,
+        } => {
+            commands::privacy::activate(
+                &client,
+                &category,
+                &target_key,
+                version,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
     }
 }
 
 use crate::ConfigCommands;
-use crate::config::Config;
 use crate::base_client::BaseClient;
+use crate::config::Config;
 use crate::output;
 
 pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
@@ -518,19 +572,15 @@ pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> 
             }
             Err(e) => Err(Error::Config(e.to_string())),
         },
-        ConfigCommands::SetupCli => {
-            handle_setup_cli().await
-        },
-        ConfigCommands::Switch => {
-            handle_config_switch().await
-        },
+        ConfigCommands::SetupCli => handle_setup_cli().await,
+        ConfigCommands::Switch => handle_config_switch().await,
     }
 }
 
 /// Interactive setup for CLI configuration
 async fn handle_setup_cli() -> Result<()> {
-    use rustyline::DefaultEditor;
     use colored::Colorize;
+    use rustyline::DefaultEditor;
 
     println!("{}", "Welcome to OpenViking CLI Setup!".bold().green());
     println!();
@@ -541,7 +591,8 @@ async fn handle_setup_cli() -> Result<()> {
         Err(_) => Config::default(),
     };
 
-    let mut rl = DefaultEditor::new().map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
+    let mut rl = DefaultEditor::new()
+        .map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
 
     // Step 1: Get server URL
     let default_url = config.url.clone();
@@ -597,7 +648,10 @@ async fn handle_setup_cli() -> Result<()> {
     // Step 4: Save config
     println!();
     let config_path = crate::config::default_config_path()?;
-    println!("{}", format!("Saving configuration to: {}", config_path.to_string_lossy()).blue());
+    println!(
+        "{}",
+        format!("Saving configuration to: {}", config_path.to_string_lossy()).blue()
+    );
     config.save_default()?;
 
     // Step 5: Optionally save a named backup
@@ -608,15 +662,30 @@ async fn handle_setup_cli() -> Result<()> {
         let config_name = name_input.trim().to_string();
         if let Some(parent) = config_path.parent() {
             let backup_path = parent.join(format!("ovcli.conf.{}", config_name));
-            std::fs::copy(&config_path, &backup_path).map_err(|e| Error::Config(format!("Failed to save configuration backup: {}", e)))?;
-            println!("{}", format!("✓ Configuration saved as backup: {}", backup_path.to_string_lossy()).green());
+            std::fs::copy(&config_path, &backup_path).map_err(|e| {
+                Error::Config(format!("Failed to save configuration backup: {}", e))
+            })?;
+            println!(
+                "{}",
+                format!(
+                    "✓ Configuration saved as backup: {}",
+                    backup_path.to_string_lossy()
+                )
+                .green()
+            );
         }
     }
 
     println!();
     println!("{}", "✓ Setup complete!".bold().green());
-    println!("{}", "You can now use the 'ov' command to interact with OpenViking.".dimmed());
-    println!("{}", "Use 'ov config switch' to switch between saved configurations.".dimmed());
+    println!(
+        "{}",
+        "You can now use the 'ov' command to interact with OpenViking.".dimmed()
+    );
+    println!(
+        "{}",
+        "Use 'ov config switch' to switch between saved configurations.".dimmed()
+    );
 
     Ok(())
 }
@@ -630,20 +699,26 @@ async fn probe_health(base_url: &str, timeout_secs: f64) -> Result<(bool, bool)>
 
     match result {
         Ok(value) => {
-            let healthy = value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+            let healthy = value
+                .get("healthy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             Ok((healthy, false))
         }
         Err(Error::Api(msg)) => {
             // If we get auth-related errors, auth is required
-            if msg.contains("401") || msg.contains("403") || msg.contains("unauthorized") || msg.contains("forbidden") || msg.contains("AuthenticationError") {
+            if msg.contains("401")
+                || msg.contains("403")
+                || msg.contains("unauthorized")
+                || msg.contains("forbidden")
+                || msg.contains("AuthenticationError")
+            {
                 Ok((false, true))
             } else {
                 Ok((false, false))
             }
         }
-        Err(_) => {
-            Ok((false, true))
-        }
+        Err(_) => Ok((false, true)),
     }
 }
 
@@ -653,7 +728,9 @@ async fn handle_config_switch() -> Result<()> {
 
     // Step 1: Find all available configurations
     let config_path = crate::config::default_config_path()?;
-    let config_dir = config_path.parent().ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?;
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?;
 
     let mut configs = Vec::new();
 
@@ -678,7 +755,10 @@ async fn handle_config_switch() -> Result<()> {
 
     if configs.is_empty() {
         println!("{}", "No saved configurations found.".yellow());
-        println!("{}", "Use 'ov config setup-cli' and save a named configuration first.".dimmed());
+        println!(
+            "{}",
+            "Use 'ov config setup-cli' and save a named configuration first.".dimmed()
+        );
         return Ok(());
     }
 
@@ -695,11 +775,18 @@ async fn handle_config_switch() -> Result<()> {
     }
 
     println!();
-    println!("{}", "Enter    '<number>' to use a configuration (e.g. '2')".dimmed());
-    println!("{}", "Or enter 'del<number>' to delete a configuration (e.g. 'del2')".dimmed());
+    println!(
+        "{}",
+        "Enter    '<number>' to use a configuration (e.g. '2')".dimmed()
+    );
+    println!(
+        "{}",
+        "Or enter 'del<number>' to delete a configuration (e.g. 'del2')".dimmed()
+    );
     println!("{}", "Press Enter without input to cancel".dimmed());
 
-    let mut rl = rustyline::DefaultEditor::new().map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
+    let mut rl = rustyline::DefaultEditor::new()
+        .map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
 
     loop {
         let input = rl.readline("> ").unwrap_or_default();
@@ -712,17 +799,31 @@ async fn handle_config_switch() -> Result<()> {
         }
 
         // Check for delete command
-        if let Some(num_str) = input.strip_prefix("del").or_else(|| input.strip_prefix("Del")) {
+        if let Some(num_str) = input
+            .strip_prefix("del")
+            .or_else(|| input.strip_prefix("Del"))
+        {
             if let Ok(idx) = num_str.parse::<usize>() {
                 if idx >= 1 && idx <= configs.len() {
                     let idx = idx - 1;
                     let (name, path, _) = &configs[idx];
                     println!();
-                    println!("{}", format!("Are you sure you want to delete configuration '{}'? (y/N)", name).yellow());
+                    println!(
+                        "{}",
+                        format!(
+                            "Are you sure you want to delete configuration '{}'? (y/N)",
+                            name
+                        )
+                        .yellow()
+                    );
 
                     let confirm = rl.readline("> ").unwrap_or_default();
-                    if confirm.trim().eq_ignore_ascii_case("y") || confirm.trim().eq_ignore_ascii_case("yes") {
-                        std::fs::remove_file(path).map_err(|e| Error::Config(format!("Failed to delete configuration: {}", e)))?;
+                    if confirm.trim().eq_ignore_ascii_case("y")
+                        || confirm.trim().eq_ignore_ascii_case("yes")
+                    {
+                        std::fs::remove_file(path).map_err(|e| {
+                            Error::Config(format!("Failed to delete configuration: {}", e))
+                        })?;
                         println!("{}", format!("✓ Configuration '{}' deleted.", name).green());
                     } else {
                         println!("{}", "Deletion cancelled.".dimmed());
@@ -744,21 +845,39 @@ async fn handle_config_switch() -> Result<()> {
                 // First, backup current config as .bak
                 if config_path.exists() {
                     let backup_path = config_dir.join("ovcli.conf.bak");
-                    std::fs::copy(&config_path, &backup_path).map_err(|e| Error::Config(format!("Failed to backup current config: {}", e)))?;
+                    std::fs::copy(&config_path, &backup_path).map_err(|e| {
+                        Error::Config(format!("Failed to backup current config: {}", e))
+                    })?;
                 }
 
                 // Copy selected config to main config
-                std::fs::copy(source_path, &config_path).map_err(|e| Error::Config(format!("Failed to switch configuration: {}", e)))?;
+                std::fs::copy(source_path, &config_path)
+                    .map_err(|e| Error::Config(format!("Failed to switch configuration: {}", e)))?;
 
                 println!();
-                println!("{}", format!("✓ Switched to configuration '{}'", name).bold().green());
-                println!("{}", format!("Configuration saved to: {}", config_path.to_string_lossy()).dimmed());
+                println!(
+                    "{}",
+                    format!("✓ Switched to configuration '{}'", name)
+                        .bold()
+                        .green()
+                );
+                println!(
+                    "{}",
+                    format!("Configuration saved to: {}", config_path.to_string_lossy()).dimmed()
+                );
 
                 return Ok(());
             }
         }
 
-        println!("{}", format!("Invalid selection. Please enter a number between 1 and {}.", configs.len()).yellow());
+        println!(
+            "{}",
+            format!(
+                "Invalid selection. Please enter a number between 1 and {}.",
+                configs.len()
+            )
+            .yellow()
+        );
     }
 }
 
@@ -810,12 +929,7 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(
-    uri: String,
-    mode: String,
-    wait: bool,
-    ctx: CliContext,
-) -> Result<()> {
+pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
 }
@@ -1069,7 +1183,12 @@ pub async fn handle_grep(
     .await
 }
 
-pub async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
+pub async fn handle_glob(
+    pattern: String,
+    uri: String,
+    node_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
     let params = vec![
         format!("--uri={}", uri),
         format!("-n {}", node_limit),
@@ -1104,7 +1223,10 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     println!("Connecting to {}...", ctx.config.url);
     match client.get::<serde_json::Value>("/health", &[]).await {
         Ok(value) => {
-            let healthy = value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+            let healthy = value
+                .get("healthy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !healthy {
                 println!("Warning: Server reports unhealthy status");
             }
