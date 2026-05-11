@@ -623,7 +623,7 @@ async def run_import(args: argparse.Namespace) -> None:
 
                 # Skip already ingested sessions unless force-ingest is enabled
                 if not args.force_ingest and is_already_ingested(
-                    sample_id, session_key, ingest_record, success_keys
+                    display_id, session_key, ingest_record, success_keys
                 ):
                     print(
                         f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
@@ -777,6 +777,12 @@ def main():
         help="OpenViking service URL (default: http://localhost:1933)",
     )
     parser.add_argument(
+        "--engine",
+        choices=("vikingbot", "openviking"),
+        default="vikingbot",
+        help="Import engine. Default: vikingbot. Use openviking to enable OV-specific ingest behavior.",
+    )
+    parser.add_argument(
         "--account",
         default="default",
         help="OpenViking account identifier (default: default)",
@@ -828,7 +834,18 @@ def main():
     Path(args.error_log).parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        asyncio.run(run_import(args))
+        if args.engine == "openviking":
+            try:
+                from benchmark.locomo.openviking import import_to_ov as ov_import
+            except ModuleNotFoundError:
+                import sys as _sys
+
+                _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openviking"))
+                import import_to_ov as ov_import
+
+            asyncio.run(ov_import.run_import(args))
+        else:
+            asyncio.run(run_import(args))
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

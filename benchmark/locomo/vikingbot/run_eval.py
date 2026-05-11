@@ -9,6 +9,17 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from openviking_cli.client.sync_http import SyncHTTPClient
+
+try:
+    from benchmark.locomo.vikingbot.locomo_prompts import get_answer_generation_prompt
+except ModuleNotFoundError:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from locomo_prompts import get_answer_generation_prompt
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -122,6 +133,7 @@ def load_locomo_qa(
     default_time: str | None = None,
     question_index: int | None = None,
     invalid_questions: set | None = None,
+    engine: str = "vikingbot",
 ) -> list[dict]:
     """加载LoCoMo数据集的QA部分，支持JSON和CSV格式
 
@@ -143,31 +155,22 @@ def load_locomo_qa(
             idx = int(sample_index)
             if idx < 0 or idx >= len(data):
                 raise ValueError(f"sample index {idx} out of range (0-{len(data) - 1})")
-            samples = [data[idx]]
+            samples = [(idx, data[idx])]
         except ValueError:
             # 尝试匹配 sample_id
-            matched = [s for s in data if s.get("sample_id") == sample_index]
+            matched = [(i, s) for i, s in enumerate(data) if s.get("sample_id") == sample_index]
             if not matched:
                 raise ValueError(f"sample_id '{sample_index}' not found")
             samples = matched
     else:
-        samples = data
+        samples = list(enumerate(data))
 
-    for s_idx, sample in enumerate(samples):
-        original_id = sample.get("sample_id", "")
-        # Find the sample's index in the full dataset
-        if sample_index is not None:
-            try:
-                data_idx = int(sample_index)
-            except ValueError:
-                data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
-        else:
-            data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
-        sample_id = f"sample_{data_idx}"
+    for data_idx, sample in samples:
+        raw_sample_id = sample.get("sample_id", "")
+        sample_id = f"sample_{data_idx}" if engine == "vikingbot" else raw_sample_id
+        storage_user_id = f"sample_{data_idx}" if engine == "openviking" else ""
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
-
-        # 获取对话中的所有说话者
         conv = sample.get("conversation", {})
         speakers = []
         if conv.get("speaker_a"):
@@ -182,11 +185,14 @@ def load_locomo_qa(
                     f"question index {question_index} out of range (0-{len(qa_items) - 1})"
                 )
             qa = qa_items[question_index]
+            if qa.get("category") == 5:
+                continue
             evidence_list = qa.get("evidence", [])
             question_id = f"{sample_id}_qa{question_index}"
             qa_list.append(
                 {
                     "sample_id": sample_id,
+                    "storage_user_id": storage_user_id,
                     "question_id": question_id,
                     "question_index": question_index,
                     "question": qa["question"],
@@ -203,11 +209,14 @@ def load_locomo_qa(
             )
         else:
             for q_idx, qa in enumerate(qa_items):
+                if qa.get("category") == 5:
+                    continue
                 evidence_list = qa.get("evidence", [])
                 question_id = f"{sample_id}_qa{q_idx}"
                 qa_list.append(
                     {
                         "sample_id": sample_id,
+                        "storage_user_id": storage_user_id,
                         "question_id": question_id,
                         "question_index": q_idx,
                         "question": qa["question"],
@@ -228,15 +237,364 @@ def load_locomo_qa(
     return qa_list
 
 
+DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
+DEFAULT_SINGLE_SEARCH_RERANK_LIMIT = 10
+SINGLE_SEARCH_EXCLUDED_BASENAMES = {".abstract.md", ".overview.md"}
+
+
+def get_token_encoding_name(model_name: str | None = None) -> str:
+    try:
+        import tiktoken
+
+        if model_name:
+            candidates = [model_name]
+            if "/" in model_name:
+                candidates.append(model_name.rsplit("/", 1)[-1])
+            for candidate in candidates:
+                try:
+                    return tiktoken.encoding_for_model(candidate).name
+                except KeyError:
+                    continue
+    except Exception:
+        pass
+
+    normalized = (model_name or "").lower()
+    if normalized.startswith(("gpt-4o", "gpt-5", "o1", "o3", "o4")):
+        return "o200k_base"
+    if normalized.startswith(("gpt-4", "gpt-3.5")):
+        return "cl100k_base"
+    return "approx_chars_div_4"
+
+
+def count_text_tokens(text: str, model_name: str | None = None) -> int:
+    encoding_name = get_token_encoding_name(model_name)
+    if encoding_name == "approx_chars_div_4":
+        return max(0, len(text or "") // 4)
+
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding(encoding_name)
+        return len(encoding.encode(text or ""))
+    except Exception:
+        return max(0, len(text or "") // 4)
+
+
+def _iter_search_contexts(search_result: Any) -> list[Any]:
+    if search_result is None:
+        return []
+    if isinstance(search_result, list):
+        return search_result
+
+    contexts = []
+    for attr in ("memories", "resources", "skills"):
+        contexts.extend(getattr(search_result, attr, []) or [])
+    if contexts:
+        return contexts
+
+    try:
+        return list(search_result)
+    except TypeError:
+        return []
+
+
+def is_single_search_excluded_uri(uri: str) -> bool:
+    basename = str(uri or "").rstrip("/").rsplit("/", 1)[-1]
+    return basename in SINGLE_SEARCH_EXCLUDED_BASENAMES
+
+
+def is_single_search_excluded_before_rerank_uri(
+    uri: str,
+    exclude_facts: bool = False,
+) -> bool:
+    if exclude_facts and "/facts/" in str(uri or ""):
+        return True
+    return False
+
+
+def select_single_search_contexts(
+    search_result: Any,
+    limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+) -> list[dict[str, Any]]:
+    selected = []
+    for raw_rank, context in enumerate(_iter_search_contexts(search_result), start=1):
+        if raw_rank > limit:
+            break
+        uri = getattr(context, "uri", "")
+        if not uri or is_single_search_excluded_uri(uri):
+            continue
+        selected.append(
+            {
+                "raw_rank": raw_rank,
+                "uri": uri,
+                "score": getattr(context, "score", 0.0),
+                "abstract": getattr(context, "abstract", ""),
+                "created_at": getattr(context, "created_at", ""),
+            }
+        )
+    return selected
+
+
+def build_single_search_context_prompt(
+    question: str,
+    question_time: str | None,
+    contexts: list[dict[str, Any]],
+) -> str:
+    search_results = build_single_search_prompt_search_results(contexts)
+    return get_answer_generation_prompt(
+        question=question,
+        search_results=search_results,
+        reference_date=question_time or "2023",
+    )
+
+
+def build_single_search_prompt_search_results(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "memory": str(context.get("content", "")),
+            "score": context.get("score", 0.0),
+            "raw_rank": context.get("raw_rank"),
+            "created_at": context.get("created_at", ""),
+        }
+        for context in contexts
+    ]
+
+
+def count_retrieved_memory_content_tokens(
+    contexts: list[dict[str, Any]],
+    model_name: str | None = None,
+) -> tuple[int, int, str]:
+    memory_texts = [str(context.get("content", "")) for context in contexts]
+    tokenizer = get_token_encoding_name(model_name)
+    return (
+        sum(count_text_tokens(memory_text, model_name) for memory_text in memory_texts),
+        sum(len(memory_text) for memory_text in memory_texts),
+        tokenizer,
+    )
+
+
+def build_single_search_reranker() -> Any | None:
+    from openviking.models.rerank import RerankClient
+    from openviking_cli.utils.config import get_openviking_config
+
+    rerank_config = get_openviking_config().rerank
+    if not rerank_config or not rerank_config.is_available():
+        return None
+    return RerankClient.from_config(rerank_config)
+
+
+def build_single_search_vlm() -> Any:
+    from openviking.models.vlm import VLMFactory
+    from openviking_cli.utils.config import get_openviking_config
+
+    vlm_config = get_openviking_config().vlm
+    return VLMFactory.create(vlm_config._build_vlm_config_dict())
+
+
+def _single_search_rerank_document(context: dict[str, Any]) -> str:
+    content = str(context.get("content", "") or "")
+    if content and not content.startswith("[READ ERROR]"):
+        return content
+    return str(context.get("abstract", "") or "")
+
+
+def rerank_single_search_contexts(
+    question: str,
+    contexts: list[dict[str, Any]],
+    reranker: Any | None,
+    limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not reranker or len(contexts) <= 1:
+        return contexts, []
+
+    documents = [_single_search_rerank_document(context) for context in contexts]
+    try:
+        scores = reranker.rerank_batch(question, documents)
+    except Exception:
+        return contexts, []
+
+    if not scores or len(scores) != len(contexts):
+        return contexts, []
+
+    ranked_contexts = []
+    rerank_scores = []
+    for context, score in zip(contexts, scores, strict=True):
+        if not isinstance(score, (int, float)):
+            return contexts, []
+        next_context = dict(context)
+        next_context["rerank_score"] = float(score)
+        ranked_contexts.append(next_context)
+        rerank_scores.append(
+            {
+                "uri": str(context.get("uri", "")),
+                "score": float(score),
+                "raw_rank": context.get("raw_rank"),
+            }
+        )
+
+    ranked_contexts.sort(
+        key=lambda context: (
+            context.get("rerank_score", 0.0),
+            -int(context.get("raw_rank", 0) or 0),
+        ),
+        reverse=True,
+    )
+    selected_contexts = ranked_contexts[: max(1, limit)]
+    return selected_contexts, rerank_scores
+
+
+def _response_text(response: Any) -> str:
+    if hasattr(response, "content"):
+        return str(response.content or "").strip()
+    return str(response).strip()
+
+
+def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    if isinstance(usage, dict) and usage:
+        return {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+        }
+
+    if hasattr(vlm, "get_token_usage_summary"):
+        summary = vlm.get_token_usage_summary()
+        return {
+            "prompt_tokens": int(summary.get("total_prompt_tokens", 0) or 0),
+            "completion_tokens": int(summary.get("total_completion_tokens", 0) or 0),
+            "total_tokens": int(summary.get("total_tokens", 0) or 0),
+        }
+
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def run_openviking_single_search(
+    question: str,
+    question_time: str | None = None,
+    sample_id: str | None = None,
+    storage_user_id: str | None = None,
+    question_id: str | None = None,
+    single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+    exclude_facts: bool = False,
+) -> tuple[str, dict, float, int, list, list]:
+    """执行单轮 search + rerank + answer，返回回答、token、耗时、迭代次数、工具和检索轨迹"""
+    start_time = time.time()
+    retrieval_user = storage_user_id or sample_id
+    client = SyncHTTPClient(agent_id=question_id, user=retrieval_user, timeout=300)
+    try:
+        client.initialize()
+        target_uri = f"viking://user/{retrieval_user or 'default'}/memories"
+        search_result = client.find(
+            question,
+            target_uri=target_uri,
+            limit=single_search_context_limit,
+        )
+        contexts = select_single_search_contexts(
+            search_result,
+            limit=single_search_context_limit,
+        )
+        if exclude_facts:
+            contexts = [
+                context
+                for context in contexts
+                if not is_single_search_excluded_before_rerank_uri(
+                    str(context.get("uri", "")),
+                    exclude_facts=exclude_facts,
+                )
+            ]
+        retrieved_uris = [context["uri"] for context in contexts]
+
+        for context in contexts:
+            uri = context["uri"]
+            try:
+                context["content"] = client.read(uri, offset=0, limit=-1)
+            except Exception as exc:
+                context["content"] = f"[READ ERROR] {exc}"
+
+        reranker = build_single_search_reranker()
+        rerank_enabled = reranker is not None
+        rerank_limit = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT
+        contexts, rerank_scores = rerank_single_search_contexts(
+            question=question,
+            contexts=contexts,
+            reranker=reranker,
+            limit=rerank_limit,
+        )
+        context_uris = [context["uri"] for context in contexts]
+
+        prompt = build_single_search_context_prompt(question, question_time, contexts)
+        vlm = build_single_search_vlm()
+        memory_prompt_tokens, memory_chars, memory_tokenizer = (
+            count_retrieved_memory_content_tokens(
+                contexts,
+                model_name=getattr(vlm, "model", None),
+            )
+        )
+        raw_response = vlm.get_completion(prompt)
+        response = _response_text(raw_response)
+        token_usage = _token_usage_from_vlm(vlm, raw_response)
+        token_usage["memory_prompt_tokens"] = memory_prompt_tokens
+        token_usage["memory_chars"] = memory_chars
+        token_usage["memory_tokenizer"] = memory_tokenizer
+        time_cost = time.time() - start_time
+        return (
+            response,
+            token_usage,
+            time_cost,
+            1,
+            ["single_search", "read", "context_answer"],
+            [
+                {
+                    "iteration": 1,
+                    "retrieved_uris": retrieved_uris,
+                    "context_uris": context_uris,
+                    "rerank_enabled": rerank_enabled,
+                    "rerank_limit": rerank_limit if rerank_enabled else 0,
+                    "rerank_scores": rerank_scores,
+                }
+            ],
+        )
+    except Exception as e:
+        return (
+            f"[SINGLE SEARCH ERROR] {str(e)}",
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "memory_prompt_tokens": 0,
+                "memory_chars": 0,
+                "memory_tokenizer": "approx_chars_div_4",
+            },
+            0,
+            1,
+            [],
+            [
+                {
+                    "iteration": 1,
+                    "retrieved_uris": [],
+                    "context_uris": [],
+                    "rerank_enabled": False,
+                    "rerank_limit": 0,
+                    "rerank_scores": [],
+                }
+            ],
+        )
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
 def run_vikingbot_chat(
     question: str,
     question_time: str | None = None,
     sample_id: str | None = None,
     question_id: str | None = None,
     memory_users: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
-    """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
-    # 先执行 /new 命令清除会话
+) -> tuple[str, dict, float, int, list, list]:
+    """执行旧 vikingbot chat 路径。"""
     if sample_id:
         new_cmd = [
             "vikingbot",
@@ -249,55 +607,48 @@ def run_vikingbot_chat(
             "--session",
             question_id,
         ]
-        # 添加 --memory-user 参数
         if memory_users:
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
         try:
-            # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
-            # 忽略 /new 命令的错误
             pass
 
-    # 如果有 question_time，注入到 prompt 中
-    if question_time:
-        input = f"Current date: {question_time}. Answer the question directly: {question}"
-    else:
-        input = f"Answer the question directly: {question}"
+    prompt = (
+        f"Current date: {question_time}. Answer the question directly: {question}"
+        if question_time
+        else f"Answer the question directly: {question}"
+    )
 
-    cmd = ["vikingbot", "chat", "-m", input, "-e"]
-    # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
+    cmd = ["vikingbot", "chat", "-m", prompt, "-e"]
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
-    # 添加 --memory-user 参数，指定检索哪些用户的记忆
     if memory_users:
         for user in memory_users:
             cmd.extend(["--memory-user", user])
+
     start_time = time.time()
     try:
-        # print(f'cmd={cmd}')
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
-        end_time = time.time()
-        time_cost = end_time - start_time
-
+        time_cost = time.time() - start_time
         output = result.stdout.strip()
-        # 解析返回的json结果，处理换行、多余前缀等特殊情况
         try:
             resp_json = json.loads(output, strict=False)
             response = resp_json.get("text", "")
             token_usage = resp_json.get(
-                "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                "token_usage",
+                {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             )
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+        return response, token_usage, time_cost, iteration, tools_used_names, []
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -305,20 +656,24 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            [],
         )
     except subprocess.TimeoutExpired:
-        time_cost = 0
         return (
             "[TIMEOUT]",
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            time_cost,
             0,
+            0,
+            [],
             [],
         )
 
 
-def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
-    """加载已处理的问题集合。"""
+def load_processed_questions(
+    output_path: str,
+    skip_done: bool = False,
+    key_field: str = "question",
+) -> set:
     if not skip_done or not os.path.exists(output_path):
         return set()
 
@@ -326,9 +681,9 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
     with open(output_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            question = row.get("question")
-            if question:
-                processed_questions.add(question)
+            value = row.get(key_field)
+            if value:
+                processed_questions.add(value)
     return processed_questions
 
 
@@ -374,6 +729,26 @@ def main():
         "--threads", type=int, default=40, help="Number of concurrent threads, default: 40"
     )
     parser.add_argument(
+        "--single-search-context-limit",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+        help=(
+            "Number of memory files to read into the single-search prompt, "
+            f"default: {DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT}"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-facts",
+        action="store_true",
+        help="Only used in openviking mode: exclude /facts/ URIs before read/rerank.",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=("vikingbot", "openviking"),
+        default="vikingbot",
+        help="Evaluation engine. Default: vikingbot. Use openviking for single-search mode.",
+    )
+    parser.add_argument(
         "--update-mode",
         action="store_true",
         help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
@@ -382,7 +757,7 @@ def main():
         "--group-chat",
         action="store_true",
         default=False,
-        help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
+        help="Only used in vikingbot mode: pass both speakers via --memory-user.",
     )
     parser.add_argument(
         "--retry-wrong",
@@ -392,7 +767,7 @@ def main():
     parser.add_argument(
         "--skip-done",
         action="store_true",
-        help="Skip questions already present in the output file",
+        help="Skip questions already present in the output file.",
     )
     args = parser.parse_args()
 
@@ -418,23 +793,6 @@ def main():
     else:
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
-    # --retry-wrong: 从结果 CSV 中提取有效错题
-    retry_wrong_questions = None
-    if args.retry_wrong:
-        retry_wrong_questions = set()
-        retry_wrong_samples = set()
-        with open(args.retry_wrong, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("is_invalid", "").lower() == "true":
-                    continue
-                if row.get("result") == "WRONG":
-                    retry_wrong_questions.add(row["question"])
-                    retry_wrong_samples.add(row["sample_id"])
-        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
-        if retry_wrong_samples:
-            print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
-
     # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
     qa_list = load_locomo_qa(
         args.input,
@@ -442,11 +800,23 @@ def main():
         args.count,
         question_index=args.question_index,
         invalid_questions=invalid_questions,
+        engine=args.engine,
     )
     total = len(qa_list)
 
-    # --retry-wrong: 只保留错题
-    if retry_wrong_questions is not None:
+    retry_wrong_questions = None
+    if args.retry_wrong:
+        retry_wrong_questions = set()
+        with open(args.retry_wrong, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("is_invalid", "").lower() == "true":
+                    continue
+                if row.get("result") == "WRONG":
+                    retry_wrong_questions.add(row["question"])
+        print(
+            f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}"
+        )
         before = len(qa_list)
         qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
         print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
@@ -456,7 +826,12 @@ def main():
     print(f"Filtered to {len(qa_list)} questions after removing category=5")
 
     # 加载已处理的问题
-    processed_questions = load_processed_questions(args.output, skip_done=args.skip_done)
+    processed_key_field = "question_id" if args.engine == "openviking" else "question"
+    processed_questions = load_processed_questions(
+        args.output,
+        skip_done=args.skip_done,
+        key_field=processed_key_field,
+    )
     remaining = total - len(processed_questions)
     print(
         f"Loaded {total} QA questions, {len(processed_questions)} already processed, {remaining} remaining"
@@ -464,6 +839,7 @@ def main():
 
     fieldnames = [
         "sample_id",
+        "question_id",
         "question_index",
         "result",
         "is_invalid",
@@ -478,7 +854,18 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "retrieved_uris_by_iteration",
     ]
+
+    existing_rows = []
+    existing_fieldnames = fieldnames
+    if args.update_mode and os.path.exists(args.output):
+        with open(args.output, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_rows = list(reader)
+            existing_fieldnames = reader.fieldnames or fieldnames
+    elif os.path.exists(args.output):
+        os.remove(args.output)
 
     # 创建线程锁，确保多线程写文件安全
     write_lock = threading.Lock()
@@ -487,8 +874,21 @@ def main():
     new_rows = []
     processed_count = 0
 
+    def save_results_locked():
+        temp_file = f"{args.output}.tmp"
+        with open(temp_file, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+            writer.writeheader()
+            writer.writerows(existing_rows)
+        os.replace(temp_file, args.output)
+
     # 过滤掉已经处理过的问题
-    remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
+    remaining_qa = [
+        qa
+        for qa in qa_list
+        if qa["question_id" if args.engine == "openviking" else "question"]
+        not in processed_questions
+    ]
     remaining_count = len(remaining_qa)
     print(
         f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
@@ -501,21 +901,51 @@ def main():
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
         sample_id = qa_item.get("sample_id")
+        storage_user_id = qa_item.get("storage_user_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
         if question_time:
             print(f"  [time context: {question_time}]")
-        if speakers:
+        if speakers and args.engine == "vikingbot" and args.group_chat:
             print(f"  [memory users: {speakers}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question, question_time, sample_id, question_id,
-            memory_users=None if not args.group_chat else speakers,
-        )
+        if args.engine == "openviking":
+            (
+                response,
+                token_usage,
+                time_cost,
+                iteration,
+                tools_used_names,
+                retrieved_uris_by_iteration,
+            ) = run_openviking_single_search(
+                question,
+                question_time,
+                sample_id,
+                storage_user_id,
+                question_id,
+                args.single_search_context_limit,
+                exclude_facts=args.exclude_facts,
+            )
+        else:
+            (
+                response,
+                token_usage,
+                time_cost,
+                iteration,
+                tools_used_names,
+                retrieved_uris_by_iteration,
+            ) = run_vikingbot_chat(
+                question,
+                question_time,
+                sample_id,
+                question_id,
+                memory_users=speakers if args.group_chat else None,
+            )
 
         row = {
             "sample_id": qa_item["sample_id"],
+            "question_id": question_id,
             "question_index": qa_item.get("question_index", ""),
             "result": "",
             "question": question,
@@ -529,6 +959,9 @@ def main():
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "retrieved_uris_by_iteration": json.dumps(
+                retrieved_uris_by_iteration, ensure_ascii=False
+            ),
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -536,8 +969,27 @@ def main():
         with write_lock:
             nonlocal processed_count
             new_rows.append(row)
-            processed_questions.add(question)
+            row_identity = str(
+                row.get("question_id", "")
+                if args.engine == "openviking"
+                else row.get("question", "")
+            )
+            found = False
+            for existing_row in existing_rows:
+                existing_identity = str(
+                    existing_row.get("question_id", "")
+                    if args.engine == "openviking"
+                    else existing_row.get("question", "")
+                )
+                if existing_identity == row_identity:
+                    existing_row.update(row)
+                    found = True
+                    break
+            if not found:
+                existing_rows.append(row)
+            processed_questions.add(row_identity)
             processed_count += 1
+            save_results_locked()
             print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
         return True
 
@@ -555,47 +1007,9 @@ def main():
             except Exception as e:
                 print(f"Error processing QA item: {str(e)}")
 
-    # 写文件逻辑
-    if args.update_mode and os.path.exists(args.output):
-        # 更新模式：读取现有文件，更新匹配行
-        print(f"Update mode: updating existing file {args.output}")
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            existing_rows = list(reader)
-            existing_fieldnames = reader.fieldnames or fieldnames
-
-        # 更新匹配的行
-        updated_count = 0
-        for new_row in new_rows:
-            q_idx = str(new_row.get("question_index", ""))
-            found = False
-            for row in existing_rows:
-                if str(row.get("question_index", "")) == q_idx:
-                    row.update(new_row)
-                    found = True
-                    updated_count += 1
-                    break
-            if not found:
-                existing_rows.append(new_row)
-                updated_count += 1
-
-        # 写回文件
-        with open(args.output, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
-            writer.writeheader()
-            writer.writerows(existing_rows)
-
-        print(f"Updated {updated_count} rows in {args.output}")
+    if args.update_mode:
+        print(f"Updated {len(new_rows)} rows in {args.output}")
     else:
-        # 普通模式：覆盖写入
-        if os.path.exists(args.output):
-            os.remove(args.output)
-
-        with open(args.output, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(new_rows)
-
         print(f"Evaluation completed, results saved to {args.output}")
 
 

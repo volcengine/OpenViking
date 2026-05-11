@@ -7,50 +7,79 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 
+try:
+    from benchmark.locomo.vikingbot.locomo_prompts import (
+        JUDGE_SYSTEM_PROMPT,
+        get_judge_prompt,
+        get_judge_prompt_with_evidence,
+        preprocess_answer,
+    )
+except ModuleNotFoundError:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from locomo_prompts import (  # type: ignore
+        JUDGE_SYSTEM_PROMPT,
+        get_judge_prompt,
+        get_judge_prompt_with_evidence,
+        preprocess_answer,
+    )
+
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
 
 
+def _parse_evidence_text(raw: str) -> str:
+    if not raw:
+        return ""
+    raw = raw.strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+    if isinstance(parsed, list):
+        return "\n".join(str(item) for item in parsed if str(item).strip())
+    if isinstance(parsed, str):
+        return parsed
+    return ""
+
+
 async def grade_answer(
-    llm_client, model: str, question: str, gold_answer: str, response: str
+    llm_client,
+    model: str,
+    category: int,
+    question: str,
+    gold_answer: str,
+    response: str,
+    evidence_text: str = "",
 ) -> tuple[bool, str]:
-    system_prompt = """
-        You are an expert grader that determines if answers to questions match a gold standard answer
-        """
-
-    ACCURACY_PROMPT = f"""
-    Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given the following data:
-        (1) a question (posed by one user to another user),
-        (2) a 'gold' (ground truth) answer,
-        (3) a generated answer
-    which you will score as CORRECT/WRONG.
-
-    The point of the question is to ask about something one user should know about the other user based on their prior conversations.
-    The gold answer will usually be a concise and short answer that includes the referenced topic, for example:
-    Question: Do you remember what I got the last time I went to Hawaii?
-    Gold answer: A shell necklace
-    The generated answer might be much longer, but you should be generous with your grading - as long as it touches on the same topic as the gold answer, it should be counted as CORRECT.
-
-    For time related questions, the gold answer will be a specific date, month, year, etc. The generated answer might be much longer or use relative time references (like "last Tuesday" or "next month"), but you should be generous with your grading - as long as it refers to the same date or time period as the gold answer, it should be counted as CORRECT. Even if the format differs (e.g., "May 7th" vs "7 May"), consider it CORRECT if it's the same date.
-
-    Now it's time for the real question:
-    Question: {question}
-    Gold answer: {gold_answer}
-    Generated answer: {response}
-
-    First, provide a short (one sentence) explanation of your reasoning, then finish with CORRECT or WRONG.
-    Do NOT include both CORRECT and WRONG in your response, or it will break the evaluation script.
-
-    Respond with JSON only: {{"is_correct": "CORRECT" or "WRONG", "reasoning": "your explanation"}}
-    """
+    processed_answer = preprocess_answer(category, gold_answer)
+    if evidence_text:
+        accuracy_prompt = get_judge_prompt_with_evidence(
+            category,
+            question,
+            processed_answer,
+            response,
+            evidence_text,
+        )
+    else:
+        accuracy_prompt = get_judge_prompt(
+            category,
+            question,
+            processed_answer,
+            response,
+        )
 
     try:
         resp = await llm_client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": ACCURACY_PROMPT},
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": accuracy_prompt},
             ],
             temperature=0,
             timeout=60,
@@ -62,7 +91,7 @@ async def grade_answer(
         if start_idx != -1 and end_idx != -1:
             json_str = content[start_idx : end_idx + 1].strip()
             result = json.loads(json_str)
-            is_correct = result.get("is_correct", "WRONG").strip().upper() == "CORRECT"
+            is_correct = result.get("label", "WRONG").strip().upper() == "CORRECT"
             reasoning = result.get("reasoning", "")
             return is_correct, reasoning
         return False, f"[PARSE ERROR] Invalid response: {content}"
@@ -127,7 +156,11 @@ async def main():
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
     # 筛选未评分的行
-    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
+    ungraded = [
+        i
+        for i, row in enumerate(rows)
+        if not row.get("result") and str(row.get("category", "")).strip() != "5"
+    ]
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:
@@ -157,8 +190,18 @@ async def main():
             question = row["question"]
             gold = row["answer"]
             response = row["response"]
+            category = int(str(row.get("category", "0") or "0"))
+            evidence_text = _parse_evidence_text(row.get("evidence_text", ""))
             print(f"Grading {idx + 1}/{total}: {question[:60]}...")
-            is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
+            is_correct, reasoning = await grade_answer(
+                client,
+                args.model,
+                category,
+                question,
+                gold,
+                response,
+                evidence_text,
+            )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
 
