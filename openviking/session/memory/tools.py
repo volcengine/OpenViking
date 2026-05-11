@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
@@ -175,15 +176,16 @@ class MemoryReadTool(MemoryTool):
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
+            plain_content = LinkRenderer.strip_links(parsed.get("content", ""))
             ctx.read_file_contents[uri] = MemoryFileContent(
                 uri=uri,
-                plain_content=parsed.get("content", ""),
+                plain_content=plain_content,
                 memory_fields=parsed,
             )
             # Remove links/backlinks from LLM-visible output (not needed for extraction)
             llm_result = {k: v for k, v in parsed.items() if k not in ("links", "backlinks")}
             # Add 1-based line numbers to content for LLM readability & link extraction
-            raw_content = parsed.get("content", "")
+            raw_content = plain_content
             if raw_content:
                 lines = raw_content.split("\n")
                 numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))

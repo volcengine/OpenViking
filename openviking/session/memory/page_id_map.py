@@ -40,7 +40,6 @@ class PageIdMap:
         return page_id
 
     def register_new_page_id(self, uri: str, page_id: int) -> None:
-
         if uri in self._uri_to_id:
             return  # URI already registered
         self._id_to_uri[page_id] = uri

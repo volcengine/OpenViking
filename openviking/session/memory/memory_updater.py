@@ -32,6 +32,7 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
     serialize_with_metadata,
 )
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.uri import supplement_operation_uris, render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -401,8 +402,9 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx)
                 if content:
                     parsed = parse_memory_file_with_fields(content)
+                    plain_content = LinkRenderer.strip_links(parsed.get("content", ""))
                     old_content = MemoryFileContent(
-                        uri=uri, plain_content=parsed.get("content", ""), memory_fields=parsed
+                        uri=uri, plain_content=plain_content, memory_fields=parsed
                     )
             except Exception:
                 # File doesn't exist yet, that's okay
@@ -467,9 +469,17 @@ class MemoryUpdater:
                 elif existing_backlinks:
                     metadata["backlinks"] = existing_backlinks
 
+            # Render links in content body before serialization
+            rendered_content = LinkRenderer.render_links(
+                metadata.get("content", ""),
+                source_uri=uri,
+                links=metadata.get("links", []) + metadata.get("backlinks", []),
+            )
+            metadata_copy = metadata.copy()
+            metadata_copy["content"] = rendered_content
             # serialize_with_metadata modifies metadata dict, so pass a copy
             new_full_content = serialize_with_metadata(
-                metadata.copy(),
+                metadata_copy,
                 content_template=schema.content_template,
                 extract_context=extract_context,
             )
@@ -564,9 +574,17 @@ class MemoryUpdater:
                     )
                     parsed["backlinks"] = merged_backlinks
 
+                # Render links in content body before serialization
+                rendered_content = LinkRenderer.render_links(
+                    parsed.get("content", ""),
+                    source_uri=uri,
+                    links=parsed.get("links", []) + parsed.get("backlinks", []),
+                )
+                parsed_copy = parsed.copy()
+                parsed_copy["content"] = rendered_content
                 # Re-serialize with updated links
                 new_full_content = serialize_with_metadata(
-                    parsed.copy(), content_template=None, extract_context=None
+                    parsed_copy, content_template=None, extract_context=None
                 )
                 await viking_fs.write_file(uri, new_full_content, ctx=ctx)
             except Exception as e:

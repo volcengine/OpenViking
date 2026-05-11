@@ -358,28 +358,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         resolved.resolved_links = resolved_links
         return resolved
 
-    @staticmethod
-    def _validate_match_text(match_text: Optional[str], conversation_text: str) -> bool:
-        """Validate match_text: must be a single word and exist verbatim in conversation.
-
-        Args:
-            match_text: The match_text value to validate.
-            conversation_text: The full conversation text to check against.
-        """
-        if not match_text:
-            return True  # None/empty is allowed
-
-        stripped = match_text.strip()
-
-        # Must be a single word (no spaces/whitespace)
-        if " " in stripped or "\t" in stripped or "\n" in stripped:
-            return False
-
-        # Must exist verbatim in conversation
-        if stripped not in conversation_text:
-            return False
-
-        return True
 
     def _resolve_links(
         self, operations, upsert_operations: List[ResolvedOperation]
@@ -405,15 +383,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if not from_uri or not to_uri:
                 logger.warning(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
                 continue
-
-            # Validate match_text: must be a single word and exist verbatim in conversation
-            if link.match_text:
-                conversation_text = self.context_provider.get_conversation_text()
-                if not self._validate_match_text(link.match_text, conversation_text):
-                    logger.warning(
-                        f"match_text '{link.match_text}' is invalid"
-                        f" (not a single word or not found in conversation)"
-                    )
 
             stored_link = StoredLink(
                 from_uri=from_uri,
