@@ -24,6 +24,7 @@ fields:
     description: |
       Username for the preference owner
     merge_op: immutable
+    searchable: true
 
   - name: topic
     type: string
@@ -33,6 +34,7 @@ fields:
       Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
       Different preference topics should be stored as separate memories, do not mix unrelated preferences.
     merge_op: immutable
+    searchable: true
 
   - name: content
     type: string
@@ -40,4 +42,3 @@ fields:
       Preference content in Markdown format describing "what the user prefers/is accustomed to".
       Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
     merge_op: patch
-    searchable: true

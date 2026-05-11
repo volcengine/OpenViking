@@ -40,4 +40,3 @@ fields:
       - Career plan
       etc.
     merge_op: patch
-    searchable: true

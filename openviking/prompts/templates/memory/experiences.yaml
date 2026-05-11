@@ -42,4 +42,3 @@ fields:
       - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
     merge_op: patch
-    searchable: true

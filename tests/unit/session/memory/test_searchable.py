@@ -39,32 +39,27 @@ class TestSearchableYamlParsing:
     def test_tools_searchable_fields(self):
         schema = self.registry.get("tools")
         searchable = {f.name for f in schema.fields if f.searchable}
-        assert "tool_name" not in searchable
-        assert "call_count" not in searchable
-        assert "when_to_use" in searchable
-        assert "guidelines" in searchable
+        assert searchable == set()  # all rendered in content_template
 
     def test_entities_searchable_fields(self):
         schema = self.registry.get("entities")
         searchable = {f.name for f in schema.fields if f.searchable}
-        assert searchable == {"content"}
+        assert searchable == set()  # content is always included as abstract, no need for searchable
 
     def test_profile_searchable_fields(self):
         schema = self.registry.get("profile")
         searchable = {f.name for f in schema.fields if f.searchable}
-        assert searchable == {"content"}
+        assert searchable == set()
 
     def test_soul_searchable_fields(self):
         schema = self.registry.get("soul")
         searchable = {f.name for f in schema.fields if f.searchable}
-        assert searchable == {"core_truths", "boundaries", "vibe", "continuity"}
+        assert searchable == set()  # all rendered in content_template
 
-    def test_skills_non_searchable_counters(self):
+    def test_skills_searchable_fields(self):
         schema = self.registry.get("skills")
-        non_searchable = {f.name for f in schema.fields if not f.searchable}
-        assert "total_executions" in non_searchable
-        assert "success_count" in non_searchable
-        assert "fail_count" in non_searchable
+        searchable = {f.name for f in schema.fields if f.searchable}
+        assert searchable == set()  # all rendered in content_template
 
 
 class TestEmbeddingTextConstruction:

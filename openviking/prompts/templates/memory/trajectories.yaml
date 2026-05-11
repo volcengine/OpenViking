@@ -58,4 +58,3 @@ fields:
       - Goal and Result are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch
-    searchable: true

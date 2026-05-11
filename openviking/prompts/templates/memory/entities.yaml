@@ -21,16 +21,17 @@ fields:
     description: |
       - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words.
     merge_op: immutable
+    searchable: true
 
   - name: name
     type: string
     description: |
       - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
     merge_op: immutable
+    searchable: true
 
   - name: content
     type: string
     description: |
       - Detailed Zettelkasten card content in markdown format
     merge_op: patch
-    searchable: true

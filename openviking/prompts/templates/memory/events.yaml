@@ -43,6 +43,7 @@ fields:
       6. Patterns like "person_chat", "chat_about_xxx", "daily_talk" are forbidden;
       7. Output only the event name, no extra explanation.
     merge_op: immutable
+    searchable: true
 
   - name: goal
     type: string
