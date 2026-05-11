@@ -152,7 +152,7 @@ async def build_index_expectations(
     for uri, rel_path in _directory_candidates(root_uri, entries):
         abstract = await _read_text_if_exists(viking_fs, f"{uri}/.abstract.md", ctx)
         overview = await _read_text_if_exists(viking_fs, f"{uri}/.overview.md", ctx)
-        if abstract or overview:
+        if abstract:
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=0))
         if overview:
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=1))

@@ -995,6 +995,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 - `entries[].path` 是相对导出 root 的路径；`""` 表示 root 目录本身。
 - 文件条目包含 `size` 和 `sha256`；`content_sha256` 覆盖按路径排序后的文件列表（`path`、`size`、`sha256`）。
 - `_._ovpack/index_records.jsonl` 保存可迁移的索引标量。`include_vectors=true` 时，`_._ovpack/dense.f32` 保存纯 dense float32 向量快照和 embedding 元数据；底层 `VectorIndex.IndexType` 为 hybrid 时不支持向量快照导出。
+- `.ovpack/`、`_._ovpack/`、`.ovpack_manifest.json`、`_._ovpack_manifest.json` 是 OVPack 保留路径，不能作为用户内容导出或导入。
 - `id`、`uri`、`account_id`、`created_at`、`updated_at`、`active_count` 等运行态字段会在目标环境重新生成，不从包内恢复。
 - OVPack 不额外设置包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 

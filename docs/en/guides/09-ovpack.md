@@ -243,7 +243,8 @@ OpenViking escapes ordinary dotfiles in ZIP paths with the `_._` prefix:
 | `.abstract.md` | `_._abstract.md` |
 | `.overview.md` | `_._overview.md` |
 | `.meta.json` | `_._meta.json` |
-| `.ovpack_manifest.json` | `_._ovpack_manifest.json` |
+
+`_._ovpack/` and `_._ovpack_manifest.json` are OVPack internal reserved paths. To avoid collisions with `_._` escaping, user content cannot contain `.ovpack/`, `_._ovpack/`, `.ovpack_manifest.json`, or `_._ovpack_manifest.json`.
 
 The manifest stores package structure, file checksums, and checksums for
 internal index files. It does not inline per-file index records:

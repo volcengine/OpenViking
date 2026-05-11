@@ -102,6 +102,40 @@ class FakeExportVikingFS:
         return self.binary_files[uri]
 
 
+class OverviewOnlyExportVikingFS(FakeExportVikingFS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.text_files = {
+            "viking://resources/demo/.overview.md": "root overview",
+        }
+
+
+class ReservedPathExportVikingFS(FakeExportVikingFS):
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        assert uri == "viking://resources/demo"
+        return [
+            {
+                "rel_path": ".ovpack",
+                "uri": "viking://resources/demo/.ovpack",
+                "isDir": True,
+                "size": 0,
+            },
+            {
+                "rel_path": ".ovpack/foo.txt",
+                "uri": "viking://resources/demo/.ovpack/foo.txt",
+                "isDir": False,
+                "size": 5,
+            },
+        ]
+
+
 class FakeBackupVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
@@ -214,6 +248,24 @@ class FakeVectorStore:
 
 class IncompleteVectorStore(FakeVectorStore):
     async def filter(self, **kwargs):
+        return []
+
+
+class OverviewOnlyVectorStore(FakeVectorStore):
+    async def filter(self, **kwargs):
+        uri = kwargs["filter"].value
+        if uri == "viking://resources/demo":
+            return [
+                {
+                    "uri": uri,
+                    "context_type": "resource",
+                    "level": 1,
+                    "abstract": "root overview",
+                    "vector": [0.7, 0.8, 0.9],
+                }
+            ]
+        if uri == "viking://resources/demo/notes.txt":
+            return await super().filter(**kwargs)
         return []
 
 
@@ -524,6 +576,50 @@ async def test_export_include_vectors_rejects_missing_index_records(
         "notes.txt#level=2",
     }
     assert not temp_ovpack_path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_export_include_vectors_allows_overview_without_abstract(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    await export_ovpack(
+        OverviewOnlyExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+        vector_store=OverviewOnlyVectorStore(),
+        include_vectors=True,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        index_records = [
+            json.loads(line)
+            for line in zf.read("demo/_._ovpack/index_records.jsonl").decode("utf-8").splitlines()
+        ]
+
+    root_levels = {record["level"] for record in index_records if record["path"] == ""}
+    assert root_levels == {1}
+
+
+@pytest.mark.asyncio
+async def test_ovpack_rejects_reserved_internal_user_paths(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    with pytest.raises(InvalidArgumentError, match=r"reserved ovpack path") as export_exc:
+        await export_ovpack(
+            ReservedPathExportVikingFS(),
+            "viking://resources/demo",
+            str(temp_ovpack_path),
+            ctx=request_ctx,
+        )
+    assert export_exc.value.details["path"] == ".ovpack"
+    assert not temp_ovpack_path.read_bytes()
+
+    _write_ovpack_with_manifest(temp_ovpack_path, "demo", {".ovpack/foo.txt": "hello"})
+    fake_fs = FakeVikingFS()
+    with pytest.raises(InvalidArgumentError, match=r"reserved ovpack path"):
+        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+    assert fake_fs.written_files == []
 
 
 @pytest.mark.asyncio

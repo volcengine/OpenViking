@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from openviking.core.namespace import uri_depth
+from openviking.core.namespace import uri_depth, uri_parts
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_TYPE,
-    OVPACK_MANIFEST_FILENAME,
+    is_ovpack_reserved_rel_path,
     join_uri,
     leaf_name,
     strip_uri_trailing_slash,
@@ -21,12 +21,27 @@ from openviking_cli.utils.uri import VikingURI
 PUBLIC_SCOPES = ("resources", "user", "agent", "session")
 IMPORTABLE_SCOPES = frozenset(PUBLIC_SCOPES)
 STRUCTURED_IMPORT_SCOPES = frozenset({"user", "agent", "session"})
-EXCLUDED_FILENAMES = frozenset({".relations.json", OVPACK_MANIFEST_FILENAME})
+EXCLUDED_FILENAMES = frozenset({".relations.json"})
 NON_VECTOR_SCOPES = frozenset({"session"})
 
 
 def is_excluded_rel_path(rel_path: str) -> bool:
     return leaf_name(rel_path) in EXCLUDED_FILENAMES
+
+
+def validate_ovpack_user_rel_path(rel_path: str, *, operation: str) -> None:
+    if is_ovpack_reserved_rel_path(rel_path):
+        raise InvalidArgumentError(
+            f"cannot {operation} reserved ovpack path",
+            details={"path": rel_path},
+        )
+
+
+def _scope_relative_path(uri: str) -> str:
+    parts = uri_parts(uri)
+    if len(parts) <= 1:
+        return ""
+    return "/".join(parts[1:])
 
 
 def validate_public_scope(uri: str, *, operation: str, allow_root: bool = False) -> None:
@@ -42,6 +57,7 @@ def validate_public_scope(uri: str, *, operation: str, allow_root: bool = False)
 def validate_import_target_uri(uri: str) -> None:
     """Enforce the same target-policy boundary as direct content writes."""
     validate_public_scope(uri, operation="import")
+    validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="import")
     name = leaf_name(uri)
     if name in EXCLUDED_FILENAMES:
         raise InvalidArgumentError(f"cannot import internal ovpack file: {uri}")
@@ -51,6 +67,7 @@ def validate_import_target_uri(uri: str) -> None:
 
 def validate_export_source_uri(uri: str) -> None:
     validate_public_scope(uri, operation="export")
+    validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="export")
     name = leaf_name(uri)
     if name in EXCLUDED_FILENAMES:
         raise InvalidArgumentError(f"cannot export internal ovpack file: {uri}")

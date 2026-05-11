@@ -46,6 +46,7 @@ from openviking.storage.ovpack.policy import (
     validate_export_source_uri,
     validate_import_scope_compatibility,
     validate_import_target_uri,
+    validate_ovpack_user_rel_path,
     validate_public_scope,
 )
 from openviking.storage.ovpack.validation import (
@@ -137,7 +138,13 @@ async def _existing_scope_roots(
 
 
 def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [entry for entry in entries if not is_excluded_rel_path(entry.get("rel_path", ""))]
+    exportable: list[dict[str, Any]] = []
+    for entry in entries:
+        rel_path = str(entry.get("rel_path") or "")
+        validate_ovpack_user_rel_path(rel_path, operation="export")
+        if not is_excluded_rel_path(rel_path):
+            exportable.append(entry)
+    return exportable
 
 
 async def _enqueue_direct_vectorization(

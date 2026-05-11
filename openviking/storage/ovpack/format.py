@@ -24,6 +24,7 @@ OVPACK_KIND = "openviking.ovpack"
 OVPACK_MANIFEST_FILENAME = ".ovpack_manifest.json"
 OVPACK_MANIFEST_ZIP_LEAF = "_._ovpack_manifest.json"
 OVPACK_INTERNAL_DIR = "_._ovpack"
+OVPACK_INTERNAL_SOURCE_DIR = ".ovpack"
 OVPACK_INDEX_RECORDS_FILENAME = "index_records.jsonl"
 OVPACK_INDEX_RECORDS_PATH = f"{OVPACK_INTERNAL_DIR}/{OVPACK_INDEX_RECORDS_FILENAME}"
 OVPACK_DENSE_FILENAME = "dense.f32"
@@ -32,6 +33,8 @@ OVPACK_ON_CONFLICT_VALUES = frozenset({"fail", "overwrite", "skip"})
 OVPACK_VECTOR_MODE_VALUES = frozenset({"auto", "recompute", "require"})
 OVPACK_BACKUP_NAME = "openviking-backup"
 OVPACK_BACKUP_TYPE = "backup"
+OVPACK_RESERVED_REL_PATH_PARTS = frozenset({OVPACK_INTERNAL_SOURCE_DIR, OVPACK_INTERNAL_DIR})
+OVPACK_RESERVED_FILENAMES = frozenset({OVPACK_MANIFEST_FILENAME, OVPACK_MANIFEST_ZIP_LEAF})
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -67,6 +70,22 @@ def is_internal_zip_path(zip_path: str, base_name: str) -> bool:
 
 def internal_zip_path(base_name: str, internal_path: str) -> str:
     return f"{base_name}/{internal_path}"
+
+
+def rel_path_parts(rel_path: str) -> tuple[str, ...]:
+    """Return normalized slash-separated relative path parts."""
+    return tuple(part for part in rel_path.split("/") if part)
+
+
+def is_ovpack_reserved_rel_path(rel_path: str) -> bool:
+    """Return whether a user relative path collides with OVPack internals."""
+    parts = rel_path_parts(rel_path)
+    if not parts:
+        return False
+    return (
+        any(part in OVPACK_RESERVED_REL_PATH_PARTS for part in parts)
+        or parts[-1] in OVPACK_RESERVED_FILENAMES
+    )
 
 
 def validate_ovpack_member_path(zip_path: str, base_name: str) -> str:

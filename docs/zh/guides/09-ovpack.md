@@ -230,7 +230,8 @@ OpenViking 在 ZIP 中会把普通点文件转义为 `_._` 前缀：
 | `.abstract.md` | `_._abstract.md` |
 | `.overview.md` | `_._overview.md` |
 | `.meta.json` | `_._meta.json` |
-| `.ovpack_manifest.json` | `_._ovpack_manifest.json` |
+
+`_._ovpack/` 和 `_._ovpack_manifest.json` 是 OVPack 内部保留路径。为避免和 `_._` 转义规则碰撞，用户内容中不能包含 `.ovpack/`、`_._ovpack/`、`.ovpack_manifest.json` 或 `_._ovpack_manifest.json`。
 
 manifest 只保存包结构、文件 checksum 和内部索引文件的 checksum，不直接内嵌每个文件的索引记录：
 
