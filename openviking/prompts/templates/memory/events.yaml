@@ -48,12 +48,14 @@ fields:
     type: string
     description: |
       Summarize the purpose of the content in 5 words or less
+    searchable: true
 
   - name: summary
     type: string
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+    searchable: true
 
   - name: ranges
     type: string

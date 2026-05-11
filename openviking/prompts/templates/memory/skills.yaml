@@ -54,6 +54,7 @@ fields:
       Best use cases for the skill, describing in what scenarios this skill works best.
       Examples: "Slide creation tasks with clear topic and target audience"
     merge_op: patch
+    searchable: true
 
   - name: recommended_flow
     type: string
@@ -61,6 +62,7 @@ fields:
       Recommended execution flow for the skill, describing the best steps to execute this skill.
       Examples: "1. Confirm topic and audience -> 2. Collect reference materials -> 3. Generate outline -> 4. Create slides -> 5. Refine content"
     merge_op: patch
+    searchable: true
 
   - name: key_dependencies
     type: string
@@ -68,6 +70,7 @@ fields:
       Key dependencies/prerequisites for the skill, describing what prerequisites and inputs are needed to execute this skill.
       Examples: "Clear topic (e.g., 'Q3 project update', 'Python tutorial'); Target audience (e.g., 'executives', 'beginners'); Reference materials (optional but recommended)"
     merge_op: patch
+    searchable: true
 
   - name: common_failures
     type: string
@@ -75,6 +78,7 @@ fields:
       Common failure modes of the skill, describing problems and error patterns this skill frequently encounters.
       Examples: "Vague topic like 'make a PPT' leads to multiple rework cycles; Missing audience info causes style mismatch; No reference materials results in generic content"
     merge_op: patch
+    searchable: true
 
   - name: recommendation
     type: string
@@ -82,6 +86,7 @@ fields:
       Actionable recommendations for skill usage, short actionable recommendations.
       Examples: "Always confirm topic and audience before starting; Collect 2-3 reference materials for better quality"
     merge_op: patch
+    searchable: true
 
   - name: guidelines
     type: string
@@ -93,3 +98,4 @@ fields:
       - "### Bad Cases" - failed usage examples
       Headings must be in English, content can be in target language.
     merge_op: patch
+    searchable: true

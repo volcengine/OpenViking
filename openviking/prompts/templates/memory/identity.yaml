@@ -43,6 +43,7 @@ fields:
     type: string
     description: Vibe or temperament
     merge_op: patch
+    searchable: true
 
   - name: emoji
     type: string
@@ -59,3 +60,4 @@ fields:
     description: Self introduction
     merge_op: patch
     init_value: "The start of figuring out who you are."
+    searchable: true

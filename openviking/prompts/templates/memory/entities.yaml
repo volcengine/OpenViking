@@ -33,3 +33,4 @@ fields:
     description: |
       - Detailed Zettelkasten card content in markdown format
     merge_op: patch
+    searchable: true

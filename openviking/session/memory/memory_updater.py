@@ -355,7 +355,11 @@ class MemoryUpdater:
                 result.add_error(file_content.uri, e)
 
         # Vectorize written and edited memories
-        await self._vectorize_memories(result, ctx)
+        uri_memory_type_map = {}
+        for op in operations.upsert_operations:
+            for uri in op.uris:
+                uri_memory_type_map[uri] = op.memory_type
+        await self._vectorize_memories(result, ctx, uri_memory_type_map=uri_memory_type_map)
 
         # Apply links to endpoint files not covered by upsert_operations
         if operations.resolved_links:
@@ -586,12 +590,14 @@ class MemoryUpdater:
         self,
         result: MemoryUpdateResult,
         ctx: RequestContext,
+        uri_memory_type_map: Dict[str, str],
     ) -> None:
         """Vectorize written and edited memory files.
 
         Args:
             result: MemoryUpdateResult with written_uris and edited_uris
             ctx: Request context
+            uri_memory_type_map: Mapping from URI to memory_type
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
@@ -623,6 +629,38 @@ class MemoryUpdater:
                 parsed = parse_memory_file_with_fields(content)
                 abstract = parsed.get("content", "")
 
+                # Build embedding text from only searchable fields
+                embedding_parts = []
+                if abstract:
+                    embedding_parts.append(abstract)
+
+                memory_type = uri_memory_type_map.get(uri)
+
+                if memory_type and self._registry:
+                    schema = self._registry.get(memory_type)
+                    if schema:
+                        searchable_fields = {f.name for f in schema.fields if f.searchable}
+                        searchable_data = {}
+                        for field_name in searchable_fields:
+                            if field_name == "content":
+                                continue
+                            field_value = parsed.get(field_name)
+                            if field_value is not None:
+                                field_str = (
+                                    str(field_value)
+                                    if not isinstance(field_value, str)
+                                    else field_value
+                                )
+                                if field_str.strip():
+                                    searchable_data[field_name] = field_str.strip()
+                        if searchable_data:
+                            import json
+
+                            embedding_parts.append(json.dumps(searchable_data, ensure_ascii=False))
+
+                embedding_text = "\n\n".join(embedding_parts) if embedding_parts else abstract
+                print(f"[Vectorize] uri={uri}\nembedding_text=\n{embedding_text}")
+
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI
 
@@ -642,7 +680,7 @@ class MemoryUpdater:
                     user=ctx.user,
                     account_id=ctx.account_id,
                 )
-                memory_context.set_vectorize(Vectorize(text=content))
+                memory_context.set_vectorize(Vectorize(text=embedding_text))
 
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)

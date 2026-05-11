@@ -44,6 +44,7 @@ fields:
     description: |
       Static description of the tool, basic functionality description.
       Examples: "Searches the web for information", "Reads files from the file system"
+    searchable: true
 
   - name: call_count
     type: int64
@@ -65,6 +66,7 @@ fields:
       Hint for when this tool should be retrieved and used, describing in what scenarios this tool works best.
       Examples: "When needing to read configuration files or JSON data from filesystem; When handling file read errors or implementing robust file operations"
     merge_op: patch
+    searchable: true
 
   - name: optimal_params
     type: string
@@ -74,6 +76,7 @@ fields:
       do not describe specific case values (such as "command: 'echo hello'").
       Examples: "max_results: 5-20 (larger values may timeout); language: 'en' for better results; query: specific multi-word phrases with qualifiers"
     merge_op: patch
+    searchable: true
 
   - name: common_failures
     type: string
@@ -81,6 +84,7 @@ fields:
       Common failure modes of the tool, describing problems and error patterns this tool frequently encounters.
       Examples: "Single-word queries return irrelevant results; max_results>50 causes timeout; non-English queries have lower quality"
     merge_op: patch
+    searchable: true
 
   - name: recommendation
     type: string
@@ -88,6 +92,7 @@ fields:
       Actionable recommendations for tool usage, short actionable recommendations.
       Examples: "Use specific multi-word queries like 'Python asyncio tutorial'; add qualifiers like 'guide', 'docs', 'example'"
     merge_op: patch
+    searchable: true
 
   - name: guidelines
     type: string
@@ -98,3 +103,4 @@ fields:
       - "### Good Cases" - successful usage examples
       - "### Bad Cases" - failed usage examples
     merge_op: patch
+    searchable: true

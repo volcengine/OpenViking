@@ -40,3 +40,4 @@ fields:
       Preference content in Markdown format describing "what the user prefers/is accustomed to".
       Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
     merge_op: patch
+    searchable: true

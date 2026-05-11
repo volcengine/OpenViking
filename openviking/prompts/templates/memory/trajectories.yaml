@@ -33,11 +33,11 @@ fields:
       Execution trace in EXACTLY this format:
       - Goal: <what the user wanted to achieve — one sentence>
       - Trajectory:
-        1. <what the agent aimed to achieve>. 
-           Actions: <summarized interactions, tools used, and summarized responses>. 
+        1. <what the agent aimed to achieve>.
+           Actions: <summarized interactions, tools used, and summarized responses>.
            Progress: <how this shifted the state>.
-        2. <...>. 
-           Actions: <...>. 
+        2. <...>.
+           Actions: <...>.
            Progress: <...>.
         3. <... continue sequentially to capture the entire execution>
       - Result: <final outcome and any important side effects — one sentence>
@@ -49,7 +49,7 @@ fields:
       - SUMMARIZE LONG TEXTS: Do NOT record exact tool responses, raw JSON payloads, or verbatim user/agent messages, especially when they are very long. You MUST use a concise, summarized version that captures the core meaning without losing any key information, constraints, or data points critical to the task.
       - CAPTURE ALL MISTAKES: You MUST explicitly detail any errors, false attempts, wrong function calls, or agent misunderstandings. Do not gloss over failures, dead ends, or retry loops.
       - INTENT & PROGRESS TRACKING: Every step must clearly state the current agent intention, summarize the 'Actions/Events' taken, and conclude with 'Progress' (evaluating what was achieved or blocked).
-      - TOOL TRACKING (under 'Actions'): 
+      - TOOL TRACKING (under 'Actions'):
         * Format (Success): "Called <tool_name(s)> -> Response: <summarized output retaining key info>."
         * Format (Error/Mistake): "Called <tool_name(s)> -> Error/Issue: <summarized error> | Context: <why it failed or why it was the wrong call>."
 
@@ -58,3 +58,4 @@ fields:
       - Goal and Result are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch
+    searchable: true

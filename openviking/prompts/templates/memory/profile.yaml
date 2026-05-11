@@ -25,7 +25,7 @@ fields:
       User profile content in Markdown format describing "who the user is".
       Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
       Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09) 
+      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
       Example:
       # Caroline
       - Date of birth
@@ -40,3 +40,4 @@ fields:
       - Career plan
       etc.
     merge_op: patch
+    searchable: true

@@ -85,6 +85,9 @@ class MemoryField(BaseModel):
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
     init_value: Optional[str] = Field(None, description="Initial value for this field")
+    searchable: bool = Field(
+        False, description="Whether this field's value contributes to embedding text"
+    )
 
 
 class MemoryTypeSchema(BaseModel):
