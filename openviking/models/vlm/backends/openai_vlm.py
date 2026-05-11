@@ -4,13 +4,13 @@
 
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
 
 try:
     import openai
@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _DASHSCOPE_HOSTS = {

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
@@ -17,9 +16,10 @@ from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TextPartRequest(BaseModel):

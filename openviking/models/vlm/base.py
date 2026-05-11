@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601
+from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

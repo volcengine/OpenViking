@@ -4,7 +4,6 @@
 
 import base64
 import json
-import logging
 import os
 import time
 from pathlib import Path
@@ -18,10 +17,11 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_google_generate_language_endpoint(api_base: str) -> bool:

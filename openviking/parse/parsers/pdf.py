@@ -12,7 +12,6 @@ This design simplifies PDF handling by delegating structure analysis
 to the MarkdownParser after conversion.
 """
 
-import logging
 import re
 import time
 from collections import Counter, defaultdict
@@ -27,9 +26,10 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PDFParser(BaseParser):

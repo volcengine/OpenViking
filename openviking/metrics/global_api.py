@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import threading
 from typing import Optional
 
 from openviking.server.config import ServerConfig
+from openviking_cli.utils import get_logger
 
 from .account_dimension import (
     configure_metric_account_dimension as _configure_metric_account_dimension_runtime,
@@ -47,7 +47,7 @@ from .core.runtime import EventCollectorRouter
 from .exporters.otel import OTelMetricExporter
 from .exporters.prometheus import PrometheusExporter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _lock = threading.Lock()
 _registry: Optional[MetricRegistry] = None

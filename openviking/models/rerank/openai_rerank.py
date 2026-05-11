@@ -8,14 +8,14 @@ via api_key + api_base configuration.
 """
 
 # For logging, use Python's built-in logging
-import logging
 from typing import Dict, List, Optional
 
 import requests
 
 from openviking.models.rerank.base import RerankBase
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAIRerankClient(RerankBase):
