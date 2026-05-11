@@ -97,6 +97,7 @@ class MergeOp(str, Enum):
     """Merge operation enumeration."""
 
     PATCH = "patch"
+    REPLACE = "replace"
     SUM = "sum"
     IMMUTABLE = "immutable"
 

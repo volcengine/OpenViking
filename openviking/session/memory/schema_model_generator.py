@@ -229,10 +229,17 @@ class SchemaModelGenerator:
                 ),
             )
 
-        field_definitions["delete_uris"] = (
-            List[str],
-            Field(default_factory=list, description="Delete operations as URI strings"),
+        # Only expose delete_uris when at least one schema supports it.
+        # add_only schemas (e.g. trajectories) never delete existing records,
+        # so excluding this field prevents the LLM from hallucinating fake URIs.
+        has_deletable_schema = any(
+            mt.operation_mode != "add_only" for mt in enabled_memory_types
         )
+        if has_deletable_schema:
+            field_definitions["delete_uris"] = (
+                List[str],
+                Field(default_factory=list, description="Delete operations as URI strings"),
+            )
 
         # Create model using create_model
         StructuredMemoryOperations = create_model(

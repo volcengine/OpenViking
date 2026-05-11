@@ -6,7 +6,7 @@ description: |
   Skip pure chitchat or simple Q&A with no execution trace.
 
 directory: "viking://agent/{{ agent_space }}/memories/trajectories"
-filename_template: "{{ trajectory_name }}.md"
+filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
 operation_mode: "add_only"
 agent_only: true
@@ -15,9 +15,12 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Lowercase snake_case, ASCII only, max 5 words. Name the task directly and stably.
-      Do not use Chinese. Do not create near-duplicate names for the same task.
-      Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix".
+      Name the task directly and stably.
+      Choose ONE language and stick to it — do not create both a Chinese and an English version of the same concept.
+      If English: lowercase snake_case, max 5 words.
+      If Chinese: concise noun phrase, max 15 characters.
+      Do not create near-duplicate names for the same task.
+      Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix", "机票重复预订处理".
     merge_op: immutable
 
   - name: outcome

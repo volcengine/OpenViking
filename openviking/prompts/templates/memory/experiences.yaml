@@ -13,9 +13,11 @@ fields:
   - name: experience_name
     type: string
     description: |
-      Lowercase snake_case, ASCII only, max 5 words. Name the generalizable pattern, not the specific instance.
-      Do not use Chinese.
-      Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix".
+      Name the generalizable pattern, not the specific instance.
+      Choose ONE language and stick to it — do not create both a Chinese and an English version of the same concept.
+      If English: lowercase snake_case, max 5 words.
+      If Chinese: concise noun phrase, max 15 characters.
+      Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix", "重复预订处理".
     merge_op: immutable
 
   - name: content
@@ -40,4 +42,13 @@ fields:
       - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
       - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
-    merge_op: patch
+    merge_op: replace
+
+  - name: supersedes
+    type: string
+    description: |
+      The experience_name of an existing experience that this one supersedes.
+      Set ONLY when this experience replaces a narrower existing experience with a DIFFERENT name.
+      The system will automatically delete the old experience and inherit its trajectory history.
+      Leave empty for a new experience or when updating an experience with the same name.
+    merge_op: replace

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from openviking.session.memory.merge_op.base import FieldType, MergeOp, MergeOpBase
 from openviking.session.memory.merge_op.immutable import ImmutableOp
 from openviking.session.memory.merge_op.patch import PatchOp
+from openviking.session.memory.merge_op.replace import ReplaceOp
 from openviking.session.memory.merge_op.sum import SumOp
 
 if TYPE_CHECKING:
@@ -31,6 +32,8 @@ class MergeOpFactory:
         """
         if merge_op == MergeOp.PATCH:
             return PatchOp(field_type)
+        elif merge_op == MergeOp.REPLACE:
+            return ReplaceOp()
         elif merge_op == MergeOp.SUM:
             return SumOp()
         elif merge_op == MergeOp.IMMUTABLE:

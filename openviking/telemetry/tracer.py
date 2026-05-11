@@ -97,6 +97,41 @@ def _setup_logging():
         _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
 
 
+def init_tracer_from_config() -> Any:
+    """Initialize tracer from the legacy ov.conf telemetry.tracer config."""
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        tracer_cfg = config.telemetry.tracer
+
+        if not tracer_cfg.enabled:
+            logger.info("[TRACER] disabled in config")
+            return None
+
+        if not tracer_cfg.endpoint:
+            logger.warning("[TRACER] endpoint not configured")
+            return None
+
+        headers = {
+            "x-tls-otel-tracetopic": tracer_cfg.topic,
+            "x-tls-otel-ak": tracer_cfg.ak,
+            "x-tls-otel-sk": tracer_cfg.sk,
+            "x-tls-otel-region": "cn-beijing",
+        }
+
+        return init_tracer(
+            endpoint=tracer_cfg.endpoint,
+            service_name=tracer_cfg.service_name or "openviking",
+            protocol="grpc",
+            headers=headers,
+            enabled=tracer_cfg.enabled,
+        )
+    except Exception as e:
+        logger.warning(f"[TRACER] init from config failed: {e}")
+        return None
+
+
 def init_tracer_from_server_config(server_config: Any) -> Any:
     """Initialize tracer from server.observability.traces config.
 

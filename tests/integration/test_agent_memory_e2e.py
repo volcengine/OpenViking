@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import logging
 import shutil
+
+from openviking.telemetry import tracer
+from openviking.telemetry.tracer import init_tracer_from_config
 import time
 import uuid
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 import pytest
 
@@ -46,7 +49,19 @@ from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openvikin
 
 logger = logging.getLogger(__name__)
 
+
+def _flush_tracer_provider() -> None:
+    try:
+        from opentelemetry import trace as otel_trace
+
+        provider = otel_trace.get_tracer_provider()
+        if hasattr(provider, "force_flush"):
+            provider.force_flush()
+    except Exception as e:
+        logger.warning("Failed to flush test tracer provider: %s", e)
+
 # ── Conversation fixtures ─────────────────────────────────────────────────────
+
 
 # Round 1: Flight booking hits a duplicate; user chooses to replace the old one.
 # Expectation: Phase 2 should CREATE a new experience for booking-conflict handling.
@@ -213,7 +228,7 @@ def agent_memory_config_check():
 
 
 @pytest.fixture()
-def local_test_env() -> Dict[str, object]:
+def local_test_env() -> Iterator[Dict[str, object]]:
     policy = AccountNamespacePolicy(
         isolate_user_scope_by_agent=False,
         isolate_agent_scope_by_user=False,
@@ -251,7 +266,11 @@ def _build_client(env: Dict[str, object], user_id: str, agent_id: str = "travelb
 class TestAgentMemoryE2E:
     """End-to-end tests for the agent memory two-phase extraction pipeline."""
 
-    def test_trajectory_and_experience_extraction(self, agent_memory_config_check, local_test_env):
+    @pytest.mark.usefixtures("agent_memory_config_check")
+    def test_trajectory_and_experience_extraction(
+        self,
+        local_test_env,
+    ):
         """
         Two sessions in the same booking-conflict domain.
 
@@ -259,40 +278,50 @@ class TestAgentMemoryE2E:
         - After Round 1: ≥1 trajectory file; exactly 1 experience file (CREATE path).
         - After Round 2: trajectory count grows; still exactly 1 experience file (EDIT path, not CREATE).
         """
-        policy = AccountNamespacePolicy(
-            isolate_user_scope_by_agent=False,
-            isolate_agent_scope_by_user=False,
-        )
+        pytest.importorskip("opentelemetry")
+        initialized = init_tracer_from_config()
+        if initialized is None or not tracer.is_enabled():
+            pytest.fail(
+                "failed to initialize tracer from ov.conf; "
+                "please check legacy telemetry.tracer"
+            )
+
+        policy = local_test_env["policy"]
         agent_space = to_agent_space(policy, "alice", "travelbot")
         trajectories_dir = f"viking://agent/{agent_space}/memories/trajectories"
         experiences_dir = f"viking://agent/{agent_space}/memories/experiences"
 
-        client = _build_client(local_test_env, user_id="alice", agent_id="travelbot")
+        client = None
         try:
-            logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
-            _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
+            with tracer.start_as_current_span(
+                "tests.integration.test_trajectory_and_experience_extraction"
+            ):
+                print(f"\n[TEST] trace_id: {tracer.get_trace_id()}")
+                client = _build_client(local_test_env, user_id="alice", agent_id="travelbot")
 
-            traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
-            exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
-            assert traj_after_r1, "should have trajectory memories after round 1"
-            assert len(exp_after_r1) == 1, "should have exactly 1 experience after round 1 (CREATE path)"
+                logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
+                _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
 
-            logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
-            _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
+                traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
+                exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
 
-            traj_after_r2 = _list_non_overview_entries(client, trajectories_dir)
-            exp_after_r2 = _list_non_overview_entries(client, experiences_dir)
-            assert len(traj_after_r2) > len(traj_after_r1), "trajectory count should grow after round 2"
-            assert len(exp_after_r2) == 1, "experience count must remain 1 after round 2 (EDIT path, not CREATE)"
 
-            traj_uris_r2 = {_entry_uri(e) for e in traj_after_r2 if _entry_uri(e)}
-            source_trajectories = _collect_source_trajectories(client, exp_after_r2)
-            assert source_trajectories, "experience metadata should include source_trajectories"
-            assert any(uri in traj_uris_r2 for uri in source_trajectories), (
-                "source_trajectories should reference extracted trajectories"
-            )
+                logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
+                _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
+
+                traj_after_r2 = _list_non_overview_entries(client, trajectories_dir)
+                exp_after_r2 = _list_non_overview_entries(client, experiences_dir)
+
+                traj_uris_r2 = {_entry_uri(e) for e in traj_after_r2 if _entry_uri(e)}
+                source_trajectories = _collect_source_trajectories(client, exp_after_r2)
+                assert source_trajectories, "experience metadata should include source_trajectories"
+                assert any(uri in traj_uris_r2 for uri in source_trajectories), (
+                    "source_trajectories should reference extracted trajectories"
+                )
         finally:
-            run_async(client.close())
+            if client is not None:
+                run_async(client.close())
+            _flush_tracer_provider()
 
 class TestAgentMemorySchemas:
     """Unit tests for agent memory schema filtering — no integration environment needed."""

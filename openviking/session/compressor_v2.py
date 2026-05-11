@@ -40,44 +40,6 @@ logger = get_logger(__name__)
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
 
 
-def _stamp_trajectory_names(operations) -> None:
-    """Append a timestamp suffix to trajectory_name in all trajectory operations.
-
-    This ensures every trajectory gets a unique filename and that the embedded
-    MEMORY_FIELDS comment also records the full timestamped name.
-    Only applies to add_only trajectory writes (no existing uri).
-    """
-    from datetime import datetime
-
-    now_suffix = datetime.now().strftime("%Y%m%d%H%M%S")
-
-    # New model: ResolvedOperations with upsert_operations list
-    if hasattr(operations, "upsert_operations"):
-        for op in operations.upsert_operations:
-            if getattr(op, "memory_type", None) == "trajectories":
-                fields = getattr(op, "memory_fields", None)
-                if fields and isinstance(fields, dict):
-                    name = fields.get("trajectory_name")
-                    if name and not fields.get("uri"):
-                        fields["trajectory_name"] = f"{name}_{now_suffix}"
-        return
-
-    # Old model: operations with "trajectory" attribute
-    traj_field = getattr(operations, "trajectory", None)
-    if traj_field is None:
-        return
-    items = traj_field if isinstance(traj_field, list) else [traj_field]
-    for item in items:
-        if isinstance(item, dict):
-            name = item.get("trajectory_name")
-            if name and not item.get("uri"):
-                item["trajectory_name"] = f"{name}_{now_suffix}"
-        else:
-            name = getattr(item, "trajectory_name", None)
-            uri = getattr(item, "uri", None)
-            if name and not uri:
-                item.trajectory_name = f"{name}_{now_suffix}"
-
 
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
@@ -225,8 +187,11 @@ class SessionCompressorV2:
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
                 # 基于 provider 的 schemas 生成目录列表
+                # 固定文件名 schema（如 soul.md、identity.md）只需 POINT 锁，
+                # 避免因 SUBTREE 锁阻塞子目录（trajectories/experiences）的并发加锁。
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-                memory_schema_dirs = []
+                point_lock_dirs: list = []   # 固定文件名 schema → POINT 锁
+                subtree_lock_dirs: list = [] # 变量文件名 schema → SUBTREE 锁
                 for schema in schemas:
                     if not schema.directory:
                         continue
@@ -244,9 +209,15 @@ class SessionCompressorV2:
                                 },
                             )
                             dir_path = viking_fs._uri_to_path(dir_path, ctx)
-                            if dir_path not in memory_schema_dirs:
-                                memory_schema_dirs.append(dir_path)
-                logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
+                            if schema.filename_has_variables():
+                                if dir_path not in subtree_lock_dirs:
+                                    subtree_lock_dirs.append(dir_path)
+                            else:
+                                if dir_path not in point_lock_dirs:
+                                    point_lock_dirs.append(dir_path)
+                logger.debug(
+                    f"Memory schema lock dirs: point={point_lock_dirs}, subtree={subtree_lock_dirs}"
+                )
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
@@ -254,9 +225,10 @@ class SessionCompressorV2:
 
                 # 循环重试获取锁（机制确保不会死锁）
                 while True:
-                    lock_acquired = await lock_manager.acquire_subtree_batch(
+                    lock_acquired = await lock_manager.acquire_mixed_batch(
                         transaction_handle,
-                        memory_schema_dirs,
+                        point_paths=point_lock_dirs,
+                        subtree_paths=subtree_lock_dirs,
                         timeout=None,
                     )
                     if lock_acquired:
@@ -375,7 +347,7 @@ class SessionCompressorV2:
                 except Exception as e:
                     logger.warning(f"Failed to release transaction lock: {e}")
 
-    @tracer("agent.memory.extract", ignore_result=True)
+    @tracer(ignore_result=True)
     async def extract_agent_memories(
         self,
         messages: List[Message],
@@ -419,6 +391,11 @@ class SessionCompressorV2:
 
         written_trajectory_uris, _, traj_contexts, _ = traj_result
         contexts.extend(traj_contexts)
+
+        # Deduplicate: LLM may output the same trajectory_name twice in one call,
+        # producing identical URIs. Without this, experience extraction would run
+        # once per duplicate and generate near-identical experiences.
+        written_trajectory_uris = list(dict.fromkeys(written_trajectory_uris))
 
         if not written_trajectory_uris:
             tracer.info("No trajectories extracted; skipping experience phase")
@@ -481,7 +458,7 @@ class SessionCompressorV2:
                     )
                 continue
 
-            exp_written_uris, exp_edited_uris, exp_contexts, inherited_traj_uris = exp_result
+            exp_written_uris, exp_edited_uris, exp_contexts, inheritance_map = exp_result
             contexts.extend(exp_contexts)
 
             all_exp_uris = exp_written_uris + exp_edited_uris
@@ -507,12 +484,11 @@ class SessionCompressorV2:
                             f"[source_traj] fallback append by directory scan: {all_exp_uris[0]}"
                         )
 
-            if all_exp_uris:
-                # Include inherited source_trajectories from any deleted (superseded) experiences
-                traj_uris_to_append = list(dict.fromkeys([traj_uri] + inherited_traj_uris))
-                await self._append_trajectories_to_experiences(
-                    all_exp_uris, traj_uris_to_append, ctx, viking_fs
-                )
+            for exp_uri in all_exp_uris:
+                # Only the superseding experience inherits source_trajectories from the old file.
+                uri_inherited = inheritance_map.get(exp_uri, [])
+                traj_uris = list(dict.fromkeys([traj_uri] + uri_inherited))
+                await self._append_trajectories_to_experiences([exp_uri], traj_uris, ctx, viking_fs)
 
         return contexts
 
@@ -526,8 +502,10 @@ class SessionCompressorV2:
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
-        Returns (written_uris, edited_uris, contexts, inherited_traj_uris) on success,
-        or None on failure (unless strict_extract_errors is True, in which case
+        Returns (written_uris, edited_uris, contexts, inheritance_map) on success,
+        where inheritance_map maps new experience URI → inherited source_trajectory URIs
+        (only populated for experiences that supersede an existing one).
+        Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
         from openviking.session.memory.memory_updater import ExtractContext
@@ -616,7 +594,7 @@ class SessionCompressorV2:
 
             if operations is None:
                 tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], [], []
+                return [], [], [], {}
 
             # Log raw LLM operations before applying.
             _op_items = [
@@ -630,22 +608,12 @@ class SessionCompressorV2:
                 f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
             )
 
-            # Collect source_trajectories from files about to be deleted, before apply_operations
-            # removes them. This is experience-specific: allows merge operations to inherit
-            # historical source_trajectories into the replacement experience.
-            inherited_traj_uris: List[str] = []
-            for dc in getattr(operations, "delete_file_contents", []):
-                existing = (dc.memory_fields or {}).get("source_trajectories", [])
-                if isinstance(existing, list):
-                    inherited_traj_uris.extend(existing)
-                elif isinstance(existing, str) and existing.strip():
-                    inherited_traj_uris.extend(
-                        line.strip() for line in existing.splitlines() if line.strip()
-                    )
+            # Resolve supersedes fields (name-based Replace): find old experience URI,
+            # queue for deletion, and return per-URI inheritance map so only the
+            # superseding experience inherits the old source_trajectories.
+            inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
 
-            # Append timestamp suffix to trajectory_name so each trajectory gets a
-            # unique filename and MEMORY_FIELDS also records the timestamped name.
-            _stamp_trajectory_names(operations)
+
 
             registry = provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
@@ -673,7 +641,7 @@ class SessionCompressorV2:
                     Context(uri=uri, category="memory_delete", context_type="memory")
                 )
 
-            return list(result.written_uris), list(result.edited_uris), contexts, inherited_traj_uris
+            return list(result.written_uris), list(result.edited_uris), contexts, inheritance_map
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
@@ -685,6 +653,82 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"[{phase_label}] Failed to release transaction lock: {e}")
+
+    async def _resolve_supersedes(
+        self,
+        operations: ResolvedOperations,
+        ctx,
+        viking_fs,
+        provider,
+    ) -> Dict[str, List[str]]:
+        """Resolve supersedes fields in experience upsert operations.
+
+        For each experience with a non-empty `supersedes` field, find the old
+        experience file by name, append it to delete_file_contents so
+        apply_operations handles deletion uniformly, then pop `supersedes` from
+        memory_fields so it is not written to disk.
+
+        Returns a mapping from new experience URI → inherited source_trajectory URIs,
+        so the caller can apply inherited trajectories only to the superseding experience,
+        not to every experience written in the same batch.
+        """
+        from openviking.session.memory.dataclass import MemoryFileContent
+        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+
+        inheritance_map: Dict[str, List[str]] = {}
+
+        exp_dir: str = ""
+        if hasattr(provider, "_render_experience_dir"):
+            exp_dir = provider._render_experience_dir(ctx) or ""
+
+        for op in operations.upsert_operations:
+            if op.memory_type != "experiences":
+                continue
+            supersedes_name = (op.memory_fields.pop("supersedes", None) or "").strip()
+            if not supersedes_name:
+                continue
+            if not exp_dir:
+                logger.warning(f"[supersedes] cannot resolve '{supersedes_name}': no experience dir")
+                continue
+
+            old_uri = f"{exp_dir.rstrip('/')}/{supersedes_name}.md"
+
+            # Derive the new URI from experience_name (filename_template: "{{ experience_name }}.md")
+            new_name = (op.memory_fields.get("experience_name") or "").strip()
+            new_uri = f"{exp_dir.rstrip('/')}/{new_name}.md" if new_name else None
+
+            # Guard: never delete the file we are about to write (same-name edge case)
+            if old_uri == new_uri or old_uri in (op.uris or []):
+                tracer.info(f"[supersedes] skipping self-reference: {old_uri}")
+                continue
+
+            try:
+                raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
+                parsed = parse_memory_file_with_fields(raw)
+                operations.delete_file_contents.append(
+                    MemoryFileContent(
+                        uri=old_uri,
+                        plain_content=parsed.get("content", ""),
+                        memory_fields=parsed,
+                    )
+                )
+                tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
+
+                # Map inherited source_trajectories to the new (superseding) URI only.
+                if new_uri:
+                    existing = parsed.get("source_trajectories", [])
+                    if isinstance(existing, list):
+                        inherited = list(existing)
+                    elif isinstance(existing, str) and existing.strip():
+                        inherited = [line.strip() for line in existing.splitlines() if line.strip()]
+                    else:
+                        inherited = []
+                    if inherited:
+                        inheritance_map[new_uri] = inherited
+            except Exception as e:
+                logger.warning(f"[supersedes] failed to read '{old_uri}': {e}")
+
+        return inheritance_map
 
     async def _append_trajectories_to_experiences(
         self,

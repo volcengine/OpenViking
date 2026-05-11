@@ -14,6 +14,7 @@ from openviking.session.memory.merge_op.base import (
 from openviking.session.memory.merge_op.factory import MergeOpFactory
 from openviking.session.memory.merge_op.immutable import ImmutableOp
 from openviking.session.memory.merge_op.patch import PatchOp
+from openviking.session.memory.merge_op.replace import ReplaceOp
 from openviking.session.memory.merge_op.patch_handler import (
     MemoryPatchHandler,
     PatchParseError,
@@ -28,6 +29,7 @@ __all__ = [
     "SearchReplaceBlock",
     "StrPatch",
     "PatchOp",
+    "ReplaceOp",
     "SumOp",
     "ImmutableOp",
     "MergeOpFactory",
