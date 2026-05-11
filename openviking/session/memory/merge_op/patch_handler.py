@@ -32,6 +32,13 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+MAX_SIMILARITY_CELLS = 2_000_000
+MAX_FUZZY_SEARCH_CHARS = 8_000
+MAX_UNBOUNDED_FUZZY_CONTENT_CHARS = 60_000
+MAX_FUZZY_CANDIDATES = 2_000
+MAX_PATCH_FAILURE_LOG_CHARS = 2_000
+
+
 class PatchParseError(Exception):
     """Error parsing patch content."""
 
@@ -95,10 +102,58 @@ def get_similarity(original: str, search: str) -> float:
     if normalized_original == normalized_search:
         return 1.0
 
+    if len(normalized_original) * len(normalized_search) > MAX_SIMILARITY_CELLS:
+        return 0.0
+
     dist = levenshtein_distance(normalized_original, normalized_search)
     max_length = max(len(normalized_original), len(normalized_search))
 
     return 1.0 - (dist / max_length) if max_length > 0 else 1.0
+
+
+def _is_unbounded_search(start_index: int, end_index: int, total_lines: int) -> bool:
+    return start_index <= 0 and end_index >= total_lines
+
+
+def _fuzzy_skip_reason(
+    original_content: str,
+    search_chunk: str,
+    start_index: int,
+    end_index: int,
+    total_lines: int,
+) -> Optional[str]:
+    if len(search_chunk) > MAX_FUZZY_SEARCH_CHARS:
+        return (
+            f"search block too large for fuzzy matching "
+            f"({len(search_chunk)} chars > {MAX_FUZZY_SEARCH_CHARS})"
+        )
+    if (
+        _is_unbounded_search(start_index, end_index, total_lines)
+        and len(original_content) > MAX_UNBOUNDED_FUZZY_CONTENT_CHARS
+    ):
+        return (
+            "unbounded fuzzy matching skipped for large content "
+            f"({len(original_content)} chars > {MAX_UNBOUNDED_FUZZY_CONTENT_CHARS})"
+        )
+    return None
+
+
+def _format_patch_failure_context(original_content: str, patch: Any) -> str:
+    if isinstance(patch, StrPatch):
+        block_count = len(patch.blocks)
+        search_chars = sum(len(block.search or "") for block in patch.blocks)
+        replace_chars = sum(len(block.replace or "") for block in patch.blocks)
+        return (
+            f"original_chars={len(original_content)}, patch_blocks={block_count}, "
+            f"search_chars={search_chars}, replace_chars={replace_chars}"
+        )
+    return f"original_chars={len(original_content)}, patch_chars={len(str(patch))}"
+
+
+def _truncate_patch_failure_error(error: str) -> str:
+    if len(error) <= MAX_PATCH_FAILURE_LOG_CHARS:
+        return error
+    return error[:MAX_PATCH_FAILURE_LOG_CHARS] + "...(truncated)"
 
 
 def fuzzy_search(
@@ -124,9 +179,19 @@ def fuzzy_search(
     # For single-line search, enable substring matching mode
     is_single_line = search_len == 1
     search_str = search_lines[0] if is_single_line else ""
+    candidates_checked = 0
+
+    def can_check_next_candidate() -> bool:
+        nonlocal candidates_checked
+        if candidates_checked >= MAX_FUZZY_CANDIDATES:
+            return False
+        candidates_checked += 1
+        return True
 
     while left_index >= start_index or right_index <= end_index - search_len:
         if left_index >= start_index:
+            if not can_check_next_candidate():
+                break
             if is_single_line:
                 # Check substring match in this single line
                 line = lines[left_index]
@@ -154,6 +219,8 @@ def fuzzy_search(
             left_index -= 1
 
         if right_index <= end_index - search_len:
+            if not can_check_next_candidate():
+                break
             if is_single_line:
                 # Check substring match in this single line
                 line = lines[right_index]
@@ -184,6 +251,8 @@ def fuzzy_search(
         "bestScore": best_score,
         "bestMatchIndex": best_match_index,
         "bestMatchContent": best_match_content,
+        "candidatesChecked": candidates_checked,
+        "hitCandidateLimit": candidates_checked >= MAX_FUZZY_CANDIDATES,
     }
 
 
@@ -206,7 +275,7 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
 
     for i in positions_to_check:
         if 0 <= i <= line_len - search_len:
-            substring = line[i:i+search_len]
+            substring = line[i : i + search_len]
             score = get_similarity(substring, search_str)
             if score > best_score:
                 best_score = score
@@ -647,13 +716,21 @@ class MultiSearchReplaceDiffStrategy:
                     )
 
             # If no match found yet, try middle-out search within bounds
+            fuzzy_skip_reason = _fuzzy_skip_reason(
+                original_content,
+                search_chunk,
+                search_start_index,
+                search_end_index,
+                len(result_lines),
+            )
             if match_index == -1:
-                fuzzy_result = fuzzy_search(
-                    result_lines, search_chunk, search_start_index, search_end_index
-                )
-                match_index = fuzzy_result["bestMatchIndex"]
-                best_match_score = fuzzy_result["bestScore"]
-                best_match_content = fuzzy_result["bestMatchContent"]
+                if fuzzy_skip_reason is None:
+                    fuzzy_result = fuzzy_search(
+                        result_lines, search_chunk, search_start_index, search_end_index
+                    )
+                    match_index = fuzzy_result["bestMatchIndex"]
+                    best_match_score = fuzzy_result["bestScore"]
+                    best_match_content = fuzzy_result["bestMatchContent"]
 
             # Try aggressive line number stripping as a fallback
             if match_index == -1 or best_match_score < self.fuzzy_threshold:
@@ -666,8 +743,26 @@ class MultiSearchReplaceDiffStrategy:
                 aggressive_search_chunk = "\n".join(aggressive_search_lines)
 
                 # Try middle-out search again with aggressive stripped content
-                fuzzy_result = fuzzy_search(
-                    result_lines, aggressive_search_chunk, search_start_index, search_end_index
+                aggressive_fuzzy_skip_reason = _fuzzy_skip_reason(
+                    original_content,
+                    aggressive_search_chunk,
+                    search_start_index,
+                    search_end_index,
+                    len(result_lines),
+                )
+                fuzzy_result = (
+                    fuzzy_search(
+                        result_lines,
+                        aggressive_search_chunk,
+                        search_start_index,
+                        search_end_index,
+                    )
+                    if aggressive_fuzzy_skip_reason is None
+                    else {
+                        "bestMatchIndex": -1,
+                        "bestScore": 0.0,
+                        "bestMatchContent": "",
+                    }
                 )
                 if (
                     fuzzy_result["bestMatchIndex"] != -1
@@ -683,6 +778,7 @@ class MultiSearchReplaceDiffStrategy:
                     replace_lines = [] if replace_content == "" else replace_content.split("\n")
                 else:
                     # No match found with either method
+                    skip_reason = fuzzy_skip_reason or aggressive_fuzzy_skip_reason
                     if start_line and end_line:
                         original_section = "\n\nOriginal Content:\n" + add_line_numbers(
                             "\n".join(
@@ -693,6 +789,11 @@ class MultiSearchReplaceDiffStrategy:
                                 ]
                             ),
                             max(1, start_line - self.buffer_lines),
+                        )
+                    elif skip_reason:
+                        original_section = (
+                            "\n\nOriginal Content:\n"
+                            f"(omitted because fuzzy search was skipped: {skip_reason})"
                         )
                     else:
                         original_section = "\n\nOriginal Content:\n" + add_line_numbers(
@@ -707,6 +808,9 @@ class MultiSearchReplaceDiffStrategy:
                     )
 
                     line_range = f" at line: {start_line}" if start_line else ""
+                    skip_reason_line = (
+                        f"- Fuzzy Search: skipped ({skip_reason})\n" if skip_reason else ""
+                    )
 
                     diff_results.append(
                         {
@@ -719,6 +823,7 @@ class MultiSearchReplaceDiffStrategy:
                                 f"- Similarity Score: {int(best_match_score * 100)}%\n"
                                 f"- Required Threshold: {int(self.fuzzy_threshold * 100)}%\n"
                                 f"- Search Range: {f'starting at line {start_line}' if start_line else 'start to end'}\n"
+                                f"{skip_reason_line}"
                                 "- Tried both standard and aggressive line number stripping\n"
                                 "- Tip: Use read_file tool to get the latest content of the file before "
                                 "attempting to use apply_diff tool again, as file content may have changed\n\n"
@@ -940,8 +1045,13 @@ class MemoryPatchHandler:
             return result.content if result.content is not None else original_content
         else:
             error_msg = result.error or "Unknown error"
-            logger.warning(f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}")
-            raise PatchParseError(f"Patch application failed: {error_msg}")
+            safe_error = _truncate_patch_failure_error(error_msg)
+            logger.warning(
+                "Patch application failed, skipping update: %s; %s",
+                safe_error,
+                _format_patch_failure_context(original_content, patch),
+            )
+            raise PatchParseError(f"Patch application failed: {safe_error}")
 
     def _extract_replace_content(self, patch: str) -> str:
         """Extract replace content from patch for fallback append."""
@@ -1113,7 +1223,14 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                 )
 
         # If no match found yet, try middle-out search within bounds
-        if match_index == -1:
+        fuzzy_skip_reason = _fuzzy_skip_reason(
+            original_content,
+            search_chunk,
+            search_start_index,
+            search_end_index,
+            len(result_lines),
+        )
+        if match_index == -1 and fuzzy_skip_reason is None:
             fuzzy_result = fuzzy_search(
                 result_lines, search_chunk, search_start_index, search_end_index
             )
@@ -1132,8 +1249,26 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
             aggressive_search_chunk = "\n".join(aggressive_search_lines)
 
             # Try middle-out search again with aggressive stripped content
-            fuzzy_result = fuzzy_search(
-                result_lines, aggressive_search_chunk, search_start_index, search_end_index
+            aggressive_fuzzy_skip_reason = _fuzzy_skip_reason(
+                original_content,
+                aggressive_search_chunk,
+                search_start_index,
+                search_end_index,
+                len(result_lines),
+            )
+            fuzzy_result = (
+                fuzzy_search(
+                    result_lines,
+                    aggressive_search_chunk,
+                    search_start_index,
+                    search_end_index,
+                )
+                if aggressive_fuzzy_skip_reason is None
+                else {
+                    "bestMatchIndex": -1,
+                    "bestScore": 0.0,
+                    "bestMatchContent": "",
+                }
             )
             if (
                 fuzzy_result["bestMatchIndex"] != -1
@@ -1149,6 +1284,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                 replace_lines = [] if replace_content == "" else replace_content.split("\n")
             else:
                 # No match found with either method
+                skip_reason = fuzzy_skip_reason or aggressive_fuzzy_skip_reason
                 if start_line:
                     end_line = start_line + len(search_lines) - 1
                     original_section = "\n\nOriginal Content:\n" + add_line_numbers(
@@ -1160,6 +1296,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                             ]
                         ),
                         max(1, start_line - strategy.buffer_lines),
+                    )
+                elif skip_reason:
+                    original_section = (
+                        "\n\nOriginal Content:\n"
+                        f"(omitted because fuzzy search was skipped: {skip_reason})"
                     )
                 else:
                     original_section = "\n\nOriginal Content:\n" + add_line_numbers(
@@ -1174,6 +1315,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                 )
 
                 line_range = f" at line: {start_line}" if start_line else ""
+                skip_reason_line = (
+                    f"- Fuzzy Search: skipped ({skip_reason})\n" if skip_reason else ""
+                )
 
                 diff_results.append(
                     {
@@ -1186,10 +1330,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
                             f"- Similarity Score: {int(best_match_score * 100)}%\n"
                             f"- Required Threshold: {int(strategy.fuzzy_threshold * 100)}%\n"
                             f"- Search Range: {f'starting at line {start_line}' if start_line else 'start to end'}\n"
+                            f"{skip_reason_line}"
                             "- Tried both standard and aggressive line number stripping\n"
                             "- Tip: Use read_file tool to get the latest content of the file before "
                             "attempting to use apply_diff tool again, as file content may have changed\n\n"
-                            f"Search Content:\n{search_chunk}"
+                            f"Search Content:\n{_truncate_patch_failure_error(search_chunk)}"
                             f"{best_match_section}"
                             f"{original_section}"
                         ),
@@ -1229,9 +1374,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
             # Get indent from current replace line
             current_replace_match = re.match(r"^[\t ]*", line)
-            current_replace_indent = (
-                current_replace_match.group(0) if current_replace_match else ""
-            )
+            current_replace_indent = current_replace_match.group(0) if current_replace_match else ""
 
             # Calculate relative indent level (how much deeper/shallower this line is compared to search)
             relative_level = len(current_replace_indent) - len(search_indent)
@@ -1258,13 +1401,14 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
     final_content = line_ending.join(result_lines)
 
-    # Check if all results are successful (including no-change cases)
-    all_successful = all(result.get("success", False) for result in diff_results)
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
-        logger.warning("Patch application failed, skipping update")
-        raise PatchParseError(f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}")
+        failure_context = _format_patch_failure_context(original_content, patch)
+        logger.warning("Patch application failed, skipping update: %s", failure_context)
+        raise PatchParseError(
+            f"Patch application failed: search content not found in original ({failure_context})"
+        )
 
     return final_content
 
