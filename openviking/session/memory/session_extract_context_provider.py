@@ -364,9 +364,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             try:
                 result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                 # Annotate with page_id for link extraction
-                page_id = (
-                    self._page_id_map.register_existing(file_uri) if self._page_id_map else None
-                )
+                page_id = self._page_id_map.get_page_id(file_uri) if self._page_id_map else None
                 if page_id is not None and isinstance(result, dict):
                     result["page_id"] = page_id
                 add_tool_call_pair_to_messages(
@@ -391,9 +389,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 try:
                     result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                     # Annotate with page_id for link extraction
-                    page_id = (
-                        self._page_id_map.register_existing(file_uri) if self._page_id_map else None
-                    )
+                    page_id = self._page_id_map.get_page_id(file_uri) if self._page_id_map else None
                     if page_id is not None and isinstance(result, dict):
                         result["page_id"] = page_id
                     add_tool_call_pair_to_messages(

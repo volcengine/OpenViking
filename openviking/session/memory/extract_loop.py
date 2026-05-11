@@ -184,7 +184,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         # Register prefetched files in PageIdMap
         for uri in self.context_provider.read_file_contents:
-            self._page_id_map.register_existing(uri)
+            self._page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
             iteration += 1
@@ -344,15 +344,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
-        # A single operation may produce multiple URIs (multi-user mode).
-        # The LLM-declared page_id maps to the first URI; remaining URIs are aliases.
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
-                if op.uris:
-                    self._page_id_map.register_new(op.uris[0], page_id=op.page_id)
-                    # Register remaining URIs as aliases pointing to the same page_id
-                    for uri in op.uris[1:]:
-                        self._page_id_map.register_alias(uri, op.page_id)
+                for uri in op.uris:
+                    self._page_id_map.register_new_page_id(uri, op.page_id)
 
         # Debug: log page_id map state before resolving links
         tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")
@@ -451,7 +446,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if tool_call.name == "read" and self._page_id_map:
                 uri = tool_call.arguments.get("uri", "")
                 if uri:
-                    page_id = self._page_id_map.register_existing(uri)
+                    page_id = self._page_id_map.get_page_id(uri)
                     if isinstance(result, dict):
                         result["page_id"] = page_id
                     elif isinstance(result, str):
