@@ -84,6 +84,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 ov consistency viking://resources/my-project
 ```
 
+接口只返回摘要和最多 20 条缺失记录，不返回完整 expected 列表。`--include-vectors`
+导出失败时，错误 details 只携带 1 条缺失 key，避免错误日志过大。
+
 Python SDK：
 
 ```python

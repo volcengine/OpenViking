@@ -17,6 +17,8 @@ from openviking_cli.utils.uri import VikingURI
 logger = get_logger(__name__)
 
 NON_INDEX_SCOPES = frozenset({"session"})
+PUBLIC_MISSING_RECORD_LIMIT = 20
+ERROR_DETAILS_MISSING_RECORD_LIMIT = 1
 
 
 @dataclass(frozen=True)
@@ -52,20 +54,23 @@ class IndexConsistencyReport:
     def ok(self) -> bool:
         return not self.missing_records
 
-    def details(self) -> dict[str, Any]:
+    def details(self, limit: int = ERROR_DETAILS_MISSING_RECORD_LIMIT) -> dict[str, Any]:
+        limited = self.missing_records[:limit]
         return {
             "expected_count": len(self.expected),
             "missing_record_count": len(self.missing_records),
-            "missing_records": [item.key for item in self.missing_records[:20]],
+            "missing_records": [item.key for item in limited],
+            "missing_records_truncated": len(self.missing_records) > len(limited),
         }
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, limit: int = PUBLIC_MISSING_RECORD_LIMIT) -> dict[str, Any]:
+        limited = self.missing_records[:limit]
         return {
             "ok": self.ok,
             "expected_count": len(self.expected),
             "missing_record_count": len(self.missing_records),
-            "expected": [item.to_dict() for item in self.expected],
-            "missing_records": [item.to_dict() for item in self.missing_records],
+            "missing_records": [item.to_dict() for item in limited],
+            "missing_records_truncated": len(self.missing_records) > len(limited),
         }
 
 

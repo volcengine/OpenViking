@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.index_consistency import IndexConsistencyReport, IndexExpectation
 from openviking.storage.ovpack.operations import (
     backup_ovpack,
     export_ovpack,
@@ -429,6 +430,30 @@ def _rewrite_ovpack_manifest(path: Path, root_name: str, mutate) -> None:
             zf.writestr(name, data)
 
 
+def test_index_consistency_report_limits_public_and_error_records():
+    missing = tuple(
+        IndexExpectation(
+            uri=f"viking://resources/demo/file_{index}.md",
+            rel_path=f"file_{index}.md",
+            level=2,
+        )
+        for index in range(25)
+    )
+    report = IndexConsistencyReport(expected=missing, missing_records=missing)
+
+    public = report.to_dict()
+    assert "expected" not in public
+    assert public["expected_count"] == 25
+    assert public["missing_record_count"] == 25
+    assert len(public["missing_records"]) == 20
+    assert public["missing_records_truncated"] is True
+
+    details = report.details()
+    assert details["missing_record_count"] == 25
+    assert details["missing_records"] == ["file_0.md#level=2"]
+    assert details["missing_records_truncated"] is True
+
+
 @pytest.mark.asyncio
 async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
     temp_ovpack_path: Path, request_ctx: RequestContext
@@ -570,11 +595,9 @@ async def test_export_include_vectors_rejects_missing_index_records(
             include_vectors=True,
         )
 
-    assert set(exc_info.value.details["missing_records"]) == {
-        ".#level=0",
-        ".#level=1",
-        "notes.txt#level=2",
-    }
+    assert exc_info.value.details["missing_record_count"] == 3
+    assert exc_info.value.details["missing_records"] == [".#level=0"]
+    assert exc_info.value.details["missing_records_truncated"] is True
     assert not temp_ovpack_path.read_bytes()
 
 

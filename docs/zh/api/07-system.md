@@ -171,6 +171,8 @@ ov system status
 
 检查指定 URI 子树的文件系统内容和向量索引是否一致，用于调试索引缺失、向量快照导出失败等问题。该能力是通用数据一致性检查，不属于 OVPack 私有接口；`ov export --include-vectors` 和 `ov backup --include-vectors` 会复用同一检查。
 
+响应只返回摘要和缺失项，不返回完整 expected 列表。`missing_records` 最多返回前 20 条；如果还有更多缺失项，`missing_records_truncated` 为 `true`。
+
 **代码入口**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP 路由
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK 入口
@@ -218,10 +220,11 @@ ov consistency viking://resources/my-project
 {
   "status": "ok",
   "result": {
-    "ok": false,
-    "expected_count": 3,
-    "missing_record_count": 1,
-    "missing_records": [
+	    "ok": false,
+	    "expected_count": 3,
+	    "missing_record_count": 1,
+	    "missing_records_truncated": false,
+	    "missing_records": [
       {
         "uri": "viking://resources/my-project/README.md",
         "path": "README.md",

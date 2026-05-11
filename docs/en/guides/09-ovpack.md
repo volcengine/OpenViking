@@ -96,6 +96,10 @@ You can call the consistency check directly when debugging data state:
 ov consistency viking://resources/my-project
 ```
 
+The API returns only a summary and at most 20 missing records. It does not return
+the full expected-record list. When `--include-vectors` export fails, error
+details include only one missing key to keep logs small.
+
 Python SDK:
 
 ```python

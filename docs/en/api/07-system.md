@@ -175,6 +175,10 @@ exports, and related issues. It is not an OVPack-private API;
 `ov export --include-vectors` and `ov backup --include-vectors` reuse the same
 check.
 
+The response returns only a summary and missing records. It does not return the
+full expected-record list. `missing_records` includes at most the first 20
+records; `missing_records_truncated` is `true` when more missing records exist.
+
 **Code Entry Points**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP route
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK entry
@@ -222,10 +226,11 @@ ov consistency viking://resources/my-project
 {
   "status": "ok",
   "result": {
-    "ok": false,
-    "expected_count": 3,
-    "missing_record_count": 1,
-    "missing_records": [
+	    "ok": false,
+	    "expected_count": 3,
+	    "missing_record_count": 1,
+	    "missing_records_truncated": false,
+	    "missing_records": [
       {
         "uri": "viking://resources/my-project/README.md",
         "path": "README.md",
