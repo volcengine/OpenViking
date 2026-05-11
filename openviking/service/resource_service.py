@@ -306,6 +306,7 @@ class ResourceService:
                             task.task_id,
                             telemetry_id,
                             ctx.account_id,
+                            ctx.user.user_id,
                         )
                     )
                 else:
