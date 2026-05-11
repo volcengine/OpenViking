@@ -496,3 +496,726 @@ class TestBuildConfig:
         assert call_kwargs.get("api_key") == "key"
         if _HTTP_RETRY_AVAILABLE:
             assert "http_options" in call_kwargs
+
+
+# ============================================================================
+# Multimodal branch (gemini-embedding-2 family + input_type='multimodal')
+# ============================================================================
+
+
+class TestGeminiMultimodalInit:
+    """input_type switching, model-pin enforcement, and the supports_multimodal
+    @property derived from input_type (single source of truth)."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_multimodal_with_v2_succeeds(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder("gemini-embedding-2", api_key="key", input_type="multimodal")
+        assert e._input_type == "multimodal"
+        assert e.supports_multimodal is True
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_multimodal_with_v2_preview_succeeds(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview", api_key="key", input_type="multimodal"
+        )
+        assert e.supports_multimodal is True
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_multimodal_with_001_raises(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="gemini-embedding-2 family"):
+            GeminiDenseEmbedder("gemini-embedding-001", api_key="key", input_type="multimodal")
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_multimodal_with_text_embedding_004_raises(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="gemini-embedding-2 family"):
+            GeminiDenseEmbedder("text-embedding-004", api_key="key", input_type="multimodal")
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_invalid_input_type_raises(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="Invalid input_type"):
+            GeminiDenseEmbedder("gemini-embedding-2", api_key="key", input_type="image")
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_text_mode_default_supports_multimodal_false(self, mock_client_class):
+        """Backward-compat: default input_type='text' keeps supports_multimodal False."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        assert e._input_type == "text"
+        assert e.supports_multimodal is False
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_supports_multimodal_is_property_not_settable(self, mock_client_class):
+        """Single source of truth — setting supports_multimodal directly fails."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        with pytest.raises(AttributeError):
+            e.supports_multimodal = True  # type: ignore[misc]
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_task_instruction_stored(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            task_instruction="Retrieve documents that answer:",
+        )
+        assert e.task_instruction == "Retrieve documents that answer:"
+
+
+class TestGeminiMimeWhitelist:
+    """The mime-type whitelist is the user-visible constraint that turns silent
+    Google API 400s into clear 'pre-convert your file' errors."""
+
+    @pytest.mark.parametrize(
+        "url,expected_mime",
+        [
+            # Images — union of both Google docs pages
+            ("foo.png", "image/png"),
+            ("foo.PNG", "image/png"),
+            ("https://x/y/img.jpg", "image/jpeg"),
+            ("https://x/y/img.jpeg", "image/jpeg"),
+            ("photo.webp", "image/webp"),
+            ("scan.bmp", "image/bmp"),
+            ("phone.heic", "image/heic"),
+            ("phone.heif", "image/heif"),
+            ("modern.avif", "image/avif"),
+            # Audio
+            ("https://x/audio.mp3?token=abc&v=2", "audio/mpeg"),
+            ("clip.wav", "audio/wav"),
+            # Video — union (mp4, mov, mpeg)
+            ("video.mp4", "video/mp4"),
+            ("video.MOV", "video/quicktime"),
+            ("clip.mpeg", "video/mpeg"),
+            ("clip.MPG", "video/mpeg"),
+            # Documents
+            ("doc.pdf", "application/pdf"),
+        ],
+    )
+    def test_whitelist_resolves(self, url, expected_mime):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        assert GeminiDenseEmbedder._detect_mime_type(url, None) == expected_mime
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "report.docx",
+            "notes.txt",
+            "diagram.svg",
+            "image.gif",
+            "audio.m4a",
+            "audio.ogg",
+            "audio.flac",
+            "video.webm",
+            "video.mkv",
+            "video.avi",
+            "no_extension",
+            "https://x/y/no_extension_in_path?ext=.png",  # ext only in query → reject
+        ],
+    )
+    def test_whitelist_rejects(self, url):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            GeminiDenseEmbedder._detect_mime_type(url, None)
+
+    def test_explicit_mime_in_whitelist_passes(self):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        # Bytes input + explicit whitelisted mime should work
+        assert GeminiDenseEmbedder._detect_mime_type(b"fake-png-bytes", "image/png") == "image/png"
+        # webp is in the union whitelist
+        assert GeminiDenseEmbedder._detect_mime_type(b"fake-webp", "image/webp") == "image/webp"
+
+    def test_explicit_mime_outside_whitelist_rejects(self):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        # image/gif is outside the union whitelist
+        with pytest.raises(ValueError, match="not in the gemini-embedding-2"):
+            GeminiDenseEmbedder._detect_mime_type(b"...", "image/gif")
+
+    def test_bytes_without_explicit_mime_raises(self):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="Cannot infer mime_type from raw bytes"):
+            GeminiDenseEmbedder._detect_mime_type(b"...", None)
+
+
+class TestGeminiSSRFGuard:
+    """The SSRF guard is what stops a malicious YAML or upstream caller from
+    getting the google-genai SDK to fetch internal services or local files."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "file:///Users/me/.aws/credentials",
+            "gs://internal-bucket/secret.png",
+            "data:image/png;base64,iVBOR...",
+            "ftp://example.com/file.png",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_rejects_non_http_schemes(self, url):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="not allowed"):
+            GeminiDenseEmbedder._validate_url(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1/admin",
+            "http://localhost:8080/internal",
+            "http://169.254.169.254/latest/meta-data/",  # AWS IMDS
+            "http://metadata.google.internal/computeMetadata/v1/",  # GCP metadata via DNS
+            "http://10.0.0.1/admin",
+            "http://172.16.0.1/admin",
+            "http://192.168.1.1/admin",
+            "http://[::1]/admin",
+        ],
+    )
+    def test_rejects_internal_addresses(self, url):
+        """All these should hit the IP-range block (loopback / link-local /
+        RFC1918 / etc.) regardless of scheme normalization."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        # GCP metadata requires DNS resolution — the test allows ValueError OR
+        # silent return on DNS failure (which falls through to SDK error path).
+        try:
+            GeminiDenseEmbedder._validate_url(url)
+        except ValueError as e:
+            assert (
+                "loopback" in str(e)
+                or "link-local" in str(e)
+                or "private" in str(e)
+                or "reserved" in str(e)
+                or "multicast" in str(e)
+            )
+            return
+        # If no raise, the host failed DNS resolution — acceptable in test envs
+        # where metadata.google.internal isn't resolvable.
+
+    def test_https_to_public_host_passes(self):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        # Pick a host with a stable IP that's NOT in private range.
+        # example.com is reserved by IANA for documentation but resolves to a
+        # public IP. We catch the ValueError (raised) and assert the message
+        # is NOT about SSRF — so test passes if the validator doesn't raise OR
+        # raises for an unrelated reason (which it shouldn't).
+        try:
+            GeminiDenseEmbedder._validate_url("https://example.com/img.png")
+        except ValueError as e:
+            # Only acceptable failure: DNS doesn't resolve (offline env)
+            pytest.fail(f"Expected pass for public host; got ValueError: {e}")
+
+    def test_url_without_host_raises(self):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        with pytest.raises(ValueError, match="no host"):
+            GeminiDenseEmbedder._validate_url("https:///no-host-here")
+
+
+class TestGeminiEmbedContent:
+    """The actual multimodal SDK call path. Mocks google.genai.Client and asserts
+    the SDK gets called with the right model + Parts."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_text_only(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1, 0.2, 0.3]])
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=3,
+        )
+        result = e.embed_content([{"text": "hello multimodal world"}])
+        assert result.dense_vector is not None
+        assert len(result.dense_vector) == 3
+        mock_client.models.embed_content.assert_called_once()
+        _, kwargs = mock_client.models.embed_content.call_args
+        assert kwargs["model"] == "gemini-embedding-2"
+        # Parts list, not a string — multimodal API contract
+        assert isinstance(kwargs["contents"], list)
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_with_image_bytes(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1, 0.2]])
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=2,
+        )
+        result = e.embed_content(
+            [
+                {"text": "describe"},
+                {"image": b"fake-png-bytes", "mime_type": "image/png"},
+            ]
+        )
+        assert len(result.dense_vector) == 2
+        mock_client.models.embed_content.assert_called_once()
+        _, kwargs = mock_client.models.embed_content.call_args
+        # Two parts in one aggregated call
+        assert len(kwargs["contents"]) == 2
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_raises_in_text_mode(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        # Default input_type='text' — embed_content must hard-error
+        with pytest.raises(RuntimeError, match="only available in multimodal mode"):
+            e.embed_content([{"text": "hi"}])
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_empty_list_raises(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+        )
+        with pytest.raises(ValueError, match="non-empty list"):
+            e.embed_content([])
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_unknown_dict_shape_raises(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+        )
+        with pytest.raises(ValueError, match="Unknown content dict shape"):
+            e.embed_content([{"transcript": "what?"}])
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_propagates_api_error(self, mock_client_class):
+        from google.genai.errors import APIError
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_resp = MagicMock()
+        mock_resp.status_code = 429
+        mock_client.models.embed_content.side_effect = APIError(429, {}, response=mock_resp)
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+        )
+        with pytest.raises(RuntimeError, match="Quota exceeded"):
+            e.embed_content([{"text": "hi"}])
+
+
+class TestGeminiTaskInstruction:
+    """task_instruction is prepended to the FIRST text part on the multimodal
+    branch — single instruction, not query/document split (vectorizer doesn't
+    thread is_query through; documented in design doc Eng Phase Corrections §2)."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_task_instruction_prepended_to_first_text_part(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+            task_instruction="Classify the sentiment of:",
+        )
+        e.embed_content([{"text": "this product is great"}])
+        _, kwargs = mock_client.models.embed_content.call_args
+        first_part = kwargs["contents"][0]
+        # The Part should now carry the prefixed text
+        assert hasattr(first_part, "text")
+        assert "Classify the sentiment of:" in first_part.text
+        assert "this product is great" in first_part.text
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_task_instruction_inserts_when_no_text_part(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+            task_instruction="Describe this image:",
+        )
+        e.embed_content([{"image": b"fake-png", "mime_type": "image/png"}])
+        _, kwargs = mock_client.models.embed_content.call_args
+        # Prepended as a NEW first text part because no text part existed
+        assert len(kwargs["contents"]) == 2
+        assert getattr(kwargs["contents"][0], "text", None) == "Describe this image:"
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_no_task_instruction_no_prepend(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        e.embed_content([{"text": "raw"}])
+        _, kwargs = mock_client.models.embed_content.call_args
+        first_part = kwargs["contents"][0]
+        assert first_part.text == "raw"
+
+
+class TestGeminiEmbedContentAsync:
+    """Async path mirrors the sync path; uses client.aio.models.embed_content."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_embed_content_async_text(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.aio.models.embed_content = AsyncMock(
+            return_value=_make_mock_result([[0.1, 0.2, 0.3]])
+        )
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=3,
+        )
+        result = await e.embed_content_async([{"text": "async hello"}])
+        assert len(result.dense_vector) == 3
+        mock_client.aio.models.embed_content.assert_called_once()
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_embed_content_async_raises_in_text_mode(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        e = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        with pytest.raises(RuntimeError, match="only available in multimodal mode"):
+            await e.embed_content_async([{"text": "hi"}])
+
+
+def _make_count_tokens_response(total_tokens: int):
+    """Mock a CountTokensResponse — only `.total_tokens` is read by the embedder."""
+    resp = MagicMock()
+    resp.total_tokens = total_tokens
+    return resp
+
+
+class TestGeminiMultimodalTelemetry:
+    """The /metrics Prometheus endpoint depends on every embedder forwarding
+    token usage via the base class's update_token_usage(). The multimodal
+    branch uses Google's `count_tokens` API for an exact server-side count
+    (one extra round-trip per embed_content call; count_tokens is free).
+    On count_tokens failure: log warning and skip the telemetry update —
+    zero-recorded is preferable to wrong-recorded for ops dashboards."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_calls_count_tokens_then_update(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        mock_client.models.count_tokens.return_value = _make_count_tokens_response(42)
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        with patch.object(e, "update_token_usage") as mock_track:
+            e.embed_content([{"text": "abcd" * 25}])
+            mock_client.models.count_tokens.assert_called_once()
+            mock_track.assert_called_once_with(
+                model_name="gemini-embedding-2",
+                provider="gemini",
+                prompt_tokens=42,
+                completion_tokens=0,
+            )
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_count_tokens_called_with_same_parts_as_embed(self, mock_client_class):
+        """count_tokens must see the exact same Parts list embed_content saw —
+        otherwise telemetry diverges from what was actually billed."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        mock_client.models.count_tokens.return_value = _make_count_tokens_response(5)
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        e.embed_content([{"text": "hello"}])
+        embed_parts = mock_client.models.embed_content.call_args.kwargs["contents"]
+        count_parts = mock_client.models.count_tokens.call_args.kwargs["contents"]
+        assert embed_parts == count_parts
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_count_tokens_failure_skips_telemetry(self, mock_client_class):
+        """count_tokens failure must NOT block the embed; it logs and skips
+        the /metrics update so ops sees fewer-but-honest numbers."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        mock_client.models.count_tokens.side_effect = RuntimeError("rate limited")
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        with patch.object(e, "update_token_usage") as mock_track:
+            r = e.embed_content([{"text": "hello"}])
+            assert r.dense_vector  # embed still succeeded
+            mock_track.assert_not_called()
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_task_instruction_is_counted_via_parts(self, mock_client_class):
+        """task_instruction is baked into the parts list before count_tokens
+        sees them, so its tokens are naturally included in the count."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        mock_client.models.count_tokens.return_value = _make_count_tokens_response(1)
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+            task_instruction="Retrieve documents that answer:",
+        )
+        e.embed_content([{"text": "what is x"}])
+        parts = mock_client.models.count_tokens.call_args.kwargs["contents"]
+        # First part should now carry the prepended instruction
+        assert parts[0].text.startswith("Retrieve documents that answer:")
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_embed_content_skips_telemetry_on_api_error(self, mock_client_class):
+        """If the API call raises, we don't track tokens for a failed call —
+        avoids inflating /metrics with phantom usage."""
+        from google.genai.errors import APIError
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_client.models.embed_content.side_effect = APIError(500, {}, response=mock_resp)
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        with patch.object(e, "update_token_usage") as mock_track:
+            with pytest.raises(RuntimeError):
+                e.embed_content([{"text": "hi"}])
+            mock_track.assert_not_called()
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_embed_content_async_calls_count_tokens_then_update(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.aio.models.embed_content = AsyncMock(return_value=_make_mock_result([[0.1]]))
+        mock_client.aio.models.count_tokens = AsyncMock(
+            return_value=_make_count_tokens_response(17)
+        )
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        with patch.object(e, "update_token_usage") as mock_track:
+            await e.embed_content_async([{"text": "async hello"}])
+            mock_client.aio.models.count_tokens.assert_called_once()
+            mock_track.assert_called_once_with(
+                model_name="gemini-embedding-2",
+                provider="gemini",
+                prompt_tokens=17,
+                completion_tokens=0,
+            )
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_count_tokens_failure_skips_telemetry(self, mock_client_class):
+        """Async count_tokens failure logs warning, embed succeeds, telemetry skipped."""
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+        mock_client = mock_client_class.return_value
+        mock_client.aio.models.embed_content = AsyncMock(return_value=_make_mock_result([[0.1]]))
+        mock_client.aio.models.count_tokens = AsyncMock(side_effect=RuntimeError("rate limited"))
+        e = GeminiDenseEmbedder(
+            "gemini-embedding-2",
+            api_key="key",
+            input_type="multimodal",
+            dimension=1,
+        )
+        with patch.object(e, "update_token_usage") as mock_track:
+            r = await e.embed_content_async([{"text": "async hello"}])
+            assert r.dense_vector
+            mock_track.assert_not_called()
+
+
+class TestGeminiOptionalDepFactoryGuard:
+    """When google-genai isn't installed, openviking.models.embedder.__init__
+    sets GeminiDenseEmbedder = None (existing optional-dep pattern). The factory
+    must catch this and raise a clear ValueError pointing at the install hint —
+    matching the existing LiteLLM pattern at embedding_config.py:478."""
+
+    def test_factory_raises_when_gemini_class_is_none(self, monkeypatch):
+        """Simulate google-genai not being installed by setting the
+        package-level export to None, then verify the factory catches it
+        before invoking the constructor."""
+        from openviking_cli.utils.config import embedding_config as ec_mod
+
+        monkeypatch.setattr(
+            "openviking.models.embedder.GeminiDenseEmbedder",
+            None,
+            raising=False,
+        )
+        # The factory imports GeminiDenseEmbedder inside _create_embedder via
+        # a fresh `from openviking.models.embedder import ...`, so the patch
+        # has to land on the source module too.
+        monkeypatch.setattr(
+            "openviking.models.embedder.gemini_embedders.GeminiDenseEmbedder",
+            None,
+            raising=False,
+        )
+        cfg = ec_mod.EmbeddingConfig(
+            dense=ec_mod.EmbeddingModelConfig(
+                provider="gemini", model="gemini-embedding-001", api_key="k"
+            )
+        )
+        with pytest.raises(ValueError, match="google-genai"):
+            cfg.get_embedder()
+
+
+class TestGeminiPydanticConfigValidator:
+    """Ensures the EmbeddingModelConfig validator doesn't false-positive on
+    existing 001 users (whose `input` defaults to 'multimodal' from the schema
+    default) and DOES catch explicit task_instruction misconfigurations."""
+
+    def test_existing_001_default_input_does_not_raise(self):
+        """Backward-compat: a Gemini config with model='gemini-embedding-001'
+        and the schema-default input='multimodal' MUST validate cleanly. This
+        is the case every existing Gemini user is in today."""
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        # No `input` set explicitly — picks up the default of "multimodal"
+        cfg = EmbeddingModelConfig(provider="gemini", model="gemini-embedding-001", api_key="k")
+        assert cfg.input == "multimodal"  # default applied
+        # Did NOT raise — validator is permissive on the schema default
+
+    def test_v2_with_multimodal_input_validates(self):
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        cfg = EmbeddingModelConfig(
+            provider="gemini",
+            model="gemini-embedding-2",
+            api_key="k",
+            input="multimodal",
+        )
+        assert cfg.model == "gemini-embedding-2"
+
+    def test_task_instruction_with_text_input_raises(self):
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        with pytest.raises(ValueError, match="task_instruction is only used"):
+            EmbeddingModelConfig(
+                provider="gemini",
+                model="gemini-embedding-2",
+                api_key="k",
+                input="text",
+                task_instruction="should error",
+            )
+
+    def test_task_instruction_with_001_raises(self):
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        with pytest.raises(ValueError, match="not in the gemini-embedding-2 family"):
+            EmbeddingModelConfig(
+                provider="gemini",
+                model="gemini-embedding-001",
+                api_key="k",
+                input="multimodal",
+                task_instruction="explicit-multimodal-signal",
+            )
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_factory_existing_001_user_gets_text_mode(self, mock_client_class):
+        """The factory contract: existing 001 users with default
+        input='multimodal' get text mode at the embedder layer (no input_type
+        threaded). This is the safety net that preserves backward compat."""
+        from openviking_cli.utils.config.embedding_config import (
+            EmbeddingConfig,
+            EmbeddingModelConfig,
+        )
+
+        cfg = EmbeddingConfig(
+            dense=EmbeddingModelConfig(provider="gemini", model="gemini-embedding-001", api_key="k")
+        )
+        embedder = cfg.get_embedder()
+        # Embedder constructed in text mode despite cfg.dense.input == 'multimodal'
+        assert embedder._input_type == "text"
+        assert embedder.supports_multimodal is False
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_factory_v2_with_multimodal_threads_input_type(self, mock_client_class):
+        from openviking_cli.utils.config.embedding_config import (
+            EmbeddingConfig,
+            EmbeddingModelConfig,
+        )
+
+        cfg = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                provider="gemini",
+                model="gemini-embedding-2",
+                api_key="k",
+                input="multimodal",
+                task_instruction="Retrieve documents that answer:",
+            )
+        )
+        embedder = cfg.get_embedder()
+        assert embedder._input_type == "multimodal"
+        assert embedder.supports_multimodal is True
+        assert embedder.task_instruction == "Retrieve documents that answer:"

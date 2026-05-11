@@ -120,3 +120,107 @@ def test_invalid_model_error_message():
     bad = GeminiDenseEmbedder("gemini-embedding-does-not-exist-xyz", api_key=GOOGLE_API_KEY)
     with pytest.raises(RuntimeError, match="Model not found"):
         bad.embed("hello")
+
+
+# ── Multimodal integration tests ────────────────────────────────────────────
+# Shape mirrors tests/integration/test_dashscope_embedding_it.py from PR #1535.
+# Uses bytes (PIL-generated tiny PNG) rather than URLs because Gemini's URL
+# fetcher is restrictive in practice; bytes path is the reliable test.
+
+GEMINI_MULTIMODAL_MODEL = "gemini-embedding-2"
+GEMINI_MULTIMODAL_DIM = 768
+
+
+@pytest.fixture(scope="session")
+def gemini_multimodal_embedder():
+    """Session-scoped multimodal-mode GeminiDenseEmbedder."""
+    from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+    return GeminiDenseEmbedder(
+        GEMINI_MULTIMODAL_MODEL,
+        api_key=GOOGLE_API_KEY,
+        input_type="multimodal",
+        dimension=GEMINI_MULTIMODAL_DIM,
+    )
+
+
+@pytest.fixture(scope="session")
+def tiny_png_bytes():
+    """Generate a 32x32 solid-color PNG inline. PIL is a transitive dep
+    via pdfplumber, so it's already available."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), color=(120, 200, 80)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_multimodal_embed_text_only(gemini_multimodal_embedder):
+    """Multimodal mode handles a text-only content list."""
+    r = gemini_multimodal_embedder.embed_content([{"text": "machine learning"}])
+    assert r.dense_vector and len(r.dense_vector) == GEMINI_MULTIMODAL_DIM
+    assert 0.99 < l2_norm(r.dense_vector) < 1.01
+
+
+def test_multimodal_embed_text_plus_image_bytes(gemini_multimodal_embedder, tiny_png_bytes):
+    """Multimodal mode aggregates text + image bytes into one fused embedding."""
+    r = gemini_multimodal_embedder.embed_content(
+        [
+            {"text": "describe this image"},
+            {"image": tiny_png_bytes, "mime_type": "image/png"},
+        ]
+    )
+    assert r.dense_vector and len(r.dense_vector) == GEMINI_MULTIMODAL_DIM
+
+
+def test_multimodal_embed_async(gemini_multimodal_embedder):
+    """Async embed_content_async produces the same shape as sync."""
+    import asyncio
+
+    r = asyncio.run(
+        gemini_multimodal_embedder.embed_content_async([{"text": "async multimodal"}])
+    )
+    assert r.dense_vector and len(r.dense_vector) == GEMINI_MULTIMODAL_DIM
+
+
+def test_multimodal_count_tokens_telemetry(gemini_multimodal_embedder):
+    """count_tokens fires after a successful embed_content; /metrics
+    integration shows non-zero prompt_tokens for the call."""
+    e = gemini_multimodal_embedder
+    before = e.get_token_usage()["total_usage"]["prompt_tokens"]
+    e.embed_content([{"text": "telemetry sanity check"}])
+    after = e.get_token_usage()["total_usage"]["prompt_tokens"]
+    assert after > before, "count_tokens telemetry must increment prompt_tokens"
+
+
+def test_multimodal_rejects_unsupported_mime():
+    """.gif extension must be rejected before any API call."""
+    from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+    e = GeminiDenseEmbedder(
+        GEMINI_MULTIMODAL_MODEL,
+        api_key=GOOGLE_API_KEY,
+        input_type="multimodal",
+        dimension=GEMINI_MULTIMODAL_DIM,
+    )
+    with pytest.raises(ValueError, match="Unsupported file extension"):
+        e.embed_content([{"image": "https://example.com/photo.gif"}])
+
+
+def test_multimodal_ssrf_guard_rejects_imds():
+    """169.254.169.254 (AWS IMDS) is rejected by the SSRF guard before
+    any API call — the guard runs locally on every URL."""
+    from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+    e = GeminiDenseEmbedder(
+        GEMINI_MULTIMODAL_MODEL,
+        api_key=GOOGLE_API_KEY,
+        input_type="multimodal",
+        dimension=GEMINI_MULTIMODAL_DIM,
+    )
+    with pytest.raises(ValueError, match="SSRF guard"):
+        e.embed_content(
+            [{"image": "http://169.254.169.254/latest/meta-data/iam.png"}]
+        )
