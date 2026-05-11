@@ -180,13 +180,15 @@ class MemoryReadTool(MemoryTool):
                 plain_content=parsed.get("content", ""),
                 memory_fields=parsed,
             )
+            # Remove links/backlinks from LLM-visible output (not needed for extraction)
+            llm_result = {k: v for k, v in parsed.items() if k not in ("links", "backlinks")}
             # Add 1-based line numbers to content for LLM readability & link extraction
             raw_content = parsed.get("content", "")
             if raw_content:
                 lines = raw_content.split("\n")
                 numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))
-                parsed = {**parsed, "content": numbered}
-            return parsed
+                llm_result["content"] = numbered
+            return llm_result
         except NotFoundError as e:
             tracer.info(f"read not found: {uri}")
             return {"error": str(e)}
