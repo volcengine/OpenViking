@@ -205,29 +205,22 @@ If your graph passes only the latest request and relies on OpenViking for the se
 
 LangGraph `thread_id` is the natural OpenViking `session_id`. Reuse the same ID for both systems when you also configure a LangGraph checkpointer. OpenViking handles semantic context and memory; the checkpointer handles exact graph execution resume. Provide `session_id_resolver` if your graph uses a custom thread/session identifier.
 
-## Smoke Tests
+## Try The Examples
 
-The repository includes deterministic smoke apps that exercise real LangChain and LangGraph workflows without requiring credentials:
+The repository includes small deterministic examples that exercise real LangChain and LangGraph application flows without requiring model credentials or a running OpenViking server. They use an OpenViking-compatible in-memory test client so you can see how the adapters fit into an agent app before connecting to a real backend.
 
-```bash
-uv run --extra test --extra langchain --extra langgraph \
-  pytest tests/unit/test_langchain_integration.py -q
-
-uv run --extra test --extra langchain --extra langgraph \
-  pytest tests/integration/langchain_langgraph/test_smoke.py -q
-```
-
-For real-service validation, run the true live e2e lane manually. This lane requires both a real OpenViking HTTP backend and a real OpenAI-compatible LLM. It seeds session history, runs one LangChain app through `with_openviking_context()` and one LangGraph app through `OpenVikingContextMiddleware`, commits each session with `keep_recent_count=0`, and waits for OpenViking's background memory-extraction task to complete.
+From the repository root:
 
 ```bash
-export OPENVIKING_URL=http://localhost:1933
-export ARK_API_KEY=...
-export ARK_BASE_URL=https://ark-cn-beijing.bytedance.net/api/v3
-export ARK_MODEL=doubao-seed-2-0-code-preview-260215
-
-uv run --extra test --extra langchain --extra langgraph \
-  pytest tests/integration/langchain_langgraph/live_e2e.py -q -s
+uv run --extra langgraph python examples/langchain-rag/quick_app.py
+uv run --extra langgraph python examples/langchain-context-backend/quick_app.py
+uv run --extra langgraph python examples/langgraph-agent/quick_app.py
 ```
 
-`OPENVIKING_URL` can be omitted when your OpenViking CLI config already points to the target server.
-The tests load `tests/integration/langchain_langgraph/.env` if it exists. Do not commit that file. Run this lane only against an OpenViking service that is safe to use for live test data.
+The examples cover:
+
+- [LangChain RAG quick app](../../../examples/langchain-rag/quick_app.py): LangChain RAG with `OpenVikingRetriever`.
+- [LangChain context backend quick app](../../../examples/langchain-context-backend/quick_app.py): LangChain session context injection with `with_openviking_context()`.
+- [LangGraph agent quick app](../../../examples/langgraph-agent/quick_app.py): LangGraph workflow using OpenViking tools and `OpenVikingStore`.
+
+For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](../../../examples/langgraph-agent/live_app.py).
