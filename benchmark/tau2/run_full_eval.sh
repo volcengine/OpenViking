@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
       STRICT_PREFLIGHT=true
       shift
       ;;
-    --domain|--repeat-count|--strategy-id|--task-id|--num-tasks)
+    --domain|--repeat-count|--strategy-id|--task-id|--num-tasks|--train-num-tasks)
       RUN_EVAL_EXTRA+=("$1" "$2")
       shift 2
       ;;

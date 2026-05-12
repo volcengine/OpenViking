@@ -4,11 +4,13 @@ This directory contains a small OpenViking-style entry point for TAU-2 memory
 evaluation. The first version is intentionally narrow:
 
 - no-memory control;
-- fresh OpenViking memory baseline;
+- fresh OpenViking Memory V2 experience-only baseline;
 - trajectory / procedure-view treatment;
 - optional pre-write recall.
 
 Category rerank and other harness-only diagnostics are not migrated here yet.
+The Memory V2 baseline is wired end to end; trajectory / procedure-view remains
+visible in the plan but adapter-pending.
 
 ## Layout
 
@@ -85,30 +87,49 @@ configured:
 benchmark/tau2/run_full_eval.sh --config benchmark/tau2/config/prewrite.yaml --execute
 ```
 
+Run the Memory V2 8-trial baseline (`retail + airline` x 4 repeats):
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/baseline.yaml \
+  --strategy-id memory_v2_experience_only \
+  --execute
+```
+
+For a small E2E smoke, keep both the eval and train slices tiny:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/baseline.yaml \
+  --domain retail \
+  --strategy-id memory_v2_experience_only \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
+  --repeat-count 1 \
+  --execute
+```
+
 When using Doubao through an OpenAI-compatible endpoint, set `OPENAI_API_KEY`
 and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
 
-The initial no-memory cells use upstream TAU-2 CLI flags only. OpenViking memory
-cells are kept in the same plan, but marked adapter-pending until the TAU-2
-agent adapter is wired in this benchmark directory.
+Start the OpenViking service before executing memory cells, and verify it with
+`ov status`. For evidence runs, use a clean OpenViking workspace/config and set
+`OPENVIKING_URL` explicitly so local custom memory templates do not pollute the
+Memory V2 baseline.
 
 ## Memory Adapter Boundary
 
-The first PR keeps memory strategies visible in `run_plan.json` without
-pretending they are executable through upstream TAU-2 flags. `no_memory` cells
-can run immediately through the external TAU-2 CLI. OpenViking memory cells are
-planned with corpus / strategy metadata and `adapter_status: pending`; the plan
-also records `non_executable_reason` for those cells.
-
-The next adapter step should register a TAU-2 agent entry point that can:
+`no_memory` cells run through the external TAU-2 CLI. `memory_v2_experience_only`
+cells run through a small TAU-2 agent adapter in this directory:
 
 - train by writing TAU-2 training conversations into OpenViking sessions;
-- evaluate by retrieving OpenViking memory at the configured decision node;
-- emit enough artifact metadata to identify the OpenViking account, agent,
+- evaluate by retrieving OpenViking experience memory at the first user turn;
+- emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
 
-Until that adapter exists, `--execute` is expected to fail fast if a selected
-cell needs OpenViking memory.
+The trajectory / procedure-view treatment is kept in the same plan but remains
+`adapter_status: pending`; `--execute` fails fast if that strategy is selected
+before its adapter is implemented.
 
 ## User Simulator Policy
 
@@ -132,3 +153,7 @@ artifact records that boundary instead of labeling the run pure official.
 Only completed `retail + airline` runs with the same config, same seeds/repeats,
 and non-empty artifacts should be read as benchmark evidence. Partial runs,
 single-task probes, or missing OpenViking corpus identity are diagnostics.
+Executed runs write per-cell JSON under `cell_results/` and a strategy/domain
+aggregate under `scoreboard.json`. Memory training artifacts are shared by
+domain and strategy under `memory_corpora/`, so repeated eval cells reuse the
+same fresh corpus instead of rewriting it.

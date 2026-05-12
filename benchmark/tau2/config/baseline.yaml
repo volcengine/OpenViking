@@ -45,7 +45,7 @@ strategies:
   - id: memory_v2_experience_only
     label: OpenViking Memory V2 experience-only
     memory_backend: openviking
-    adapter_status: pending
+    adapter_status: ready
     train_required: true
     train_memory_mode: experience_only
     retrieval_mode: first_user
