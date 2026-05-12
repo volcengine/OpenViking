@@ -477,6 +477,93 @@ ov session get-session-archive a1b2c3d4 archive_002
 
 ---
 
+### preview_memory_extraction()
+
+预览当前 live session 会抽取出哪些 memory，但**不会**写入任何 memory 文件。
+
+这个接口主要用于调试和可观察性：
+- 查看 memory extraction LLM 实际产出的候选记忆
+- 在调用 `commit_session()` 前先确认分类分布是否合理
+- 查看当前 live messages 会生成什么 archive summary 预览
+
+该接口返回：
+- `session_id`：目标会话 ID
+- `message_count`：当前 session 里 live message 数量
+- `estimated_message_tokens`：当前 live messages 的估算 token 数
+- `latest_archive_overview`：最近一个已完成 archive 的 overview（如果存在）
+- `archive_summary_preview`：当前 live messages 对应的 summary 预览
+- `counts_by_category`：按 memory category 聚合的候选数量
+- `candidates`：抽取出的候选记忆，尚未去重，也未落盘
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+preview = await client.preview_memory_extraction("a1b2c3d4")
+print(preview["counts_by_category"])
+print(preview["archive_summary_preview"])
+print(preview["candidates"][0]["abstract"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/extract-preview
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/extract-preview" \
+  -H "X-API-Key: your-key"
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 2,
+    "estimated_message_tokens": 21,
+    "latest_archive_overview": "",
+    "archive_summary_preview": "# Session Summary\n\n**Overview**: 用户提到了旺财和手冲咖啡偏好。",
+    "counts_by_category": {
+      "entities": 1,
+      "preferences": 1,
+      "total": 2
+    },
+    "candidates": [
+      {
+        "category": "entities",
+        "abstract": "用户有一只叫旺财的狗。",
+        "overview": "用户提到自己的狗叫旺财。",
+        "content": "用户在对话中说明自己的狗叫旺财。",
+        "language": "zh-CN"
+      },
+      {
+        "category": "preferences",
+        "abstract": "用户偏好手冲咖啡。",
+        "overview": "用户表达了对手冲咖啡的偏好。",
+        "content": "用户提到自己喜欢手冲咖啡。",
+        "language": "zh-CN"
+      }
+    ]
+  }
+}
+```
+
+说明：
+- 这个接口**不会**写入任何 memory 文件。
+- 返回的 `candidates` 是去重、合并、落盘之前的原始抽取结果。
+- 当 session 里没有 live messages 时，`candidates` 为空，`archive_summary_preview` 为空字符串。
+
+---
+
 ### delete_session()
 
 #### 1. API 实现介绍
