@@ -370,6 +370,17 @@ class VikingClient:
         """通过上下文消息，检索viking 的user、Agent memory。"""
         await self._load_namespace_policy()
 
+        def _extract_memories(result: Any) -> list[Any]:
+            if not result:
+                return []
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict):
+                memories = result.get("memories")
+                return memories if isinstance(memories, list) else []
+            memories = getattr(result, "memories", None)
+            return memories if isinstance(memories, list) else []
+
         if isinstance(user_ids, str):
             user_ids = [user_ids]
 
@@ -389,7 +400,7 @@ class VikingClient:
                 target_uri=uri_user_memory,
                 limit=limit,
             )
-            all_user_memories.extend(user_memory or [])
+            all_user_memories.extend(_extract_memories(user_memory))
 
         effective_agent_user_id = self._effective_user_id(agent_user_id)
         uri_agent_memory = self._agent_memory_target_uri(effective_agent_user_id)
@@ -398,7 +409,7 @@ class VikingClient:
             target_uri=uri_agent_memory,
             limit=limit,
         )
-        all_agent_memories.extend(agent_memory or [])
+        all_agent_memories.extend(_extract_memories(agent_memory))
 
         return {
             "user_memory": all_user_memories,

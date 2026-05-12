@@ -397,7 +397,7 @@ async def process_single_session(
     try:
         user_id = str(sample_id) if args.separate_user_by_sample else csv_id
         agent_id = str(sample_id) if args.separate_user_by_sample else f"agent_{csv_id}"
-        account = args.account if args.separate_user_by_sample else args.account
+        account = args.account
         result = await viking_ingest(
             messages,
             args.openviking_url,
