@@ -383,14 +383,16 @@ async def process_single_session(
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     try:
-        # 使用 sample_id 作为 user_id 和 agent_id，实现独立的 userspace/agentspace
+        user_id = str(sample_id) if args.separate_user_by_sample else ""
+        agent_id = str(sample_id) if args.separate_user_by_sample else ""
+        account = args.account if args.separate_user_by_sample else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
-            user_id=str(sample_id),
-            agent_id=str(sample_id),
-            account=args.account,
+            user_id=user_id,
+            agent_id=agent_id,
+            account=account,
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
@@ -557,9 +559,18 @@ async def run_import(args: argparse.Namespace) -> None:
                     args=args,
                 )
 
-        # 不同 sample 之间并行执行
-        tasks = [asyncio.create_task(process_sample(item)) for item in samples]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = []
+
+        if args.parallel_samples:
+            semaphore = asyncio.Semaphore(args.parallel_samples)
+
+            async def process_sample_with_limit(item):
+                async with semaphore:
+                    await process_sample(item)
+
+            tasks = [asyncio.create_task(process_sample_with_limit(item)) for item in samples]
+        else:
+            tasks = [asyncio.create_task(process_sample(item)) for item in samples]
 
     else:
         # Plain text format
@@ -693,6 +704,18 @@ def main():
         type=int,
         default=None,
         help="LoCoMo JSON: question index (0-based). When specified, auto-detect required sessions from question's evidence.",
+    )
+    parser.add_argument(
+        "--separate-user-by-sample",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to isolate OpenViking user/agent/account by sample (default: true). Use --no-separate-user-by-sample to share empty user/agent/account.",
+    )
+    parser.add_argument(
+        "--parallel-samples",
+        type=int,
+        default=None,
+        help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
     )
     parser.add_argument(
         "--force-ingest",
