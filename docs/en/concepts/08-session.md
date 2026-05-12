@@ -108,8 +108,9 @@ commit() executes in two phases:
 **Phase 2 (asynchronous background)**:
 5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
 6. Extract long-term memories
-7. Update active_count
-8. Write `.done` completion marker
+7. Write `memory_diff.json` (memory change audit log) to archive directory
+8. Update active_count
+9. Write `.done` completion marker
 
 ### Summary Format
 
@@ -168,6 +169,57 @@ Write to AGFS → Vectorize
 | Per-existing item | `merge` | Merge candidate content into specified existing memory |
 | Per-existing item | `delete` | Delete specified conflicting existing memory |
 
+## Memory Diff
+
+Each `session.commit()` writes a `memory_diff.json` to the archive directory, recording all memory changes from that commit for auditing and rollback.
+
+```json
+{
+  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "extracted_at": "2026-04-21T10:00:00Z",
+  "operations": {
+    "adds": [
+      {
+        "uri": "memory/user/xxx/identity.md",
+        "memory_type": "identity",
+        "after": "Newly created file content"
+      }
+    ],
+    "updates": [
+      {
+        "uri": "memory/user/xxx/context/project.md",
+        "memory_type": "context",
+        "before": "Content before modification",
+        "after": "Content after modification"
+      }
+    ],
+    "deletes": [
+      {
+        "uri": "memory/user/xxx/context/old.md",
+        "memory_type": "context",
+        "deleted_content": "Deleted file content"
+      }
+    ]
+  },
+  "summary": {
+    "total_adds": 1,
+    "total_updates": 1,
+    "total_deletes": 1
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `archive_uri` | Archive directory URI for this commit |
+| `extracted_at` | ISO 8601 timestamp of extraction |
+| `operations.adds` | New memories created (no `before`) |
+| `operations.updates` | Modified memories (with `before` and `after`) |
+| `operations.deletes` | Deleted memories (with `deleted_content`) |
+| `summary` | Counts per operation type |
+
+An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+
 ## Storage Structure
 
 ```
@@ -180,6 +232,7 @@ viking://session/{session_id}/
 │   │   ├── messages.jsonl    # Written in Phase 1
 │   │   ├── .abstract.md      # Written in Phase 2 (background)
 │   │   ├── .overview.md      # Written in Phase 2 (background)
+│   │   ├── memory_diff.json  # Written in Phase 2 (background, memory change audit)
 │   │   └── .done             # Phase 2 completion marker
 │   └── archive_NNN/
 └── tools/

@@ -64,6 +64,7 @@ class BaseChannelConfig(BaseModel):
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
     ov_tools_enable: bool = True
+    memory_user: list[str] | None = None
 
     def channel_id(self) -> str:
         return "default"

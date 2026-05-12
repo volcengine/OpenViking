@@ -182,6 +182,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
     1. 在 `data` 中直接传结构化 skill 数据
     2. 在 `data` 中直接传原始 `SKILL.md` 内容
     3. 先调用 `POST /api/v1/resources/temp_upload` 上传本地 `SKILL.md` 文件/zip 目录，再调用 `POST /api/v1/skills` 并传入 `temp_file_id`
+    4. `temp_upload` 默认使用本地临时存储；只有在明确需要分布式共享临时上传时，才传 `upload_mode=shared`。在 Python HTTP client / CLI 流程里，也可以通过 `ovcli.conf` 的 `upload.mode = "shared"` 驱动这一行为
   - `POST /api/v1/skills` 不接受在 `data` 中直接传宿主机本地路径。
 
 - **支持的数据格式**：

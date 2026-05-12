@@ -1,38 +1,56 @@
-from pathlib import Path
+import sysconfig
+
+import openviking.pyagfs as pyagfs
 
 
-def test_pyagfs_loader_prefers_abi3_artifact(monkeypatch, tmp_path: Path):
-    import openviking.pyagfs as pyagfs
-
-    cpython_artifact = tmp_path / "ragfs_python.cpython-312-darwin.so"
-    abi3_artifact = tmp_path / "ragfs_python.abi3.so"
-    cpython_artifact.write_bytes(b"old")
-    abi3_artifact.write_bytes(b"new")
-
+def test_find_ragfs_so_rejects_mismatched_cpython_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
-    assert pyagfs._find_ragfs_so() == str(abi3_artifact)
+    monkeypatch.setattr(
+        sysconfig, "get_config_var", lambda name: ".cpython-312-x86_64-linux-gnu.so"
+    )
 
-
-def test_pyagfs_loader_ignores_cpython_specific_artifact(monkeypatch, tmp_path: Path):
-    import openviking.pyagfs as pyagfs
-
-    cpython_artifact = tmp_path / "ragfs_python.cpython-312-darwin.so"
-    cpython_artifact.write_bytes(b"old")
-
-    monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
+    (tmp_path / "ragfs_python.cpython-310-x86_64-linux-gnu.so").touch()
 
     assert pyagfs._find_ragfs_so() is None
 
 
-def test_pyagfs_loader_finds_windows_maturin_abi3_pyd(monkeypatch, tmp_path: Path):
-    import openviking.pyagfs as pyagfs
-
-    cpython_artifact = tmp_path / "ragfs_python.cp310-win_amd64.pyd"
-    abi3_artifact = tmp_path / "ragfs_python.pyd"
-    cpython_artifact.write_bytes(b"old")
-    abi3_artifact.write_bytes(b"new")
-
+def test_find_ragfs_so_prefers_exact_cpython_suffix(tmp_path, monkeypatch):
     monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
-    monkeypatch.setattr(pyagfs.sys, "platform", "win32")
+    monkeypatch.setattr(
+        sysconfig, "get_config_var", lambda name: ".cpython-312-x86_64-linux-gnu.so"
+    )
+    exact = tmp_path / "ragfs_python.cpython-312-x86_64-linux-gnu.so"
+    exact.touch()
+    (tmp_path / "ragfs_python.cpython-310-x86_64-linux-gnu.so").touch()
 
-    assert pyagfs._find_ragfs_so() == str(abi3_artifact)
+    assert pyagfs._find_ragfs_so() == str(exact)
+
+
+def test_find_ragfs_so_rejects_mismatched_windows_cpython_binary(tmp_path, monkeypatch):
+    monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
+    monkeypatch.setattr(sysconfig, "get_config_var", lambda name: ".cp312-win_amd64.pyd")
+
+    (tmp_path / "ragfs_python.cp310-win_amd64.pyd").touch()
+
+    assert pyagfs._find_ragfs_so() is None
+
+
+def test_find_ragfs_so_prefers_exact_windows_cpython_suffix(tmp_path, monkeypatch):
+    monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
+    monkeypatch.setattr(sysconfig, "get_config_var", lambda name: ".cp312-win_amd64.pyd")
+    exact = tmp_path / "ragfs_python.cp312-win_amd64.pyd"
+    exact.touch()
+    (tmp_path / "ragfs_python.cp310-win_amd64.pyd").touch()
+
+    assert pyagfs._find_ragfs_so() == str(exact)
+
+
+def test_find_ragfs_so_allows_stable_abi_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
+    monkeypatch.setattr(
+        sysconfig, "get_config_var", lambda name: ".cpython-312-x86_64-linux-gnu.so"
+    )
+    abi3 = tmp_path / "ragfs_python.abi3.so"
+    abi3.touch()
+
+    assert pyagfs._find_ragfs_so() == str(abi3)

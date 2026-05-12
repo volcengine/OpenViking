@@ -108,7 +108,15 @@ openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
 
 ## Verify
 
-Check that the plugin owns the `contextEngine` slot:
+For a one-shot health check covering plugin registration, server connectivity, and version compatibility, run:
+
+```bash
+openclaw openviking status
+```
+
+For automation, append `--json` to `openclaw openviking status` to get a machine-readable result. `openclaw openviking setup` also supports `--json` when used with `--base-url`.
+
+Or check the underlying signals manually. The plugin owns the `contextEngine` slot:
 
 ```bash
 openclaw config get plugins.slots.contextEngine

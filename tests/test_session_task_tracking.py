@@ -69,13 +69,13 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
         task = tracker.create(
             "session_commit",
             resource_id=_sid,
-            owner_account_id=_ctx.account_id,
-            owner_user_id=_ctx.user.user_id,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
         )
         archive_uri = f"viking://session/test/{_sid}/history/archive_001"
 
         async def _background():
-            tracker.start(task.task_id)
+            tracker.start(task.task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
             try:
                 if started:
                     started.set()
@@ -96,9 +96,19 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
                 }
                 if result_overrides:
                     final_result.update(result_overrides)
-                tracker.complete(task.task_id, final_result)
+                tracker.complete(
+                    task.task_id,
+                    final_result,
+                    account_id=_ctx.account_id,
+                    user_id=_ctx.user.user_id,
+                )
             except Exception as e:
-                tracker.fail(task.task_id, str(e))
+                tracker.fail(
+                    task.task_id,
+                    str(e),
+                    account_id=_ctx.account_id,
+                    user_id=_ctx.user.user_id,
+                )
 
         asyncio.create_task(_background())
 
@@ -321,3 +331,227 @@ async def test_error_sanitized_in_task(api_client):
     error = task_resp.json()["result"]["error"]
     assert "superSecretKey" not in error
     assert "[REDACTED]" in error
+
+
+# ── add_resource task tracking ──
+
+
+async def test_add_resource_async_returns_task_id(api_client):
+    """add_resource with wait=False should return a task_id."""
+    client, service = api_client
+
+    async def fake_add_resource(**kwargs):
+        tracker = get_task_tracker()
+        root_uri = "viking://resources/async-test"
+        task = tracker.create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.start(
+            task.task_id,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.complete(
+            task.task_id,
+            {"root_uri": root_uri},
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        return {"status": "success", "root_uri": root_uri, "task_id": task.task_id}
+
+    service.resources.add_resource = fake_add_resource
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_resource(ctx=ctx, reason="test async resource")
+
+    assert "task_id" in result
+    assert result["task_id"]
+
+    task_resp = await client.get(f"/api/v1/tasks/{result['task_id']}")
+    assert task_resp.status_code == 200
+    task_data = task_resp.json()["result"]
+    assert task_data["task_type"] == "add_resource"
+
+
+async def test_add_resource_sync_no_task_id(api_client):
+    """add_resource with wait=True should NOT return a task_id."""
+    client, service = api_client
+
+    async def fake_add_resource(**kwargs):
+        root_uri = "viking://resources/sync-test"
+        return {"status": "success", "root_uri": root_uri}
+
+    service.resources.add_resource = fake_add_resource
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_resource(ctx=ctx, reason="test sync resource")
+
+    assert "task_id" not in result
+
+
+async def test_add_resource_async_task_lifecycle(api_client):
+    """Async add_resource task should transition pending→running→completed."""
+    client, service = api_client
+
+    async def fake_add_resource(**kwargs):
+        tracker = get_task_tracker()
+        root_uri = "viking://resources/test-resource"
+        task = tracker.create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+
+        async def _background():
+            tracker.start(
+                task.task_id,
+                account_id=kwargs["ctx"].account_id,
+                user_id=kwargs["ctx"].user.user_id,
+            )
+            await asyncio.sleep(0.05)
+            tracker.complete(
+                task.task_id,
+                {"root_uri": root_uri},
+                account_id=kwargs["ctx"].account_id,
+                user_id=kwargs["ctx"].user.user_id,
+            )
+
+        asyncio.create_task(_background())
+        return {"status": "success", "root_uri": root_uri, "task_id": task.task_id}
+
+    service.resources.add_resource = fake_add_resource
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_resource(ctx=ctx, reason="test lifecycle")
+
+    task_id = result["task_id"]
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    assert task_resp.json()["result"]["status"] in {"pending", "running"}
+
+    await asyncio.sleep(0.2)
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    task_data = task_resp.json()["result"]
+    assert task_data["status"] == "completed"
+    assert task_data["task_type"] == "add_resource"
+
+
+async def test_add_resource_task_list_filter(api_client):
+    """add_resource tasks should appear in task list filtered by type."""
+    client, service = api_client
+
+    async def fake_add_resource(**kwargs):
+        tracker = get_task_tracker()
+        root_uri = "viking://resources/filter-test"
+        task = tracker.create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.start(
+            task.task_id,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.complete(
+            task.task_id,
+            {"root_uri": root_uri},
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        return {"status": "success", "root_uri": root_uri, "task_id": task.task_id}
+
+    service.resources.add_resource = fake_add_resource
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_resource(ctx=ctx, reason="test list filter")
+    task_id = result["task_id"]
+
+    resp = await client.get("/api/v1/tasks", params={"task_type": "add_resource"})
+    assert resp.status_code == 200
+    tasks = resp.json()["result"]
+    matching = [t for t in tasks if t["task_id"] == task_id]
+    assert len(matching) >= 1
+    assert matching[0]["task_type"] == "add_resource"
+
+
+# ── add_skill task tracking ──
+
+
+async def test_add_skill_async_returns_task_id(api_client):
+    """add_skill with wait=False should return a task_id."""
+    client, service = api_client
+
+    async def fake_add_skill(**kwargs):
+        tracker = get_task_tracker()
+        task = tracker.create(
+            "add_skill",
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.start(
+            task.task_id,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.complete(
+            task.task_id,
+            {},
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        return {"status": "success", "task_id": task.task_id}
+
+    service.resources.add_skill = fake_add_skill
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_skill(data="test skill", ctx=ctx)
+
+    assert "task_id" in result
+    assert result["task_id"]
+
+    task_resp = await client.get(f"/api/v1/tasks/{result['task_id']}")
+    assert task_resp.status_code == 200
+    task_data = task_resp.json()["result"]
+    assert task_data["task_type"] == "add_skill"
+
+
+async def test_add_skill_sync_no_task_id(api_client):
+    """add_skill with wait=True should NOT return a task_id."""
+    client, service = api_client
+
+    async def fake_add_skill(**kwargs):
+        return {"status": "success"}
+
+    service.resources.add_skill = fake_add_skill
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_skill(data="test skill", ctx=ctx, wait=True)
+
+    assert "task_id" not in result

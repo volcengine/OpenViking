@@ -8,7 +8,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
@@ -153,21 +152,6 @@ class SemanticProcessor(DequeueHandlerBase):
             return None
         with cls._stats_lock:
             return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
-
-    @staticmethod
-    def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
-        """Derive owner_space from a URI.
-
-        Resources (viking://resources/...) always get owner_space="" so they
-        are globally visible.  User / agent / session URIs inherit the
-        caller's space name.
-        """
-        if uri.startswith("viking://agent/"):
-            return agent_space_fragment(ctx)
-        if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-            return user_space_fragment(ctx)
-        # resources and anything else → shared (empty owner_space)
-        return ""
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
@@ -341,6 +325,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                             is_code_repo=msg.is_code_repo,
                             changes=msg.changes,
+                            skip_vectorization=msg.skip_vectorization,
                         )
                         self._dag_executor = executor
                         if msg.lifecycle_lock_handle_id:
@@ -464,18 +449,12 @@ class SemanticProcessor(DequeueHandlerBase):
             if msg.telemetry_id and msg.id:
                 request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
 
-        def _mark_failed(message: str) -> None:
-            if msg.telemetry_id and msg.id:
-                request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, message)
-
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
-            logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
         file_paths: List[str] = []
         for entry in entries:
@@ -589,13 +568,15 @@ class SemanticProcessor(DequeueHandlerBase):
             await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
-            logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
 
         try:
+            if msg.skip_vectorization:
+                logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
+                _mark_done()
+                return
             if msg.telemetry_id and msg.id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 

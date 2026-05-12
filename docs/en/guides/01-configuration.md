@@ -735,7 +735,7 @@ Retrieval ranking configuration for final search scores.
 {
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 0.5
+    "score_propagation_alpha": 1.0
   }
 }
 ```
@@ -743,7 +743,7 @@ Retrieval ranking configuration for final search scores.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
-| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `0.5` keeps the existing equal blend; `1.0` ignores the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `0.5` |
+| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `1.0` ignores the parent score (semantic similarity only); `0.5` is an equal blend with the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `1.0` |
 
 Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
 
@@ -966,6 +966,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 ### ovcli.conf
 
+You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
 ```json
@@ -976,6 +978,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "user": "alice",
   "agent_id": "my-agent",
   "upload": {
+    "mode": "local",
     "ignore_dirs": "node_modules,.cache,.nx",
     "include": "*.md,*.pdf",
     "exclude": "*.tmp,*.log"
@@ -993,6 +996,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
 | `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
+| `upload.mode` | Temporary upload backend: `"local"` (per-instance disk) or `"shared"` (distributed shared store, required when consumer requests can land on a different server instance than the upload). Per-call override via `OPENVIKING_UPLOAD_MODE`. | `null` (server's `temp_upload.default_mode`, which itself defaults to `"local"`) |
 
 Local directory uploads respect `.gitignore` files (root and nested). `ignore_dirs/include/exclude` apply on top of that.
 
@@ -1023,7 +1027,12 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
-    "cors_origins": ["*"]
+    "cors_origins": ["*"],
+    "temp_upload": {
+      "default_mode": "local",
+      "shared_max_size_bytes": 536870912,
+      "shared_prefix": "viking://upload"
+    }
   }
 }
 ```
@@ -1035,6 +1044,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
+| `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). | `"local"` |
+| `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
+| `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 
@@ -1063,6 +1075,26 @@ Path locks are enabled by default and usually require no configuration. **The de
 | `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
+## storage.task_tracker Section
+
+The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). The `persistent` backend stores task state on the workspace volume so that **a `task_id` returned by one instance can be looked up from another instance**, and task history survives a restart. The default `memory` backend keeps task state per process — sufficient for single-instance deployments.
+
+```json
+{
+  "storage": {
+    "task_tracker": {
+      "backend": "memory"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `backend` | str | Task tracker backend. `"memory"` keeps task state in process memory (single-instance). `"persistent"` enables cross-instance task lookup and survives restarts. | `"memory"` |
+
+Set `backend` to `"persistent"` for multi-instance deployments where callers may poll `GET /api/v1/tasks/{task_id}` from any instance, or when task history needs to outlive the process.
 
 ## encryption Section
 
@@ -1195,7 +1227,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
   },
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 0.5
+    "score_propagation_alpha": 1.0
   },
   "encryption": {
     "enabled": false,

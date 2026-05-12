@@ -28,6 +28,8 @@
  *   Lifecycle / behavior:
  *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
  *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV)
+ *   Profile injection (session_start):
+ *     OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
  *   Misc:
  *     OPENVIKING_MEMORY_ENABLED, OPENVIKING_DEBUG, OPENVIKING_DEBUG_LOG,
  *     OPENVIKING_CONFIG_FILE, OPENVIKING_CLI_CONFIG_FILE
@@ -242,7 +244,12 @@ export function loadConfig() {
       num(cc.captureMaxLength, 24000),
     ))),
     captureTimeoutMs,
-    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns === true),
+    // Default true: a "memory plugin" without assistant-side capture only sees half the
+    // conversation, which makes extraction noticeably worse. Subagent capture has always
+    // pushed both sides (subagent-stop.mjs); this aligns the main-session path with that
+    // behavior. Operators who want the old user-only behavior can still set
+    // OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or claude_code.captureAssistantTurns=false.
+    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns !== false),
     // P0-2: client-driven commit threshold (ported from openclaw afterTurn).
     // Default 20000 aligns with openclaw; lower values produce archives faster.
     commitTokenThreshold: Math.max(1000, Math.floor(num(
@@ -254,6 +261,16 @@ export function loadConfig() {
     resumeContextBudget: Math.max(1024, Math.floor(num(
       process.env.OPENVIKING_RESUME_CONTEXT_BUDGET,
       num(cc.resumeContextBudget, 32000),
+    ))),
+
+    // Session-start profile injection: pull profile.md + ls of preferences/
+    // and entities/ on every session_start (startup/clear/resume/compact),
+    // independent of UserPromptSubmit auto-recall. Subagents skip entirely
+    // (handled by subagent-start.mjs not invoking buildProfileBlock).
+    noAutoInject: envBool("OPENVIKING_NO_AUTO_INJECT") ?? (cc.noAutoInject === true),
+    profileTokenBudget: Math.max(500, Math.floor(num(
+      process.env.OPENVIKING_PROFILE_TOKEN_BUDGET,
+      num(cc.profileTokenBudget, 10000),
     ))),
 
     // P1-15: bypass patterns (glob) — when the CC session_id or cwd matches,

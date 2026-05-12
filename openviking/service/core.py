@@ -21,9 +21,11 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
+from openviking.service.task_tracker import set_task_tracker
 from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -147,7 +149,9 @@ class OpenVikingService:
             agfs=self._agfs_client,
             lock_timeout=tx_cfg.lock_timeout,
             lock_expire=tx_cfg.lock_expire,
+            redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
         )
+        set_task_tracker(config.build_task_tracker(self._agfs_client))
 
     @property
     def _agfs(self) -> Any:
@@ -334,7 +338,10 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
-        self._pack_service.set_viking_fs(self._viking_fs)
+        self._pack_service.set_dependencies(
+            viking_fs=self._viking_fs,
+            vector_store=self._vikingdb_manager,
+        )
         self._search_service.set_viking_fs(self._viking_fs)
         self._resource_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -388,6 +395,57 @@ class OpenVikingService:
         self._initialized = False
 
         logger.info("OpenVikingService closed")
+
+    async def reindex(
+        self,
+        *,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        if not self._initialized:
+            await self.initialize()
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        from openviking.service.reindex_executor import get_reindex_executor
+
+        return await get_reindex_executor().execute(
+            uri=uri,
+            mode=mode,
+            wait=wait,
+            ctx=effective_ctx,
+        )
+
+    async def check_consistency(
+        self,
+        *,
+        uri: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        if not self._initialized:
+            await self.initialize()
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        entries = await self._viking_fs.tree(
+            uri,
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=effective_ctx,
+        )
+        report = await check_index_consistency(
+            self._viking_fs,
+            self._vikingdb_manager,
+            uri,
+            entries,
+            effective_ctx,
+        )
+        return report.to_dict()
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""

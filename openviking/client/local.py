@@ -56,15 +56,17 @@ class LocalClient(BaseClient):
     def __init__(
         self,
         path: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ):
         """Initialize LocalClient.
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
+            user: Explicit user/account/agent identity for embedded mode
         """
         self._service = OpenVikingService(
             path=path,
-            user=UserIdentifier.the_default_user(),
+            user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
         self._ctx = RequestContext(user=self._user, role=Role.USER)
@@ -154,6 +156,19 @@ class LocalClient(BaseClient):
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
+
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        return await self._service.reindex(
+            uri=uri,
+            mode=mode,
+            wait=wait,
+        )
 
     async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger index building."""
@@ -384,13 +399,26 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(
+        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
         """
+        execution = await run_with_telemetry(
+            operation="session.create",
+            telemetry=telemetry,
+            fn=lambda: self._create_session_impl(session_id),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _create_session_impl(self, session_id: Optional[str]) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
         session = await self._service.sessions.create(self._ctx, session_id)
@@ -456,6 +484,7 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
         role_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -469,6 +498,32 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
+        execution = await run_with_telemetry(
+            operation="session.add_message",
+            telemetry=telemetry,
+            fn=lambda: self._add_message_impl(
+                session_id,
+                role,
+                content,
+                parts,
+                created_at,
+                role_id,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _add_message_impl(
+        self,
+        session_id: str,
+        role: str,
+        content: Optional[str],
+        parts: Optional[List[Dict[str, Any]]],
+        created_at: Optional[str],
+        role_id: Optional[str],
+    ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
@@ -494,23 +549,66 @@ class LocalClient(BaseClient):
 
     # ============= Pack =============
 
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        include_vectors: bool = False,
+    ) -> str:
         """Export context as .ovpack file."""
-        return await self._service.pack.export_ovpack(uri, to, ctx=self._ctx)
+        return await self._service.pack.export_ovpack(
+            uri,
+            to,
+            ctx=self._ctx,
+            include_vectors=include_vectors,
+        )
+
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        return await self._service.pack.backup_ovpack(
+            to,
+            ctx=self._ctx,
+            include_vectors=include_vectors,
+        )
 
     async def import_ovpack(
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
-        vectorize: bool = True,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         return await self._service.pack.import_ovpack(
-            file_path, parent, ctx=self._ctx, force=force, vectorize=vectorize
+            file_path,
+            parent,
+            ctx=self._ctx,
+            on_conflict=on_conflict,
+            vector_mode=vector_mode,
+        )
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        return await self._service.pack.restore_ovpack(
+            file_path,
+            ctx=self._ctx,
+            on_conflict=on_conflict,
+            vector_mode=vector_mode,
         )
 
     # ============= Debug =============
+
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return await self._service.check_consistency(
+            uri=uri,
+            ctx=self._ctx,
+        )
 
     async def health(self) -> bool:
         """Check service health."""

@@ -71,10 +71,12 @@ OpenCode auto-discovers first-level `*.ts` and `*.js` files under `~/.config/ope
 
 This plugin also works if you intentionally place it in a workspace-local plugin directory, because it stores config and runtime files next to the plugin file itself.
 
-Recommended: provide the API key via environment variable instead of writing it into the config file:
+Recommended: provide the API key and tenant identity via environment variables instead of writing them into the config file:
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
+export OPENVIKING_ACCOUNT="default"
+export OPENVIKING_USER="opencode"
 ```
 
 ## Configuration
@@ -85,6 +87,8 @@ Example config:
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -94,7 +98,9 @@ Example config:
 }
 ```
 
-The environment variable `OPENVIKING_API_KEY` takes precedence over the config file.
+`account` and `user` are sent as `X-OpenViking-Account` and `X-OpenViking-User` tenant headers on every plugin API request; leave them empty to omit the headers.
+
+The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take precedence over the config file.
 
 ## Runtime Files
 
@@ -216,6 +222,8 @@ Add an `autoRecall` block to your `openviking-config.json` to customize recall b
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {

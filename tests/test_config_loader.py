@@ -198,6 +198,24 @@ def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch)
 
     assert config.retrieval.hotness_alpha == 0.0
     assert config.retrieval.score_propagation_alpha == 0.5
+    assert config.storage.transaction.redo_recovery_enabled is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {"storage": {"transaction": {"redo_recovery_enabled": False}}}
+    )
+
+    assert config.storage.transaction.redo_recovery_enabled is False
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -231,6 +249,34 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     with pytest.raises(ValueError, match="server"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_loads_utf8_bom_config(tmp_path, monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import open_viking_config as config_module
+
+    class _ConfigStub:
+        default_account = "default"
+
+    loaded = {}
+
+    def _from_dict(data):
+        loaded.update(data)
+        return _ConfigStub()
+
+    monkeypatch.setattr(config_module.OpenVikingConfig, "from_dict", _from_dict)
+
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text("\ufeff{}", encoding="utf-8")
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
+    config = config_module.OpenVikingConfigSingleton.initialize(config_path=str(config_path))
+
+    assert config.default_account == "default"
+    assert loaded == {}
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
 
 
 def test_require_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):

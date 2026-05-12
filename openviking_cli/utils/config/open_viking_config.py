@@ -23,6 +23,7 @@ from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
+from .oauth_config import OAuthConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
@@ -168,6 +169,11 @@ class OpenVikingConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
+
+    oauth: OAuthConfig = Field(
+        default_factory=OAuthConfig,
+        description="OAuth 2.1 (MCP) configuration",
+    )
 
     telemetry: "TelemetryConfig" = Field(
         default_factory=TelemetryConfig, description="Telemetry configuration"
@@ -382,7 +388,7 @@ class OpenVikingConfigSingleton:
             if not config_path.exists():
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 raw = f.read()
 
             # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).

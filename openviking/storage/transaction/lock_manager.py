@@ -26,10 +26,12 @@ class LockManager:
         agfs: AGFSClient,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
+        redo_recovery_enabled: bool = True,
     ):
         self._agfs = agfs
         self._path_lock = PathLock(agfs, lock_expire=lock_expire)
         self._lock_timeout = lock_timeout
+        self._redo_recovery_enabled = redo_recovery_enabled
         self._redo_log = RedoLog(agfs)
         self._handles: Dict[str, LockHandle] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -39,6 +41,10 @@ class LockManager:
     @property
     def redo_log(self) -> RedoLog:
         return self._redo_log
+
+    @property
+    def redo_recovery_enabled(self) -> bool:
+        return self._redo_recovery_enabled
 
     def _mark_handle_active(self, handle: LockHandle) -> None:
         handle.last_active_at = time.time()
@@ -55,7 +61,10 @@ class LockManager:
         """Start background cleanup and redo recovery."""
         self._running = True
         self._cleanup_task = asyncio.create_task(self._stale_cleanup_loop())
-        self._redo_task = asyncio.create_task(self._recover_pending_redo())
+        if self._redo_recovery_enabled:
+            self._redo_task = asyncio.create_task(self._recover_pending_redo())
+        else:
+            logger.info("Redo recovery disabled by config; skipping pending redo recovery")
 
     async def stop(self) -> None:
         """Stop cleanup and release all active locks."""
@@ -133,31 +142,74 @@ class LockManager:
             self._mark_handle_active(handle)
             return True
 
-        # 对路径进行排序，确保加锁顺序一致
         sorted_paths = sorted(paths, key=lambda x: (len(x), x))
-        acquired = []
+        acquired_lock_paths: List[str] = []
 
         try:
             for path in sorted_paths:
+                locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
-                    path,
-                    handle,
-                    timeout=timeout,
+                    path, handle,
+                    timeout=timeout if timeout is not None else self._lock_timeout,
                 )
                 if not success:
-                    # 释放已获得的锁
-                    for p in acquired:
-                        await self._path_lock.release_subtree(p, handle)
+                    await self._path_lock.release_selected(handle, acquired_lock_paths)
                     return False
-                acquired.append(path)
+                newly = [lp for lp in handle.locks if lp not in locks_before]
+                acquired_lock_paths.extend(newly)
 
             self._mark_handle_active(handle)
             return True
 
         except Exception as e:
             logger.error(f"Failed to acquire subtree batch lock: {e}")
-            for p in acquired:
-                await self._path_lock.release_subtree(p, handle)
+            await self._path_lock.release_selected(handle, acquired_lock_paths)
+            return False
+
+    async def acquire_mixed_batch(
+        self,
+        handle: LockHandle,
+        point_paths: List[str],
+        subtree_paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """"""
+        subtree_set = set(subtree_paths)
+        point_only = [p for p in point_paths if p not in subtree_set]
+        all_pairs = [(p, False) for p in point_only] + [(p, True) for p in subtree_set]
+
+        if not all_pairs:
+            self._mark_handle_active(handle)
+            return True
+
+        sorted_pairs = sorted(all_pairs, key=lambda x: (len(x[0]), x[0]))
+        acquired_lock_paths: List[str] = []
+
+        try:
+            for path, is_subtree in sorted_pairs:
+                locks_before = set(handle.locks)
+                if is_subtree:
+                    success = await self._path_lock.acquire_subtree(
+                        path, handle,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
+                    )
+                else:
+                    success = await self._path_lock.acquire_point(
+                        path, handle,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
+                    )
+                if not success:
+                    await self._path_lock.release_selected(handle, acquired_lock_paths)
+                    return False
+                newly = [lp for lp in handle.locks if lp not in locks_before]
+                acquired_lock_paths.extend(newly)
+
+            self._mark_handle_active(handle)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire mixed batch lock: {e}")
+            await self._path_lock.release_selected(handle, acquired_lock_paths)
             return False
 
     async def acquire_mv(
@@ -187,6 +239,20 @@ class LockManager:
         if current is None or not current.locks:
             return None
         return current
+
+    def is_path_locked(self, path: str, ignore_stale: bool = True) -> bool:
+        """Check whether *path* is currently locked.
+
+        Semantics align with conflict detection in the acquire flow: the path
+        is considered locked if it (or any ancestor) holds a lock. By default,
+        stale locks are ignored because they will be reclaimed on the next
+        acquire attempt.
+        """
+        try:
+            return self._path_lock.is_locked(path, ignore_stale=ignore_stale)
+        except Exception as e:
+            logger.warning(f"is_path_locked failed for {path}: {e}")
+            return False
 
     async def refresh_lock(self, handle: LockHandle) -> None:
         current = self._reconcile_handle(handle)
@@ -367,9 +433,15 @@ def init_lock_manager(
     agfs: AGFSClient,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
+    redo_recovery_enabled: bool = True,
 ) -> LockManager:
     global _lock_manager
-    _lock_manager = LockManager(agfs=agfs, lock_timeout=lock_timeout, lock_expire=lock_expire)
+    _lock_manager = LockManager(
+        agfs=agfs,
+        lock_timeout=lock_timeout,
+        lock_expire=lock_expire,
+        redo_recovery_enabled=redo_recovery_enabled,
+    )
     return _lock_manager
 
 

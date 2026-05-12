@@ -200,6 +200,82 @@ class TestVLMExtraHeaders:
         assert "extra_body" not in call_kwargs
 
 
+class TestOpenAIVLMClientRetries:
+    """Test OpenAI SDK retries are disabled in favor of OpenViking retries."""
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_openai_sync_client_disables_sdk_retries(self, mock_openai_class):
+        mock_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_client()
+
+        call_kwargs = mock_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncOpenAI")
+    def test_openai_async_client_disables_sdk_retries(self, mock_async_openai_class):
+        mock_async_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_async_client()
+
+        call_kwargs = mock_async_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
+    def test_azure_sync_client_disables_sdk_retries(self, mock_azure_openai_class):
+        mock_azure_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-01-01-preview",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_client()
+
+        call_kwargs = mock_azure_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncAzureOpenAI")
+    def test_azure_async_client_disables_sdk_retries(self, mock_async_azure_openai_class):
+        mock_async_azure_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-01-01-preview",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_async_client()
+
+        call_kwargs = mock_async_azure_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+
 class TestVLMBaseExtraHeaders:
     """Test VLMBase extracts extra_headers from config."""
 

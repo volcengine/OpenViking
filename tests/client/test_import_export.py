@@ -3,7 +3,9 @@
 
 """Import/export tests"""
 
+import hashlib
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -53,29 +55,27 @@ class TestImportOvpack:
         await client.export_ovpack(uri, str(export_path))
 
         # Import to new location
-        import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/imported/", vectorize=False
-        )
+        import_uri = await client.import_ovpack(str(export_path), "viking://resources/imported/")
 
         assert isinstance(import_uri, str)
         assert "imported" in import_uri
 
-    async def test_import_with_force(self, client_with_resource, temp_dir: Path):
-        """Test force overwrite import"""
+    async def test_import_with_on_conflict_overwrite(self, client_with_resource, temp_dir: Path):
+        """Test overwrite import."""
         client, uri = client_with_resource
 
         # Export first
-        export_path = temp_dir / "force_test.ovpack"
+        export_path = temp_dir / "overwrite_test.ovpack"
         await client.export_ovpack(uri, str(export_path))
 
         # First import
-        await client.import_ovpack(
-            str(export_path), "viking://resources/force_test/", vectorize=False
-        )
+        await client.import_ovpack(str(export_path), "viking://resources/overwrite_test/")
 
-        # Second force import (overwrite)
+        # Second import overwrites the existing root.
         import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/force_test/", force=True, vectorize=False
+            str(export_path),
+            "viking://resources/overwrite_test/",
+            on_conflict="overwrite",
         )
 
         assert isinstance(import_uri, str)
@@ -104,9 +104,7 @@ class TestImportOvpack:
         await client.rm(original_uri, recursive=True)
 
         # Import
-        import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/roundtrip/", vectorize=False
-        )
+        import_uri = await client.import_ovpack(str(export_path), "viking://resources/roundtrip/")
 
         # Read imported content
         imported_content = ""
@@ -120,8 +118,32 @@ class TestImportOvpack:
 
     @staticmethod
     def _build_ovpack(zip_path: Path, entries: dict[str, str]) -> None:
+        index_records = b""
+        manifest = {
+            "kind": "openviking.ovpack",
+            "format_version": 2,
+            "root": {
+                "name": "pkg",
+                "uri": "viking://resources/pkg",
+                "scope": "resources",
+            },
+            "entries": [{"path": "", "kind": "directory"}],
+            "content_sha256": hashlib.sha256(b"[]").hexdigest(),
+            "index": {
+                "records": {
+                    "path": "_ovpack/index_records.jsonl",
+                    "count": 0,
+                    "sha256": hashlib.sha256(index_records).hexdigest(),
+                }
+            },
+        }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("pkg/", "")
+            zf.writestr("pkg/files/", "")
+            zf.writestr("pkg/_ovpack/", "")
+            zf.writestr("pkg/_ovpack/index_records.jsonl", index_records)
+            zf.writestr("pkg/_ovpack/manifest.json", json.dumps(manifest))
             for name, content in entries.items():
                 zf.writestr(name, content)
         zip_path.write_bytes(buffer.getvalue())
@@ -131,35 +153,30 @@ class TestImportOvpack:
         [
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "pkg/../../escape.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "/abs/path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "C:/drive/path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "pkg\\windows\\path.txt": "pwned",
                 },
                 "Unsafe ovpack entry path",
             ),
             (
                 {
-                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
                     "other/file.txt": "pwned",
                 },
                 "Invalid ovpack entry root",
@@ -173,6 +190,4 @@ class TestImportOvpack:
         self._build_ovpack(ovpack_path, entries)
 
         with pytest.raises(ValueError, match=error_pattern):
-            await client.import_ovpack(
-                str(ovpack_path), "viking://resources/security/", vectorize=False
-            )
+            await client.import_ovpack(str(ovpack_path), "viking://resources/security/")

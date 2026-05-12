@@ -108,7 +108,15 @@ openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
 
 ## 验证
 
-确认插件占用了 `contextEngine` 槽位：
+要一键检查插件注册、服务端连通性和版本兼容性，运行：
+
+```bash
+openclaw openviking status
+```
+
+自动化场景下，可为 `openclaw openviking status` 追加 `--json` 获取机器可读结果。`openclaw openviking setup` 也支持 `--json`，但自动化使用时需同时提供 `--base-url`。
+
+或手动核对各个信号。确认插件占用了 `contextEngine` 槽位：
 
 ```bash
 openclaw config get plugins.slots.contextEngine

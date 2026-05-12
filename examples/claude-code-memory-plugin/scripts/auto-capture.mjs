@@ -33,6 +33,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { readJsonState, writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -175,10 +176,49 @@ function parseTranscript(content) {
   return messages;
 }
 
+// Tool result (output) retention. 0 = drop tool_result blocks entirely; >0 = keep,
+// truncated to that many chars. Default 0 — memory extraction signal lives in the
+// agent's prose summary of what happened, not in the raw bytes the tool returned
+// (file contents, web pages, command stdout). Operators who want replay-style
+// archives can set this >0 to retain truncated results.
+const TOOL_RESULT_MAX_CHARS = 0;
+
+function formatToolInput(value) {
+  // Tool inputs are agent-authored. We keep them verbatim — they're usually short
+  // (URLs, file paths, queries) and a pathologically long input is itself signal
+  // worth surfacing to the memory extractor.
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateToolResult(s) {
+  if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_RESULT_MAX_CHARS) return s;
+  return (
+    s.slice(0, TOOL_RESULT_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_RESULT_MAX_CHARS} more chars]`
+  );
+}
+
+function extractToolResultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /**
- * Extract user/assistant turns. Tier-1 parts: plain text + tool-use name list.
- * Tool-use blocks are aggregated into a tool-name summary per assistant message
- * so the OV memory extractor sees "what happened" without raw tool_result JSON.
+ * Extract user/assistant turns. Captures plain text + tool_use input (verbatim) and,
+ * if TOOL_RESULT_MAX_CHARS > 0, tool_result output (truncated). Tool blocks are inlined
+ * into the per-turn text so the OV memory extractor sees what the agent did with
+ * substance, not just tool names.
  */
 function extractAllTurns(messages) {
   const turns = [];
@@ -193,16 +233,23 @@ function extractAllTurns(messages) {
       if (typeof content === "string") {
         text = content;
       } else if (Array.isArray(content)) {
-        const texts = [];
+        const parts = [];
         for (const block of content) {
           if (!block || typeof block !== "object") continue;
           if (block.type === "text" && typeof block.text === "string") {
-            texts.push(block.text);
+            parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
+            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
+          } else if (block.type === "tool_result") {
+            const resultText = extractToolResultText(block.content);
+            const truncated = resultText ? truncateToolResult(resultText) : null;
+            if (truncated) {
+              parts.push(`[tool result]\n${truncated}`);
+            }
           }
         }
-        text = texts.join("\n");
+        text = parts.join("\n\n");
       }
     };
 
@@ -242,13 +289,9 @@ async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    let content = stripInjectedBlocks(turn.text).trim();
-    if (turn.role === "assistant" && turn.toolNames.length > 0) {
-      const uniq = Array.from(new Set(turn.toolNames)).join(", ");
-      content = content
-        ? `${content}\n\n[tools used: ${uniq}]`
-        : `[tools used: ${uniq}]`;
-    }
+    // Tool input + tool_result are already inlined as `[tool: NAME]` / `[tool result]`
+    // blocks during harvesting, so no separate suffix is needed here.
+    const content = stripInjectedBlocks(turn.text).trim();
     if (!content) continue;
 
     const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });
@@ -355,19 +398,45 @@ async function main() {
     return;
   }
 
+  // Batch-level capture decision. shouldCapture() is designed to evaluate a *single
+  // user message* (length bounds, command/punctuation/question-only filters, keyword
+  // trigger). Applied to a multi-turn batch concatenated by formatTurnsAsText(), it
+  // misfires:
+  //   - tool I/O inlining easily pushes combined text over captureMaxLength → entire
+  //     batch silently dropped + state advanced → permanent data loss
+  //   - JSON-shaped tool I/O can match the punctuation-only regex → non_content drop
+  //   - a leading `/cmd` user turn flips the whole batch to `command` → drop
+  //   - a question-shaped user turn ("why?") tags the whole batch as question_only
+  // For batches we only need: skip empty batches, and (keyword mode) require *some*
+  // user turn to carry a trigger phrase. Per-turn substance is already bounded by
+  // TOOL_BLOCK_MAX_CHARS during harvest.
   const combined = formatTurnsAsText(captureTurns);
-  const decision = shouldCapture(combined);
-  log("should_capture", {
-    capture: decision.capture,
-    reason: decision.reason,
-    textPreview: decision.text.slice(0, 100),
-  });
-
-  if (!decision.capture) {
+  if (!sanitize(combined)) {
+    log("skip", { stage: "batch_empty" });
     await saveState(sessionId, { capturedTurnCount: allTurns.length });
     approve();
     return;
   }
+
+  if (cfg.captureMode === "keyword") {
+    const hasTrigger = captureTurns.some(
+      (t) =>
+        t.role === "user" &&
+        MEMORY_TRIGGERS.some((re) => re.test(sanitize(t.text))),
+    );
+    if (!hasTrigger) {
+      log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
+      await saveState(sessionId, { capturedTurnCount: allTurns.length });
+      approve();
+      return;
+    }
+  }
+
+  log("should_capture", {
+    capture: true,
+    reason: cfg.captureMode === "keyword" ? "keyword_trigger_matched" : "semantic",
+    combinedLength: combined.length,
+  });
 
   const result = await pushTurnsToOv(ovSessionId, captureTurns);
   log("push_turns", { ovSessionId, ok: result.ok, failed: result.failed });
@@ -381,15 +450,47 @@ async function main() {
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let pendingTokens = 0;
+  let commitCount = 0;
+  let totalMessageCount = 0;
   if (result.ok > 0) {
     const meta = await getSession(fetchJSON, ovSessionId);
-    const pending = Number(meta?.pending_tokens || 0);
-    log("pending_tokens", { ovSessionId, pending, threshold: cfg.commitTokenThreshold });
-    if (pending >= cfg.commitTokenThreshold) {
+    pendingTokens = Number(meta?.pending_tokens || 0);
+    commitCount = Number(meta?.commit_count || 0);
+    totalMessageCount = Number(meta?.total_message_count || 0);
+    log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
+    if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId);
       committed = commitRes.ok;
-      log("commit", { ovSessionId, ok: commitRes.ok, pending });
+      if (committed) commitCount += 1;
+      log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
     }
+  }
+
+  // Snapshot for the statusline. Lives across sessions; statusline reads it
+  // alongside last-recall.json to show pending/committed counts. commit_count
+  // is the running total of archives this session has produced — distinct
+  // from `committed` (which is just whether THIS turn triggered a commit).
+  writeJsonState("last-capture.json", {
+    turns_captured: result.ok,
+    turns_failed: result.failed,
+    pending_tokens: pendingTokens,
+    commit_threshold: cfg.commitTokenThreshold,
+    committed,
+    commit_count: commitCount,
+    total_message_count: totalMessageCount,
+    ov_session_id: ovSessionId,
+    cc_session_id: sessionId,
+  });
+
+  // Cross-session daily counter — number of archives produced today across
+  // all CC sessions. Cheap proxy for "how much OV digested today" without
+  // hitting the server again. Resets on date rollover.
+  if (committed) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
+    const prior = readJsonState("daily-stats.json") || {};
+    const archives = prior.date === today ? Number(prior.archives || 0) + 1 : 1;
+    writeJsonState("daily-stats.json", { date: today, archives });
   }
 
   if (result.ok > 0) {

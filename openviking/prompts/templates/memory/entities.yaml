@@ -31,11 +31,4 @@ fields:
     type: string
     description: |
       - Detailed Zettelkasten card content in markdown format
-      Relative path format: events://{event_name} or ../events/{year}/{month}/{day}/{event_name}.md
-      - Example:
-      # Book club events Caroline participated in:
-      - [Monthly book discussion](../events/2023/03/05/Monthly book discussion.md)
-      - [Author meetup](events://Author meetup)
-      - [Summer reading challenge](../events/2024/03/10/Summer reading challenge.md)
-
     merge_op: patch

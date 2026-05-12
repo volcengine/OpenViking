@@ -438,9 +438,9 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
     ),
     CloudProvider(
         "BytePlus",
-        "openai",
+        "volcengine",
         "https://ark.ap-southeast.bytepluses.com/api/v3",
-        "doubao-embedding-vision-251215",
+        "skylark-embedding-vision-251215",
         1024,
         "doubao-seed-2-0-code-preview-260215",
     ),
@@ -469,6 +469,7 @@ _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
     ("OpenAI Codex", "(Subscription)"),
     ("Kimi", "(Subscription API Key)"),
     ("GLM", "(Subscription API Key)"),
+    ("Custom (OpenAI-compatible)", "(Any OpenAI-compatible endpoint)"),
 ]
 
 
@@ -917,24 +918,34 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
     elif vlm_mode == 2:
         # Cloud VLM
         provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
+        provider_options.append(("Custom (OpenAI-compatible)", ""))
         choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
-        provider = CLOUD_PROVIDERS[choice - 1]
 
-        vlm_api_key = _prompt_api_key("VLM API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Vision Model")
-        vlm_api_base = provider.default_api_base
+        if choice > len(CLOUD_PROVIDERS):
+            print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
+            vlm_api_base = _prompt_required_input("API Base URL")
+            vlm_api_key = _prompt_api_key("VLM API Key")
+            vlm_model = _prompt_required_input("Vision Model")
+            vlm_provider = "openai"
+        else:
+            provider = CLOUD_PROVIDERS[choice - 1]
+            vlm_api_key = _prompt_api_key("VLM API Key")
+            if not vlm_api_key:
+                print(f"  {_red('API key is required')}")
+                return None
+            vlm_model = _prompt_required_input("Vision Model")
+            vlm_api_base = provider.default_api_base
+            vlm_provider = provider.provider
 
         vlm_config = {
-            "provider": provider.provider,
+            "provider": vlm_provider,
             "model": vlm_model,
-            "api_key": vlm_api_key,
             "api_base": vlm_api_base,
             "temperature": 0.0,
             "max_retries": 2,
         }
+        if vlm_api_key:
+            vlm_config["api_key"] = vlm_api_key
 
     return _build_local_config(
         model_name=model_name,
@@ -1022,7 +1033,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
         vlm_api_base = _DEFAULT_KIMI_BASE_URL
         vlm_provider = "kimi"
-    else:
+    elif vlm_mode == 6:
         print(f"\n  {_bold('GLM VLM configuration')}")
         vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
@@ -1031,6 +1042,12 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_GLM_MODEL)
         vlm_api_base = _DEFAULT_GLM_BASE_URL
         vlm_provider = "glm"
+    else:
+        print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
+        vlm_api_base = _prompt_required_input("API Base URL")
+        vlm_api_key = _prompt_api_key("API Key")
+        vlm_model = _prompt_required_input("Model")
+        vlm_provider = "openai"
 
     return _build_cloud_config(
         provider,

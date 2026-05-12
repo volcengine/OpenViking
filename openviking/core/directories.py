@@ -10,11 +10,12 @@ This module defines the preset directory structure that is created on initializa
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
     agent_space_fragment,
     canonical_agent_root,
     canonical_user_root,
+    context_type_for_uri,
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
@@ -94,22 +95,21 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         children=[
             DirectoryDefinition(
                 path="memories",
-                abstract="Agent's long-term memory storage. Contains cases and patterns, managed hierarchically by type.",
+                abstract="Agent's long-term memory storage. Contains trajectories and experiences, managed hierarchically by type.",
                 overview="Use this directory to access Agent's learning memories. Contains two main categories: "
-                "1) cases-specific cases, 2) patterns-reusable patterns.",
+                "1) trajectories-task execution records, 2) experiences-generalized lessons from trajectories.",
                 children=[
                     DirectoryDefinition(
-                        path="cases",
-                        abstract="Agent's case records. Stores specific problems and solutions, new problems and resolution processes encountered in each interaction.",
-                        overview="Access cases when encountering similar problems, reference historical solutions. "
-                        "Cases are records of specific conversations, each independent and not updated.",
+                        path="trajectories",
+                        abstract="Agent's execution trajectory records. Stores end-to-end task execution traces from each interaction, each trajectory is independent and not updated.",
+                        overview="Access when reviewing how the agent handled past tasks or diagnosing execution history. "
+                        "Trajectories are records of specific task executions, each independent and not updated once created.",
                     ),
                     DirectoryDefinition(
-                        path="patterns",
-                        abstract="Agent's effective patterns. Stores reusable processes and best practices distilled from multiple interactions, "
-                        "validated general solutions.",
-                        overview="Access patterns when executing tasks requiring strategy selection or process determination. "
-                        "Patterns are highly distilled experiences, each independent and not updated; create new pattern if modification needed.",
+                        path="experiences",
+                        abstract="Agent's generalized experience memories. Reusable insights and lessons distilled from execution trajectories, updated as new evidence accumulates.",
+                        overview="Access when the agent encounters recurring situations or needs guidance from past lessons. "
+                        "Experiences are distilled from trajectories and updated incrementally as more supporting evidence accumulates.",
                     ),
                 ],
             ),
@@ -134,19 +134,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         "No preset subdirectory structure, users create project directories as needed.",
     ),
 }
-
-
-def get_context_type_for_uri(uri: str) -> str:
-    """Determine context_type based on URI."""
-    if "/memories" in uri:
-        return ContextType.MEMORY.value
-    elif "/resources" in uri:
-        return ContextType.RESOURCE.value
-    elif "/skills" in uri:
-        return ContextType.SKILL.value
-    elif uri.startswith("viking://session"):
-        return ContextType.MEMORY.value
-    return ContextType.RESOURCE.value
 
 
 class DirectoryInitializer:
@@ -310,7 +297,7 @@ class DirectoryInitializer:
                 uri=uri,
                 parent_uri=parent_uri,
                 is_leaf=False,
-                context_type=get_context_type_for_uri(uri),
+                context_type=context_type_for_uri(uri),
                 abstract=defn.abstract,
                 level=level,
                 user=ctx.user,

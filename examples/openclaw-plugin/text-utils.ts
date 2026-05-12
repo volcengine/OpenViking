@@ -19,7 +19,7 @@ const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
-const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
+const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{1,2}(?::\d{2})?)?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
 const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
@@ -69,6 +69,7 @@ export function sanitizeUserTextForCapture(text: string): string {
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
+    .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -494,4 +495,30 @@ export function extractLatestUserText(messages: unknown[] | undefined): string {
     }
   }
   return "";
+}
+
+/**
+ * Backward-compatible wrapper around extractNewTurnMessages.
+ * Returns flat text strings in the legacy `[role]: text` format.
+ * @deprecated Use extractNewTurnMessages for structured output.
+ */
+export function extractNewTurnTexts(
+  messages: unknown[],
+  startIndex: number,
+): { texts: string[]; newCount: number } {
+  const { messages: extracted, newCount } = extractNewTurnMessages(messages, startIndex);
+  const texts: string[] = [];
+  for (const msg of extracted) {
+    for (const part of msg.parts) {
+      if (part.type === "text") {
+        texts.push(`[${msg.role}]: ${part.text}`);
+      } else if (part.type === "tool") {
+        if (part.toolInput && Object.keys(part.toolInput).length > 0) {
+          texts.push(`[toolUse: ${part.toolName}] ${JSON.stringify(part.toolInput)}`);
+        }
+        texts.push(`[${part.toolName} result]: ${part.toolOutput}`);
+      }
+    }
+  }
+  return { texts, newCount };
 }

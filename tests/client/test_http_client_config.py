@@ -88,6 +88,7 @@ def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
                 "upload": {
+                    "mode": "shared",
                     "ignore_dirs": "node_modules,.cache",
                     "include": "*.md,*.pdf",
                     "exclude": "*.tmp,*.log",
@@ -101,6 +102,7 @@ def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
 
     assert client._url == "http://config-host:1933"
     assert client._api_key == "config-key"
+    assert client._upload_mode == "shared"
 
 
 def test_async_http_client_rejects_unknown_ovcli_upload_field(tmp_path, monkeypatch):

@@ -231,6 +231,34 @@ class TestWatchTaskConflict:
         assert to_uri in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_conflict_does_not_create_async_task(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """A rejected watch request must not leave behind a user-invisible task."""
+        from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+
+        reset_task_tracker()
+        to_uri = "viking://resources/conflict_no_task"
+
+        await resource_service.add_resource(
+            path="/test/path1",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30.0,
+        )
+        task_count_before = get_task_tracker().count()
+
+        with pytest.raises(ConflictError):
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=45.0,
+            )
+
+        assert get_task_tracker().count() == task_count_before
+
+    @pytest.mark.asyncio
     async def test_conflict_when_task_exists_but_hidden_by_permission(
         self, resource_service: ResourceService, request_context: RequestContext
     ):

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
-Exposes 7 tools to Claude Code (or any MCP client) via streamable HTTP:
-  search, read, list, store, add_resource, forget, health
+Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
+  find, search, read, list, remember, add_resource, grep, glob, forget, health
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -55,6 +55,52 @@ def _get_ctx() -> RequestContext:
     return ctx
 
 
+def _scope_to_origin(scope: Scope) -> Optional[str]:
+    """Derive the public-facing origin (scheme://host) from an ASGI scope.
+
+    Resolution order matches openviking.server.oauth.router._public_origin:
+      1. ``OPENVIKING_PUBLIC_BASE_URL`` environment variable
+      2. ``app.state.oauth_config.issuer`` (if OAuth enabled)
+      3. ``X-Forwarded-Proto`` / ``X-Forwarded-Host``
+      4. scope's own scheme + Host header
+    """
+    import os as _os
+
+    env_value = _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+
+    app = scope.get("app")
+    if app is not None:
+        cfg = getattr(app.state, "oauth_config", None)
+        configured = getattr(cfg, "issuer", None) if cfg else None
+        if configured:
+            return configured.rstrip("/")
+
+    headers = {
+        k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+    }
+    proto = headers.get("x-forwarded-proto") or scope.get("scheme") or "http"
+    proto = proto.split(",", 1)[0].strip()
+    host = headers.get("x-forwarded-host") or headers.get("host")
+    if not host:
+        server = scope.get("server")
+        if isinstance(server, (list, tuple)) and len(server) >= 2:
+            host = f"{server[0]}:{server[1]}" if server[1] else str(server[0])
+    if not host:
+        return None
+    host = host.split(",", 1)[0].strip()
+    return f"{proto}://{host}"
+
+
+def _oauth_enabled(scope: Scope) -> bool:
+    """Return True if app.state has an oauth_provider (i.e. OAuth is configured)."""
+    app = scope.get("app")
+    if app is None:
+        return False
+    return getattr(app.state, "oauth_provider", None) is not None
+
+
 class _IdentityASGIMiddleware:
     """ASGI middleware: delegates to auth.resolve_identity (the same function
     used by all REST API routes) so authentication logic is never duplicated."""
@@ -82,9 +128,21 @@ class _IdentityASGIMiddleware:
                 if isinstance(exc, UnauthenticatedError)
                 else (403 if isinstance(exc, PermissionDeniedError) else 400)
             )
+            headers: dict[str, str] = {}
+            # When OAuth is enabled and the request is unauthenticated, advertise
+            # the OAuth 2.0 protected resource metadata so MCP clients (Claude.ai,
+            # Claude Desktop, etc.) can auto-discover the authorization server
+            # per RFC 9728 §5.1.
+            if status == 401 and _oauth_enabled(scope):
+                origin = _scope_to_origin(scope)
+                if origin:
+                    headers["WWW-Authenticate"] = (
+                        f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource"'
+                    )
             resp = JSONResponse(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}},
                 status_code=status,
+                headers=headers,
             )
             return await resp(scope, receive, send)
 
@@ -105,7 +163,7 @@ class _IdentityASGIMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# MCP server + 7 tools (aligned with vikingbot/agent/tools/ov_file.py)
+# MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
@@ -114,23 +172,50 @@ mcp = FastMCP(
 )
 
 
-# -- search ----------------------------------------------------------------
+# -- find / search ---------------------------------------------------------
 
 
 @mcp.tool()
-async def search(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
-    """Search OpenViking context database (memories, resources, skills). Returns ranked results with URI, abstract, and score. Leave target_uri empty to search everything, or pass a viking:// URI to narrow scope."""
+async def find(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
-    ctx = _get_ctx()
-
     result = await service.search.find(
         query=query,
-        ctx=ctx,
+        ctx=_get_ctx(),
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
     )
+    return _format_search_result(result)
 
+
+@mcp.tool()
+async def search(
+    query: str,
+    target_uri: str = "",
+    session_id: Optional[str] = None,
+    limit: int = 10,
+    min_score: float = 0.35,
+) -> str:
+    """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
+    service = get_service()
+    ctx = _get_ctx()
+    session = None
+    if session_id:
+        session = service.sessions.session(ctx, session_id)
+        await session.load()
+    result = await service.search.search(
+        query=query,
+        ctx=ctx,
+        target_uri=target_uri,
+        session=session,
+        limit=limit,
+        score_threshold=min_score,
+    )
+    return _format_search_result(result)
+
+
+def _format_search_result(result) -> str:
     items = []
     for ctx_type, contexts in [
         ("memory", result.memories),
@@ -145,8 +230,11 @@ async def search(query: str, target_uri: str = "", limit: int = 10, min_score: f
 
     lines = []
     for ctx_type, m in items:
-        abstract = (m.abstract or m.overview or "(no abstract)").strip()
-        lines.append(f"- [{ctx_type} {m.score * 100:.0f}%] {m.uri}\n    {abstract}")
+        abstract = (
+            getattr(m, "abstract", "") or getattr(m, "overview", "") or "(no abstract)"
+        ).strip()
+        score = getattr(m, "score", 0.0)
+        lines.append(f"- [{ctx_type} {score * 100:.0f}%] {m.uri}\n    {abstract}")
 
     return (
         f"Found {len(items)} item(s):\n\n"
@@ -213,7 +301,7 @@ async def ls(uri: str, recursive: bool = False) -> str:
     return "\n".join(lines)
 
 
-# -- store -----------------------------------------------------------------
+# -- remember --------------------------------------------------------------
 
 
 class StoreMessage(BaseModel):
@@ -222,7 +310,7 @@ class StoreMessage(BaseModel):
 
 
 @mcp.tool()
-async def store(messages: list[StoreMessage]) -> str:
+async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
 
@@ -234,7 +322,11 @@ async def store(messages: list[StoreMessage]) -> str:
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
         if msg.content:
-            session.add_message(msg.role, [TextPart(text=msg.content)])
+            session.add_message(
+                msg.role,
+                [TextPart(text=msg.content)],
+                role_id=ctx.resolve_role_id(msg.role),
+            )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
 
@@ -242,17 +334,37 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
+_LOCAL_FILE_HINT = (
+    "MCP add_resource only accepts remote URLs (http(s)://, git@, ssh://, git://). "
+    "For local files or directories, use the `ov` CLI:\n"
+    "  1. Try first: ov add-resource <path>\n"
+    "     (if `ov` is already on PATH, this is all you need)\n"
+    "  2. If `ov` is not installed, run:\n"
+    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
+    "configure ~/.openviking/ovcli.conf:\n"
+    '       {"url": "https://your-host", "api_key": "your-key"}'
+)
+
+
 @mcp.tool()
 async def add_resource(path: str, description: str = "") -> str:
-    """Add a resource (local file path or URL) to OpenViking. This is an asynchronous operation — the resource will be processed in the background."""
+    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files."""
+    from openviking.server.local_input_guard import require_remote_resource_source
+
     service = get_service()
     ctx = _get_ctx()
+    try:
+        path = require_remote_resource_source(path)
+    except PermissionDeniedError:
+        return f"Error: {_LOCAL_FILE_HINT}"
     try:
         result = await service.resources.add_resource(
             path=path,
             ctx=ctx,
             reason=description,
             wait=False,
+            enforce_public_remote_targets=True,
         )
         root_uri = result.get("root_uri", "")
         return (
@@ -344,11 +456,11 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 
 @mcp.tool()
-async def forget(uri: str) -> str:
-    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here."""
+async def forget(uri: str, recursive: bool = False) -> str:
+    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here. Set recursive=true only when the user explicitly asks to delete a directory tree."""
     service = get_service()
     ctx = _get_ctx()
-    await service.fs.rm(uri, ctx=ctx)
+    await service.fs.rm(uri, ctx=ctx, recursive=recursive)
     return f"Deleted: {uri}"
 
 
@@ -375,7 +487,7 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)"
+            "MCP endpoint ready (10 tools: find, search, read, list, remember, add_resource, grep, glob, forget, health)"
         )
         yield
 
