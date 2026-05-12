@@ -558,6 +558,8 @@ ov chat
 
 👉 **[查看：Claude Code 记忆插件示例](examples/claude-code-memory-plugin/README_CN.md)**
 
+👉 **[查看：LangChain / LangGraph 集成](./docs/zh/agent-integrations/05-langchain-langgraph.md)**
+
 ## VikingBot 部署详情
 
 OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。
