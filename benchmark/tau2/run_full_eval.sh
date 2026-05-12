@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CONFIG="$SCRIPT_DIR/config/baseline.yaml"
 EXECUTE=false
+PREFLIGHT=false
+STRICT_PREFLIGHT=false
 RUN_ID=""
 RUN_EVAL_EXTRA=()
 
@@ -23,6 +25,14 @@ while [[ $# -gt 0 ]]; do
       EXECUTE=true
       shift
       ;;
+    --preflight)
+      PREFLIGHT=true
+      shift
+      ;;
+    --strict-preflight)
+      STRICT_PREFLIGHT=true
+      shift
+      ;;
     --domain|--repeat-count|--strategy-id|--task-id|--num-tasks)
       RUN_EVAL_EXTRA+=("$1" "$2")
       shift 2
@@ -30,9 +40,9 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'EOF'
 Usage:
-  benchmark/tau2/run_full_eval.sh [--config PATH] [--run-id ID] [--execute]
+  benchmark/tau2/run_full_eval.sh [--config PATH] [--run-id ID] [--execute] [--preflight]
 
-Without --execute the script only writes preflight and run_plan artifacts.
+Without --execute the script only writes run_plan artifacts.
 EOF
       exit 0
       ;;
@@ -49,7 +59,11 @@ if [[ -n "$RUN_ID" ]]; then
 fi
 
 cd "$REPO_ROOT"
-"$PYTHON_BIN" "$SCRIPT_DIR/scripts/preflight.py" --config "$CONFIG" "${RUN_ARGS[@]}"
+if [[ "$STRICT_PREFLIGHT" == true ]]; then
+  RUN_EVAL_EXTRA+=(--strict-preflight)
+elif [[ "$PREFLIGHT" == true ]]; then
+  RUN_EVAL_EXTRA+=(--preflight)
+fi
 
 if [[ "$EXECUTE" == true ]]; then
   "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" "${RUN_EVAL_EXTRA[@]}" --execute

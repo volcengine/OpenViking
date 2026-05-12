@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -159,6 +160,42 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
     return rows
 
 
+def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
+    errors: list[str] = []
+    split_rows = []
+    for domain in domains(config):
+        path = split_file(config, domain)
+        exists = path.is_file()
+        split_rows.append({"domain": domain, "path": str(path), "exists": exists})
+        if strict and not exists:
+            errors.append(f"missing split file for {domain}: {path}")
+
+    import_rows = []
+    for module in ("openviking", "openviking_cli", "tau2"):
+        ok = importlib.util.find_spec(module) is not None
+        import_rows.append({"module": module, "ok": ok})
+        if strict and not ok:
+            errors.append(f"missing Python module: {module}")
+
+    report = {
+        "status": "failed" if errors else "ok",
+        "strict": strict,
+        "tau2_repo": str(tau2_repo(config)),
+        "domains": domains(config),
+        "strategies": strategy_ids(config),
+        "imports": import_rows,
+        "split_files": split_rows,
+        "errors": errors,
+    }
+    write_json(out / "preflight.json", report)
+    if errors:
+        for error in errors:
+            print(f"[preflight][ERROR] {error}", file=sys.stderr)
+        return 1
+    print(f"[preflight][OK] wrote {out / 'preflight.json'}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plan or run TAU-2 benchmark cells.")
     parser.add_argument("--config", type=Path, default=Path(__file__).parents[1] / "config" / "baseline.yaml")
@@ -168,6 +205,8 @@ def main() -> int:
     parser.add_argument("--strategy-id", action="append", help="Run only this strategy id; may be repeated.")
     parser.add_argument("--task-id", action="append", help="Run only this TAU-2 task id; may be repeated.")
     parser.add_argument("--num-tasks", type=int, help="Run the first N tasks from the selected split.")
+    parser.add_argument("--preflight", action="store_true", help="Write a lightweight environment/config preflight report.")
+    parser.add_argument("--strict-preflight", action="store_true", help="Fail if optional runtime imports or split files are missing.")
     parser.add_argument("--plan-only", action="store_true", help="Only write run_plan.json.")
     parser.add_argument("--execute", action="store_true", help="Execute planned cells.")
     args = parser.parse_args()
@@ -178,6 +217,11 @@ def main() -> int:
     config = load_config(args.config)
     out = output_dir(config, args.run_id)
     out.mkdir(parents=True, exist_ok=True)
+    if args.preflight or args.strict_preflight:
+        preflight_status = _preflight(config, out, strict=args.strict_preflight)
+        if args.strict_preflight and preflight_status != 0:
+            return preflight_status
+
     plan = _build_plan(
         config,
         args.run_id,

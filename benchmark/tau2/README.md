@@ -18,10 +18,8 @@ benchmark/tau2/
 │   ├── baseline.yaml
 │   └── prewrite.yaml
 ├── scripts/
-│   ├── preflight.py
 │   ├── run_eval.py
-│   ├── summarize.py
-│   └── parity_check.py
+│   └── tau2_common.py
 └── run_full_eval.sh
 ```
 
@@ -32,9 +30,11 @@ Generated artifacts are written to `benchmark/tau2/result/<run_id>/`.
 Plan the default benchmark without running TAU-2:
 
 ```bash
-python benchmark/tau2/scripts/preflight.py --config benchmark/tau2/config/baseline.yaml
 python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baseline.yaml --plan-only
 ```
+
+Add `--preflight` or `--strict-preflight` when you want the runner to write a
+small environment/config check next to the run plan.
 
 Plan a one-cell upstream TAU-2 smoke:
 
