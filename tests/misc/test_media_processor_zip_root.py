@@ -86,6 +86,27 @@ async def test_zip_multiple_top_level_entries_keeps_extract_root(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_zip_single_top_level_dir_preserves_distinct_source_name(tmp_path: Path):
+    zip_path = tmp_path / "temp_upload_access.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("access-dns/readme.md", "# dns\n")
+
+    parser = ZipParser()
+
+    with patch("openviking.parse.parsers.directory.DirectoryParser.parse") as mock_dir_parse:
+        mock_result = AsyncMock()
+        mock_result.temp_dir_path = None
+        mock_dir_parse.return_value = mock_result
+
+        await parser.parse(zip_path, instruction="", source_name="access")
+
+        called_path = Path(mock_dir_parse.await_args.args[0])
+        assert called_path.name != "access-dns"
+        assert called_path.name.startswith("ov_zip_")
+        assert mock_dir_parse.await_args.kwargs.get("source_name") == "access"
+
+
+@pytest.mark.asyncio
 async def test_single_file_uses_source_name_for_resource_name(tmp_path: Path):
     """Test that source_name is passed through correctly when needed."""
     zip_path = tmp_path / "mixed.zip"

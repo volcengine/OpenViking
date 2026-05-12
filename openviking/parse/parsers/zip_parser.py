@@ -89,9 +89,13 @@ class ZipParser(BaseParser):
             parser = DirectoryParser()
 
             if len(extracted_entries) == 1 and extracted_entries[0].is_dir():
-                # Single root directory - parse that directly
-                dir_kwargs.pop("source_name", None)
-                result = await parser.parse(str(extracted_entries[0]), **dir_kwargs)
+                source_name = dir_kwargs.get("source_name")
+                source_stem = Path(source_name).stem if source_name else None
+                if not source_name or source_stem == extracted_entries[0].name:
+                    dir_kwargs.pop("source_name", None)
+                    result = await parser.parse(str(extracted_entries[0]), **dir_kwargs)
+                else:
+                    result = await parser.parse(str(temp_dir), **dir_kwargs)
             else:
                 # Multiple entries at root - parse the temp dir itself
                 # Set source_name from zip filename if not provided
