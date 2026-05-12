@@ -107,16 +107,3 @@ pub async fn stat(
     output_success(&result, output_format, compact);
     Ok(())
 }
-
-pub async fn count(
-    client: &HttpClient,
-    uri: &str,
-    recursive: bool,
-    show_all_hidden: bool,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let result = client.count(uri, recursive, show_all_hidden).await?;
-    output_success(&result, output_format, compact);
-    Ok(())
-}

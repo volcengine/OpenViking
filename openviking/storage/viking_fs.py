@@ -445,7 +445,9 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
-        async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
+        async def _estimate_deleted_count(
+            target_path: str, real_ctx: RequestContext
+        ) -> int:
             """Estimate number of nodes to be deleted using vector index."""
             vector_store = self._get_vector_store()
             if not vector_store:
@@ -1209,74 +1211,6 @@ class VikingFS:
         await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
 
         return all_entries
-
-    async def count(
-        self,
-        uri: str,
-        recursive: bool = False,
-        show_all_hidden: bool = False,
-        ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, int]:
-        """Count files and sub-directories under a directory.
-
-        Args:
-            uri: Viking URI (must be a directory).
-            recursive: If True, count all descendants; otherwise only direct children.
-            show_all_hidden: If True, include hidden files/directories (name starts with ".").
-            ctx: Request context.
-
-        Returns:
-            Dict with keys:
-                - files: number of files
-                - dirs: number of sub-directories
-                - total: files + dirs
-        """
-        self._ensure_access(uri, ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        real_ctx = self._ctx_or_default(ctx)
-
-        try:
-            info = self.agfs.stat(path)
-        except Exception as exc:
-            mapped = map_exception(exc, resource=uri)
-            if mapped is not None:
-                raise mapped from exc
-            raise NotFoundError(uri, "directory")
-
-        if not info.get("isDir", info.get("is_dir")):
-            raise FailedPreconditionError(
-                f"{uri} is not a directory",
-                details={"resource": uri, "expected": "directory"},
-            )
-
-        files = 0
-        dirs = 0
-
-        def _count_entries(current_path: str) -> None:
-            nonlocal files, dirs
-            try:
-                entries = self._ls_entries(current_path)
-            except Exception:
-                return
-            for entry in entries:
-                name = entry.get("name", "")
-                if name in (".", ".."):
-                    continue
-                is_dir = entry.get("isDir", False)
-                entry_uri = self._path_to_uri(f"{current_path}/{name}", ctx=ctx)
-                if not self._is_accessible(entry_uri, real_ctx):
-                    continue
-                if not is_dir and name.startswith(".") and not show_all_hidden:
-                    continue
-                if is_dir:
-                    dirs += 1
-                    if recursive:
-                        _count_entries(f"{current_path}/{name}")
-                else:
-                    files += 1
-
-        _count_entries(path)
-        return {"files": files, "dirs": dirs, "total": files + dirs}
 
     # ========== VikingFS Specific Capabilities ==========
 
