@@ -191,7 +191,16 @@ jobs:
 
     - name: Get version from tag
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/cli@}" >> $GITHUB_OUTPUT
+      shell: bash
+      run: |
+        VERSION="${GITHUB_REF#refs/tags/cli@}"
+        DIST_TAG="latest"
+        if [[ "$VERSION" == *-* ]]; then
+          DIST_TAG="${VERSION#*-}"
+          DIST_TAG="${DIST_TAG%%.*}"
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
 
     - name: Download all platform artifacts
       uses: actions/download-artifact@v8
@@ -215,7 +224,7 @@ jobs:
           echo "Publishing $package@$VERSION..."
           chmod +x "$pkg_dir/bin/ov" 2>/dev/null || true
           cd "$pkg_dir"
-          npm publish --access public
+          npm publish --access public --tag "${{ steps.get_version.outputs.dist_tag }}"
           cd "$GITHUB_WORKSPACE"
         done
 
@@ -240,4 +249,4 @@ jobs:
         fi
 
         echo "Publishing @openviking/cli@$VERSION..."
-        npm publish --access public
+        npm publish --access public --tag "${{ steps.get_version.outputs.dist_tag }}"
