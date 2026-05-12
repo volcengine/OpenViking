@@ -128,7 +128,7 @@ class MemoryStore:
             admin_user_id = config.admin_user_id
             user_id = sender_id
             logger.info(f"workspace_id={workspace_id}")
-            logger.info(f"user_id={user_id}")
+            logger.info(f"requested_user_id={user_id}")
             logger.info(f"admin_user_id={admin_user_id}")
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(

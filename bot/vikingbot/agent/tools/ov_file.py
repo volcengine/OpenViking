@@ -238,7 +238,7 @@ class VikingSearchTool(OVFileTool):
     ) -> str:
         try:
             client = await self._get_client(tool_context)
-            search_client = getattr(client, "admin_user_client", client)
+            search_client = client.admin_user_client or client.client
             results = await search_client.search(query, target_uri=target_uri, limit=20)
 
             if not results:
