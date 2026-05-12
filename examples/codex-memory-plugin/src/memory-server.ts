@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { join, resolve as resolvePath } from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
+import { loadClientConfig, loadOvConf, resolveConfig } from "./config.js"
 
 type FindResultItem = {
   uri: string
@@ -38,39 +36,6 @@ type SystemStatus = {
   user?: unknown
 }
 
-function readJson(path: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>
-}
-
-function loadOvConf(): Record<string, unknown> {
-  const defaultPath = join(homedir(), ".openviking", "ov.conf")
-  const configPath = resolvePath(
-    (process.env.OPENVIKING_CONFIG_FILE || defaultPath).replace(/^~/, homedir()),
-  )
-  try {
-    return readJson(configPath)
-  } catch (err) {
-    const code = (err as { code?: string })?.code
-    const detail = code === "ENOENT" ? `Config file not found: ${configPath}` : `Invalid config file: ${configPath}`
-    process.stderr.write(`[openviking-memory] ${detail}\n`)
-    process.exit(1)
-  }
-}
-
-function str(value: unknown, fallback: string): string {
-  if (typeof value === "string" && value.trim()) return value.trim()
-  return fallback
-}
-
-function num(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return fallback
-}
-
 function md5Short(value: string): string {
   return createHash("md5").update(value).digest("hex").slice(0, 12)
 }
@@ -92,21 +57,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-const ovConf = loadOvConf()
-const serverConfig = (ovConf.server ?? {}) as Record<string, unknown>
-const host = str(serverConfig.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1")
-const port = Math.floor(num(serverConfig.port, 1933))
-
-const config = {
-  baseUrl: `http://${host}:${port}`,
-  apiKey: str(process.env.OPENVIKING_API_KEY, str(serverConfig.root_api_key, "")),
-  accountId: str(process.env.OPENVIKING_ACCOUNT, str(ovConf.default_account, "default")),
-  userId: str(process.env.OPENVIKING_USER, str(ovConf.default_user, "default")),
-  agentId: str(process.env.OPENVIKING_AGENT_ID, str(ovConf.default_agent, "codex")),
-  timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
-  recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
-  scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, 0.01))),
-}
+const config = resolveConfig(loadOvConf(), loadClientConfig(), process.env)
 
 class OpenVikingClient {
   private runtimeIdentity: { userId: string; agentId: string } | null = null
