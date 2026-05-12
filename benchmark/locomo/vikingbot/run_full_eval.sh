@@ -232,7 +232,7 @@ if [ -n "$RETRY_WRONG" ]; then
     "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20 --engine "$ENGINE"
 
     # 统计结果
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE" --engine "$ENGINE"
 
     echo ""
     echo "=== 错题重跑完成 ==="
@@ -270,7 +270,7 @@ if [ -z "$SAMPLE" ]; then
 
     # 计算结果
     echo "[4/4] 计算结果..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE" --engine "$ENGINE"
 
     echo ""
     echo "=== 全量评测完成 ==="
@@ -462,7 +462,7 @@ PY
     else
         echo "[4/4] Calculating statistics..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE" --engine "$ENGINE"
 
     echo ""
     echo "=== 批量评测完成 ==="

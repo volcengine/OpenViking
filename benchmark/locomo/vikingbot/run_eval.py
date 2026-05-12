@@ -166,9 +166,7 @@ def load_locomo_qa(
         samples = list(enumerate(data))
 
     for data_idx, sample in samples:
-        raw_sample_id = sample.get("sample_id", "")
-        sample_id = f"sample_{data_idx}" if engine == "vikingbot" else raw_sample_id
-        storage_user_id = f"sample_{data_idx}" if engine == "openviking" else ""
+        sample_id = f"sample_{data_idx}"
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
         conv = sample.get("conversation", {})
@@ -192,7 +190,6 @@ def load_locomo_qa(
             qa_list.append(
                 {
                     "sample_id": sample_id,
-                    "storage_user_id": storage_user_id,
                     "question_id": question_id,
                     "question_index": question_index,
                     "question": qa["question"],
@@ -216,7 +213,6 @@ def load_locomo_qa(
                 qa_list.append(
                     {
                         "sample_id": sample_id,
-                        "storage_user_id": storage_user_id,
                         "question_id": question_id,
                         "question_index": q_idx,
                         "question": qa["question"],
@@ -473,18 +469,16 @@ def run_openviking_single_search(
     question: str,
     question_time: str | None = None,
     sample_id: str | None = None,
-    storage_user_id: str | None = None,
     question_id: str | None = None,
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
     exclude_facts: bool = False,
 ) -> tuple[str, dict, float, int, list, list]:
     """执行单轮 search + rerank + answer，返回回答、token、耗时、迭代次数、工具和检索轨迹"""
     start_time = time.time()
-    retrieval_user = storage_user_id or sample_id
-    client = SyncHTTPClient(agent_id=question_id, user=retrieval_user, timeout=300)
+    client = SyncHTTPClient(agent_id=question_id, user=sample_id, timeout=300)
     try:
         client.initialize()
-        target_uri = f"viking://user/{retrieval_user or 'default'}/memories"
+        target_uri = f"viking://user/{sample_id or 'default'}/memories"
         search_result = client.find(
             question,
             target_uri=target_uri,
@@ -901,7 +895,6 @@ def main():
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
         sample_id = qa_item.get("sample_id")
-        storage_user_id = qa_item.get("storage_user_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
@@ -922,7 +915,6 @@ def main():
                 question,
                 question_time,
                 sample_id,
-                storage_user_id,
                 question_id,
                 args.single_search_context_limit,
                 exclude_facts=args.exclude_facts,
