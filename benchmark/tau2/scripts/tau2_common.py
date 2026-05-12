@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -111,6 +113,76 @@ def tau2_repo(config: dict[str, Any]) -> Path:
     if not raw:
         raise ValueError("paths.tau2_repo is required")
     return resolve_path(raw)
+
+
+def tau2_cli(config: dict[str, Any]) -> str:
+    return str(config.get("paths", {}).get("tau2_cli") or "tau2")
+
+
+def _git_commit(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def tau2_context(config: dict[str, Any]) -> dict[str, Any]:
+    repo = tau2_repo(config)
+    cli = tau2_cli(config)
+    return {
+        "tau2_repo": str(repo),
+        "tau2_repo_exists": repo.exists(),
+        "tau2_commit": _git_commit(repo),
+        "tau2_cli": cli,
+        "tau2_cli_resolved": shutil.which(cli),
+    }
+
+
+def user_simulator_policy(config: dict[str, Any]) -> str:
+    policy = config.get("eval", {}).get("user_simulator_policy", "official")
+    policy = str(policy)
+    if policy not in {"official", "confirmation_aware"}:
+        raise ValueError(
+            "eval.user_simulator_policy must be 'official' or 'confirmation_aware'"
+        )
+    return policy
+
+
+def simulator_policy_report(config: dict[str, Any]) -> dict[str, Any]:
+    policy = user_simulator_policy(config)
+    repo = tau2_repo(config)
+    prompt_paths = [
+        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines.md",
+        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines_tools.md",
+    ]
+    prompt_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in prompt_paths if path.is_file()
+    )
+    confirmation_aware_prompt = (
+        "do not emit" in prompt_text
+        and "###STOP###" in prompt_text
+        and "confirm" in prompt_text.lower()
+    )
+    supported = policy == "official" or confirmation_aware_prompt
+    return {
+        "user_simulator_policy": policy,
+        "supported": supported,
+        "confirmation_aware_prompt_detected": confirmation_aware_prompt,
+        "prompt_files": [str(path) for path in prompt_paths],
+        "claim_boundary": (
+            "official_tau2_user_simulator"
+            if policy == "official"
+            else "requires_tau2_confirmation_aware_user_simulator_prompt"
+        ),
+    }
 
 
 def split_file(config: dict[str, Any], domain: str) -> Path:

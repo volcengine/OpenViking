@@ -15,7 +15,14 @@ benchmark:
 
 paths:
   tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
+  tau2_cli: ${TAU2_CLI:-tau2}
   output_dir: benchmark/tau2/result
+
+eval:
+  # The runner default is official if this field is omitted. The OpenViking
+  # memory benchmark config opts into the confirmation-aware TAU-2 prompt when
+  # the referenced TAU-2 checkout contains that upstream fix.
+  user_simulator_policy: confirmation_aware
 
 model:
   agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}

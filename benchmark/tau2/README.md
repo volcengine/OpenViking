@@ -16,9 +16,11 @@ Category rerank and other harness-only diagnostics are not migrated here yet.
 benchmark/tau2/
 ├── config/
 │   ├── baseline.yaml
+│   ├── official.yaml
 │   └── prewrite.yaml
 ├── scripts/
 │   ├── run_eval.py
+│   ├── setup_tau2_repo.sh
 │   └── tau2_common.py
 └── run_full_eval.sh
 ```
@@ -26,6 +28,31 @@ benchmark/tau2/
 Generated artifacts are written to `benchmark/tau2/result/<run_id>/`.
 
 ## Quick Start
+
+This benchmark delegates task simulation and scoring to an external TAU-2
+checkout. Point the runner at that checkout and CLI explicitly when they are not
+on the default path:
+
+```bash
+export TAU2_REPO=/path/to/tau2-bench
+export TAU2_CLI=/path/to/tau2
+```
+
+For a local one-command setup, clone and install TAU-2 into ignored benchmark
+directories:
+
+```bash
+benchmark/tau2/scripts/setup_tau2_repo.sh
+source benchmark/tau2/.env.tau2
+```
+
+Use `TAU2_REF` or `--ref` when you need a TAU-2 branch that already contains the
+confirmation-aware user simulator prompt:
+
+```bash
+benchmark/tau2/scripts/setup_tau2_repo.sh --ref <branch-or-commit>
+source benchmark/tau2/.env.tau2
+```
 
 Plan the default benchmark without running TAU-2:
 
@@ -35,6 +62,18 @@ python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baselin
 
 Add `--preflight` or `--strict-preflight` when you want the runner to write a
 small environment/config check next to the run plan.
+
+After setup, verify the local TAU-2 link and write a one-cell run plan:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/baseline.yaml \
+  --strict-preflight \
+  --domain retail \
+  --strategy-id no_memory \
+  --task-id 5 \
+  --repeat-count 1
+```
 
 Plan a one-cell upstream TAU-2 smoke:
 
@@ -60,6 +99,21 @@ and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
 The initial no-memory cells use upstream TAU-2 CLI flags only. OpenViking memory
 cells are kept in the same plan, but marked adapter-pending until the TAU-2
 agent adapter is wired in this benchmark directory.
+
+## User Simulator Policy
+
+The runner default is the official TAU-2 user simulator if
+`eval.user_simulator_policy` is omitted. The bundled OpenViking memory benchmark
+config sets `confirmation_aware`, because a memory benchmark should not treat
+user confirmation as task completion before the backend write has happened.
+
+`confirmation_aware` does not monkey-patch TAU-2 from this directory. It requires
+the configured `TAU2_REPO` to contain the corresponding upstream TAU-2 simulator
+prompt fix. `--strict-preflight` fails fast when that prompt is not detected, so
+the artifact cannot silently claim confirmation-aware semantics while running an
+older official simulator.
+
+Use `config/official.yaml` when you need an official-user-simulator parity run.
 
 ## Evidence Boundary
 

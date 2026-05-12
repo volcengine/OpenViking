@@ -8,7 +8,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tau2_common import domains, load_config, output_dir, run_id, split_file, strategy_ids, tau2_repo, write_json
+from tau2_common import (
+    domains,
+    load_config,
+    output_dir,
+    run_id,
+    simulator_policy_report,
+    split_file,
+    strategy_ids,
+    tau2_cli,
+    tau2_context,
+    tau2_repo,
+    user_simulator_policy,
+    write_json,
+)
 
 
 def _tau2_command(
@@ -27,7 +40,7 @@ def _tau2_command(
         return None
 
     command = [
-        "tau2",
+        tau2_cli(config),
         "run",
         "--domain",
         domain,
@@ -76,6 +89,7 @@ def _build_plan(
     repeat_count_override: int | None,
 ) -> dict[str, Any]:
     repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 4))
+    policy_report = simulator_policy_report(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
         unknown = selected_strategy_ids - set(strategy_ids(config))
@@ -113,6 +127,8 @@ def _build_plan(
                         "memory_backend": strategy.get("memory_backend"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
+                        "user_simulator_policy": user_simulator_policy(config),
+                        "user_simulator_policy_supported": policy_report["supported"],
                         "split_file": str(split_path),
                         "command": command,
                     }
@@ -123,12 +139,20 @@ def _build_plan(
         "status": "planned",
         "strategy_ids": strategy_ids(config),
         "domains": plan_domains,
+        "tau2": tau2_context(config),
+        "simulator_policy": policy_report,
         "cell_count": len(cells),
         "cells": cells,
     }
 
 
 def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
+    policy_report = plan.get("simulator_policy") or {}
+    if not policy_report.get("supported", False):
+        raise RuntimeError(
+            "configured user simulator policy is not supported by this TAU-2 checkout: "
+            f"{policy_report}"
+        )
     rows = []
     for cell in plan["cells"]:
         if not cell.get("executable"):
@@ -162,6 +186,17 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
 
 def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     errors: list[str] = []
+    tau2_info = tau2_context(config)
+    policy_report = simulator_policy_report(config)
+    if strict and not tau2_info["tau2_repo_exists"]:
+        errors.append(f"missing TAU-2 repo: {tau2_info['tau2_repo']}")
+    if strict and not tau2_info["tau2_cli_resolved"]:
+        errors.append(f"missing TAU-2 CLI: {tau2_info['tau2_cli']}")
+    if strict and not policy_report["supported"]:
+        errors.append(
+            "configured confirmation-aware user simulator policy requires a TAU-2 "
+            f"checkout with the prompt fix: {policy_report['prompt_files']}"
+        )
     split_rows = []
     for domain in domains(config):
         path = split_file(config, domain)
@@ -180,7 +215,8 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     report = {
         "status": "failed" if errors else "ok",
         "strict": strict,
-        "tau2_repo": str(tau2_repo(config)),
+        "tau2": tau2_info,
+        "simulator_policy": policy_report,
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,
