@@ -220,9 +220,7 @@ class TestApplyStrPatch:
     def test_simple_replace(self):
         """Simple replace."""
         original = "hello world"
-        patch = StrPatch(
-            blocks=[SearchReplaceBlock(search="hello world", replace="hello there")]
-        )
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="hello world", replace="hello there")])
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"

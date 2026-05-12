@@ -488,7 +488,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         return await asyncio.gather(*tasks)
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
-
         refetch_uris = {}
         for operation in operations.upsert_operations:
             for uri in operation.uris:

@@ -450,7 +450,7 @@ class tracer:
 
                         return result
                     except Exception as e:
-                        self.error("e",e=e)
+                        self.error("e", e=e)
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise

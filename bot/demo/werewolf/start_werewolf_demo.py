@@ -206,7 +206,11 @@ def prepare_workspace(workspace: Path) -> None:
 
 
 def validate_assets() -> None:
-    missing = [str(path) for path in (SOUL_GOD_PATH, SOUL_PLAYER_PATH, WEREWOLF_SERVER_PATH) if not path.exists()]
+    missing = [
+        str(path)
+        for path in (SOUL_GOD_PATH, SOUL_PLAYER_PATH, WEREWOLF_SERVER_PATH)
+        if not path.exists()
+    ]
     if missing:
         raise FileNotFoundError("Missing required demo files: " + ", ".join(missing))
 

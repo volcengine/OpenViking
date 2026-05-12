@@ -66,9 +66,6 @@ def render_template(
     return jinja_template.render(**template_vars).strip()
 
 
-
-
-
 def generate_uri(
     memory_type: MemoryTypeSchema,
     fields: Dict[str, Any],
@@ -138,9 +135,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
     return True
 
 
-
-
-
 def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     """
     Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
@@ -204,7 +198,6 @@ def is_uri_allowed(
     return False
 
 
-
 from openviking.session.memory.utils.model import model_to_dict
 
 
@@ -231,16 +224,12 @@ def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> 
     return uri_fields
 
 
-
-
-
 def supplement_operation_uris(
     operations: ResolvedOperations,
     registry: MemoryTypeRegistry,
     extract_context: ExtractContext = None,
     isolation_handler: MemoryIsolationHandler = None,
 ):
-
     logger.info(f"[supplement_operation_uris] isolation_handler: {isolation_handler}")
     for operation in operations.upsert_operations:
         memory_type_schema = registry.get(operation.memory_type)

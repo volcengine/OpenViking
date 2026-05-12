@@ -640,16 +640,15 @@ class TestParseAsyncIntegration:
         mock_result = MagicMock()
         mock_result.source_format = "feishu_docx"
         mock_result.meta = {"feishu_token": "larkoffice123"}
-        
+
         async def _mock_parse(*a, **kw):
             return mock_result
-            
+
         parser.parse = _mock_parse
 
         result = asyncio.get_event_loop().run_until_complete(
             parser.parse_content(
-                content="", 
-                source_path="https://bytedance.larkoffice.com/wiki/larkoffice123"
+                content="", source_path="https://bytedance.larkoffice.com/wiki/larkoffice123"
             )
         )
 

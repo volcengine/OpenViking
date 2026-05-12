@@ -170,8 +170,7 @@ class TestNormalizeZipFilenames:
             # After normalization, the name should be repaired to CJK
             repaired = zf.infolist()[0]
             assert repaired.filename == cjk_name, (
-                f"Expected filename to be repaired to {cjk_name!r}, "
-                f"got {repaired.filename!r}"
+                f"Expected filename to be repaired to {cjk_name!r}, got {repaired.filename!r}"
             )
 
 
@@ -192,11 +191,13 @@ class TestSafeExtractZipNormal:
     def test_extracts_nested_directories(self, tmp_path: Path) -> None:
         dest = tmp_path / "out"
         dest.mkdir()
-        data = _make_zip_bytes({
-            "src/main.py": "print('hello')",
-            "src/utils/helper.py": "pass",
-            "README.md": "# Test",
-        })
+        data = _make_zip_bytes(
+            {
+                "src/main.py": "print('hello')",
+                "src/utils/helper.py": "pass",
+                "README.md": "# Test",
+            }
+        )
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             safe_extract_zip(zf, dest)
         assert (dest / "src" / "main.py").read_text() == "print('hello')"
@@ -229,12 +230,14 @@ class TestSafeExtractZipNormal:
     def test_handles_special_characters_in_filenames(self, tmp_path: Path) -> None:
         dest = tmp_path / "out"
         dest.mkdir()
-        data = _make_zip_bytes({
-            "spaces in name.txt": "content",
-            "file (1).txt": "content",
-            "file-with-dashes.txt": "content",
-            "file_with_underscores.txt": "content",
-        })
+        data = _make_zip_bytes(
+            {
+                "spaces in name.txt": "content",
+                "file (1).txt": "content",
+                "file-with-dashes.txt": "content",
+                "file_with_underscores.txt": "content",
+            }
+        )
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             safe_extract_zip(zf, dest)
         assert (dest / "spaces in name.txt").exists()
@@ -302,11 +305,13 @@ class TestSafeExtractZipSlipPrevention:
         """Filenames with dots (not traversal) should be allowed."""
         dest = tmp_path / "out"
         dest.mkdir()
-        data = _make_zip_bytes({
-            ".gitignore": "*.pyc",
-            "src/.env.example": "KEY=val",
-            "dir/file.tar.gz": "data",
-        })
+        data = _make_zip_bytes(
+            {
+                ".gitignore": "*.pyc",
+                "src/.env.example": "KEY=val",
+                "dir/file.tar.gz": "data",
+            }
+        )
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             safe_extract_zip(zf, dest)
         assert (dest / ".gitignore").read_text() == "*.pyc"
@@ -325,10 +330,12 @@ class TestSafeExtractZipSlipPrevention:
         """If the first entry is malicious, no files should be extracted."""
         dest = tmp_path / "out"
         dest.mkdir()
-        data = _make_zip_bytes({
-            "../../evil.txt": "pwned",
-            "safe.txt": "this should not be extracted",
-        })
+        data = _make_zip_bytes(
+            {
+                "../../evil.txt": "pwned",
+                "safe.txt": "this should not be extracted",
+            }
+        )
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             with pytest.raises(ValueError, match="Zip Slip"):
                 safe_extract_zip(zf, dest)

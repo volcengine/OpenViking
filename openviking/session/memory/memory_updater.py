@@ -306,7 +306,6 @@ class MemoryUpdater:
         extract_context: ExtractContext = None,
         isolation_handler: MemoryIsolationHandler = None,
     ) -> MemoryUpdateResult:
-
         result = MemoryUpdateResult()
         viking_fs = self._get_viking_fs()
 

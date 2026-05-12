@@ -48,7 +48,9 @@ class UserPrivacyConfigService:
     async def _ensure_root(self, ctx: RequestContext, category: str, target_key: str) -> None:
         root_uri = self.get_config_root(ctx, category, target_key)
         await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
-        await self._viking_fs.mkdir(history_dir_uri(self._user_space(ctx), category, target_key), exist_ok=True, ctx=ctx)
+        await self._viking_fs.mkdir(
+            history_dir_uri(self._user_space(ctx), category, target_key), exist_ok=True, ctx=ctx
+        )
 
     async def get_meta(
         self, ctx: RequestContext, category: str, target_key: str

@@ -53,9 +53,7 @@ class MemoryStore:
         def get_abstract(m):
             return m.get("abstract", "") if isinstance(m, dict) else getattr(m, "abstract", "")
 
-        filtered_memories = [
-            memory for memory in result if get_score(memory) >= min_score
-        ]
+        filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
 
         user_memories = []
@@ -162,7 +160,10 @@ class MemoryStore:
             if not client:
                 return ""
             result = await client.search_memory(
-                query=current_message, user_ids=search_user_ids, agent_user_id=admin_user_id, limit=30
+                query=current_message,
+                user_ids=search_user_ids,
+                agent_user_id=admin_user_id,
+                limit=30,
             )
             if not result:
                 return ""

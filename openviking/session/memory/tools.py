@@ -82,7 +82,6 @@ def add_tool_call_pair_to_messages(
     )
 
 
-
 class MemoryTool(ABC):
     """
     Abstract base class for memory tools.
@@ -327,7 +326,6 @@ def get_tool(name: str) -> Optional[MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.get(name)
 
 
-
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
@@ -335,7 +333,6 @@ LLM_TOOLS = ["read"]
 def get_tool_schemas() -> List[Dict[str, Any]]:
     """Get tools exposed to LLM in OpenAI function schema format."""
     return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
-
 
 
 # Register default tools

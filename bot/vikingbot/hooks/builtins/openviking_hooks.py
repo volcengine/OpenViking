@@ -40,7 +40,6 @@ class OpenVikingCompactHook(Hook):
         # Use global singleton client
         return await get_global_client()
 
-
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_key.safe_name()
@@ -51,7 +50,9 @@ class OpenVikingCompactHook(Hook):
             client = await self._get_client(context.workspace_id)
 
             # 1. 提交全部的 message 到 admin
-            admin_result = await client.commit(session_id, vikingbot_session.messages, admin_user_id)
+            admin_result = await client.commit(
+                session_id, vikingbot_session.messages, admin_user_id
+            )
 
             # 2. 根据 message 里的 sender_id 进行分组
             messages_by_sender = defaultdict(list)
@@ -68,7 +69,9 @@ class OpenVikingCompactHook(Hook):
 
                 async def commit_with_semaphore(user_id: str, user_messages: list):
                     async with semaphore:
-                        return await client.commit(f"{session_id}_{user_id}", user_messages, user_id)
+                        return await client.commit(
+                            f"{session_id}_{user_id}", user_messages, user_id
+                        )
 
                 user_tasks = []
                 for user_id, user_messages in messages_by_sender.items():
@@ -82,7 +85,7 @@ class OpenVikingCompactHook(Hook):
                 "success": True,
                 "admin_result": admin_result,
                 "user_results": user_results,
-                "users_count": len(messages_by_sender)
+                "users_count": len(messages_by_sender),
             }
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")

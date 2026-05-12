@@ -60,6 +60,7 @@ def _flush_tracer_provider() -> None:
     except Exception as e:
         logger.warning("Failed to flush test tracer provider: %s", e)
 
+
 # ── Conversation fixtures ─────────────────────────────────────────────────────
 
 
@@ -84,8 +85,7 @@ CONV_A_FLIGHT_DUPLICATE: List[Tuple[str, str]] = [
     ),
     (
         "assistant",
-        "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，"
-        "还是保留现有预订？",
+        "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，还是保留现有预订？",
     ),
     ("user", "那就取消 CA1501，改订 MU5101"),
     ("assistant", "[tool_call: cancel_booking(booking_id=CA1501-xyz)] 已取消原预订。"),
@@ -169,7 +169,9 @@ def _run_conversation(client: LocalClient, turns: List[Tuple[str, str]]) -> None
         run_async(client.add_message(session_id=session_id, role=role, content=content))
     logger.info(f"  Committing {len(turns)} messages...")
     result = run_async(client.commit_session(session_id=session_id))
-    task_id = result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
+    task_id = (
+        result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
+    )
     if task_id:
         _wait_for_task(client, task_id)
         logger.info(f"  Done (task {task_id[:8]})")
@@ -282,8 +284,7 @@ class TestAgentMemoryE2E:
         initialized = init_tracer_from_config()
         if initialized is None or not tracer.is_enabled():
             pytest.fail(
-                "failed to initialize tracer from ov.conf; "
-                "please check legacy telemetry.tracer"
+                "failed to initialize tracer from ov.conf; please check legacy telemetry.tracer"
             )
 
         policy = local_test_env["policy"]
@@ -305,7 +306,6 @@ class TestAgentMemoryE2E:
                 traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
                 exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
 
-
                 logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
                 _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
 
@@ -322,6 +322,7 @@ class TestAgentMemoryE2E:
             if client is not None:
                 run_async(client.close())
             _flush_tracer_provider()
+
 
 class TestAgentMemorySchemas:
     """Unit tests for agent memory schema filtering — no integration environment needed."""
@@ -341,4 +342,3 @@ class TestAgentMemorySchemas:
         assert "experiences" not in schema_types, (
             "experiences schema must not appear in user memory extraction"
         )
-

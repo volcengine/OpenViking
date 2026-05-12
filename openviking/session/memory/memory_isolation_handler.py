@@ -81,7 +81,6 @@ class MemoryIsolationHandler:
         )
 
     def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
-
         user_ids = set()
         agent_ids = set()
 

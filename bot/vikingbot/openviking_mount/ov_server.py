@@ -488,7 +488,6 @@ async def main_test():
 
 
 async def account_test():
-
     client = ov.AsyncHTTPClient(
         url="http://localhost:1933",
         api_key="",

@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || \
+    defined(_M_IX86)
 #if defined(_MSC_VER)
 #include <immintrin.h>
 #include <intrin.h>
@@ -28,7 +29,8 @@ struct CpuFeatures {
   bool avx512vl = false;
 };
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || \
+    defined(_M_IX86)
 void cpuid(int regs[4], int leaf, int subleaf) {
 #if defined(_MSC_VER)
   __cpuidex(regs, leaf, subleaf);
@@ -89,7 +91,9 @@ CpuFeatures detect_cpu_features() {
   return features;
 }
 #else
-CpuFeatures detect_cpu_features() { return CpuFeatures{}; }
+CpuFeatures detect_cpu_features() {
+  return CpuFeatures{};
+}
 #endif
 
 std::vector<std::string> get_supported_variants_impl() {
