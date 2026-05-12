@@ -26,13 +26,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact_name: ov-linux-x86_64
             npm_pkg: cli-linux-x64
             npm_os: linux
             npm_cpu: x64
           - os: ubuntu-24.04
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact_name: ov-linux-aarch64
             npm_pkg: cli-linux-arm64
             npm_os: linux
@@ -65,19 +65,27 @@ jobs:
         toolchain: stable
         targets: ${{ matrix.target }}
 
-    - name: Install system dependencies (Linux)
+    # Linux artifacts are produced as fully static musl binaries so they run on
+    # any glibc-flavored distro (CentOS 7/8/Stream 9, RHEL 8/9, Amazon Linux,
+    # Alpine, etc.) — the ubuntu-24.04 runner's glibc 2.39 is newer than
+    # CentOS 7 (2.17) / RHEL 8 (2.28) / RHEL 9 (2.34), so a gnu-linked binary
+    # fails with `version 'GLIBC_2.X' not found`. cargo-zigbuild + zig handle
+    # both x86_64 and aarch64 musl cross-compilation with one toolchain;
+    # ov_cli uses reqwest+rustls-tls so libssl-dev is no longer needed.
+    # Zig is installed via shell to avoid depending on a third-party action
+    # not on the org's allowed-actions list.
+    - name: Install Zig + cargo-zigbuild (Linux musl cross-build)
       if: runner.os == 'Linux'
+      shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libssl-dev
-
-    - name: Install cross-compilation tools (Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+        set -euo pipefail
+        ZIG_VERSION=0.13.0
+        ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+        mkdir -p "$ZIG_DIR"
+        curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" \
+          | tar -xJ --strip-components=1 -C "$ZIG_DIR"
+        echo "$ZIG_DIR" >> "$GITHUB_PATH"
+        cargo install --locked cargo-zigbuild
 
     - name: Cache Cargo registry and index
       uses: actions/cache@v5
@@ -111,7 +119,13 @@ jobs:
         fi
 
     - name: Build CLI
-      run: cargo build --release --target ${{ matrix.target }} -p ov_cli
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          cargo zigbuild --release --target ${{ matrix.target }} -p ov_cli
+        else
+          cargo build --release --target ${{ matrix.target }} -p ov_cli
+        fi
 
     - name: Package platform npm package
       shell: bash
