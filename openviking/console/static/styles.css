@@ -1479,6 +1479,109 @@ body.dragging-output * {
   }
 }
 
+/* Monitor Dashboard */
+.monitor-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.monitor-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.monitor-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.monitor-card-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text);
+}
+
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.health-dot.ok { background: var(--ok, #30c482); }
+.health-dot.error { background: var(--danger, #ff5c5c); }
+
+.monitor-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.monitor-card th {
+  text-align: left;
+  padding: 6px 12px;
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.monitor-card td {
+  padding: 6px 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.monitor-card tr:last-child td {
+  border-bottom: none;
+}
+
+.monitor-card tr.total-row td {
+  font-weight: 600;
+  color: var(--text-strong);
+  border-top: 1px solid var(--border-strong);
+}
+
+.monitor-card .plain-text {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.monitor-card .kv-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+}
+
+.monitor-card .kv-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monitor-card .kv-value {
+  color: var(--text);
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+#monitorRefreshBtn.active {
+  background: var(--ok, #30c482);
+  color: #fff;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
