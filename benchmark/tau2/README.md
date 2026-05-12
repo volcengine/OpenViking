@@ -92,6 +92,24 @@ The initial no-memory cells use upstream TAU-2 CLI flags only. OpenViking memory
 cells are kept in the same plan, but marked adapter-pending until the TAU-2
 agent adapter is wired in this benchmark directory.
 
+## Memory Adapter Boundary
+
+The first PR keeps memory strategies visible in `run_plan.json` without
+pretending they are executable through upstream TAU-2 flags. `no_memory` cells
+can run immediately through the external TAU-2 CLI. OpenViking memory cells are
+planned with corpus / strategy metadata and `adapter_status: pending`; the plan
+also records `non_executable_reason` for those cells.
+
+The next adapter step should register a TAU-2 agent entry point that can:
+
+- train by writing TAU-2 training conversations into OpenViking sessions;
+- evaluate by retrieving OpenViking memory at the configured decision node;
+- emit enough artifact metadata to identify the OpenViking account, agent,
+  corpus, retrieval mode, and simulator policy used by each cell.
+
+Until that adapter exists, `--execute` is expected to fail fast if a selected
+cell needs OpenViking memory.
+
 ## User Simulator Policy
 
 The runner default is the official TAU-2 user simulator if

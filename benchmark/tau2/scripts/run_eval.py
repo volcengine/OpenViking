@@ -116,6 +116,12 @@ def _build_plan(
                     task_ids=task_ids,
                     num_tasks=num_tasks,
                 )
+                non_executable_reason = None
+                if command is None:
+                    non_executable_reason = (
+                        "OpenViking memory strategy requires a TAU-2 agent adapter; "
+                        "this benchmark scaffold only executes upstream TAU-2 no-memory cells."
+                    )
                 cells.append(
                     {
                         "domain": domain,
@@ -131,8 +137,10 @@ def _build_plan(
                         "user_simulator_policy_supported": policy_report["supported"],
                         "split_file": str(split_path),
                         "command": command,
+                        "non_executable_reason": non_executable_reason,
                     }
                 )
+    executable_cell_count = sum(1 for cell in cells if cell["executable"])
     return {
         "schema_version": "openviking.tau2.run_plan.v0",
         "run_id": configured_run_id,
@@ -142,6 +150,8 @@ def _build_plan(
         "tau2": tau2_context(config),
         "simulator_policy": policy_report,
         "cell_count": len(cells),
+        "executable_cell_count": executable_cell_count,
+        "pending_cell_count": len(cells) - executable_cell_count,
         "cells": cells,
     }
 
