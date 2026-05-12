@@ -31,6 +31,7 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
+from openviking.storage.expr import PathScope
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -432,6 +433,10 @@ class VikingFS:
         Acquires a path lock, deletes VectorDB records, then FS files.
         Raises ResourceBusyError when the target is locked by an ongoing
         operation (e.g. semantic processing).
+
+        Returns:
+            Dict with 'estimated_deleted_count' indicating the estimated number
+            of nodes deleted from vector index.
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
@@ -439,6 +444,23 @@ class VikingFS:
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+
+        async def _estimate_deleted_count(
+            target_path: str, real_ctx: RequestContext
+        ) -> int:
+            """Estimate number of nodes to be deleted using vector index."""
+            vector_store = self._get_vector_store()
+            if not vector_store:
+                return 0
+            try:
+                target_canonical_uri = canonicalize_uri(
+                    self._path_to_uri(target_path, ctx=real_ctx), real_ctx
+                )
+                filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+                return await vector_store.count(filter=filter_expr, ctx=real_ctx)
+            except Exception as e:
+                logger.warning(f"[VikingFS] Failed to count nodes before delete: {e}")
+                return 0
 
         # Check existence and determine lock strategy
         try:
@@ -453,9 +475,11 @@ class VikingFS:
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
+            real_ctx = self._ctx_or_default(ctx)
+            estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
-            return {}
+            return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
             if not recursive:
@@ -479,6 +503,8 @@ class VikingFS:
             ):
                 uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
                 uris_to_delete.append(target_uri)
+                real_ctx = self._ctx_or_default(ctx)
+                estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
                 try:
                     result = self.agfs.rm(path, recursive=recursive)
@@ -493,6 +519,11 @@ class VikingFS:
                             f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
                         )
                     raise
+                # Add estimated_deleted_count to the result
+                if isinstance(result, dict):
+                    result["estimated_deleted_count"] = estimated_count
+                else:
+                    result = {"estimated_deleted_count": estimated_count}
                 return result
         except LockAcquisitionError:
             raise ResourceBusyError(f"Resource is being processed: {uri}")
@@ -945,19 +976,35 @@ class VikingFS:
         """
         File/directory information.
 
-        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'isLocked': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
+        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'isLocked': False, 'count': 42, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
 
         Extra field:
             isLocked (bool): Whether the path is currently held by a path lock
                 (either the path itself or any ancestor directory). Returns
                 False when the LockManager is not initialized or the lookup
                 fails.
+            count (int): For directories, the number of nodes in the vector index
+                under this directory (including subdirectories). For files, this
+                field is not included.
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         result = self.agfs.stat(path)
         if isinstance(result, dict):
             result["isLocked"] = self._is_path_locked(path)
+            # Add count for directories if vector store available
+            if result.get("isDir", False):
+                try:
+                    vector_store = self._get_vector_store()
+                    if vector_store:
+                        real_ctx = self._ctx_or_default(ctx)
+                        target_canonical_uri = canonicalize_uri(
+                            self._path_to_uri(path, ctx=real_ctx), real_ctx
+                        )
+                        filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+                        result["count"] = await vector_store.count(filter=filter_expr, ctx=real_ctx)
+                except Exception as e:
+                    logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
 
     def _is_path_locked(self, path: str) -> bool:

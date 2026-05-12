@@ -63,6 +63,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
+| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
@@ -195,6 +196,12 @@ openviking find "invoice" --after 7d
 
 # 带限制数量
 openviking find "how to authenticate users" --limit 20
+
+# 限定层级范围 (仅 L0)
+openviking find "how to authenticate users" --level 0
+
+# 限定层级范围 (L1 和 L2)，使用短选项
+openviking find "how to authenticate users" -L 1,2
 ```
 
 **响应示例**
@@ -274,6 +281,7 @@ openviking find "how to authenticate users" --limit 20
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
+| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
@@ -363,6 +371,12 @@ openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
 # 不带会话的搜索（仍进行意图分析）
 openviking search "how to implement OAuth 2.0 authorization code flow"
+
+# 限定层级范围（仅 L0）
+openviking search "best practices" --level 0
+
+# 限定层级范围（L1 和 L2），使用短选项
+openviking search "how to implement OAuth" -L 1,2
 ```
 
 **响应示例**

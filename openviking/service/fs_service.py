@@ -157,11 +157,11 @@ class FSService:
         directory_uri = VikingURI(abstract_uri).parent.uri
         return directory_uri, abstract_uri
 
-    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> None:
+    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
-        await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        return await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""

@@ -421,7 +421,7 @@ openviking tree viking://resources/my-project/
 
 ### stat()
 
-Get file or directory status information.
+Get file or directory status information. For directories, returns the count of items under the directory.
 
 **Parameters**
 
@@ -435,6 +435,11 @@ Get file or directory status information.
 info = client.stat("viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
+
+# For directories, returns item count
+dir_info = client.stat("viking://resources/docs")
+if dir_info.get('isDir'):
+    print(f"Item count: {dir_info.get('count')}")
 ```
 
 **HTTP API**
@@ -452,9 +457,10 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 
 ```bash
 openviking stat viking://resources/my-project/docs/api.md
+openviking stat viking://resources/my-project/docs
 ```
 
-**Response**
+**Response (File)**
 
 ```json
 {
@@ -472,7 +478,28 @@ openviking stat viking://resources/my-project/docs/api.md
 }
 ```
 
+**Response (Directory)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "docs",
+    "size": 4096,
+    "mode": 16877,
+    "modTime": "2024-01-01T00:00:00Z",
+    "isDir": true,
+    "isLocked": false,
+    "uri": "viking://resources/docs",
+    "count": 42
+  },
+  "time": 0.1
+}
+```
+
 The `isLocked` field reports whether the path is currently held by a path lock — either the path itself has a valid `.path.ovlock`, or any ancestor directory holds a SUBTREE lock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+
+The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
 ---
 
@@ -533,7 +560,7 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 
 ### rm()
 
-Remove file or directory.
+Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
 Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
@@ -552,7 +579,9 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 client.rm("viking://resources/docs/old.md")
 
 # Remove directory recursively
-client.rm("viking://resources/old-project/", recursive=True)
+result = client.rm("viking://resources/old-project/", recursive=True)
+if 'estimated_deleted_count' in result:
+    print(f"Deleted {result['estimated_deleted_count']} items")
 ```
 
 **HTTP API**
@@ -577,7 +606,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 openviking rm viking://resources/old.md [--recursive]
 ```
 
-**Response**
+**Response (Single file)**
 
 ```json
 {
@@ -588,6 +617,21 @@ openviking rm viking://resources/old.md [--recursive]
   "time": 0.1
 }
 ```
+
+**Response (Recursive delete)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/old-project/",
+    "estimated_deleted_count": 42
+  },
+  "time": 0.1
+}
+```
+
+The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
 ---
 
