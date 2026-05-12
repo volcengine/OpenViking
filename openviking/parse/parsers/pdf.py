@@ -306,54 +306,57 @@ class PDFParser(BaseParser):
                     bookmarks_by_page[page].append(bm)
 
                 for page_num, page in enumerate(pdf.pages, 1):
-                    # Inject headings before page text
-                    page_bookmarks = bookmarks_by_page.get(page_num, [])
-                    for bm in page_bookmarks:
-                        heading_prefix = "#" * bm["level"]
-                        parts.append(f"\n{heading_prefix} {bm['title']}\n")
+                    try:
+                        # Inject headings before page text
+                        page_bookmarks = bookmarks_by_page.get(page_num, [])
+                        for bm in page_bookmarks:
+                            heading_prefix = "#" * bm["level"]
+                            parts.append(f"\n{heading_prefix} {bm['title']}\n")
 
-                    # Extract text
-                    text = page.extract_text()
-                    if text and text.strip():
-                        # Add page marker as HTML comment
-                        parts.append(f"<!-- Page {page_num} -->\n{text.strip()}")
-                        meta["pages_processed"] += 1
+                        # Extract text
+                        text = page.extract_text()
+                        if text and text.strip():
+                            # Add page marker as HTML comment
+                            parts.append(f"<!-- Page {page_num} -->\n{text.strip()}")
+                            meta["pages_processed"] += 1
 
-                    # Extract tables
-                    tables = page.extract_tables()
-                    for table_idx, table in enumerate(tables or []):
-                        if table and len(table) > 0:
-                            md_table = self._format_table_markdown(table)
-                            if md_table:
-                                parts.append(
-                                    f"<!-- Page {page_num} Table {table_idx + 1} -->\n{md_table}"
+                        # Extract tables
+                        tables = page.extract_tables()
+                        for table_idx, table in enumerate(tables or []):
+                            if table and len(table) > 0:
+                                md_table = self._format_table_markdown(table)
+                                if md_table:
+                                    parts.append(
+                                        f"<!-- Page {page_num} Table {table_idx + 1} -->\n{md_table}"
+                                    )
+                                    meta["tables_extracted"] += 1
+
+                        # Extract images
+                        images = page.images
+                        for img_idx, img in enumerate(images or []):
+                            try:
+                                # Extract image using underlying PDF object
+                                image_obj = self._extract_image_from_page(page, img)
+                                if image_obj:
+                                    # Save image
+                                    filename = f"page{page_num}_img{img_idx + 1}"
+                                    image_path = storage.save_image(
+                                        resource_name, image_obj, filename=filename
+                                    )
+
+                                    # Generate relative path for markdown
+                                    rel_path = image_path.relative_to(Path.cwd())
+                                    parts.append(
+                                        f"<!-- Page {page_num} Image {img_idx + 1} -->\n"
+                                        f"![Page {page_num} Image {img_idx + 1}]({rel_path})"
+                                    )
+                                    meta["images_extracted"] += 1
+                            except Exception as img_err:
+                                logger.warning(
+                                    f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
                                 )
-                                meta["tables_extracted"] += 1
-
-                    # Extract images
-                    images = page.images
-                    for img_idx, img in enumerate(images or []):
-                        try:
-                            # Extract image using underlying PDF object
-                            image_obj = self._extract_image_from_page(page, img)
-                            if image_obj:
-                                # Save image
-                                filename = f"page{page_num}_img{img_idx + 1}"
-                                image_path = storage.save_image(
-                                    resource_name, image_obj, filename=filename
-                                )
-
-                                # Generate relative path for markdown
-                                rel_path = image_path.relative_to(Path.cwd())
-                                parts.append(
-                                    f"<!-- Page {page_num} Image {img_idx + 1} -->\n"
-                                    f"![Page {page_num} Image {img_idx + 1}]({rel_path})"
-                                )
-                                meta["images_extracted"] += 1
-                        except Exception as img_err:
-                            logger.warning(
-                                f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
-                            )
+                    finally:
+                        self._release_page_cache(page)
 
             if not parts:
                 logger.warning(f"No content extracted from {pdf_path}")
@@ -374,6 +377,24 @@ class PDFParser(BaseParser):
         except Exception as e:
             logger.error(f"pdfplumber conversion failed: {e}")
             raise
+
+    @staticmethod
+    def _release_page_cache(page: Any) -> None:
+        """Release pdfplumber/pdfminer per-page caches when available."""
+        close = getattr(page, "close", None)
+        if callable(close):
+            try:
+                close()
+                return
+            except Exception:
+                pass
+
+        flush_cache = getattr(page, "flush_cache", None)
+        if callable(flush_cache):
+            try:
+                flush_cache()
+            except Exception:
+                pass
 
     def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
         """Extract bookmark structure from PDF outlines.
@@ -472,10 +493,13 @@ class PDFParser(BaseParser):
             size_counter: Counter = Counter()
             sample_pages = pdf.pages[::5]
             for page in sample_pages:
-                for char in page.chars:
-                    if char["text"].strip():
-                        rounded = round(char["size"] * 2) / 2
-                        size_counter[rounded] += 1
+                try:
+                    for char in page.chars:
+                        if char["text"].strip():
+                            rounded = round(char["size"] * 2) / 2
+                            size_counter[rounded] += 1
+                finally:
+                    self._release_page_cache(page)
 
             if not size_counter:
                 return []
@@ -533,35 +557,38 @@ class PDFParser(BaseParser):
                 )
 
             for page in pdf.pages:
-                page_num = page.page_number + 1
-                chars = sorted(page.chars, key=lambda c: (c["top"], c["x0"]))
+                try:
+                    page_num = page.page_number + 1
+                    chars = sorted(page.chars, key=lambda c: (c["top"], c["x0"]))
 
-                current_line_chars: list = []
-                current_top = None
+                    current_line_chars: list = []
+                    current_top = None
 
-                for char in chars:
-                    # Performance: headings won't appear in bottom 70% of page
-                    if char["top"] > page.height * 0.3:
-                        flush_line(current_line_chars, page_num)
-                        current_line_chars = []
-                        break
+                    for char in chars:
+                        # Performance: headings won't appear in bottom 70% of page
+                        if char["top"] > page.height * 0.3:
+                            flush_line(current_line_chars, page_num)
+                            current_line_chars = []
+                            break
 
-                    rounded_size = round(char["size"] * 2) / 2
-                    if rounded_size not in size_to_level:
-                        flush_line(current_line_chars, page_num)
-                        current_line_chars = []
-                        current_top = None
-                        continue
+                        rounded_size = round(char["size"] * 2) / 2
+                        if rounded_size not in size_to_level:
+                            flush_line(current_line_chars, page_num)
+                            current_line_chars = []
+                            current_top = None
+                            continue
 
-                    # Same line check (top offset < 2pt)
-                    if current_top is not None and abs(char["top"] - current_top) > 2:
-                        flush_line(current_line_chars, page_num)
-                        current_line_chars = []
+                        # Same line check (top offset < 2pt)
+                        if current_top is not None and abs(char["top"] - current_top) > 2:
+                            flush_line(current_line_chars, page_num)
+                            current_line_chars = []
 
-                    current_line_chars.append(char)
-                    current_top = char["top"]
+                        current_line_chars.append(char)
+                        current_top = char["top"]
 
-                flush_line(current_line_chars, page_num)
+                    flush_line(current_line_chars, page_num)
+                finally:
+                    self._release_page_cache(page)
 
             # Step 4: Deduplicate - filter headers appearing on >30% of pages
             title_page_count: Counter = Counter(h["title"] for h in headings)
