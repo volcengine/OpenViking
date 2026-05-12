@@ -258,7 +258,7 @@ class EmbedderBase(ABC):
             finally:
                 elapsed = time.monotonic() - started
                 telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
-                if logger and elapsed >= 1.0:
+                if logger and elapsed >= 3.0:
                     logger.warning(
                         "%s slow call provider=%s model=%s wait_ms=%.2f duration_ms=%.2f",
                         operation_name,

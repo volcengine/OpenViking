@@ -77,9 +77,9 @@ def test_deserialize_full_parses_memory_metadata_timestamps_with_z_suffix():
         }
     )
 
-    body, metadata = deserialize_full(full_content)
+    result = deserialize_full(full_content)
 
-    assert body == "memory body"
-    assert metadata is not None
-    assert metadata["created_at"].isoformat() == "2026-04-17T01:26:14.481000+00:00"
-    assert metadata["updated_at"].isoformat() == "2026-04-17T09:10:11.123456+08:00"
+    assert result.plain_content == "memory body"
+    assert result.memory_fields is not None
+    assert result.memory_fields["created_at"].isoformat() == "2026-04-17T01:26:14.481000+00:00"
+    assert result.memory_fields["updated_at"].isoformat() == "2026-04-17T09:10:11.123456+08:00"

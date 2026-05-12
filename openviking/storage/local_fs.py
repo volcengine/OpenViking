@@ -6,6 +6,7 @@ import os
 import re
 import zipfile
 
+from openviking.core.directories import get_context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
@@ -132,11 +133,17 @@ async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext
                 overview = content.decode("utf-8") if isinstance(content, bytes) else content
         except Exception:
             return
-        await vectorize_directory_meta(dir_uri, abstract, overview, ctx=ctx)
+        await vectorize_directory_meta(
+            dir_uri, abstract, overview, context_type=get_context_type_for_uri(dir_uri), ctx=ctx
+        )
 
     async def index_file(file_uri: str, parent_uri: str, name: str) -> None:
         await vectorize_file(
-            file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx
+            file_path=file_uri,
+            summary_dict={"name": name},
+            parent_uri=parent_uri,
+            context_type=get_context_type_for_uri(file_uri),
+            ctx=ctx,
         )
 
     await asyncio.gather(*(index_dir(dir_uri) for dir_uri in dir_uris))

@@ -4,7 +4,8 @@
 import pytest
 
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
-from openviking.server.identity import RequestContext, Role
+from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
+from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -181,3 +182,93 @@ async def test_skill_read_appends_notice_for_extra_configured_keys(service):
     assert 'api_key: "secret-xyz"' in restored
     assert "[Privacy Config Notice]" in restored
     assert "Configured but not referenced in content: region=cn" in restored
+
+
+@pytest.mark.asyncio
+async def test_privacy_config_service_uses_policy_aware_user_root(service):
+    ctx = RequestContext(
+        user=UserIdentifier("acme", "privacy_user_policy", "demo-agent"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(isolate_user_scope_by_agent=True),
+    )
+    await service.initialize_user_directories(ctx)
+
+    privacy = service.privacy_configs
+    await privacy.upsert(
+        ctx=ctx,
+        category="skill",
+        target_key="policy-skill",
+        values={"api_key": "secret-1"},
+        updated_by=ctx.user.user_id,
+    )
+
+    current = await privacy.get_current(ctx, "skill", "policy-skill")
+    stored = await service.viking_fs.read_file(
+        "viking://user/privacy_user_policy/agent/demo-agent/privacy/skill/policy-skill/current.json",
+        ctx=ctx,
+    )
+
+    assert current is not None
+
+
+@pytest.mark.asyncio
+async def test_placeholderization_only_replaces_structured_values(monkeypatch):
+    content = """region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod should stay here\n"""
+    result = placeholderize_skill_content_with_blocks(
+        content,
+        "structured-skill",
+        {"region": "cn", "env": "prod"},
+    )
+
+    assert result.replaced_values == {"region": "cn", "env": "prod"}
+    assert result.sanitized_content == (
+        "region: {{ov_privacy:skill:structured-skill:region}}\n"
+        "notes: region is cn in docs\n"
+        "default_env={{ov_privacy:skill:structured-skill:env}}\n"
+        "text: prod should stay here\n"
+    )
+
+    async def fake_completion_async(_prompt):
+        return '{"values": {"api_key": "different-secret"}}'
+
+    monkeypatch.setattr(
+        "openviking.privacy.skill_extractor.get_openviking_config",
+        lambda: type("Cfg", (), {"vlm": type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})()})(),
+    )
+
+    content = 'api_key: "secret-xyz"\n'
+    result = await extract_skill_privacy_values(
+        skill_name="unmatched-skill",
+        skill_description="skill with secret",
+        content=content,
+    )
+
+    assert result.values == {}
+    assert result.sanitized_content == content
+    assert result.original_content_blocks == []
+    assert result.replacement_content_blocks == []
+
+
+def test_placeholderization_replaces_end_of_file_values_without_newline():
+    result = placeholderize_skill_content_with_blocks(
+        "api_key=secret-xyz",
+        "eof-skill",
+        {"api_key": "secret-xyz"},
+    )
+
+    assert result.replaced_values == {"api_key": "secret-xyz"}
+    assert result.sanitized_content == "api_key={{ov_privacy:skill:eof-skill:api_key}}"
+
+
+def test_placeholderization_replaces_all_structured_occurrences_for_same_value():
+    result = placeholderize_skill_content_with_blocks(
+        'api_key: "secret"\nbackup=secret\n',
+        "multi-hit-skill",
+        {"api_key": "secret"},
+    )
+
+    assert result.replaced_values == {"api_key": "secret"}
+    assert result.sanitized_content == (
+        'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
+        'backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n'
+    )

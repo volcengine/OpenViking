@@ -4,11 +4,10 @@ export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
   agent_prefix?: string;
-  serverAuthMode?: "api_key" | "trusted";
   apiKey?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
   accountId?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. */
   userId?: string;
   /**
    * Canonical namespace policy. Must match the server-side account namespace
@@ -39,6 +38,13 @@ export type MemoryOpenVikingConfig = {
   /** @deprecated Use recallMaxInjectedChars. */
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  /**
+   * WM v2: number of most-recent messages to keep live after an afterTurn
+   * commit so the next turn still has immediate context. Forwarded to the
+   * server as `keep_recent_count`. Default 10. The compact path ignores this
+   * value and always passes 0.
+   */
+  commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
@@ -57,17 +63,18 @@ const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
-const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_AGENT_PREFIX = "default";
-const DEFAULT_SERVER_AUTH_MODE = "api_key";
+const DEFAULT_AGENT_PREFIX = "";
 
 function resolveAgentPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim();
+    const trimmed = configured.trim();
+    return trimmed === "default" ? DEFAULT_AGENT_PREFIX : trimmed;
   }
   return DEFAULT_AGENT_PREFIX;
 }
@@ -177,6 +184,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
@@ -192,10 +200,6 @@ export const memoryOpenVikingConfigSchema = {
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
-    const rawServerAuthMode =
-      cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
-    const serverAuthMode =
-      rawServerAuthMode === "trusted" ? "trusted" as const : "api_key" as const;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -262,7 +266,6 @@ export const memoryOpenVikingConfigSchema = {
       mode,
       baseUrl: resolvedBaseUrl,
       agent_prefix: resolveAgentPrefix(cfg.agent_prefix),
-      serverAuthMode,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       accountId,
       userId,
@@ -288,12 +291,22 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract === true,
+      recallPreferAbstract:
+        typeof cfg.recallPreferAbstract === "boolean"
+          ? cfg.recallPreferAbstract
+          : DEFAULT_RECALL_PREFER_ABSTRACT,
       recallMaxInjectedChars,
       recallTokenBudget: recallMaxInjectedChars,
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
+      commitKeepRecentCount: Math.max(
+        0,
+        Math.min(
+          1_000,
+          Math.floor(toNumber(cfg.commitKeepRecentCount, DEFAULT_COMMIT_KEEP_RECENT_COUNT)),
+        ),
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
@@ -320,13 +333,8 @@ export const memoryOpenVikingConfigSchema = {
     },
     agent_prefix: {
       label: "Agent Prefix",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent prefix. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
-    },
-    serverAuthMode: {
-      label: "Server Auth Mode",
-      placeholder: DEFAULT_SERVER_AUTH_MODE,
-      help: 'OpenViking auth behavior. "api_key" (default): send X-API-Key when configured, otherwise dev fallback to X-OpenViking-Account/User default/default. "trusted": always send accountId/userId and optionally send apiKey when configured.',
+      placeholder: "optional-prefix",
+      help: 'Optional prefix for OpenViking X-OpenViking-Agent. Empty means use OpenClaw ctx.agentId directly. Non-empty values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]). If ctx.agentId is unavailable, OpenClaw default agent "main" is used.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -337,13 +345,13 @@ export const memoryOpenVikingConfigSchema = {
     accountId: {
       label: "Account ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      help: "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
       advanced: true,
     },
     userId: {
       label: "User ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      help: "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
       advanced: true,
     },
     isolateUserScopeByAgent: {
@@ -443,6 +451,14 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
+    commitKeepRecentCount: {
+      label: "Commit Keep Recent Count",
+      placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
+      advanced: true,
+      help:
+        "Number of most-recent messages to keep live after an afterTurn commit. " +
+        "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

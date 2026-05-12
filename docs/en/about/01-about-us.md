@@ -1,4 +1,4 @@
-# OpenViking Team and Organization
+# Team & Org
 
 ## Project Overview
 

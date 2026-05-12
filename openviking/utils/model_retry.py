@@ -16,6 +16,8 @@ PERMANENT_API_ERROR_PATTERNS = (
     "AccountOverdue",
 )
 
+_PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+
 TRANSIENT_API_ERROR_PATTERNS = (
     "429",
     "500",
@@ -35,6 +37,10 @@ TRANSIENT_API_ERROR_PATTERNS = (
 
 def classify_api_error(error: Exception) -> str:
     """Classify an API error as permanent, transient, or unknown."""
+    for exc in (error, getattr(error, "__cause__", None)):
+        if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
+            return "permanent"
+
     texts = [str(error)]
     if error.__cause__ is not None:
         texts.append(str(error.__cause__))

@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -59,6 +59,7 @@ class OTelExporterConfig(BaseModel):
     endpoint: str = "localhost:4317"  # gRPC default: 4317; HTTP default: 4318
     service_name: str = "openviking-server"
     export_interval_ms: int = 10000
+    headers: Dict[str, str] = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
 

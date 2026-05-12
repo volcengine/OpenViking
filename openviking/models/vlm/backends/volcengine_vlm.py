@@ -114,8 +114,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -147,8 +147,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -318,8 +318,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -359,8 +359,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

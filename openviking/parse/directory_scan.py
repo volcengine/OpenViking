@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
+from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.parsers.constants import IGNORE_DIRS
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.parse.registry import ParserRegistry, get_registry
@@ -183,8 +184,8 @@ def scan_directory(
     """
     Traverse directory tree and classify every file (phase-one validation).
 
-    - Skips directories in IGNORE_DIRS (or ignore_dirs), and skips dot files,
-      symlinks, and empty files (they are not included in any list).
+    - Skips directories in IGNORE_DIRS (or ignore_dirs), gitignored paths,
+      and skips dot files, symlinks, and empty files (they are not included in any list).
     - If include is set, only files whose name matches one of the glob patterns are considered
       (e.g. include="*.pdf,*.md"). If exclude is set, files matching any exclude pattern are
       skipped (e.g. exclude="drafts/" for path prefix, or "*.tmp" for name glob).
@@ -220,6 +221,7 @@ def scan_directory(
     effective_registry = registry if registry is not None else get_registry()
     include_patterns = _parse_patterns(include)
     exclude_patterns = _parse_patterns(exclude)
+    gitignore_matcher = GitignoreMatcher(root)
 
     # Normalize ignore_dirs:
     # - If caller passed a comma-separated string (common from CLI/HTTP),
@@ -235,6 +237,7 @@ def scan_directory(
     result = DirectoryScanResult(root=root)
     for dir_path_str, dir_names, file_names in os.walk(root, topdown=True):
         dir_path = Path(dir_path_str)
+        dir_spec = gitignore_matcher.spec_for_dir(dir_path)
 
         # Prune subdirectories in-place so os.walk won't descend into them
         kept = []
@@ -245,8 +248,16 @@ def scan_directory(
                 skipped_path = str(sub.relative_to(root))
                 skipped_path = _normalize_rel_path(skipped_path)
                 result.skipped.append(f"{skipped_path} ({reason})")
-            else:
-                kept.append(d)
+                continue
+
+            if gitignore_matcher.is_ignored_dir(sub, dir_spec):
+                skipped_path = str(sub.relative_to(root))
+                skipped_path = _normalize_rel_path(skipped_path)
+                result.skipped.append(f"{skipped_path} (gitignore)")
+                continue
+
+            kept.append(d)
+
         dir_names[:] = kept
 
         for name in file_names:
@@ -260,6 +271,9 @@ def scan_directory(
             skip, reason = _should_skip_file(file_path)
             if skip:
                 result.skipped.append(f"{rel_path} ({reason})")
+                continue
+            if gitignore_matcher.is_ignored_file(file_path, dir_spec):
+                result.skipped.append(f"{rel_path} (gitignore)")
                 continue
 
             if include_patterns and not _matches_include(name, include_patterns):

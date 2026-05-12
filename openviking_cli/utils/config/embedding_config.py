@@ -239,6 +239,16 @@ class EmbeddingModelConfig(BaseModel):
             return self.dimension
 
         provider = (self.provider or "").lower()
+        if provider in {"openai", "azure"}:
+            openai_model_dimensions = {
+                "text-embedding-ada-002": 1536,
+                "text-embedding-3-small": 1536,
+                "text-embedding-3-large": 3072,
+            }
+            model_lower = (self.model or "").lower()
+            if model_lower in openai_model_dimensions:
+                return openai_model_dimensions[model_lower]
+
         if provider == "voyage":
             from openviking.models.embedder.voyage_embedders import (
                 get_voyage_model_default_dimension,

@@ -74,7 +74,7 @@
 
 | 维度 | case | 结果 | 说明 |
 |---|---|---|---|
-| `api_key` | `api_key_without_key_dev` | 通过 | `default/default` dev fallback 生效 |
+| `api_key` | `api_key_without_key_dev` | 通过 | 不再合成 `default/default` 租户 header |
 | `api_key` | `personal_token_default` | 通过 | 命中 `DEFAULT_USER_TOKEN_19950` |
 | `api_key` | `agentid_prefix_worker` | 通过 | 实际 agent 值为 `worker_main` |
 | 兼容 | `deprecated_agent_alias` | 通过 | `agentScopeMode=agent` 兼容正常 |
@@ -105,7 +105,7 @@
 
 ## 5. 关键结论
 
-1. 插件侧 `serverAuthMode`、canonical namespace policy 与 `role_id` 透传能力已完成联调验证。
+1. 插件侧 canonical namespace policy、显式租户 header 与 `role_id` 透传能力已完成联调验证。
 2. `afterTurn` 路径可通过 `runtimeContext.senderId` 正确写出 `role_id`。
 3. `memory_store` 路径在工具上下文中无法直接读取 `senderId`，但可稳定通过 `requesterSenderId` 写出 `role_id`。
 4. 在真实机器人私聊与群聊场景中，已确认不同用户会被映射为不同的 `role_id`，且 assistant message 保持 `role_id:null`。

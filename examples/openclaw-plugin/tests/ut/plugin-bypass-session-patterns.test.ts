@@ -39,26 +39,31 @@ function setupPlugin(pluginConfig?: Record<string, unknown>) {
 }
 
 describe("plugin bypass session patterns", () => {
-  it("bypasses before_prompt_build before any OV client work", async () => {
-    const { handlers, logger } = setupPlugin({
+  it("bypasses context-engine assemble before any OV client work", async () => {
+    const { registerContextEngine, logger } = setupPlugin({
       bypassSessionPatterns: ["agent:*:cron:**"],
     });
 
-    const hook = handlers.get("before_prompt_build");
-    expect(hook).toBeTruthy();
+    const factory = registerContextEngine.mock.calls[0]?.[1] as (() => {
+      assemble: (params: {
+        sessionId: string;
+        sessionKey?: string;
+        prompt?: string;
+        messages: Array<{ role: string; content: string }>;
+      }) => Promise<{ messages: Array<{ role: string; content: string }> }>;
+    }) | undefined;
+    expect(factory).toBeTruthy();
+    const engine = factory!();
+    const liveMessages = [{ role: "user", content: "Alice: hi\nBob: hello" }];
 
-    const result = await hook!(
-      {
-        messages: [{ role: "user", content: "Alice: hi\nBob: hello" }],
-        prompt: "Alice: hi\nBob: hello",
-      },
-      {
-        sessionId: "runtime-session",
-        sessionKey: "agent:main:cron:nightly:run:1",
-      },
-    );
+    const result = await engine.assemble({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:cron:nightly:run:1",
+      prompt: "Alice: hi\nBob: hello",
+      messages: liveMessages,
+    });
 
-    expect(result).toBeUndefined();
+    expect(result.messages).toBe(liveMessages);
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("failed to get client"),
     );

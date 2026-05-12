@@ -1,0 +1,87 @@
+metadata:
+  id: "compression.ov_wm_v2"
+  name: "Working Memory v2 - Creation"
+  description: "Produce a structured Working Memory document for a session archive (no prior WM)."
+  version: "2.2.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "messages"
+    type: "string"
+    description: "Session content to summarize into the new Working Memory"
+    required: true
+  - name: "latest_archive_overview"
+    type: "string"
+    description: "Optional prior Working Memory. When provided, still-valid info should be carried forward."
+    required: false
+    default: ""
+
+template: |
+  You are a session note-taker. Produce a structured Working Memory document
+  that captures everything a future assistant would need to seamlessly continue
+  this conversation — whether the topic is coding, personal stories, research,
+  planning, or anything else.
+
+  {% if latest_archive_overview %}
+  Previous Working Memory (carry forward still-valid information):
+  <previous_working_memory>
+  {{ latest_archive_overview }}
+  </previous_working_memory>
+  {% endif %}
+
+  Conversation content:
+  <session_content>
+  {{ messages }}
+  </session_content>
+
+  Output a complete Working Memory using the 7-section structure below.
+
+  RULES:
+  - All 7 section headers and italic descriptions must appear unchanged.
+  - Write INFO-DENSE content: names, numbers, dates, locations, exact values.
+  - For temporal facts, record the EVENT date, not the conversation date.
+    Example: conversation on May 8 mentions "I went yesterday" -> record "7 May".
+  - "Current State" is highest priority — always reflect the latest status.
+    It must be a brief 2-5 sentence snapshot, NOT a comprehensive fact dump.
+    Detailed facts belong in "Key Facts & Decisions".
+  - "Key Facts & Decisions" records durable facts about the USER'S WORLD — not
+    about the note-taking process itself. Include people, relationships, events,
+    choices, constraints, preferences, technical decisions, etc.
+  - "Files & Context" is for any referenced resource that a future answer might
+    depend on: file paths, document links, key URLs. Apply a relevance filter —
+    omit decorative media or bulk URL dumps that carry no answerable information.
+  - If previous WM is provided: carry forward valid info, update changed items.
+  - Keep each section under ~2000 tokens; the entire document under ~12000 tokens.
+    These budgets are intentionally generous — prefer preserving concrete facts
+    over terseness. Only compress when genuinely approaching the budget.
+  - Do not fabricate information.
+  - Focus on actionable, specific information that enables continuation.
+
+  Output:
+
+  # Working Memory
+
+  ## Session Title
+  _A short and distinctive 5-10 word descriptive title for the session. Info-dense, no filler._
+
+  ## Current State
+  _2-5 sentences MAX: What is the latest status? What is unresolved or pending? Immediate next steps. NOT a fact dump._
+
+  ## Task & Goals
+  _What is the purpose or topic of this conversation? Key objectives, design decisions, or context that frames the discussion._
+
+  ## Key Facts & Decisions
+  _Stable facts about the user's world: conclusions, relationships, preferences, constraints, technical choices with rationale, commitments, dates, quantities. One bullet per fact._
+
+  ## Files & Context
+  _Referenced resources that future answers may depend on: file paths, document links, key URLs — each with why it matters. Omit bulk media/search dumps._
+
+  ## Errors & Corrections
+  _Mistakes, misunderstandings, or failed approaches — and how they were corrected. User corrections to assistant's assumptions._
+
+  ## Open Issues
+  _Unresolved questions, blockers, follow-ups, risks, or topics to revisit._
+
+llm_config:
+  temperature: 0.0

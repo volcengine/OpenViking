@@ -57,19 +57,26 @@ class MemoryTypeRegistry:
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load from custom directory (if configured)
+        # Load from custom directory (if configured) - use replace to allow overriding built-in templates
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
             if os.path.exists(custom_dir_expanded):
-                custom_loaded = self.load_from_directory(custom_dir_expanded)
+                custom_loaded = self.load_from_directory(custom_dir_expanded, replace=True)
                 logger.info(
                     f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
                 )
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
-        """Register a memory type."""
+        """Register a memory type. Raises error if already exists."""
+        if memory_type.memory_type in self._types:
+            raise ValueError(f"Duplicate memory type '{memory_type.memory_type}'")
         self._types[memory_type.memory_type] = memory_type
         logger.debug(f"Registered memory type: {memory_type.memory_type}")
+
+    def replace(self, memory_type: MemoryTypeSchema) -> None:
+        """Replace an existing memory type."""
+        self._types[memory_type.memory_type] = memory_type
+        logger.debug(f"Replaced memory type: {memory_type.memory_type}")
 
     def get(self, name: str) -> Optional[MemoryTypeSchema]:
         """Get a memory type by name."""
@@ -122,25 +129,30 @@ class MemoryTypeRegistry:
                 uris.append(dir_path)
         return uris
 
-    def load_from_yaml(self, yaml_path: str) -> None:
+    def load_from_yaml(self, yaml_path: str, replace: bool = False) -> None:
         """
         Load memory type from a YAML file.
 
         Args:
             yaml_path: Path to YAML file
+            replace: If True, replace existing memory type; if False, raise error on duplicate
         """
         with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         memory_type = self._parse_memory_type(data)
-        self.register(memory_type)
+        if replace:
+            self.replace(memory_type)
+        else:
+            self.register(memory_type)
 
-    def load_from_directory(self, dir_path: str) -> int:
+    def load_from_directory(self, dir_path: str, replace: bool = False) -> int:
         """
         Load all YAML files from a directory.
 
         Args:
             dir_path: Directory path
+            replace: If True, replace existing memory types; if False, raise error on duplicate
 
         Returns:
             Number of types loaded
@@ -154,14 +166,14 @@ class MemoryTypeRegistry:
 
         for yaml_file in dir_path_obj.glob("*.yaml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")

@@ -425,6 +425,7 @@ vikingbot gateway
 - Session 和 User 追踪
 - LLM 调用监控
 - Token 使用量追踪
+- 问答效果反馈观测方案：`bot/docs/vikingbot-feedback-observability-design.md`
 
 </details>
 
@@ -596,4 +597,3 @@ which nodejs
 | `ov chat --no-format` | 显示纯文本回复（无 Markdown） |
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
-

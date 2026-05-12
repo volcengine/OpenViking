@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
+from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.parsers.constants import (
     ADDITIONAL_TEXT_EXTENSIONS,
     CODE_EXTENSIONS,
@@ -219,6 +220,7 @@ async def upload_directory(
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
+    gitignore_matcher = GitignoreMatcher(local_dir)
 
     warnings: List[str] = []
 
@@ -227,11 +229,26 @@ async def upload_directory(
     parent_uris: Set[str] = {viking_uri_base}
 
     for root, dirs, files in os.walk(local_dir):
-        dirs[:] = [
-            d for d in dirs if not should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
-        ]
+        dir_path = Path(root)
+        dir_spec = gitignore_matcher.spec_for_dir(dir_path)
+
+        # Prune subdirectories in-place so os.walk won't descend into them
+        kept = []
+        for d in dirs:
+            sub_dir_path = dir_path / d
+            should_skip = should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
+            if should_skip:
+                continue
+
+            if gitignore_matcher.is_ignored_dir(sub_dir_path, dir_spec):
+                continue
+
+            kept.append(d)
+
+        dirs[:] = kept
+
         for file_name in files:
-            file_path = Path(root) / file_name
+            file_path = dir_path / file_name
             should_skip, _ = should_skip_file(
                 file_path,
                 max_file_size=max_file_size,
@@ -239,6 +256,10 @@ async def upload_directory(
             )
             if should_skip:
                 continue
+
+            if gitignore_matcher.is_ignored_file(file_path, dir_spec):
+                continue
+
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
                 safe_rel = _sanitize_rel_path(rel_path_str)

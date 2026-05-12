@@ -314,6 +314,12 @@ class BaseOpenClawCLITest(unittest.TestCase):
             if not is_timeout and not is_empty and not is_tool_result:
                 return response
             if is_timeout:
+                is_subprocess_timeout = isinstance(response, dict) and response.get(
+                    "error", ""
+                ).startswith("命令执行超时")
+                if is_subprocess_timeout:
+                    self.logger.warning("subprocess 超时，不再重试 (auto-recall 上下文可能过大)")
+                    return response
                 reason = "LLM idle timeout"
             elif is_empty:
                 reason = "empty response (no text)"

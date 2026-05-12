@@ -464,18 +464,12 @@ class SemanticProcessor(DequeueHandlerBase):
             if msg.telemetry_id and msg.id:
                 request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
 
-        def _mark_failed(message: str) -> None:
-            if msg.telemetry_id and msg.id:
-                request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, message)
-
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
-            logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
         file_paths: List[str] = []
         for entry in entries:
@@ -589,11 +583,9 @@ class SemanticProcessor(DequeueHandlerBase):
             await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
-            logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
 
         try:
             if msg.telemetry_id and msg.id:

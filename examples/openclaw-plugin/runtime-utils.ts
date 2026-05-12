@@ -1,4 +1,4 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { ChildProcess, ExecSyncOptionsWithStringEncoding, SpawnOptions } from "node:child_process";
 
 const cp: typeof import("node:child_process") = require("node:child_process");
 
@@ -15,9 +15,9 @@ export function launchProcess(
 
 export function runSync(
   command: string,
-  options: { encoding: "utf-8"; shell?: string | boolean; env?: NodeJS.ProcessEnv },
+  options: ExecSyncOptionsWithStringEncoding,
 ): string {
-  return _execSync(command, options) as string;
+  return _execSync(command, options);
 }
 
 const _env = globalThis["process"];

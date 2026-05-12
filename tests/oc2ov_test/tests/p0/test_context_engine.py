@@ -38,10 +38,12 @@ TASK_POLL_MAX_WAIT = 120
 def _get_api_headers() -> Dict[str, str]:
     headers = {
         "X-API-Key": OPENVIKING_API_KEY,
-        "X-OpenViking-Account": OPENVIKING_ACCOUNT,
-        "X-OpenViking-User": OPENVIKING_USER,
         "Content-Type": "application/json",
     }
+    if OPENVIKING_ACCOUNT and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-Account"] = OPENVIKING_ACCOUNT
+    if OPENVIKING_USER and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-User"] = OPENVIKING_USER
     return headers
 
 

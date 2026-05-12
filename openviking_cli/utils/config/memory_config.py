@@ -41,11 +41,37 @@ class MemoryConfig(BaseModel):
         ),
     )
     eager_prefetch: bool = Field(
-        default=False,
+        default=True,
         description=(
             "When enabled, prefetch will execute search + read to preload all memory file contents "
             "into the context, and no read/search tools will be provided to the LLM. "
             "When disabled (default), LLM has read tool and reads files on-demand."
+        ),
+    )
+    prefetch_search_topn: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Number of top search results to read during prefetch. "
+            "Only applies when eager_prefetch is enabled. "
+            "When multiple directories are searched, results are merged and top-N are read."
+        ),
+    )
+    extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), memory extraction runs on session commit "
+            "to produce long-term memories. When disabled, sessions are archived "
+            "but no memory extraction is performed. Useful for read-only or "
+            "stateless deployments."
+        ),
+    )
+    enable_role_id_memory_isolate: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction uses role_id from messages to determine "
+            "which user/agent the memory belongs to. When disabled (default), role_id "
+            "is ignored and the login user from the request context is used instead."
         ),
     )
 

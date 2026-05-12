@@ -151,6 +151,7 @@ try:
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
+    # Local directory scans respect .gitignore by default.
     add_result = client.add_resource(
         path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
     )

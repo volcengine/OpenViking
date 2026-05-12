@@ -80,15 +80,29 @@ claude mcp add --transport http openviking \
 
 ### Claude.ai / Claude Desktop（OAuth 代理鉴权）
 
-Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 鉴权，无法直接传入 API Key。可借助 [MCP-Key2OAuth](https://mcp.767911.xyz/) 将 API Key 认证代理为 OAuth 流程：
+Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 2.1 鉴权，无法直接传入 API Key。
 
-1. 访问 https://mcp.767911.xyz/
+#### 官方 OAuth 支持（规划中）
+
+我们正在考虑在 `openviking-server` 中内置 OAuth 2.1 授权端点，初步方案包括：
+
+- **OTP 授权**：通过 CLI (`ov otp`) 或 REST API 获取一次性口令，在 OAuth 授权页面输入完成认证，无需外部依赖
+- **Console 快捷授权**：利用 Web Console (8020) 同源 session 实现一键授权
+- **第三方登录**：可选的 GitHub / Google 等 IdP 委托登录
+
+上述方案尚在设计评审阶段，实现时间待定。
+
+#### 当前可用方案：MCP-Key2OAuth（社区项目）
+
+在官方 OAuth 实现就绪之前，可以借助社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) 将 API Key 认证代理为 OAuth 流程：
+
+1. 参照项目 README 自行部署代理服务（Cloudflare Workers）
 2. 填入你的 OpenViking MCP 服务器 URL（如 `https://your-server.com/mcp`）
 3. 生成代理后的新 URL
 4. 在 Claude.ai / Claude Desktop 中填入生成的新 URL，连接时会跳转至代理站进行鉴权
 5. 授权完成后即可正常使用
 
-> ⚠️ MCP-Key2OAuth 为社区项目，OpenViking 不保证其安全性。
+> ⚠️ **免责声明：** MCP-Key2OAuth 为社区维护的第三方项目，OpenViking 团队不对其安全性、可用性或数据处理方式做任何保证。使用前请自行评估风险。如有顾虑，建议等待官方 OAuth 实现或自行搭建代理。
 
 
 ## 可用的 MCP 工具

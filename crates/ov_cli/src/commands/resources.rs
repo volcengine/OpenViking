@@ -19,6 +19,8 @@ pub async fn add_resource(
     watch_interval: f64,
     format: OutputFormat,
     compact: bool,
+    show_progress: bool,
+    verbose: bool,
 ) -> Result<()> {
     let result = client
         .add_resource(
@@ -35,6 +37,8 @@ pub async fn add_resource(
             exclude,
             directly_upload_media,
             watch_interval,
+            show_progress,
+            verbose,
         )
         .await?;
 

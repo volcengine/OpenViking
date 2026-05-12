@@ -80,15 +80,29 @@ Add `--scope user` to make the config global (shared across all projects).
 
 ### Claude.ai / Claude Desktop (OAuth Proxy)
 
-Claude.ai and Claude Desktop Connector require MCP servers to use OAuth authentication — API Keys cannot be passed directly. Use [MCP-Key2OAuth](https://mcp.767911.xyz/) to proxy API Key auth as an OAuth flow:
+Claude.ai and Claude Desktop Connector require MCP servers to use OAuth 2.1 authentication — API Keys cannot be passed directly.
 
-1. Visit https://mcp.767911.xyz/
+#### Official OAuth Support (Planned)
+
+We are evaluating built-in OAuth 2.1 authorization endpoints for `openviking-server`. The initial design includes:
+
+- **OTP Authorization**: Obtain a one-time passcode via CLI (`ov otp`) or REST API, then enter it on the OAuth authorization page — no external dependencies required
+- **Console Quick-Auth**: Leverage the Web Console (port 8020) same-origin session for one-click authorization
+- **Third-party Login**: Optional delegated login via GitHub / Google or other IdPs
+
+These approaches are currently in design review; implementation timeline is TBD.
+
+#### Current Workaround: MCP-Key2OAuth (Community Project)
+
+Until official OAuth support is available, the community project [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) can proxy API Key auth as an OAuth flow:
+
+1. Follow the project README to self-host the proxy (Cloudflare Workers)
 2. Enter your OpenViking MCP server URL (e.g., `https://your-server.com/mcp`)
 3. Generate the proxied URL
 4. In Claude.ai / Claude Desktop, enter the generated URL — it will redirect to the proxy for auth
 5. After authorization, MCP tools are available
 
-> ⚠️ MCP-Key2OAuth is a community project. OpenViking does not guarantee its security.
+> ⚠️ **Disclaimer:** MCP-Key2OAuth is a third-party community-maintained project. The OpenViking team makes no guarantees regarding its security, availability, or data handling. Please assess the risks before use. If you have concerns, consider waiting for the official OAuth implementation or deploying your own proxy.
 
 
 ## Available MCP Tools

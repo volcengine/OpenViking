@@ -73,6 +73,17 @@ pub async fn list_users(
     Ok(())
 }
 
+pub async fn list_agents(
+    client: &HttpClient,
+    account_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response = client.admin_list_agents(account_id).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn remove_user(
     client: &HttpClient,
     account_id: &str,
