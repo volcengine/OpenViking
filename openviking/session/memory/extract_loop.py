@@ -234,6 +234,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
+                # Refetch not needed — register page_ids and resolve links
+                await self.finalize_operations(final_operations)
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             logger.warning(
@@ -342,6 +344,21 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
+        # Register new page_ids (100+) and resolve links are deferred to
+        # finalize_operations(), which runs after refetch is complete.
+        # This ensures refetch results get proper 1-99 page_ids instead
+        # of inheriting 100+ IDs from register_new_page_id.
+        return resolved
+
+    async def finalize_operations(self, operations: ResolvedOperations) -> None:
+        """Register new page_ids and resolve links after refetch is complete.
+
+        Must be called after resolve_operations() and any refetch rounds,
+        so that existing files discovered by refetch get 1-99 page_ids
+        instead of 100+ IDs from register_new_page_id.
+        """
+        upsert_operations = operations.upsert_operations
+
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
@@ -354,8 +371,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
         resolved_links = self._resolve_links(operations, upsert_operations)
 
-        resolved.resolved_links = resolved_links
-        return resolved
+        operations.resolved_links = resolved_links
 
     def _resolve_links(
         self, operations, upsert_operations: List[ResolvedOperation]

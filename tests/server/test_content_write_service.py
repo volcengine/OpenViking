@@ -6,7 +6,8 @@
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -70,8 +71,9 @@ async def test_memory_replace_preserves_metadata(service):
         "updated_at": "2026-04-01T10:05:00",
         "fields": {"topic": "theme"},
     }
-    full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    expected_metadata = deserialize_full(full_content).memory_fields
+    original_mf = MemoryFile(content="Original preference", extra_fields=metadata)
+    full_content = MemoryFileUtils.write(original_mf)
+    expected_mf = MemoryFileUtils.read(full_content)
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -82,10 +84,10 @@ async def test_memory_replace_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_result = deserialize_full(stored)
+    stored_result = MemoryFileUtils.read(stored)
 
-    assert stored_result.plain_content == "Updated preference"
-    assert stored_result.memory_fields == expected_metadata
+    assert stored_result.content == "Updated preference"
+    assert stored_result.extra_fields == expected_mf.extra_fields
 
 
 @pytest.mark.asyncio
@@ -98,8 +100,9 @@ async def test_memory_append_preserves_metadata(service):
         "updated_at": "2026-04-01T10:05:00",
         "fields": {"topic": "theme"},
     }
-    full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    expected_metadata = deserialize_full(full_content).memory_fields
+    original_mf = MemoryFile(content="Original preference", extra_fields=metadata)
+    full_content = MemoryFileUtils.write(original_mf)
+    expected_mf = MemoryFileUtils.read(full_content)
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -110,10 +113,10 @@ async def test_memory_append_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_result = deserialize_full(stored)
+    stored_result = MemoryFileUtils.read(stored)
 
-    assert stored_result.plain_content == "Original preference\nUpdated preference"
-    assert stored_result.memory_fields == expected_metadata
+    assert stored_result.content == "Original preference\nUpdated preference"
+    assert stored_result.extra_fields == expected_mf.extra_fields
 
 
 @pytest.mark.asyncio

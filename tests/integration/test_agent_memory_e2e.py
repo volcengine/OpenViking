@@ -39,7 +39,7 @@ from openviking.client.local import LocalClient
 from openviking.core.namespace import to_agent_space
 from openviking.server.identity import AccountNamespacePolicy
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
-from openviking.session.memory.utils.content import deserialize_metadata
+from openviking.session.memory.utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
@@ -69,8 +69,7 @@ CONV_A_FLIGHT_DUPLICATE: List[Tuple[str, str]] = [
     ),
     (
         "assistant",
-        "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，"
-        "还是保留现有预订？",
+        "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，还是保留现有预订？",
     ),
     ("user", "那就取消 CA1501，改订 MU5101"),
     ("assistant", "[tool_call: cancel_booking(booking_id=CA1501-xyz)] 已取消原预订。"),
@@ -154,7 +153,9 @@ def _run_conversation(client: LocalClient, turns: List[Tuple[str, str]]) -> None
         run_async(client.add_message(session_id=session_id, role=role, content=content))
     logger.info(f"  Committing {len(turns)} messages...")
     result = run_async(client.commit_session(session_id=session_id))
-    task_id = result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
+    task_id = (
+        result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
+    )
     if task_id:
         _wait_for_task(client, task_id)
         logger.info(f"  Done (task {task_id[:8]})")
@@ -189,7 +190,8 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
         if not exp_uri:
             continue
         raw = run_async(client.read(exp_uri)) or ""
-        metadata = deserialize_metadata(raw) or {}
+        mf = MemoryFileUtils.read(raw) if raw else None
+        metadata = mf.extra_fields if mf else {}
         source = metadata.get("source_trajectories", [])
         if isinstance(source, list):
             all_uris.extend(str(u).strip() for u in source if str(u).strip())
@@ -275,15 +277,21 @@ class TestAgentMemoryE2E:
             traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
             exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
             assert traj_after_r1, "should have trajectory memories after round 1"
-            assert len(exp_after_r1) == 1, "should have exactly 1 experience after round 1 (CREATE path)"
+            assert len(exp_after_r1) == 1, (
+                "should have exactly 1 experience after round 1 (CREATE path)"
+            )
 
             logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
             _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
 
             traj_after_r2 = _list_non_overview_entries(client, trajectories_dir)
             exp_after_r2 = _list_non_overview_entries(client, experiences_dir)
-            assert len(traj_after_r2) > len(traj_after_r1), "trajectory count should grow after round 2"
-            assert len(exp_after_r2) == 1, "experience count must remain 1 after round 2 (EDIT path, not CREATE)"
+            assert len(traj_after_r2) > len(traj_after_r1), (
+                "trajectory count should grow after round 2"
+            )
+            assert len(exp_after_r2) == 1, (
+                "experience count must remain 1 after round 2 (EDIT path, not CREATE)"
+            )
 
             traj_uris_r2 = {_entry_uri(e) for e in traj_after_r2 if _entry_uri(e)}
             source_trajectories = _collect_source_trajectories(client, exp_after_r2)
@@ -293,6 +301,7 @@ class TestAgentMemoryE2E:
             )
         finally:
             run_async(client.close())
+
 
 class TestAgentMemorySchemas:
     """Unit tests for agent memory schema filtering — no integration environment needed."""
@@ -312,4 +321,3 @@ class TestAgentMemorySchemas:
         assert "experiences" not in schema_types, (
             "experiences schema must not appear in user memory extraction"
         )
-

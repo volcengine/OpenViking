@@ -185,7 +185,7 @@ class MemoryFile(BaseModel):
 
 
 class ResolvedOperation(BaseModel):
-    old_memory_file_content: Optional[MemoryFile]
+    old_memory_file_content: Optional[MemoryFile] = None
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]

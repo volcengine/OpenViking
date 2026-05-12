@@ -11,8 +11,8 @@ import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.dataclass import (
+    MemoryFile,
     MemoryField,
-    MemoryFileContent,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -29,9 +29,8 @@ from openviking.session.memory.merge_op import (
     StrPatch,
 )
 from openviking.session.memory.utils import (
-    deserialize_full,
+    MemoryFileUtils,
     parse_memory_file_with_fields,
-    serialize_with_metadata,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -167,17 +166,20 @@ class TestMemoryUpdater:
         updater._vectorize_memories = AsyncMock()
         updater.generate_overview = AsyncMock()
 
-        resolved = ResolvedOperations()
-        resolved.operations.append(
-            ResolvedOperation(
-                model={"name": "demo"},
-                uri=resolved_uri,
-                memory_type=memory_type,
-            )
+        resolved = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"name": "demo"},
+                    memory_type=memory_type,
+                    uris=[resolved_uri],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
         )
         monkeypatch.setattr(
-            "openviking.session.memory.memory_updater.resolve_all_operations",
-            lambda *args, **kwargs: resolved,
+            "openviking.session.memory.memory_updater.supplement_operation_uris",
+            lambda *args, **kwargs: None,
         )
 
         ctx = RequestContext(
@@ -186,7 +188,7 @@ class TestMemoryUpdater:
             namespace_policy=policy,
         )
 
-        result = await updater.apply_operations(operations=SimpleNamespace(), ctx=ctx)
+        result = await updater.apply_operations(operations=resolved, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
         updater.generate_overview.assert_awaited_once_with(
@@ -206,19 +208,33 @@ class TestMemoryUpdater:
 class TestApplyEditWithSearchReplacePatch:
     """Tests for _apply_edit with SEARCH/REPLACE patches."""
 
+    def _make_updater_with_registry(self):
+        content_field = MemoryField(
+            name="content",
+            field_type=FieldType.STRING,
+            merge_op=MergeOp.PATCH,
+        )
+        schema = MemoryTypeSchema(
+            memory_type="test",
+            description="test",
+            fields=[content_field],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+        return MemoryUpdater(registry=registry)
+
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
         """Test _apply_edit with StrPatch instance."""
-        updater = MemoryUpdater()
+        updater = self._make_updater_with_registry()
 
         # Original content
         original_content = """Line 1
 Line 2
 Line 3
 Line 4"""
-        original_metadata = {"name": "test"}
-        original_metadata_with_content = {**original_metadata, "content": original_content}
-        original_full_content = serialize_with_metadata(original_metadata_with_content)
+        original_mf = MemoryFile(content=original_content, extra_fields={"name": "test"})
+        original_full_content = MemoryFileUtils.write(original_mf)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
@@ -246,28 +262,32 @@ Line 4"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_upsert({"content": patch}, "viking://test/test.md", mock_ctx)
+        op = ResolvedOperation(
+            memory_fields={"content": patch},
+            memory_type="test",
+            uris=["viking://test/test.md"],
+        )
+        await updater._apply_upsert(op, mock_ctx)
 
         # Verify
         assert written_content is not None
-        result = deserialize_full(written_content)
-        assert "Line 1" in result.plain_content
-        assert "Line 2 modified" in result.plain_content
-        assert "Line 3 modified" in result.plain_content
-        assert "Line 4" in result.plain_content
+        result = MemoryFileUtils.read(written_content)
+        assert "Line 1" in result.content
+        assert "Line 2 modified" in result.content
+        assert "Line 3 modified" in result.content
+        assert "Line 4" in result.content
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_dict(self):
         """Test _apply_edit with StrPatch in dict form (from JSON parsing)."""
-        updater = MemoryUpdater()
+        updater = self._make_updater_with_registry()
 
         # Original content
         original_content = """Hello world
 This is a test
 Goodbye"""
-        original_metadata = {"name": "test"}
-        original_metadata_with_content = {**original_metadata, "content": original_content}
-        original_full_content = serialize_with_metadata(original_metadata_with_content)
+        original_mf = MemoryFile(content=original_content, extra_fields={"name": "test"})
+        original_full_content = MemoryFileUtils.write(original_mf)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
@@ -288,25 +308,29 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_upsert({"content": patch_dict}, "viking://test/test.md", mock_ctx)
+        op = ResolvedOperation(
+            memory_fields={"content": patch_dict},
+            memory_type="test",
+            uris=["viking://test/test.md"],
+        )
+        await updater._apply_upsert(op, mock_ctx)
 
         # Verify
         assert written_content is not None
-        result = deserialize_full(written_content)
-        assert "Hello world" in result.plain_content
-        assert "This has been modified" in result.plain_content
-        assert "Goodbye" in result.plain_content
+        result = MemoryFileUtils.read(written_content)
+        assert "Hello world" in result.content
+        assert "This has been modified" in result.content
+        assert "Goodbye" in result.content
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_simple_string_replacement(self):
         """Test _apply_edit with simple string full replacement."""
-        updater = MemoryUpdater()
+        updater = self._make_updater_with_registry()
 
         # Original content
         original_content = "Old content"
-        original_metadata = {"name": "test"}
-        original_metadata_with_content = {**original_metadata, "content": original_content}
-        original_full_content = serialize_with_metadata(original_metadata_with_content)
+        original_mf = MemoryFile(content=original_content, extra_fields={"name": "test"})
+        original_full_content = MemoryFileUtils.write(original_mf)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
@@ -327,12 +351,17 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_upsert({"content": new_content}, "viking://test/test.md", mock_ctx)
+        op = ResolvedOperation(
+            memory_fields={"content": new_content},
+            memory_type="test",
+            uris=["viking://test/test.md"],
+        )
+        await updater._apply_upsert(op, mock_ctx)
 
         # Verify
         assert written_content is not None
-        result = deserialize_full(written_content)
-        assert result.plain_content == new_content
+        result = MemoryFileUtils.read(written_content)
+        assert result.content == new_content
 
 
 class TestConsecutivePatchesSameURI:
@@ -426,7 +455,7 @@ class TestConsecutivePatchesSameURI:
         registry.register(schema)
 
         # In-memory store with initial content
-        initial_content = serialize_with_metadata({"content": "alpha beta gamma"})
+        initial_content = MemoryFileUtils.write(MemoryFile(content="alpha beta gamma"))
         store: dict[str, str] = {uri: initial_content}
         mock_viking_fs = MagicMock()
 
@@ -447,10 +476,9 @@ class TestConsecutivePatchesSameURI:
         # First patch: "alpha" -> "ALPHA"
         patch1 = StrPatch(blocks=[SearchReplaceBlock(search="alpha", replace="ALPHA")])
         op1 = ResolvedOperation(
-            old_memory_file_content=MemoryFileContent(
+            old_memory_file_content=MemoryFile(
                 uri=uri,
-                plain_content="alpha beta gamma",
-                memory_fields={"content": "alpha beta gamma"},
+                content="alpha beta gamma",
             ),
             memory_fields={"content": patch1},
             memory_type=memory_type,
@@ -463,10 +491,9 @@ class TestConsecutivePatchesSameURI:
         # but _apply_upsert reads from disk which now has "ALPHA beta gamma"
         patch2 = StrPatch(blocks=[SearchReplaceBlock(search="beta", replace="BETA")])
         op2 = ResolvedOperation(
-            old_memory_file_content=MemoryFileContent(
+            old_memory_file_content=MemoryFile(
                 uri=uri,
-                plain_content="alpha beta gamma",
-                memory_fields={"content": "alpha beta gamma"},
+                content="alpha beta gamma",
             ),
             memory_fields={"content": patch2},
             memory_type=memory_type,

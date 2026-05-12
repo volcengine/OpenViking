@@ -22,7 +22,7 @@ from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
     ResolvedOperations,
-    ResolvedOperation,
+    ResolvedOperation, StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
