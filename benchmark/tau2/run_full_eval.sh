@@ -7,6 +7,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 CONFIG="$SCRIPT_DIR/config/baseline.yaml"
 EXECUTE=false
 RUN_ID=""
+RUN_EVAL_EXTRA=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,6 +22,10 @@ while [[ $# -gt 0 ]]; do
     --execute)
       EXECUTE=true
       shift
+      ;;
+    --domain|--repeat-count|--strategy-id|--task-id|--num-tasks)
+      RUN_EVAL_EXTRA+=("$1" "$2")
+      shift 2
       ;;
     --help|-h)
       cat <<'EOF'
@@ -47,7 +52,7 @@ cd "$REPO_ROOT"
 "$PYTHON_BIN" "$SCRIPT_DIR/scripts/preflight.py" --config "$CONFIG" "${RUN_ARGS[@]}"
 
 if [[ "$EXECUTE" == true ]]; then
-  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" --execute
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" "${RUN_EVAL_EXTRA[@]}" --execute
 else
-  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" --plan-only
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" "${RUN_EVAL_EXTRA[@]}" --plan-only
 fi

@@ -36,12 +36,27 @@ python benchmark/tau2/scripts/preflight.py --config benchmark/tau2/config/baseli
 python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baseline.yaml --plan-only
 ```
 
+Plan a one-cell upstream TAU-2 smoke:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/baseline.yaml \
+  --domain retail \
+  --strategy-id no_memory \
+  --num-tasks 1 \
+  --repeat-count 1
+```
+
 Run with execution enabled after TAU-2, model credentials, and OpenViking are
 configured:
 
 ```bash
 benchmark/tau2/run_full_eval.sh --config benchmark/tau2/config/prewrite.yaml --execute
 ```
+
+The initial no-memory cells use upstream TAU-2 CLI flags only. OpenViking memory
+cells are kept in the same plan, but marked adapter-pending until the TAU-2
+agent adapter is wired in this benchmark directory.
 
 ## Evidence Boundary
 

@@ -10,14 +10,30 @@ from typing import Any
 from tau2_common import domains, load_config, output_dir, run_id, split_file, strategy_ids, tau2_repo, write_json
 
 
-def _tau2_command(config: dict[str, Any], *, domain: str, strategy: dict[str, Any], repeat_index: int, run_label: str) -> list[str]:
+def _tau2_command(
+    config: dict[str, Any],
+    *,
+    domain: str,
+    strategy: dict[str, Any],
+    run_label: str,
+    task_ids: list[str] | None,
+    num_tasks: int | None,
+) -> list[str] | None:
     benchmark = config["benchmark"]
     model = config["model"]
+
+    if strategy.get("memory_backend") != "none":
+        return None
+
     command = [
         "tau2",
         "run",
         "--domain",
         domain,
+        "--agent",
+        str(benchmark.get("agent", "llm_agent")),
+        "--user",
+        str(benchmark.get("user", "user_simulator")),
         "--task-split-name",
         str(benchmark.get("eval_split_name", "test")),
         "--num-trials",
@@ -39,28 +55,52 @@ def _tau2_command(config: dict[str, Any], *, domain: str, strategy: dict[str, An
         command.extend(["--agent-llm-args", f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'])
         command.extend(["--user-llm-args", f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'])
 
-    if strategy.get("memory_backend") == "none":
-        command.extend(["--memory-backend", "none"])
-    else:
-        command.extend(["--memory-backend", "openviking"])
-        command.extend(["--memory-retrieval-mode", str(strategy.get("retrieval_mode", "first_user"))])
-        command.extend(["--memory-replay-write-policy", str(config.get("openviking", {}).get("replay_write_policy", "read_only"))])
-
-    if config.get("features", {}).get("prewrite_recall", {}).get("enabled"):
-        command.append("--enable-prewrite-recall")
+    if task_ids:
+        command.append("--task-ids")
+        command.extend(task_ids)
+    elif num_tasks is not None:
+        command.extend(["--num-tasks", str(num_tasks)])
 
     return command
 
 
-def _build_plan(config: dict[str, Any], configured_run_id: str) -> dict[str, Any]:
-    repeat_count = int(config["benchmark"].get("repeat_count", 4))
+def _build_plan(
+    config: dict[str, Any],
+    configured_run_id: str,
+    *,
+    selected_domains: set[str] | None,
+    selected_strategy_ids: set[str] | None,
+    task_ids: list[str] | None,
+    num_tasks: int | None,
+    repeat_count_override: int | None,
+) -> dict[str, Any]:
+    repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 4))
     strategies = config.get("strategies") or []
+    if selected_strategy_ids:
+        unknown = selected_strategy_ids - set(strategy_ids(config))
+        if unknown:
+            raise ValueError(f"unknown strategy ids: {sorted(unknown)}")
+        strategies = [strategy for strategy in strategies if strategy["id"] in selected_strategy_ids]
     cells = []
-    for domain in domains(config):
+    plan_domains = domains(config)
+    if selected_domains:
+        unknown_domains = selected_domains - set(plan_domains)
+        if unknown_domains:
+            raise ValueError(f"unknown domains: {sorted(unknown_domains)}")
+        plan_domains = [domain for domain in plan_domains if domain in selected_domains]
+    for domain in plan_domains:
         split_path = split_file(config, domain)
         for strategy in strategies:
             for repeat_index in range(repeat_count):
                 run_label = f"{configured_run_id}_{domain}_{strategy['id']}_r{repeat_index + 1}"
+                command = _tau2_command(
+                    config,
+                    domain=domain,
+                    strategy=strategy,
+                    run_label=run_label,
+                    task_ids=task_ids,
+                    num_tasks=num_tasks,
+                )
                 cells.append(
                     {
                         "domain": domain,
@@ -70,14 +110,10 @@ def _build_plan(config: dict[str, Any], configured_run_id: str) -> dict[str, Any
                         "run_label": run_label,
                         "train_required": bool(strategy.get("train_required")),
                         "memory_backend": strategy.get("memory_backend"),
+                        "adapter_status": strategy.get("adapter_status", "ready"),
+                        "executable": command is not None,
                         "split_file": str(split_path),
-                        "command": _tau2_command(
-                            config,
-                            domain=domain,
-                            strategy=strategy,
-                            repeat_index=repeat_index,
-                            run_label=run_label,
-                        ),
+                        "command": command,
                     }
                 )
     return {
@@ -85,7 +121,7 @@ def _build_plan(config: dict[str, Any], configured_run_id: str) -> dict[str, Any
         "run_id": configured_run_id,
         "status": "planned",
         "strategy_ids": strategy_ids(config),
-        "domains": domains(config),
+        "domains": plan_domains,
         "cell_count": len(cells),
         "cells": cells,
     }
@@ -94,6 +130,11 @@ def _build_plan(config: dict[str, Any], configured_run_id: str) -> dict[str, Any
 def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
     rows = []
     for cell in plan["cells"]:
+        if not cell.get("executable"):
+            raise RuntimeError(
+                f"cell is not executable yet: {cell['run_label']} "
+                f"(strategy_id={cell['strategy_id']}, adapter_status={cell.get('adapter_status')})"
+            )
         print(f"[tau2] running {cell['run_label']}")
         completed = subprocess.run(
             cell["command"],
@@ -122,6 +163,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Plan or run TAU-2 benchmark cells.")
     parser.add_argument("--config", type=Path, default=Path(__file__).parents[1] / "config" / "baseline.yaml")
     parser.add_argument("--run-id", default=run_id())
+    parser.add_argument("--domain", action="append", help="Run only this configured domain; may be repeated.")
+    parser.add_argument("--repeat-count", type=int, help="Override benchmark.repeat_count for smoke runs.")
+    parser.add_argument("--strategy-id", action="append", help="Run only this strategy id; may be repeated.")
+    parser.add_argument("--task-id", action="append", help="Run only this TAU-2 task id; may be repeated.")
+    parser.add_argument("--num-tasks", type=int, help="Run the first N tasks from the selected split.")
     parser.add_argument("--plan-only", action="store_true", help="Only write run_plan.json.")
     parser.add_argument("--execute", action="store_true", help="Execute planned cells.")
     args = parser.parse_args()
@@ -132,7 +178,15 @@ def main() -> int:
     config = load_config(args.config)
     out = output_dir(config, args.run_id)
     out.mkdir(parents=True, exist_ok=True)
-    plan = _build_plan(config, args.run_id)
+    plan = _build_plan(
+        config,
+        args.run_id,
+        selected_domains=set(args.domain) if args.domain else None,
+        selected_strategy_ids=set(args.strategy_id) if args.strategy_id else None,
+        task_ids=args.task_id,
+        num_tasks=args.num_tasks,
+        repeat_count_override=args.repeat_count,
+    )
     write_json(out / "run_plan.json", plan)
     write_json(out / "resolved_config.json", config)
     print(f"[tau2] wrote {out / 'run_plan.json'}")
