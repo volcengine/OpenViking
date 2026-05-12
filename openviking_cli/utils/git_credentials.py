@@ -152,8 +152,8 @@ def _load_ovcli_git_credentials() -> Optional[dict]:
                 creds = data.get("git_credentials")
                 if isinstance(creds, dict):
                     return creds
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError):
+                continue
     return None
 
 

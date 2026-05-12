@@ -74,7 +74,7 @@ def _cmd_configure_git_credentials(args: list[str]) -> int:
         return 1
 
     path = save_git_credentials(host, token)
-    print(f"\n  {_green('OK')} Saved token for {host!r} to {path}\n")
+    print(f"\n  {_green('OK')} Git credentials saved.\n")
     return 0
 
 

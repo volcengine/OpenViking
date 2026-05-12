@@ -4,8 +4,8 @@
 
 import json
 import os
-from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -110,7 +110,8 @@ class TestInjectToken:
     def test_empty_token_produces_empty_userinfo(self):
         result = inject_token("https://github.com/org/repo", "")
         # Empty token: userinfo is empty, resulting in https://@github.com/...
-        assert "github.com" in result
+        parsed = urlparse(result)
+        assert parsed.hostname == "github.com"
 
 
 class TestMaskTokenInUrl:
