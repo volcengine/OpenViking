@@ -1,0 +1,12 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_prewrite
+
+features:
+  prewrite_recall:
+    enabled: true
+    decision_nodes:
+      - before_write_tool_call
+    max_memories: 4
+    evidence_boundary: runtime_retrieval_trace_required

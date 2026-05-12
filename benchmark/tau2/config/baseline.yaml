@@ -1,0 +1,52 @@
+benchmark:
+  name: tau2_openviking_baseline
+  domains:
+    - retail
+    - airline
+  train_split_name: train
+  eval_split_name: test
+  repeat_count: 4
+  task_max_concurrency: 10
+  strategy_concurrency: 4
+  max_steps: 200
+  reasoning_effort: high
+
+paths:
+  tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
+  output_dir: benchmark/tau2/result
+
+model:
+  agent_llm: ${TAU2_AGENT_LLM:-doubao-seed-1-6-250615}
+  user_llm: ${TAU2_USER_LLM:-doubao-seed-1-6-250615}
+  evaluator_llm: ${TAU2_EVALUATOR_LLM:-doubao-seed-1-6-250615}
+  temperature: 0.0
+
+openviking:
+  url: ${OPENVIKING_URL:-http://localhost:1933}
+  account: ${OPENVIKING_ACCOUNT:-default}
+  agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  retrieval_top_k: 4
+  replay_write_policy: read_only
+
+strategies:
+  - id: no_memory
+    label: No memory
+    memory_backend: none
+    train_required: false
+  - id: memory_v2_experience_only
+    label: OpenViking Memory V2 experience-only
+    memory_backend: openviking
+    train_required: true
+    train_memory_mode: experience_only
+    retrieval_mode: first_user
+  - id: trajectory_procedure_view
+    label: OpenViking trajectory procedure view
+    memory_backend: openviking
+    train_required: true
+    train_memory_mode: trajectory_procedure_view
+    operation_mode: add_only
+    retrieval_mode: first_user
+
+features:
+  prewrite_recall:
+    enabled: false
