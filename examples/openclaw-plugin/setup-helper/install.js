@@ -11,24 +11,29 @@
  *
  * Direct run:
  *   node install.js [ --base-url URL ] [ --api-key KEY ] [ --zh ] [ --workdir PATH ] [ --upgrade-plugin ]
- *                   [ --plugin-version=TAG ]
+ *                   [ --plugin-version=VERSION ] [ --plugin-source=npm|github ]
  *
  * Environment variables:
- *   REPO, PLUGIN_VERSION (or BRANCH), OPENVIKING_BASE_URL, OPENVIKING_API_KEY, SKIP_OPENCLAW
- *   NPM_REGISTRY
+ *   PLUGIN_SOURCE, PLUGIN_NPM_PACKAGE, REPO, PLUGIN_VERSION (or BRANCH),
+ *   OPENVIKING_BASE_URL, OPENVIKING_API_KEY, SKIP_OPENCLAW, NPM_REGISTRY
  */
 
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let REPO = process.env.REPO || "volcengine/OpenViking";
-// PLUGIN_VERSION takes precedence over BRANCH (legacy). If omitted, resolve the latest tag from GitHub.
+const DEFAULT_PLUGIN_NPM_PACKAGE = "@openviking/openclaw-plugin";
+let pluginNpmPackage = (process.env.PLUGIN_NPM_PACKAGE || DEFAULT_PLUGIN_NPM_PACKAGE).trim();
+let pluginSource = (process.env.PLUGIN_SOURCE || "npm").trim().toLowerCase();
+let pluginSourceExplicit = Boolean(process.env.PLUGIN_SOURCE);
+// PLUGIN_VERSION takes precedence over BRANCH (legacy). If omitted, resolve the latest npm dist-tag or GitHub tag.
 const pluginVersionEnv = (process.env.PLUGIN_VERSION || process.env.BRANCH || "").trim();
 let PLUGIN_VERSION = pluginVersionEnv;
 let pluginVersionExplicit = Boolean(pluginVersionEnv);
@@ -100,6 +105,8 @@ let resolvedMinOpenclawVersion = "";
 let resolvedMinOpenvikingVersion = "";
 let resolvedPluginReleaseId = "";
 let detectedOpenClawVersion = "";
+let npmPackageTempDir = "";
+let npmPackageExtractDir = "";
 
 let nonInteractive = false;
 let langZh = false;
@@ -108,6 +115,8 @@ let upgradePluginOnly = false;
 let rollbackLastUpgrade = false;
 let showCurrentVersion = false;
 let uninstallPlugin = false;
+let forceSlotExplicit = false;
+let allowOfflineExplicit = false;
 
 const selectedMode = "remote";
 const baseUrlFromEnv = !!process.env.OPENVIKING_BASE_URL;
@@ -151,6 +160,14 @@ for (let i = 0; i < argv.length; i++) {
     uninstallPlugin = true;
     continue;
   }
+  if (arg === "--force-slot") {
+    forceSlotExplicit = true;
+    continue;
+  }
+  if (arg === "--allow-offline") {
+    allowOfflineExplicit = true;
+    continue;
+  }
   if (arg === "--workdir") {
     const workdir = argv[i + 1]?.trim();
     if (!workdir) {
@@ -185,6 +202,9 @@ for (let i = 0; i < argv.length; i++) {
   }
   if (arg.startsWith("--github-repo=")) {
     REPO = arg.slice("--github-repo=".length).trim();
+    if (!pluginSourceExplicit) {
+      pluginSource = "github";
+    }
     continue;
   }
   if (arg === "--github-repo") {
@@ -194,6 +214,49 @@ for (let i = 0; i < argv.length; i++) {
       process.exit(1);
     }
     REPO = repo;
+    if (!pluginSourceExplicit) {
+      pluginSource = "github";
+    }
+    i += 1;
+    continue;
+  }
+  if (arg.startsWith("--plugin-source=") || arg.startsWith("--source=")) {
+    const value = arg.includes("--plugin-source=")
+      ? arg.slice("--plugin-source=".length).trim()
+      : arg.slice("--source=".length).trim();
+    pluginSource = value.toLowerCase();
+    pluginSourceExplicit = true;
+    continue;
+  }
+  if (arg === "--plugin-source" || arg === "--source") {
+    const value = argv[i + 1]?.trim();
+    if (!value) {
+      console.error(`${arg} requires a value (npm or github)`);
+      process.exit(1);
+    }
+    pluginSource = value.toLowerCase();
+    pluginSourceExplicit = true;
+    i += 1;
+    continue;
+  }
+  if (arg.startsWith("--plugin-package=") || arg.startsWith("--npm-package=")) {
+    const value = arg.includes("--plugin-package=")
+      ? arg.slice("--plugin-package=".length).trim()
+      : arg.slice("--npm-package=".length).trim();
+    if (!value) {
+      console.error("--plugin-package requires a package name");
+      process.exit(1);
+    }
+    pluginNpmPackage = value;
+    continue;
+  }
+  if (arg === "--plugin-package" || arg === "--npm-package") {
+    const value = argv[i + 1]?.trim();
+    if (!value) {
+      console.error(`${arg} requires a package name`);
+      process.exit(1);
+    }
+    pluginNpmPackage = value;
     i += 1;
     continue;
   }
@@ -270,8 +333,11 @@ function printHelp() {
   console.log("Usage: node install.js [ OPTIONS ]");
   console.log("");
   console.log("Options:");
-  console.log("  --github-repo=OWNER/REPO GitHub repository (default: volcengine/OpenViking)");
-  console.log("  --plugin-version=TAG     Plugin version (Git tag, e.g. v0.2.9, default: latest tag)");
+  console.log("  --plugin-source=npm|github");
+  console.log("                           Plugin download source (default: npm)");
+  console.log("  --plugin-package=NAME    npm plugin package (default: @openviking/openclaw-plugin)");
+  console.log("  --github-repo=OWNER/REPO GitHub repository (implies --plugin-source=github unless source is set)");
+  console.log("  --plugin-version=VERSION Plugin version (npm version/tag or Git tag; default: npm latest)");
   console.log("  --workdir PATH           OpenClaw config directory (default: ~/.openclaw)");
   console.log("  --current-version        Print installed plugin version and exit");
   console.log("  --update, --upgrade-plugin");
@@ -284,6 +350,8 @@ function printHelp() {
   console.log("  --agent-prefix=PREFIX    Agent routing prefix (default: $OPENVIKING_AGENT_PREFIX)");
   console.log("  --account-id=ID          Account ID for root API key (default: $OPENVIKING_ACCOUNT_ID)");
   console.log("  --user-id=ID             User ID for root API key (default: $OPENVIKING_USER_ID)");
+  console.log("  --force-slot             Explicitly replace an existing contextEngine slot owner");
+  console.log("  --allow-offline          Explicitly save config when the OpenViking server is unreachable");
   console.log("  --zh                     Chinese prompts");
   console.log("  -h, --help               This help");
   console.log("");
@@ -295,7 +363,7 @@ function printHelp() {
   console.log("  node install.js --current-version");
   console.log("");
   console.log("  # Install a specific release version");
-  console.log("  node install.js --plugin-version=v0.2.9");
+  console.log("  node install.js --plugin-version=2026.5.8");
   console.log("");
   console.log("  # Install from a fork repository");
   console.log("  node install.js --github-repo=yourname/OpenViking --plugin-version=dev-branch");
@@ -309,7 +377,7 @@ function printHelp() {
   console.log("  # Roll back the last plugin upgrade");
   console.log("  node install.js --rollback");
   console.log("");
-  console.log("Env: REPO, PLUGIN_VERSION, SKIP_OPENCLAW, NPM_REGISTRY");
+  console.log("Env: PLUGIN_SOURCE, PLUGIN_NPM_PACKAGE, REPO, PLUGIN_VERSION, SKIP_OPENCLAW, NPM_REGISTRY");
 }
 
 function formatCliArg(value) {
@@ -412,6 +480,11 @@ function question(prompt, defaultValue = "") {
       resolve((answer ?? defaultValue).trim() || defaultValue);
     });
   });
+}
+
+function isYes(answer) {
+  const normalized = String(answer || "").trim().toLowerCase();
+  return normalized === "y" || normalized === "yes";
 }
 
 function isValidAgentPrefixInput(value) {
@@ -611,6 +684,23 @@ if (uninstallPlugin && (upgradePluginOnly || rollbackLastUpgrade)) {
   process.exit(1);
 }
 
+if (!["npm", "github"].includes(pluginSource)) {
+  console.error("--plugin-source must be either npm or github");
+  process.exit(1);
+}
+
+function looksLikeLegacyGitHubRef(value) {
+  const ref = String(value || "").trim();
+  if (!ref) return false;
+  if (/^v\d+(\.\d+){1,2}([-.].*)?$/i.test(ref)) return true;
+  if (["main", "master"].includes(ref.toLowerCase())) return true;
+  return false;
+}
+
+if (!pluginSourceExplicit && pluginVersionExplicit && looksLikeLegacyGitHubRef(PLUGIN_VERSION)) {
+  pluginSource = "github";
+}
+
 // Detect OpenClaw version
 async function detectOpenClawVersion() {
   if (detectedOpenClawVersion) {
@@ -680,6 +770,115 @@ function pickLatestPluginTag(tagNames) {
   return normalized[0] || "";
 }
 
+function npmPackageSpec(version = PLUGIN_VERSION) {
+  return version ? `${pluginNpmPackage}@${version}` : pluginNpmPackage;
+}
+
+function parseNpmJsonOutput(output) {
+  const text = String(output || "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const firstArray = text.indexOf("[");
+    const lastArray = text.lastIndexOf("]");
+    if (firstArray >= 0 && lastArray > firstArray) {
+      try {
+        return JSON.parse(text.slice(firstArray, lastArray + 1));
+      } catch {}
+    }
+    const firstObject = text.indexOf("{");
+    const lastObject = text.lastIndexOf("}");
+    if (firstObject >= 0 && lastObject > firstObject) {
+      try {
+        return JSON.parse(text.slice(firstObject, lastObject + 1));
+      } catch {}
+    }
+  }
+  return null;
+}
+
+async function resolveDefaultPluginVersionFromNpm() {
+  info(tr(
+    `No plugin version specified; resolving latest npm version from ${pluginNpmPackage}...`,
+    `No plugin version specified; resolving latest npm version from ${pluginNpmPackage}...`,
+  ));
+
+  const result = await runCapture("npm", [
+    "view",
+    `${pluginNpmPackage}@latest`,
+    "version",
+    "--json",
+    "--registry",
+    NPM_REGISTRY,
+  ], { shell: IS_WIN });
+
+  if (result.code === 0) {
+    const parsed = parseNpmJsonOutput(result.out);
+    const version = typeof parsed === "string" ? parsed : String(result.out || "").trim().replace(/^"|"$/g, "");
+    if (version) {
+      PLUGIN_VERSION = version;
+      info(tr(
+        `Resolved default plugin version to npm latest: ${PLUGIN_VERSION}`,
+        `Resolved default plugin version to npm latest: ${PLUGIN_VERSION}`,
+      ));
+      return true;
+    }
+  }
+
+  warn(tr(
+    `Could not resolve npm latest for ${pluginNpmPackage}${result.err ? `: ${result.err}` : ""}`,
+    `Could not resolve npm latest for ${pluginNpmPackage}${result.err ? `: ${result.err}` : ""}`,
+  ));
+  return false;
+}
+
+async function ensureNpmPackageExtracted() {
+  if (npmPackageExtractDir && existsSync(npmPackageExtractDir)) {
+    return npmPackageExtractDir;
+  }
+
+  npmPackageTempDir = await mkdtemp(join(tmpdir(), "ov-plugin-npm-"));
+  info(tr(
+    `Downloading plugin package from npm: ${npmPackageSpec()}`,
+    `Downloading plugin package from npm: ${npmPackageSpec()}`,
+  ));
+
+  const packResult = await runCapture("npm", [
+    "pack",
+    npmPackageSpec(),
+    "--pack-destination",
+    npmPackageTempDir,
+    "--json",
+    "--registry",
+    NPM_REGISTRY,
+  ], { shell: IS_WIN });
+
+  if (packResult.code !== 0) {
+    throw new Error(`npm pack failed for ${npmPackageSpec()}${packResult.err ? `: ${packResult.err}` : ""}`);
+  }
+
+  const parsed = parseNpmJsonOutput(packResult.out);
+  const first = Array.isArray(parsed) ? parsed[0] : parsed;
+  const filename = first?.filename || readdirSync(npmPackageTempDir).find((name) => name.endsWith(".tgz"));
+  if (!filename) {
+    throw new Error(`npm pack did not produce a tarball for ${npmPackageSpec()}`);
+  }
+
+  const tarballPath = join(npmPackageTempDir, filename);
+  const extractRoot = join(npmPackageTempDir, "extract");
+  await mkdir(extractRoot, { recursive: true });
+  await run("tar", ["-xzf", tarballPath, "-C", extractRoot], { silent: true, shell: IS_WIN });
+
+  const packageDir = join(extractRoot, "package");
+  if (!existsSync(packageDir)) {
+    throw new Error(`npm package ${npmPackageSpec()} did not contain the expected package directory`);
+  }
+
+  npmPackageExtractDir = packageDir;
+  return npmPackageExtractDir;
+}
+
 function parseGitLsRemoteTags(output) {
   return String(output ?? "")
     .split(/\r?\n/)
@@ -693,6 +892,16 @@ function parseGitLsRemoteTags(output) {
 async function resolveDefaultPluginVersion() {
   if (PLUGIN_VERSION) {
     return;
+  }
+
+  if (pluginSource === "npm") {
+    if (await resolveDefaultPluginVersionFromNpm()) {
+      return;
+    }
+    warn(tr(
+      "Falling back to GitHub tag resolution.",
+      "Falling back to GitHub tag resolution.",
+    ));
   }
 
   info(tr(
@@ -771,8 +980,113 @@ async function resolveDefaultPluginVersion() {
   process.exit(1);
 }
 
+function applyManifestConfig(manifestData) {
+  resolvedPluginId = manifestData.plugin?.id || "";
+  resolvedPluginKind = manifestData.plugin?.kind || "";
+  resolvedPluginSlot = manifestData.plugin?.slot || "";
+  resolvedMinOpenclawVersion = manifestData.compatibility?.minOpenclawVersion || "";
+  resolvedMinOpenvikingVersion = manifestData.compatibility?.minOpenvikingVersion || "";
+  resolvedPluginReleaseId = manifestData.pluginVersion || manifestData.release?.id || "";
+  const npmConfig = manifestData.npm && typeof manifestData.npm === "object"
+    ? manifestData.npm
+    : {};
+  resolvedNpmOmitDev = npmConfig.omitDev !== false;
+  resolvedNpmBuild = npmConfig.build === true || npmConfig.buildFromSource === true;
+  resolvedNpmBuildMinOpenclawVersion =
+    typeof npmConfig.buildMinOpenclawVersion === "string" && npmConfig.buildMinOpenclawVersion.trim()
+      ? npmConfig.buildMinOpenclawVersion.trim()
+      : DEFAULT_NPM_BUILD_MIN_OPENCLAW_VERSION;
+  resolvedNpmBuildScript = typeof npmConfig.buildScript === "string" && npmConfig.buildScript.trim()
+    ? npmConfig.buildScript.trim()
+    : "build";
+  resolvedNpmPruneAfterBuild = npmConfig.pruneAfterBuild !== false;
+  resolvedFilesRequired = manifestData.files?.required || [];
+  resolvedFilesOptional = manifestData.files?.optional || [];
+}
+
+function hasPrebuiltRuntimeOutputs(packageDir) {
+  return existsSync(join(packageDir, "dist", "index.js"));
+}
+
+async function resolvePluginConfigFromNpm() {
+  info(tr(
+    `Resolving plugin configuration from npm package: ${npmPackageSpec()}`,
+    `Resolving plugin configuration from npm package: ${npmPackageSpec()}`,
+  ));
+
+  const packageDir = await ensureNpmPackageExtracted();
+  const manifestPath = join(packageDir, "install-manifest.json");
+  const packageJsonPath = join(packageDir, "package.json");
+  let manifestData = null;
+  let packageJson = null;
+
+  if (existsSync(packageJsonPath)) {
+    try {
+      packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+      resolvedPluginReleaseId = packageJson.version || "";
+    } catch {}
+  }
+
+  if (existsSync(manifestPath)) {
+    try {
+      manifestData = JSON.parse(await readFile(manifestPath, "utf8"));
+      info(tr("Found manifest in npm package", "Found manifest in npm package"));
+    } catch {}
+  }
+
+  resolvedPluginDir = ".";
+  if (manifestData) {
+    applyManifestConfig(manifestData);
+  } else {
+    const pkgName = packageJson?.name || "";
+    const fallback = pkgName && pkgName !== DEFAULT_PLUGIN_NPM_PACKAGE ? FALLBACK_LEGACY : FALLBACK_CURRENT;
+    resolvedPluginId = fallback.id;
+    resolvedPluginKind = fallback.kind;
+    resolvedPluginSlot = fallback.slot;
+    resolvedFilesRequired = fallback.required;
+    resolvedFilesOptional = fallback.optional;
+    resolvedNpmOmitDev = true;
+    resolvedNpmBuild = false;
+    resolvedNpmBuildMinOpenclawVersion = DEFAULT_NPM_BUILD_MIN_OPENCLAW_VERSION;
+    resolvedNpmBuildScript = "build";
+    resolvedNpmPruneAfterBuild = true;
+    resolvedMinOpenclawVersion = (packageJson?.engines?.openclaw || "").replace(/^>=?\s*/, "").trim()
+      || fallback.minOpenclawVersion
+      || "2026.3.7";
+    resolvedMinOpenvikingVersion = "";
+  }
+
+  if (hasPrebuiltRuntimeOutputs(packageDir)) {
+    resolvedNpmBuild = false;
+    info(tr(
+      "npm package contains prebuilt runtime output; skipping source build.",
+      "npm package contains prebuilt runtime output; skipping source build.",
+    ));
+  }
+
+  PLUGIN_DEST = join(OPENCLAW_DIR, "extensions", resolvedPluginId || "openviking");
+  info(tr(`Plugin: ${resolvedPluginId} (${resolvedPluginKind})`, `Plugin: ${resolvedPluginId} (${resolvedPluginKind})`));
+}
+
 // Resolve plugin configuration from manifest or fallback
 async function resolvePluginConfig() {
+  if (pluginSource === "npm") {
+    try {
+      await resolvePluginConfigFromNpm();
+      return;
+    } catch (error) {
+      warn(tr(
+        `npm plugin resolution failed: ${error?.message || error}`,
+        `npm plugin resolution failed: ${error?.message || error}`,
+      ));
+      warn(tr(
+        "Falling back to GitHub plugin download.",
+        "Falling back to GitHub plugin download.",
+      ));
+      pluginSource = "github";
+    }
+  }
+
   const ghRaw = `https://raw.githubusercontent.com/${REPO}/${PLUGIN_VERSION}`;
 
   info(tr(`Resolving plugin configuration for version: ${PLUGIN_VERSION}`, `正在解析插件配置，版本: ${PLUGIN_VERSION}`));
@@ -1089,6 +1403,12 @@ function extractRuntimeConfigFromPluginEntry(entryConfig) {
   if (typeof prefix === "string" && prefix.trim()) {
     runtime.agent_prefix = prefix.trim();
   }
+  if (typeof entryConfig.accountId === "string" && entryConfig.accountId.trim()) {
+    runtime.accountId = entryConfig.accountId.trim();
+  }
+  if (typeof entryConfig.userId === "string" && entryConfig.userId.trim()) {
+    runtime.userId = entryConfig.userId.trim();
+  }
   return runtime;
 }
 
@@ -1383,6 +1703,8 @@ async function prepareStrongPluginUpgrade() {
   remoteBaseUrl = upgradeRuntimeConfig.baseUrl || remoteBaseUrl;
   remoteApiKey = upgradeRuntimeConfig.apiKey || "";
   remoteAgentPrefix = upgradeRuntimeConfig.agent_prefix || "";
+  remoteAccountId = upgradeRuntimeConfig.accountId || "";
+  remoteUserId = upgradeRuntimeConfig.userId || "";
   info(tr(`Upgrade runtime mode: ${selectedMode} (remote OpenViking server)`, `升级运行模式: ${selectedMode}（远程 OpenViking 服务）`));
 
   info(tr(`Upgrade path: ${fromVersion} -> ${toVersion}`, `升级路径: ${fromVersion} -> ${toVersion}`));
@@ -1578,7 +1900,35 @@ async function installPluginNpmDependencies(destDir) {
   }
 }
 
+async function copyNpmPackageToDest(destDir) {
+  const packageDir = await ensureNpmPackageExtracted();
+  await mkdir(destDir, { recursive: true });
+  const entries = readdirSync(packageDir, { withFileTypes: true });
+  for (const entry of entries) {
+    await cp(join(packageDir, entry.name), join(destDir, entry.name), { recursive: true, force: true });
+  }
+}
+
+async function cleanupNpmPackageTemp() {
+  if (!npmPackageTempDir) return;
+  await rm(npmPackageTempDir, { recursive: true, force: true });
+  npmPackageTempDir = "";
+  npmPackageExtractDir = "";
+}
+
 async function downloadPlugin(destDir) {
+  if (pluginSource === "npm") {
+    await mkdir(destDir, { recursive: true });
+    info(tr(
+      `Installing plugin from npm package ${npmPackageSpec()}...`,
+      `Installing plugin from npm package ${npmPackageSpec()}...`,
+    ));
+    await copyNpmPackageToDest(destDir);
+    await installPluginNpmDependencies(destDir);
+    info(tr(`Plugin deployed: ${PLUGIN_DEST}`, `Plugin deployed: ${PLUGIN_DEST}`));
+    return;
+  }
+
   const ghRaw = `https://raw.githubusercontent.com/${REPO}/${PLUGIN_VERSION}`;
   const pluginDir = resolvedPluginDir;
   const total = resolvedFilesRequired.length + resolvedFilesOptional.length;
@@ -1645,6 +1995,8 @@ async function deployPluginFromRemote() {
   } catch (error) {
     await rm(stagingDir, { recursive: true, force: true });
     throw error;
+  } finally {
+    await cleanupNpmPackageTemp();
   }
 }
 
@@ -1981,7 +2333,8 @@ async function configureOpenClawPlugin({
   } catch { /* ignore read errors */ }
 
   let setupResult = null;
-  if (setupJsonSupported) {
+  let parsed = null;
+  const runSetupJson = async (extraArgs = []) => {
     const setupArgs = ["openviking", "setup"];
     setupArgs.push("--base-url", effectiveRuntimeConfig.baseUrl || remoteBaseUrl);
     setupArgs.push("--json");
@@ -1997,19 +2350,28 @@ async function configureOpenClawPlugin({
     if (effectiveRuntimeConfig.userId) {
       setupArgs.push("--user-id", effectiveRuntimeConfig.userId);
     }
-    if (claimSlot) {
+    if (forceSlotExplicit) {
       setupArgs.push("--force-slot");
     }
-    if (nonInteractive) {
+    if (allowOfflineExplicit) {
       setupArgs.push("--allow-offline");
     }
+    setupArgs.push(...extraArgs);
 
+    const result = await runCapture("openclaw", setupArgs, { env: ocEnv, shell: IS_WIN });
+    return {
+      result,
+      parsed: parseJsonObjectFromOutput(`${result.out || ""}\n${result.err || ""}`),
+    };
+  };
+
+  if (setupJsonSupported) {
     info(tr(
       "Delegating configuration to: openclaw openviking setup --json",
       "委托配置给: openclaw openviking setup --json",
     ));
 
-    setupResult = await runCapture("openclaw", setupArgs, { env: ocEnv, shell: IS_WIN });
+    ({ result: setupResult, parsed } = await runSetupJson());
   } else {
     info(tr(
       "Installed plugin does not support setup --json, using direct config write",
@@ -2017,9 +2379,32 @@ async function configureOpenClawPlugin({
     ));
   }
 
-  let parsed = null;
-  if (setupResult) {
-    parsed = parseJsonObjectFromOutput(`${setupResult.out || ""}\n${setupResult.err || ""}`);
+  if (parsed && !parsed.success && !nonInteractive) {
+    if (parsed.action === "slot_blocked" && !forceSlotExplicit) {
+      const answer = await question(
+        tr(
+          `contextEngine slot is owned by "${parsed.slot?.previousOwner}". Replace it with OpenViking? (y/N)`,
+          `contextEngine slot is owned by "${parsed.slot?.previousOwner}". Replace it with OpenViking? (y/N)`,
+        ),
+      );
+      if (isYes(answer)) {
+        ({ result: setupResult, parsed } = await runSetupJson(["--force-slot"]));
+      }
+    } else if (
+      typeof parsed.error === "string" &&
+      parsed.error.includes("Server unreachable") &&
+      !allowOfflineExplicit
+    ) {
+      const answer = await question(
+        tr(
+          "OpenViking server is unreachable. Save config offline anyway? (y/N)",
+          "OpenViking server is unreachable. Save config offline anyway? (y/N)",
+        ),
+      );
+      if (isYes(answer)) {
+        ({ result: setupResult, parsed } = await runSetupJson(["--allow-offline"]));
+      }
+    }
   }
 
   if (parsed) {
@@ -2042,6 +2427,7 @@ async function configureOpenClawPlugin({
       }
     } else {
       // Setup returned success: false
+      const setupError = parsed.error || parsed.action || "unknown error";
       if (parsed.action === "slot_blocked") {
         warn(tr(
           `Config saved but contextEngine slot is owned by "${parsed.slot?.previousOwner}". Use --force-slot to override.`,
@@ -2049,23 +2435,27 @@ async function configureOpenClawPlugin({
         ));
       } else {
         err(tr(
-          `Setup failed: ${parsed.error || "unknown error"}`,
-          `配置失败: ${parsed.error || "未知错误"}`,
+          `Setup failed: ${setupError}`,
+          `配置失败: ${setupError}`,
         ));
-        return {
-          runtimeConfigOk: false,
-          error: parsed.error || parsed.action || "unknown error",
-        };
       }
+      return {
+        runtimeConfigOk: false,
+        error: setupError,
+      };
     }
-  } else if (setupResult && setupResult.code !== 0) {
-    warn(tr(
-      `openclaw openviking setup exited with code ${setupResult.code}. Falling back to direct JSON config write.`,
-      `openclaw openviking setup 退出码 ${setupResult.code}，回退到直接写入 JSON 配置。`,
-    ));
+  } else if (setupJsonSupported) {
+    const setupError = setupResult
+      ? `openclaw openviking setup did not return JSON (exit code ${setupResult.code})`
+      : "openclaw openviking setup did not run";
+    err(tr(`Setup failed: ${setupError}`, `配置失败: ${setupError}`));
+    return {
+      runtimeConfigOk: false,
+      error: setupError,
+    };
   }
 
-  if (!parsed) {
+  if (!setupJsonSupported) {
     // Direct write: only used when the installed plugin doesn't support `setup --json` (old version).
     // Read the deployed configSchema to determine which fields are allowed, avoiding
     // "additionalProperties" validation failures when writing new fields to old schemas.
@@ -2202,7 +2592,7 @@ async function performUninstall() {
       tr("Confirm uninstall? (y/N)", "确认卸载？(y/N)"),
       "N",
     );
-    if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
+    if (!isYes(answer)) {
       info(tr("Cancelled.", "已取消。"));
       return;
     }
@@ -2314,7 +2704,12 @@ async function main() {
   await resolveDefaultPluginVersion();
   validateRequestedPluginVersion();
   info(tr(`Target: ${OPENCLAW_DIR}`, `目标实例: ${OPENCLAW_DIR}`));
-  info(tr(`Repository: ${REPO}`, `仓库: ${REPO}`));
+  info(tr(`Plugin source: ${pluginSource}`, `Plugin source: ${pluginSource}`));
+  if (pluginSource === "npm") {
+    info(tr(`Plugin package: ${pluginNpmPackage}`, `Plugin package: ${pluginNpmPackage}`));
+  } else {
+    info(tr(`Repository: ${REPO}`, `仓库: ${REPO}`));
+  }
   info(tr(`Plugin version: ${PLUGIN_VERSION}`, `插件版本: ${PLUGIN_VERSION}`));
 
   if (upgradePluginOnly) {
