@@ -243,8 +243,12 @@ class VikingSearchTool(OVFileTool):
             # If no target_uri specified, use memory_user_ids to search specific user memories
             if not target_uri and tool_context.memory_user_ids:
                 all_results = []
-                for user_id in tool_context.memory_user_ids:
-                    user_uri = f"viking://user/{user_id}/memories/"
+                user_ids = tool_context.memory_user_ids
+                if client._is_user_key_mode():
+                    user_ids = [None]
+
+                for user_id in user_ids:
+                    user_uri = client._memory_target_uri(user_id)
                     logger.info(f"openviking_search: searching {user_uri} for query: {query}")
                     results = await search_client.search(query, target_uri=user_uri, limit=20)
                     if results:

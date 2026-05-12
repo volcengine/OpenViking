@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vikingbot.agent.tools.ov_file import VikingSearchTool
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -253,10 +254,61 @@ async def test_skill_memory_uri_respects_namespace_policy(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
-    await client._load_namespace_policy()
-
     assert (
         client._skill_memory_uri("planner", "admin")
         == "viking://agent/workspace/user/admin/memories/skills/planner.md"
     )
+
+
+@pytest.mark.asyncio
+async def test_openviking_search_uses_policy_scoped_user_namespace(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    tool = VikingSearchTool()
+    client = VikingClient(agent_id="workspace")
+
+    calls = []
+
+    async def _accounts():
+        return [
+            {
+                "account_id": "acct",
+                "isolate_user_scope_by_agent": True,
+                "isolate_agent_scope_by_user": False,
+            }
+        ]
+
+    async def _search(query, target_uri=None, limit=20):
+        calls.append(target_uri)
+        return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
+
+    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
+    monkeypatch.setattr(client.client, "search", _search)
+    monkeypatch.setattr(tool, "_get_client", lambda _tool_context: client)
+
+    tool_context = SimpleNamespace(workspace_id="workspace", memory_user_ids=["sender-1"])
+    result = await tool.execute(tool_context, query="hello")
+
+    assert "sender-1/agent/workspace/memories" in result
+    assert calls == ["viking://user/sender-1/agent/workspace/memories/"]
+
+
+@pytest.mark.asyncio
+async def test_openviking_search_user_key_mode_uses_current_user_namespace(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    tool = VikingSearchTool()
+    client = VikingClient(agent_id="workspace")
+
+    calls = []
+
+    async def _search(query, target_uri=None, limit=20):
+        calls.append(target_uri)
+        return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
+
+    monkeypatch.setattr(client.client, "search", _search)
+    monkeypatch.setattr(tool, "_get_client", lambda _tool_context: client)
+
+    tool_context = SimpleNamespace(workspace_id="workspace", memory_user_ids=["sender-1", "sender-2"])
+    result = await tool.execute(tool_context, query="hello")
+
+    assert "viking://user/memories/" in result
+    assert calls == ["viking://user/memories/"]
