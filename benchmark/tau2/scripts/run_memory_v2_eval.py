@@ -239,7 +239,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     _add_tau2_to_path(args.tau2_repo)
 
     from tau2.agent.llm_agent import LLMAgent, LLMAgentState
-    from tau2.data_model.message import MultiToolMessage, SystemMessage
+    from tau2.data_model.message import AssistantMessage, MultiToolMessage, SystemMessage
     from tau2.registry import registry
     from tau2.utils.llm_utils import generate
 
@@ -278,6 +278,41 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 return "\n\n".join(blocks), rows
             finally:
                 client.close()
+
+        def _generate(self, messages):
+            try:
+                return generate(
+                    model=self.llm,
+                    tools=self.tools,
+                    messages=messages,
+                    **self.llm_args,
+                )
+            except json.JSONDecodeError:
+                retry_messages = messages + [
+                    SystemMessage(
+                        role="system",
+                        content=(
+                            "Retry the last assistant step once. If you call a tool, "
+                            "the tool arguments must be syntactically valid JSON."
+                        ),
+                    )
+                ]
+                try:
+                    return generate(
+                        model=self.llm,
+                        tools=self.tools,
+                        messages=retry_messages,
+                        **self.llm_args,
+                    )
+                except json.JSONDecodeError as exc:
+                    return AssistantMessage(
+                        role="assistant",
+                        content="I need to continue with the available task information.",
+                        raw_data={
+                            "openviking_memory_agent_error": "invalid_tool_call_json",
+                            "error": str(exc),
+                        },
+                    )
 
         def generate_next_message(self, message, state: LLMAgentState):
             if isinstance(message, MultiToolMessage):
@@ -318,12 +353,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         + "\n"
                     )
 
-            assistant_message = generate(
-                model=self.llm,
-                tools=self.tools,
-                messages=state.system_messages + state.messages,
-                **self.llm_args,
-            )
+            assistant_message = self._generate(state.system_messages + state.messages)
             state.messages.append(assistant_message)
             return assistant_message, state
 
