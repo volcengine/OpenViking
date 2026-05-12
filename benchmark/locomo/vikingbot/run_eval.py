@@ -196,6 +196,7 @@ def load_locomo_qa(
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
                     "speakers": speakers,
+                    "original_sample_id": original_id,
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
@@ -217,6 +218,7 @@ def load_locomo_qa(
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
                         "speakers": speakers,
+                        "original_sample_id": original_id,
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
@@ -532,7 +534,7 @@ def main():
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
             question,
             question_time,
-            sample_id,
+            qa_item.get("original_sample_id"),
             question_id,
             args.config,
             None if not args.group_chat else speakers,

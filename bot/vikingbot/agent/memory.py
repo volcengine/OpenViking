@@ -138,6 +138,7 @@ class MemoryStore:
             config = load_config().ov_server
             # Use provided user_ids or fall back to sender_id
             search_user_ids = user_ids if user_ids else [sender_id]
+            admin_user_id = config.admin_user_id
             logger.info(f'workspace_id={workspace_id}')
             logger.info(f'user_ids={search_user_ids}')
             logger.info(f'admin_user_id={admin_user_id}')
