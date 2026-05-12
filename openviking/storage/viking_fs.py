@@ -31,7 +31,6 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.storage.expr import PathScope
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -41,6 +40,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -1256,8 +1256,12 @@ class VikingFS:
             nonlocal files, dirs
             try:
                 entries = self._ls_entries(current_path)
-            except Exception:
-                return
+            except Exception as exc:
+                current_uri = self._path_to_uri(current_path, ctx=ctx)
+                mapped = map_exception(exc, resource=current_uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             for entry in entries:
                 name = entry.get("name", "")
                 if name in (".", ".."):
@@ -1266,7 +1270,7 @@ class VikingFS:
                 entry_uri = self._path_to_uri(f"{current_path}/{name}", ctx=ctx)
                 if not self._is_accessible(entry_uri, real_ctx):
                     continue
-                if not is_dir and name.startswith(".") and not show_all_hidden:
+                if name.startswith(".") and not show_all_hidden:
                     continue
                 if is_dir:
                     dirs += 1

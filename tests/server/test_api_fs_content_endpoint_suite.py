@@ -269,3 +269,74 @@ async def test_reindex_async_returns_task_id(client, monkeypatch):
     assert body["result"]["status"] == "accepted"
     assert body["result"]["task_id"] == "task-123"
     assert body["result"]["mode"] == "vectors_only"
+
+
+async def test_count_missing_uri_returns_not_found(app, service, monkeypatch):
+    async def fake_count(*args, **kwargs):
+        raise FileNotFoundError("count target missing")
+
+    monkeypatch.setattr(service.fs, "count", fake_count)
+    response = await _request_with_handler(
+        app,
+        "GET",
+        "/api/v1/fs/count",
+        params={"uri": "viking://resources/__count_missing__"},
+    )
+    _assert_error(response, status_code=404, error_code="NOT_FOUND")
+
+
+async def test_count_on_file_returns_failed_precondition(app, service, monkeypatch):
+    from openviking_cli.exceptions import FailedPreconditionError
+
+    async def fake_count(uri, ctx, recursive=False, show_all_hidden=False):
+        raise FailedPreconditionError(
+            f"{uri} is not a directory",
+            details={"resource": uri, "expected": "directory"},
+        )
+
+    monkeypatch.setattr(service.fs, "count", fake_count)
+    response = await _request_with_handler(
+        app,
+        "GET",
+        "/api/v1/fs/count",
+        params={"uri": "viking://resources/file.txt"},
+    )
+    _assert_error(response, status_code=412, error_code="FAILED_PRECONDITION")
+
+
+async def test_count_returns_envelope_with_uri(app, service, monkeypatch):
+    captured: dict = {}
+
+    async def fake_count(uri, ctx, recursive=False, show_all_hidden=False):
+        captured["uri"] = uri
+        captured["recursive"] = recursive
+        captured["show_all_hidden"] = show_all_hidden
+        return {"files": 4, "dirs": 2, "total": 6}
+
+    monkeypatch.setattr(service.fs, "count", fake_count)
+    response = await _request_with_handler(
+        app,
+        "GET",
+        "/api/v1/fs/count",
+        params={
+            "uri": "viking://resources/dir",
+            "recursive": "true",
+            "show_all_hidden": "true",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    # HTTP response envelope mirrors the SDK shape and additionally surfaces uri.
+    assert body["result"] == {
+        "uri": "viking://resources/dir",
+        "files": 4,
+        "dirs": 2,
+        "total": 6,
+    }
+    assert captured == {
+        "uri": "viking://resources/dir",
+        "recursive": True,
+        "show_all_hidden": True,
+    }

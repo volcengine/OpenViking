@@ -157,6 +157,101 @@ class TestTree:
         assert isinstance(tree, (list, dict))
 
 
+class TestCount:
+    """Test count operation (exact directory entry counting)."""
+
+    async def _build_tree(self, client: AsyncOpenViking) -> str:
+        """Create a deterministic tree under viking://resources/count_root.
+
+        Layout:
+            count_root/
+                visible_a.txt
+                visible_b.txt
+                .hidden_file.txt
+                visible_dir/
+                    nested.txt
+                    .hidden_nested.txt
+                .hidden_dir/
+                    inside_hidden.txt
+        """
+        ctx = client._client._ctx  # type: ignore[attr-defined]
+        viking_fs = client._service.viking_fs
+
+        root = "viking://resources/count_root"
+        await viking_fs.mkdir(root, ctx=ctx, exist_ok=True)
+        await viking_fs.write(f"{root}/visible_a.txt", "a", ctx=ctx)
+        await viking_fs.write(f"{root}/visible_b.txt", "b", ctx=ctx)
+        await viking_fs.write(f"{root}/.hidden_file.txt", "hf", ctx=ctx)
+
+        visible_dir = f"{root}/visible_dir"
+        await viking_fs.mkdir(visible_dir, ctx=ctx, exist_ok=True)
+        await viking_fs.write(f"{visible_dir}/nested.txt", "n", ctx=ctx)
+        await viking_fs.write(f"{visible_dir}/.hidden_nested.txt", "hn", ctx=ctx)
+
+        hidden_dir = f"{root}/.hidden_dir"
+        await viking_fs.mkdir(hidden_dir, ctx=ctx, exist_ok=True)
+        await viking_fs.write(f"{hidden_dir}/inside_hidden.txt", "ih", ctx=ctx)
+
+        return root
+
+    async def test_count_non_recursive_excludes_hidden(self, client: AsyncOpenViking):
+        """Default (recursive=False, show_all_hidden=False) counts only visible direct children."""
+        root = await self._build_tree(client)
+
+        result = await client.count(root)
+
+        # Visible direct children: visible_a.txt, visible_b.txt, visible_dir
+        assert result == {"files": 2, "dirs": 1, "total": 3}
+
+    async def test_count_non_recursive_with_hidden(self, client: AsyncOpenViking):
+        """show_all_hidden=True includes hidden files AND hidden directories."""
+        root = await self._build_tree(client)
+
+        result = await client.count(root, show_all_hidden=True)
+
+        # Direct children: 2 visible files + 1 hidden file + visible_dir + .hidden_dir
+        assert result == {"files": 3, "dirs": 2, "total": 5}
+
+    async def test_count_recursive_excludes_hidden_subtree(self, client: AsyncOpenViking):
+        """recursive=True must NOT descend into hidden directories when show_all_hidden=False."""
+        root = await self._build_tree(client)
+
+        result = await client.count(root, recursive=True)
+
+        # files: visible_a.txt, visible_b.txt, visible_dir/nested.txt
+        # dirs:  visible_dir
+        # hidden files & .hidden_dir/* are excluded
+        assert result == {"files": 3, "dirs": 1, "total": 4}
+
+    async def test_count_recursive_with_hidden(self, client: AsyncOpenViking):
+        """recursive=True + show_all_hidden=True walks every entry."""
+        root = await self._build_tree(client)
+
+        result = await client.count(root, recursive=True, show_all_hidden=True)
+
+        # files: visible_a, visible_b, .hidden_file, visible_dir/nested,
+        #        visible_dir/.hidden_nested, .hidden_dir/inside_hidden = 6
+        # dirs:  visible_dir, .hidden_dir = 2
+        assert result == {"files": 6, "dirs": 2, "total": 8}
+
+    async def test_count_on_file_raises(self, client: AsyncOpenViking):
+        """count() on a non-directory must raise (FailedPrecondition)."""
+        ctx = client._client._ctx  # type: ignore[attr-defined]
+        viking_fs = client._service.viking_fs
+
+        await viking_fs.mkdir("viking://resources/count_file_test", ctx=ctx, exist_ok=True)
+        file_uri = "viking://resources/count_file_test/file.txt"
+        await viking_fs.write(file_uri, "data", ctx=ctx)
+
+        with pytest.raises(Exception):  # noqa: B017
+            await client.count(file_uri)
+
+    async def test_count_missing_uri_raises(self, client: AsyncOpenViking):
+        """count() on a missing URI must raise (NotFound)."""
+        with pytest.raises(Exception):  # noqa: B017
+            await client.count("viking://resources/__count_missing__")
+
+
 async def test_local_client_mkdir_forwards_description():
     client = LocalClient.__new__(LocalClient)
     client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
