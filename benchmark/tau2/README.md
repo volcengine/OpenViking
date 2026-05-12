@@ -46,14 +46,6 @@ benchmark/tau2/scripts/setup_tau2_repo.sh
 source benchmark/tau2/.env.tau2
 ```
 
-Use `TAU2_REF` or `--ref` when you need a TAU-2 branch that already contains the
-confirmation-aware user simulator prompt:
-
-```bash
-benchmark/tau2/scripts/setup_tau2_repo.sh --ref <branch-or-commit>
-source benchmark/tau2/.env.tau2
-```
-
 Plan the default benchmark without running TAU-2:
 
 ```bash
@@ -107,13 +99,15 @@ The runner default is the official TAU-2 user simulator if
 config sets `confirmation_aware`, because a memory benchmark should not treat
 user confirmation as task completion before the backend write has happened.
 
-`confirmation_aware` does not monkey-patch TAU-2 from this directory. It requires
-the configured `TAU2_REPO` to contain the corresponding upstream TAU-2 simulator
-prompt fix. `--strict-preflight` fails fast when that prompt is not detected, so
-the artifact cannot silently claim confirmation-aware semantics while running an
-older official simulator.
+`confirmation_aware` applies a small idempotent prompt patch to the configured
+TAU-2 checkout before planning or running. The patch appends the confirmation
+boundary from [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297)
+to the TAU-2 user simulator guidelines when it is not already present, and the
+run artifacts record whether the patch was applied.
 
-Use `config/official.yaml` when you need an official-user-simulator parity run.
+Use `config/official.yaml` with a clean TAU-2 checkout when you need an
+official-user-simulator parity run. If the checkout was already patched, the
+artifact records that boundary instead of labeling the run pure official.
 
 ## Evidence Boundary
 

@@ -14,6 +14,21 @@ import yaml
 
 TAU2_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = TAU2_DIR.parents[1]
+CONFIRMATION_AWARE_UPSTREAM_PR = "https://github.com/sierra-research/tau2-bench/pull/297"
+CONFIRMATION_AWARE_MARKER = "OpenViking TAU-2 confirmation-aware user simulator patch"
+CONFIRMATION_AWARE_APPENDIX = f"""
+
+## {CONFIRMATION_AWARE_MARKER}
+
+Reference: {CONFIRMATION_AWARE_UPSTREAM_PR}
+
+- If the agent asks you to confirm, authorize, or approve a backend action,
+  reply with the requested confirmation but do not emit `###STOP###` in the
+  same turn.
+- Emit `###STOP###` only after the agent clearly reports that the requested
+  backend action has been completed, or when the official transfer /
+  out-of-scope rules apply.
+"""
 
 
 _ENV_PATTERN = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
@@ -146,6 +161,37 @@ def tau2_context(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _prompt_paths(repo: Path) -> list[Path]:
+    return [
+        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines.md",
+        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines_tools.md",
+    ]
+
+
+def _has_confirmation_aware_prompt(prompt_text: str) -> bool:
+    return (
+        CONFIRMATION_AWARE_MARKER in prompt_text
+        or (
+            "do not emit" in prompt_text
+            and "###STOP###" in prompt_text
+            and "confirm" in prompt_text.lower()
+        )
+    )
+
+
+def _ensure_confirmation_aware_prompt(repo: Path) -> bool:
+    patched = False
+    for path in _prompt_paths(repo):
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if _has_confirmation_aware_prompt(text):
+            continue
+        path.write_text(text.rstrip() + CONFIRMATION_AWARE_APPENDIX + "\n", encoding="utf-8")
+        patched = True
+    return patched
+
+
 def user_simulator_policy(config: dict[str, Any]) -> str:
     policy = config.get("eval", {}).get("user_simulator_policy", "official")
     policy = str(policy)
@@ -159,29 +205,34 @@ def user_simulator_policy(config: dict[str, Any]) -> str:
 def simulator_policy_report(config: dict[str, Any]) -> dict[str, Any]:
     policy = user_simulator_policy(config)
     repo = tau2_repo(config)
-    prompt_paths = [
-        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines.md",
-        repo / "data" / "tau2" / "user_simulator" / "simulation_guidelines_tools.md",
-    ]
+    patch_applied = policy == "confirmation_aware" and _ensure_confirmation_aware_prompt(repo)
+    patch_mode = "direct_prompt_append" if patch_applied else "none"
+    if policy == "confirmation_aware":
+        if not patch_applied:
+            patch_mode = "upstream_or_existing_prompt"
+
+    prompt_paths = _prompt_paths(repo)
     prompt_text = "\n".join(
         path.read_text(encoding="utf-8") for path in prompt_paths if path.is_file()
     )
-    confirmation_aware_prompt = (
-        "do not emit" in prompt_text
-        and "###STOP###" in prompt_text
-        and "confirm" in prompt_text.lower()
-    )
+    confirmation_aware_prompt = _has_confirmation_aware_prompt(prompt_text)
     supported = policy == "official" or confirmation_aware_prompt
+    claim_boundary = "confirmation_aware_user_simulator_prompt"
+    if policy == "official":
+        claim_boundary = (
+            "official_policy_with_confirmation_aware_checkout"
+            if confirmation_aware_prompt
+            else "official_tau2_user_simulator"
+        )
     return {
         "user_simulator_policy": policy,
         "supported": supported,
         "confirmation_aware_prompt_detected": confirmation_aware_prompt,
+        "confirmation_aware_upstream_pr": CONFIRMATION_AWARE_UPSTREAM_PR,
+        "patch_applied": patch_applied,
+        "patch_mode": patch_mode,
         "prompt_files": [str(path) for path in prompt_paths],
-        "claim_boundary": (
-            "official_tau2_user_simulator"
-            if policy == "official"
-            else "requires_tau2_confirmation_aware_user_simulator_prompt"
-        ),
+        "claim_boundary": claim_boundary,
     }
 
 
