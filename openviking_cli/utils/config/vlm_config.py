@@ -68,6 +68,14 @@ class VLMConfig(BaseModel):
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
+    extra_request_body: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields passed to OpenAI-compatible VLM completion requests. "
+            "Useful for provider-specific options such as Ollama's {'think': false}."
+        ),
+    )
+
     stream: bool = Field(
         default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
@@ -136,6 +144,11 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["api_base"] = self.api_base
             if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
                 self.providers[self.provider]["extra_headers"] = self.extra_headers
+            if (
+                self.extra_request_body
+                and "extra_request_body" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
 
@@ -164,6 +177,8 @@ class VLMConfig(BaseModel):
             config["api_base"] = self.api_base
         if self.extra_headers and "extra_headers" not in config:
             config["extra_headers"] = self.extra_headers
+        if self.extra_request_body and "extra_request_body" not in config:
+            config["extra_request_body"] = self.extra_request_body
         if self.stream and "stream" not in config:
             config["stream"] = self.stream
         return config
@@ -255,6 +270,8 @@ class VLMConfig(BaseModel):
                 result["api_base"] = config.get("api_base")
             if config.get("extra_headers"):
                 result["extra_headers"] = config.get("extra_headers")
+            if config.get("extra_request_body"):
+                result["extra_request_body"] = config.get("extra_request_body")
 
         return result
 

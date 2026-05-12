@@ -542,6 +542,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
 | `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
+| `extra_request_body` | object | Extra JSON body fields for OpenAI-compatible completion requests, useful for provider-specific options such as Ollama `{"think": false}` |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
@@ -593,6 +594,24 @@ Common use cases:
 - **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
+
+**Custom Request Body**
+
+For OpenAI-compatible providers that accept provider-specific JSON body fields, add them via `extra_request_body`. OpenViking merges these fields into the `extra_body` sent by the OpenAI SDK or LiteLLM:
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "api_key": "ollama",
+    "model": "ollama/llama3.1",
+    "api_base": "http://127.0.0.1:11434",
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
 
 **Streaming Mode**
 
@@ -1215,6 +1234,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "max_concurrent": 100,
     "max_retries": 3,
     "extra_headers": {},
+    "extra_request_body": {},
     "stream": false
   },
   "rerank": {

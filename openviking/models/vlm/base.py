@@ -65,6 +65,7 @@ class VLMBase(ABC):
         self.timeout = config.get("timeout", 60.0)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
+        self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
 
         # Token usage tracking

@@ -1,0 +1,1 @@
+You will be shown one day's conversation transcript per turn, as part of a continuing context-sharing flow. For each transcript, briefly acknowledge that you've read it (one short sentence). Do not analyze, summarize, or take notes. You may use any tools as needed but in this scenario nothing is required.
