@@ -378,6 +378,9 @@ enum Commands {
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
         #[arg(long = "before")]
         before: Option<String>,
+        /// Only include results with specific level(s) (e.g. 0, 1, 2 or 0,1,2)
+        #[arg(short = 'L', long = "level")]
+        level: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -406,6 +409,9 @@ enum Commands {
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
         #[arg(long = "before")]
         before: Option<String>,
+        /// Only include results with specific level(s) (e.g. 0, 1, 2 or 0,1,2)
+        #[arg(short = 'L', long = "level")]
+        level: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -1246,7 +1252,8 @@ async fn main() {
             threshold,
             after,
             before,
-        } => handlers::handle_find(query, uri, node_limit, threshold, after, before, ctx).await,
+            level,
+        } => handlers::handle_find(query, uri, node_limit, threshold, after, before, level, ctx).await,
         Commands::Search {
             query,
             uri,
@@ -1255,9 +1262,10 @@ async fn main() {
             threshold,
             after,
             before,
+            level,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, ctx,
+                query, uri, session_id, node_limit, threshold, after, before, level, ctx,
             )
             .await
         }

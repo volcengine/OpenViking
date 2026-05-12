@@ -303,13 +303,12 @@ impl HttpClient {
         Ok(())
     }
 
-    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<()> {
+    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
         ];
-        let _: serde_json::Value = self.delete("/api/v1/fs", &params).await?;
-        Ok(())
+        self.delete("/api/v1/fs", &params).await
     }
 
     pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<()> {
@@ -337,6 +336,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
+        level: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -346,6 +346,7 @@ impl HttpClient {
             "since": since,
             "until": until,
             "time_field": time_field,
+            "level": level,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -360,6 +361,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
+        level: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -370,6 +372,7 @@ impl HttpClient {
             "since": since,
             "until": until,
             "time_field": time_field,
+            "level": level,
         });
         self.post("/api/v1/search/search", &body).await
     }
