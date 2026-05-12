@@ -279,7 +279,7 @@ class MemoryTypeRegistry:
             from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
             mf = MemoryFile(
-                uri=uri,
+                uri=file_uri,
                 memory_type=schema.memory_type,
                 extra_fields=fields_with_init,
             )
