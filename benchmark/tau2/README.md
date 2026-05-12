@@ -54,6 +54,9 @@ configured:
 benchmark/tau2/run_full_eval.sh --config benchmark/tau2/config/prewrite.yaml --execute
 ```
 
+When using Doubao through an OpenAI-compatible endpoint, set `OPENAI_API_KEY`
+and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
+
 The initial no-memory cells use upstream TAU-2 CLI flags only. OpenViking memory
 cells are kept in the same plan, but marked adapter-pending until the TAU-2
 agent adapter is wired in this benchmark directory.

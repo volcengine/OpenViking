@@ -18,9 +18,9 @@ paths:
   output_dir: benchmark/tau2/result
 
 model:
-  agent_llm: ${TAU2_AGENT_LLM:-doubao-seed-1-6-250615}
-  user_llm: ${TAU2_USER_LLM:-doubao-seed-1-6-250615}
-  evaluator_llm: ${TAU2_EVALUATOR_LLM:-doubao-seed-1-6-250615}
+  agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
+  user_llm: ${TAU2_USER_LLM:-openai/doubao-seed-2-0-pro-260215}
+  evaluator_llm: ${TAU2_EVALUATOR_LLM:-openai/doubao-seed-2-0-pro-260215}
   temperature: 0.0
 
 openviking:
