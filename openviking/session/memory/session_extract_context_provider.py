@@ -15,7 +15,6 @@ from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.core import ExtractContextProvider
-from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,

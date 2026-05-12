@@ -358,7 +358,7 @@ class MemoryUpdater:
                 for uri in resolved_op.uris:
                     result.add_error(uri, e)
 
-        # Apply delete operations (delete_file_contents is List[MemoryFileContent])
+        # Apply delete operations (delete_file_contents is List[MemoryFile])
         # Skip deletes whose URI was just written in the same batch — this happens when the
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
