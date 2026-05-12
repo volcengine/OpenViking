@@ -100,10 +100,10 @@ config sets `confirmation_aware`, because a memory benchmark should not treat
 user confirmation as task completion before the backend write has happened.
 
 `confirmation_aware` applies a small idempotent prompt patch to the configured
-TAU-2 checkout before planning or running. The patch appends the confirmation
-boundary from [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297)
-to the TAU-2 user simulator guidelines when it is not already present, and the
-run artifacts record whether the patch was applied.
+TAU-2 checkout before planning or running. The patch appends only the behavioral
+confirmation boundary to the TAU-2 user simulator guidelines; metadata such as
+the upstream PR link is kept in run artifacts, not in the simulator prompt.
+Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297).
 
 Use `config/official.yaml` with a clean TAU-2 checkout when you need an
 official-user-simulator parity run. If the checkout was already patched, the

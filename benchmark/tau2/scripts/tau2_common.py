@@ -15,12 +15,7 @@ import yaml
 TAU2_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = TAU2_DIR.parents[1]
 CONFIRMATION_AWARE_UPSTREAM_PR = "https://github.com/sierra-research/tau2-bench/pull/297"
-CONFIRMATION_AWARE_MARKER = "OpenViking TAU-2 confirmation-aware user simulator patch"
-CONFIRMATION_AWARE_APPENDIX = f"""
-
-## {CONFIRMATION_AWARE_MARKER}
-
-Reference: {CONFIRMATION_AWARE_UPSTREAM_PR}
+CONFIRMATION_AWARE_APPENDIX = """
 
 - If the agent asks you to confirm, authorize, or approve a backend action,
   reply with the requested confirmation but do not emit `###STOP###` in the
@@ -169,13 +164,10 @@ def _prompt_paths(repo: Path) -> list[Path]:
 
 
 def _has_confirmation_aware_prompt(prompt_text: str) -> bool:
+    normalized = " ".join(prompt_text.split())
     return (
-        CONFIRMATION_AWARE_MARKER in prompt_text
-        or (
-            "do not emit" in prompt_text
-            and "###STOP###" in prompt_text
-            and "confirm" in prompt_text.lower()
-        )
+        "reply with the requested confirmation" in normalized
+        and "do not emit `###STOP###` in the same turn" in normalized
     )
 
 
