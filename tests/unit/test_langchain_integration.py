@@ -564,12 +564,21 @@ def test_langgraph_store_round_trip_and_semantic_search():
         "preferences",
         {"color": "azure", "framework": "langgraph", "nested": {"rank": 3}},
     )
+    store.put(("users", "ada"), "profile", {"color": "teal", "framework": "langgraph"})
+    store.put(
+        ("users", "ada"),
+        "bad-rank",
+        {"color": "navy", "framework": "langgraph", "nested": {"rank": "high"}},
+    )
 
     item = store.get(("users", "ada"), "preferences")
     assert item.value["framework"] == "langgraph"
 
     filtered = store.search(("users",), filter={"nested.rank": {"$gte": 3}}, limit=5)
-    assert filtered[0].key == "preferences"
+    assert [item.key for item in filtered] == ["preferences"]
+
+    bad_in_filter = store.search(("users",), filter={"framework": {"$in": 3}}, limit=5)
+    assert bad_in_filter == []
 
     semantic = store.search(("users",), query="azure", limit=5)
     assert semantic[0].namespace == ("users", "ada")

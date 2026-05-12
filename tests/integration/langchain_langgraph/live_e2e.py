@@ -120,6 +120,7 @@ def test_true_live_langchain_context_backend_e2e():
 
 
 def test_true_live_langchain_message_history_e2e():
+    _require_openviking_live_env()
     client = _build_real_client()
     session_id = f"langchain-history-live-e2e-{uuid.uuid4().hex}"
     code = f"history_live_{uuid.uuid4().hex[:10]}"
@@ -307,6 +308,7 @@ def test_true_live_langgraph_create_agent_middleware_e2e():
 
 
 def test_true_live_retriever_and_langgraph_store_e2e():
+    _require_openviking_live_env()
     client = _build_real_client()
     root_uri = f"viking://user/memories/langgraph_store_live_{uuid.uuid4().hex}"
     code = f"store_live_{uuid.uuid4().hex[:10]}"
@@ -488,7 +490,21 @@ def _call_llm(messages: list[dict[str, str]]) -> str:
 
 
 def _require_live_env() -> None:
+    _require_openviking_live_env()
     assert os.environ.get("ARK_API_KEY"), "ARK_API_KEY is required for live e2e"
+
+
+def _require_openviking_live_env() -> None:
+    if os.environ.get("OPENVIKING_URL"):
+        return
+    try:
+        from openviking_cli.utils.config.ovcli_config import load_ovcli_config
+
+        cli_config = load_ovcli_config()
+    except Exception as exc:
+        pytest.skip(f"OpenViking live connection config is unavailable: {exc}")
+    if cli_config is None or not cli_config.url:
+        pytest.skip("OPENVIKING_URL or ovcli.conf url is required for live e2e")
 
 
 def _build_real_client():

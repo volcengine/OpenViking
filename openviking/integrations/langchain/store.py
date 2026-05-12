@@ -552,16 +552,28 @@ def _compare(actual: Any, op: str, target: Any) -> bool:
     if op in {"$ne", "ne"}:
         return actual != target
     if op in {"$gt", "gt"}:
-        return actual > target
+        return _safe_ordered_compare(actual, target, lambda left, right: left > right)
     if op in {"$gte", "gte"}:
-        return actual >= target
+        return _safe_ordered_compare(actual, target, lambda left, right: left >= right)
     if op in {"$lt", "lt"}:
-        return actual < target
+        return _safe_ordered_compare(actual, target, lambda left, right: left < right)
     if op in {"$lte", "lte"}:
-        return actual <= target
+        return _safe_ordered_compare(actual, target, lambda left, right: left <= right)
     if op in {"$in", "in"}:
-        return actual in target
+        try:
+            return actual in target
+        except TypeError:
+            return False
     return actual == target
+
+
+def _safe_ordered_compare(actual: Any, target: Any, compare) -> bool:
+    if actual is None:
+        return False
+    try:
+        return bool(compare(actual, target))
+    except TypeError:
+        return False
 
 
 def _tuple_matches_prefix(value: tuple[str, ...], prefix: tuple[str, ...]) -> bool:

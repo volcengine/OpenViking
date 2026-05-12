@@ -159,12 +159,13 @@ class AsyncHTTPClient(BaseClient):
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
+        effective_user = user if user is not None else user_id
         should_load_cli_config = (
             url is None
             or api_key is None
             or agent_id is None
             or account is None
-            or user is None
+            or effective_user is None
             or timeout == 60.0
             or extra_headers is None
         )
@@ -175,7 +176,7 @@ class AsyncHTTPClient(BaseClient):
                 api_key = api_key or cli_config.api_key
                 agent_id = agent_id or cli_config.agent_id
                 account = account or cli_config.account
-                user = user or cli_config.user
+                effective_user = effective_user or cli_config.user
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
                 if extra_headers is None:
@@ -189,7 +190,7 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._agent_id = agent_id
         self._account = account
-        self._user_id = user
+        self._user_id = effective_user
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
