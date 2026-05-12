@@ -10,10 +10,8 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from openviking.session.memory.dataclass import MemoryFileContent
-from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
@@ -51,7 +49,7 @@ def optimize_tool_result(tool_name: str, result: Any) -> Any:
     # 对 read 工具返回的 dict，如果包含 content 字段，则截断 content
     if tool_name == "read" and isinstance(result, dict) and "content" in result:
         result = result.copy()
-        result["content"] = truncate_content(result["content"])
+        result["content"] = MemoryFileUtils.truncate_content(result["content"])
     return result
 
 
@@ -175,21 +173,19 @@ class MemoryReadTool(MemoryTool):
                 ctx=ctx.request_ctx,
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
-            parsed = MemoryFileUtils.read_file_content(content)
-            ctx.read_file_contents[uri] = MemoryFileContent(
-                uri=uri,
-                plain_content=parsed.get("content", ""),
-                memory_fields=parsed,
-            )
+            mf = MemoryFileUtils.read(content, uri=uri)
+            ctx.read_file_contents[uri] = mf
             # Remove links/backlinks from LLM-visible output (not needed for extraction)
-            llm_result = {k: v for k, v in parsed.items() if k not in ("links", "backlinks")}
+            llm_result = mf.to_metadata()
+            llm_result.pop("links", None)
+            llm_result.pop("backlinks", None)
             # Annotate with page_id for link extraction
             if ctx and ctx.page_id_map:
                 page_id = ctx.page_id_map.get_page_id(uri)
                 if page_id is not None:
                     llm_result["page_id"] = page_id
             # Add 1-based line numbers to content for LLM readability & link extraction
-            raw_content = parsed.get("content", "")
+            raw_content = mf.content
             if raw_content:
                 lines = raw_content.split("\n")
                 numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))

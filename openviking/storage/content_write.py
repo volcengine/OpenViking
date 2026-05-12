@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
-from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
@@ -345,26 +345,17 @@ class ContentWriteCoordinator:
     ) -> None:
         if mode == "replace" and context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing = deserialize_full(existing_raw)
-            if existing.memory_fields:
-                metadata_with_content = existing.memory_fields.copy()
-                metadata_with_content["content"] = content
-                content = serialize_with_metadata(metadata_with_content)
+            mf = MemoryFileUtils.read(existing_raw, uri=uri)
+            mf.content = content
+            content = MemoryFileUtils.write(mf)
             await self._viking_fs.write_file(uri, content, ctx=ctx)
             return
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing = deserialize_full(existing_raw)
-            existing_content = existing.plain_content
-            metadata = existing.memory_fields
-            updated_content = existing_content + content
-            if metadata:
-                metadata_with_content = metadata.copy()
-                metadata_with_content["content"] = updated_content
-                updated_raw = serialize_with_metadata(metadata_with_content)
-            else:
-                updated_raw = updated_content
+            mf = MemoryFileUtils.read(existing_raw, uri=uri)
+            mf.content = mf.content + content
+            updated_raw = MemoryFileUtils.write(mf)
             await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx)

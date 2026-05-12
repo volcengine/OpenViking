@@ -10,7 +10,6 @@ from typing import Any, Dict, List
 
 import json_repair
 
-from openviking.session.memory.utils import truncate_content
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 

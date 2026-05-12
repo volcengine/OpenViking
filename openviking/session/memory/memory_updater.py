@@ -26,12 +26,8 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
-from openviking.session.memory.utils import (
-    deserialize_full,
-    flat_model_to_dict,
-    parse_memory_file_with_fields,
-    serialize_with_metadata,
-)
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils import flat_model_to_dict
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import supplement_operation_uris, render_template
 from openviking.storage.viking_fs import get_viking_fs
@@ -397,14 +393,11 @@ class MemoryUpdater:
         for uri in resolved_op.uris:
             # Always read from disk first to get the latest content,
             # so consecutive patches to the same URI see each other's changes.
-            old_content = None
+            old_content: Optional[MemoryFile] = None
             try:
                 content = await viking_fs.read_file(uri, ctx=ctx)
                 if content:
-                    parsed = MemoryFileUtils.read_file_content(content)
-                    old_content = MemoryFileContent(
-                        uri=uri, plain_content=parsed.get("content", ""), memory_fields=parsed
-                    )
+                    old_content = MemoryFileUtils.read(content, uri=uri)
             except Exception:
                 # File doesn't exist yet, that's okay
                 pass
@@ -422,9 +415,9 @@ class MemoryUpdater:
                         current_value = None
                     else:
                         if field.name == "content":
-                            current_value = old_content.plain_content
+                            current_value = old_content.content
                         else:
-                            current_value = old_content.memory_fields.get(field.name)
+                            current_value = old_content.extra_fields.get(field.name)
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     new_value = merge_op.apply(current_value, patch_value)
@@ -433,19 +426,17 @@ class MemoryUpdater:
             # Handle links/backlinks fields: merge with existing
             incoming_links = getattr(resolved_op, "_incoming_links", [])
             incoming_backlinks = getattr(resolved_op, "_incoming_backlinks", [])
-            has_existing_links = old_content and old_content.memory_fields
+            has_existing_links = old_content is not None
             if (
                 incoming_links
                 or incoming_backlinks
-                or (has_existing_links and old_content.memory_fields.get("links"))
-                or (has_existing_links and old_content.memory_fields.get("backlinks"))
+                or (has_existing_links and old_content.links)
+                or (has_existing_links and old_content.backlinks)
             ):
                 from openviking.session.memory.merge_op.link_merge import merge_links
 
                 # Merge links
-                existing_links = []
-                if has_existing_links:
-                    existing_links = old_content.memory_fields.get("links", [])
+                existing_links = old_content.links if has_existing_links else []
                 if incoming_links:
                     merged_links = merge_links(
                         existing_links,
@@ -456,9 +447,7 @@ class MemoryUpdater:
                     metadata["links"] = existing_links
 
                 # Merge backlinks
-                existing_backlinks = []
-                if has_existing_links:
-                    existing_backlinks = old_content.memory_fields.get("backlinks", [])
+                existing_backlinks = old_content.backlinks if has_existing_links else []
                 if incoming_backlinks:
                     merged_backlinks = merge_links(
                         existing_backlinks,
@@ -468,9 +457,9 @@ class MemoryUpdater:
                 elif existing_backlinks:
                     metadata["backlinks"] = existing_backlinks
 
-            new_full_content = MemoryFileUtils.write_file_content(
-                metadata,
-                source_uri=uri,
+            mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+            new_full_content = MemoryFileUtils.write(
+                mf,
                 content_template=schema.content_template,
                 extract_context=extract_context,
             )
@@ -515,7 +504,6 @@ class MemoryUpdater:
         Links go into from_uri's "links" field; backlinks go into to_uri's "backlinks" field.
         """
         from openviking.session.memory.merge_op.link_merge import merge_links
-        from openviking.session.memory.utils.content import serialize_with_metadata
 
         viking_fs = self._get_viking_fs()
         if not viking_fs:
@@ -545,31 +533,26 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx)
                 if not content:
                     continue
-                parsed = MemoryFileUtils.read_file_content(content)
+                mf = MemoryFileUtils.read(content, uri=uri)
 
                 # Merge links
                 if link_groups["links"]:
-                    existing_links = parsed.get("links", [])
                     merged_links = merge_links(
-                        existing_links,
+                        mf.links,
                         [link.model_dump() for link in link_groups["links"]],
                     )
-                    parsed["links"] = merged_links
+                    mf.links = merged_links
 
                 # Merge backlinks
                 if link_groups["backlinks"]:
-                    existing_backlinks = parsed.get("backlinks", [])
                     merged_backlinks = merge_links(
-                        existing_backlinks,
+                        mf.backlinks,
                         [link.model_dump() for link in link_groups["backlinks"]],
                     )
-                    parsed["backlinks"] = merged_backlinks
+                    mf.backlinks = merged_backlinks
 
                 # Re-serialize with updated links
-                new_full_content = MemoryFileUtils.write_file_content(
-                    parsed,
-                    source_uri=uri,
-                )
+                new_full_content = MemoryFileUtils.write(mf)
                 await viking_fs.write_file(uri, new_full_content, ctx=ctx)
             except Exception as e:
                 logger.warning(f"Failed to apply links to existing file {uri}: {e}")

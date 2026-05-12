@@ -275,16 +275,16 @@ class MemoryTypeRegistry:
                 pass
 
             # Add MEMORY_FIELDS comment with field metadata
-            # Template rendering is handled inside serialize_with_metadata
-            from openviking.session.memory.utils.content import serialize_with_metadata
+            from openviking.session.memory.dataclass import MemoryFile
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-            metadata = {
-                "memory_type": schema.memory_type,
-                **fields_with_init,
-                "content": "",  # content will come from content_template rendering
-            }
-            full_content = serialize_with_metadata(
-                metadata,
+            mf = MemoryFile(
+                uri=uri,
+                memory_type=schema.memory_type,
+                extra_fields=fields_with_init,
+            )
+            full_content = MemoryFileUtils.write(
+                mf,
                 content_template=schema.content_template,
             )
 

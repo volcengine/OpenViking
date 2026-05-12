@@ -75,3 +75,24 @@ async def unlink(
     to_uri = resolve_path_variables(request.to_uri)
     await service.relations.unlink(from_uri, to_uri, ctx=_ctx)
     return Response(status="ok", result={"from": from_uri, "to": to_uri})
+
+
+class GenGraphRequest(BaseModel):
+    """Request model for gen_graph."""
+
+    space_uri: str
+
+
+@router.post("/gen_graph")
+async def gen_graph(
+    request: GenGraphRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Generate a self-contained HTML graph of memory links under a space."""
+    from openviking.session.memory.graph_view import MemoryGraph
+
+    service = get_service()
+    space_uri = resolve_path_variables(request.space_uri)
+    graph = MemoryGraph(viking_fs=service.viking_fs)
+    graph_path = await graph.gen_graph(space_uri, ctx=_ctx)
+    return Response(status="ok", result={"graph_uri": graph_path})

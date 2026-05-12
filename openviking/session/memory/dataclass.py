@@ -148,6 +148,48 @@ class MemoryFileContent(BaseModel):
     memory_fields: Dict
 
 
+class MemoryFile(BaseModel):
+    """Typed representation of a memory file's parsed content."""
+
+    uri: Optional[str] = None
+    content: str = ""
+    links: List[Dict[str, Any]] = []
+    backlinks: List[Dict[str, Any]] = []
+    memory_type: Optional[str] = None
+    extra_fields: Dict[str, Any] = {}
+
+    @classmethod
+    def from_parsed(cls, uri: Optional[str] = None, parsed: Dict[str, Any] = None) -> "MemoryFile":
+        """Build from parse_memory_file_with_fields result."""
+        if parsed is None:
+            parsed = {}
+        content = parsed.pop("content", "")
+        links = parsed.pop("links", []) or []
+        backlinks = parsed.pop("backlinks", []) or []
+        memory_type = parsed.pop("memory_type", None)
+        # Remaining keys are dynamic schema fields + system fields
+        return cls(
+            uri=uri,
+            content=content,
+            links=links,
+            backlinks=backlinks,
+            memory_type=memory_type,
+            extra_fields=parsed,
+        )
+
+    def to_metadata(self) -> Dict[str, Any]:
+        """Flatten to a dict suitable for serialize_with_metadata."""
+        metadata = dict(self.extra_fields)
+        metadata["content"] = self.content
+        if self.links:
+            metadata["links"] = self.links
+        if self.backlinks:
+            metadata["backlinks"] = self.backlinks
+        if self.memory_type:
+            metadata["memory_type"] = self.memory_type
+        return metadata
+
+
 class ResolvedOperation(BaseModel):
     old_memory_file_content: Optional[MemoryFileContent]
     memory_fields: Dict

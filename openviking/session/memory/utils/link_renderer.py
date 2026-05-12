@@ -29,15 +29,13 @@ class LinkRenderer:
         replacements: List[tuple] = []  # (start, end, replacement_text)
         for link in eligible:
             match_text = link["match_text"]
-            from_uri = link["from_uri"]
             to_uri = link["to_uri"]
 
-            target_uri = to_uri if from_uri == source_uri else from_uri
-            if target_uri == source_uri:
+            if to_uri == source_uri:
                 continue
 
-            rel = LinkRenderer.relative_path(source_uri, target_uri)
-            link_target = rel if rel is not None else target_uri
+            rel = LinkRenderer.relative_path(source_uri, to_uri)
+            link_target = rel if rel is not None else to_uri
 
             pattern = re.compile(r"\b" + re.escape(match_text) + r"\b", re.IGNORECASE)
             match = pattern.search(content)

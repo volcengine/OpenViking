@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 from openviking.core.namespace import to_user_space, to_agent_space
 from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
-from openviking.session.memory.dataclass import MemoryFileContent
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
@@ -56,7 +56,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
-        self._read_file_contents: Dict[str, MemoryFileContent] = {}
+        self._read_file_contents: Dict[str, MemoryFile] = {}
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
@@ -67,7 +67,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._page_id_map = None  # Set by ExtractLoop before prefetch
 
     @property
-    def read_file_contents(self) -> Dict[str, MemoryFileContent]:
+    def read_file_contents(self) -> Dict[str, MemoryFile]:
         return self._read_file_contents
 
     def get_conversation_text(self) -> str:

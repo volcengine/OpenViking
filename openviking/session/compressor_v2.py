@@ -22,9 +22,10 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.utils.json_parser import JsonUtils
-from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
@@ -428,8 +429,10 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
         for traj_uri in written_trajectory_uris:
             try:
-                from openviking.session.memory.utils.content import deserialize_content as _deser_content
-                traj_content = _deser_content(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+                mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                traj_content = mf.content
             except Exception as e:
                 logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
                 continue
@@ -486,7 +489,9 @@ class SessionCompressorV2:
 
             all_exp_uris = exp_written_uris + exp_edited_uris
             if not all_exp_uris:
-                candidate_uris = list(dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or []))
+                candidate_uris = list(
+                    dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or [])
+                )
                 candidate_exp_uris = [
                     uri
                     for uri in candidate_uris
@@ -623,9 +628,7 @@ class SessionCompressorV2:
                 f"{op.memory_type}(uris={op.uris!r})"
                 for op in getattr(operations, "upsert_operations", [])
             ]
-            _delete_uris_raw = [
-                dc.uri for dc in getattr(operations, "delete_file_contents", [])
-            ]
+            _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
             tracer.info(
                 f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
             )
@@ -650,7 +653,10 @@ class SessionCompressorV2:
             registry = provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
             result = await updater.apply_operations(
-                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
+                operations,
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
             )
 
             tracer.info(
@@ -661,19 +667,18 @@ class SessionCompressorV2:
 
             contexts: List[Context] = []
             for uri in result.written_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_write", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
             for uri in result.edited_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_edit", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
             for uri in result.deleted_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_delete", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
 
-            return list(result.written_uris), list(result.edited_uris), contexts, inherited_traj_uris
+            return (
+                list(result.written_uris),
+                list(result.edited_uris),
+                contexts,
+                inherited_traj_uris,
+            )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
@@ -698,7 +703,7 @@ class SessionCompressorV2:
         This is the system-side management of source_trajectories — the LLM never
         outputs this field; the pipeline appends the batch after a write or edit.
         """
-        from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:
@@ -707,11 +712,10 @@ class SessionCompressorV2:
         for exp_uri in exp_uris:
             try:
                 raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
-                file_content = deserialize_full(raw)
-                plain_content = file_content.plain_content
-                metadata = file_content.memory_fields or {}
+                mf = MemoryFileUtils.read(raw, uri=exp_uri)
+                plain_content = mf.content
 
-                existing = metadata.get("source_trajectories", [])
+                existing = mf.extra_fields.get("source_trajectories", [])
                 if isinstance(existing, list):
                     uris = list(existing)
                 elif isinstance(existing, str) and existing.strip():
@@ -731,9 +735,8 @@ class SessionCompressorV2:
                     changed = True
 
                 if changed:
-                    metadata["source_trajectories"] = uris
-                    metadata["content"] = plain_content
-                    new_raw = serialize_with_metadata(metadata)
+                    mf.extra_fields["source_trajectories"] = uris
+                    new_raw = MemoryFileUtils.write(mf)
                     await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
                     tracer.info(
                         f"[source_traj] appended {len(normalized_traj_uris)} trajectories -> {exp_uri}"
@@ -786,12 +789,12 @@ class SessionCompressorV2:
             if old_file:
                 # Old content existed, this is an update
                 raw_before = old_file.plain_content
-                parsed = parse_memory_file_with_fields(raw_before)
+                mf = MemoryFileUtils.read(raw_before)
                 updates.append(
                     {
                         "uri": uri,
                         "memory_type": memory_type,
-                        "before": parsed.get("content", raw_before),
+                        "before": mf.content or raw_before,
                         "after": "",  # Will be filled after
                     }
                 )
@@ -813,12 +816,12 @@ class SessionCompressorV2:
             if op and op.old_memory_file_content:
                 old_content = op.old_memory_file_content.plain_content
             raw_before = old_content or ""
-            parsed = parse_memory_file_with_fields(raw_before)
+            mf = MemoryFileUtils.read(raw_before) if raw_before else MemoryFile()
             updates.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "before": parsed.get("content", raw_before) if raw_before else "",
+                    "before": mf.content if raw_before else "",
                     "after": "",  # Will be filled after
                 }
             )
@@ -831,12 +834,12 @@ class SessionCompressorV2:
             if dc:
                 deleted_content = dc.plain_content
             raw_deleted = deleted_content or ""
-            parsed = parse_memory_file_with_fields(raw_deleted)
+            mf = MemoryFileUtils.read(raw_deleted) if raw_deleted else MemoryFile()
             deletes.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "deleted_content": parsed.get("content", raw_deleted),
+                    "deleted_content": mf.content,
                 }
             )
 
@@ -844,9 +847,8 @@ class SessionCompressorV2:
         for item in adds + updates:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
-                # Strip MEMORY_FIELDS comment from content
-                parsed = parse_memory_file_with_fields(content)
-                item["after"] = parsed.get("content", content)
+                mf = MemoryFileUtils.read(content)
+                item["after"] = mf.content
             except Exception:
                 pass
 

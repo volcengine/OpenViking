@@ -172,7 +172,8 @@ class TestRenderLinks:
         )
         assert result == "This is my profile."
 
-    def test_backlink_uses_from_uri(self):
+    def test_backlink_not_rendered(self):
+        # Backlinks (where to_uri == source_uri) are not rendered
         content = "The painting features nice colors."
         links = [
             {
@@ -187,7 +188,8 @@ class TestRenderLinks:
             "viking://user/Melanie/memories/preferences/creative.md",
             links,
         )
-        assert "[painting](../entities/art/lake_sunrise.md)" in result
+        # to_uri == source_uri, so this is a self-link, skipped
+        assert result == "The painting features nice colors."
 
     def test_cross_scope_fallback_to_full_uri(self):
         content = "The agent has a useful skill."

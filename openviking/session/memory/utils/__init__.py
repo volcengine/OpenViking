@@ -4,13 +4,6 @@
 Memory utilities package.
 """
 
-from openviking.session.memory.utils.content import (
-    deserialize_content,
-    deserialize_full,
-    deserialize_metadata,
-    serialize_with_metadata,
-    truncate_content,
-)
 from openviking.session.memory.utils.json_parser import (
     JsonUtils,
     _any_to_str,
@@ -28,6 +21,7 @@ from openviking.session.memory.utils.language import (
     resolve_output_language_from_conversation,
     resolve_with_override,
 )
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.messages import (
     parse_memory_file_with_fields,
     pretty_print_messages,
@@ -44,12 +38,8 @@ from openviking.session.memory.utils.uri import (
 )
 
 __all__ = [
-    # Content serialization
-    "serialize_with_metadata",
-    "deserialize_content",
-    "deserialize_metadata",
-    "deserialize_full",
-    "truncate_content",
+    # MemoryFile + MemoryFileUtils
+    "MemoryFileUtils",
     # Language
     "detect_language_from_conversation",
     "resolve_output_language",

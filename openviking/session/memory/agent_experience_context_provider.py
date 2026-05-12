@@ -20,8 +20,7 @@ from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.tools import get_tool
-from openviking.session.memory.utils import parse_memory_file_with_fields
-from openviking.session.memory.utils.content import deserialize_content, deserialize_metadata
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
@@ -30,8 +29,8 @@ logger = get_logger(__name__)
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 SEARCH_TOP_K = 5
-SOURCE_TRAJ_TOP_K = 3   # only attach source_trajectories for the top-3 candidates
-MAX_SOURCE_TRAJS = 3    # max trajectories to load per experience
+SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
+MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
 
 
 class AgentExperienceContextProvider(SessionExtractContextProvider):
@@ -130,7 +129,8 @@ All memory content must be written in {output_language}.
         for uri in recent_uris:
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
-                results.append({"uri": uri, "content": deserialize_content(raw)})
+                mf = MemoryFileUtils.read(raw, uri=uri)
+                results.append({"uri": uri, "content": mf.content})
             except Exception as e:
                 logger.warning(f"Failed to read source trajectory {uri}: {e}")
         return results
@@ -206,21 +206,17 @@ All memory content must be written in {output_language}.
             # 1. Update path: _check_unread_existing_files skips refetch (saves 1 LLM call)
             # 2. Replace path: resolve_operations can build delete_file_contents, enabling
             #    old file deletion and source_trajectories inheritance.
-            parsed_fields = parse_memory_file_with_fields(exp_raw)
-            self._read_file_contents[exp_uri] = MemoryFileContent(
-                uri=exp_uri,
-                plain_content=parsed_fields.get("content", ""),
-                memory_fields=parsed_fields,
-            )
-            body = deserialize_content(exp_raw)
-            meta = deserialize_metadata(exp_raw) or {}
-            exp_name = meta.get("experience_name", "")
+            mf = MemoryFileUtils.read(exp_raw, uri=exp_uri)
+            self._read_file_contents[exp_uri] = mf
+            exp_name = mf.extra_fields.get("experience_name", "")
 
-            section = f"### Experience {idx + 1}: `{exp_name}`\nURI: `{exp_uri}`\n\n{body}"
+            section = f"### Experience {idx + 1}: `{exp_name}`\nURI: `{exp_uri}`\n\n{mf.content}"
 
             # Attach source trajectories for top-3 only
             if idx < SOURCE_TRAJ_TOP_K and viking_fs:
-                source_trajs = await self._load_source_trajectories(exp_uri, meta, viking_fs, ctx)
+                source_trajs = await self._load_source_trajectories(
+                    exp_uri, mf.extra_fields, viking_fs, ctx
+                )
                 if source_trajs:
                     traj_lines = ["\n#### Source Trajectories (for reference only)"]
                     for i, t in enumerate(source_trajs, 1):
