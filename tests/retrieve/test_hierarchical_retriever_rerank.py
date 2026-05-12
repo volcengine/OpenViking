@@ -374,6 +374,49 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
     assert fake_client.calls
 
 
+def test_rerank_scores_skips_empty_docs_and_keeps_vector_score(monkeypatch):
+    fake_client = FakeRerankClient([0.95, 0.05])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    result = retriever._rerank_scores(
+        "hello",
+        ["alpha", "", "beta", "  "],
+        [0.1, 0.2, 0.3, 0.4],
+    )
+
+    # Empty slots (1, 3) keep vector scores; non-empty get rerank.
+    assert result == [0.95, 0.2, 0.05, 0.4]
+    assert fake_client.calls == [("hello", ["alpha", "beta"])]
+
+
+def test_rerank_scores_all_empty_returns_vector_scores_without_call(monkeypatch):
+    fake_client = FakeRerankClient([])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    result = retriever._rerank_scores("hello", ["", "  ", "\n\t"], [0.1, 0.2, 0.3])
+
+    assert result == [0.1, 0.2, 0.3]
+    assert fake_client.calls == []
+
+
 @pytest.mark.asyncio
 async def test_quick_mode_skips_rerank(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05, 0.05, 0.95])
