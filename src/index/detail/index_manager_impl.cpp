@@ -279,6 +279,61 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
   return 0;
 }
 
+int IndexManagerImpl::search_batch(const std::vector<SearchRequest>& reqs,
+                                   std::vector<SearchResult>& results) {
+  if (reqs.empty()) return 0;
+
+  // Use first request's DSL for all queries (batch assumes shared filter)
+  const auto& dsl = reqs[0].dsl;
+  SearchContext ctx;
+  if (!dsl.empty()) {
+    if (int ret = parse_dsl_query(dsl, ctx); ret != 0) {
+      SPDLOG_ERROR("IndexManagerImpl::search_batch DSL parse fail: {}", dsl);
+      return ret;
+    }
+  }
+
+  // Sorter queries are not supported in batch mode
+  if (ctx.sorter_op) {
+    return IndexManager::search_batch(reqs, results);
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+
+  BitmapPtr bitmap = nullptr;
+  if (ctx.filter_op) {
+    bitmap = calculate_filter_bitmap(ctx, dsl);
+    if (!bitmap) {
+      SPDLOG_DEBUG("search_batch: calculate_filter_bitmap returned null");
+      return -1;
+    }
+  }
+
+  // Extract query vectors
+  std::vector<const float*> query_ptrs(reqs.size());
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    query_ptrs[i] = reqs[i].query.data();
+  }
+  uint32_t topk = reqs[0].topk;
+
+  std::vector<VectorRecallResult> recall_results;
+  int ret = vector_index_->recall_batch(query_ptrs, topk, bitmap.get(),
+                                        recall_results);
+  if (ret != 0) {
+    SPDLOG_ERROR("search_batch: recall_batch failed, ret={}", ret);
+    return ret;
+  }
+
+  results.resize(reqs.size());
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    std::swap(results[i].labels, recall_results[i].labels);
+    std::swap(results[i].scores, recall_results[i].scores);
+    results[i].result_num = results[i].labels.size();
+  }
+
+  return 0;
+}
+
 int IndexManagerImpl::add_data(const std::vector<AddDataRequest>& data_list) {
   auto start = std::chrono::high_resolution_clock::now();
   std::vector<FieldsDict> parsed_fields_list(data_list.size());

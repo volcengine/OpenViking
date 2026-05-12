@@ -24,6 +24,8 @@ class IndexEngine {
 
   SearchResult search(const SearchRequest& req);
 
+  std::vector<SearchResult> search_batch(const std::vector<SearchRequest>& reqs);
+
   int64_t dump(const std::string& dir);
 
   StateResult get_state();

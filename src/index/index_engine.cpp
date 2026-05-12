@@ -17,6 +17,13 @@ SearchResult IndexEngine::search(const SearchRequest& req) {
   return result;
 }
 
+std::vector<SearchResult> IndexEngine::search_batch(
+    const std::vector<SearchRequest>& reqs) {
+  std::vector<SearchResult> results;
+  impl_->search_batch(reqs, results);
+  return results;
+}
+
 int IndexEngine::add_data(const std::vector<AddDataRequest>& data_list) {
   return impl_->add_data(data_list);
 }
