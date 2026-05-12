@@ -378,9 +378,9 @@ enum Commands {
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
         #[arg(long = "before")]
         before: Option<String>,
-        /// Only include results with specific level(s) (e.g. 0, 1, 2 or 0,1,2)
-        #[arg(short = 'L', long = "level")]
-        level: Option<String>,
+        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        level: Option<Vec<i32>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {

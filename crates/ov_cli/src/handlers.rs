@@ -949,7 +949,7 @@ pub async fn handle_find(
     threshold: Option<f64>,
     after: Option<String>,
     before: Option<String>,
-    level: Option<String>,
+    level: Option<Vec<i32>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -957,7 +957,12 @@ pub async fn handle_find(
         params.push(format!("--threshold {}", t));
     }
     append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
-    append_level_filter_params(&mut params, level.as_deref());
+    if let Some(ref l) = level {
+        params.push(format!(
+            "--level {}",
+            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        ));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -970,7 +975,7 @@ pub async fn handle_find(
         after.as_deref(),
         before.as_deref(),
         None,
-        level.as_deref(),
+        level,
         ctx.output_format,
         ctx.compact,
     )

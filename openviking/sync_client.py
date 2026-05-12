@@ -225,6 +225,7 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -238,6 +239,7 @@ class SyncOpenViking:
                 since,
                 until,
                 time_field,
+                level,
             )
         )
 
