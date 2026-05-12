@@ -549,23 +549,66 @@ class LocalClient(BaseClient):
 
     # ============= Pack =============
 
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        include_vectors: bool = False,
+    ) -> str:
         """Export context as .ovpack file."""
-        return await self._service.pack.export_ovpack(uri, to, ctx=self._ctx)
+        return await self._service.pack.export_ovpack(
+            uri,
+            to,
+            ctx=self._ctx,
+            include_vectors=include_vectors,
+        )
+
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        return await self._service.pack.backup_ovpack(
+            to,
+            ctx=self._ctx,
+            include_vectors=include_vectors,
+        )
 
     async def import_ovpack(
         self,
         file_path: str,
         parent: str,
-        force: bool = False,
-        vectorize: bool = True,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         return await self._service.pack.import_ovpack(
-            file_path, parent, ctx=self._ctx, force=force, vectorize=vectorize
+            file_path,
+            parent,
+            ctx=self._ctx,
+            on_conflict=on_conflict,
+            vector_mode=vector_mode,
+        )
+
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        return await self._service.pack.restore_ovpack(
+            file_path,
+            ctx=self._ctx,
+            on_conflict=on_conflict,
+            vector_mode=vector_mode,
         )
 
     # ============= Debug =============
+
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return await self._service.check_consistency(
+            uri=uri,
+            ctx=self._ctx,
+        )
 
     async def health(self) -> bool:
         """Check service health."""

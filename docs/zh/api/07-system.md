@@ -165,6 +165,79 @@ ov system status
 
 ---
 
+### consistency
+
+#### 1. API 实现介绍
+
+检查指定 URI 子树的文件系统内容和向量索引是否一致，用于调试索引缺失、向量快照导出失败等问题。该能力是通用数据一致性检查，不属于 OVPack 私有接口；`ov export --include-vectors` 和 `ov backup --include-vectors` 会复用同一检查。
+
+响应只返回摘要和缺失项，不返回完整 expected 列表。`missing_records` 最多返回前 20 条；如果还有更多缺失项，`missing_records_truncated` 为 `true`。
+
+**代码入口**:
+- `openviking/server/routers/system.py:check_consistency` - HTTP 路由
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK 入口
+- `crates/ov_cli/src/commands/system.rs:consistency` - CLI 命令
+
+#### 2. 接口和参数说明
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | string | 是 | - | 要检查的 Viking URI 子树 |
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+POST /api/v1/system/consistency
+Content-Type: application/json
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
+
+**Python SDK**
+
+```python
+report = client.check_consistency("viking://resources/my-project")
+print(report["ok"])
+print(report["missing_records"])
+```
+
+**CLI**
+
+```bash
+ov system consistency viking://resources/my-project
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+	    "ok": false,
+	    "expected_count": 3,
+	    "missing_record_count": 1,
+	    "missing_records_truncated": false,
+	    "missing_records": [
+      {
+        "uri": "viking://resources/my-project/README.md",
+        "path": "README.md",
+        "level": 2,
+        "key": "README.md#level=2"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### wait_processed
 
 #### 1. API 实现介绍

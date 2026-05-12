@@ -160,7 +160,7 @@ async def rm(
     # Resolve path variables
     uri = resolve_path_variables(uri)
     try:
-        await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -173,7 +173,11 @@ async def rm(
         if mapped is not None:
             raise mapped from exc
         raise
-    return Response(status="ok", result={"uri": uri})
+    # Build response with uri and estimated_deleted_count
+    response_result = {"uri": uri}
+    if isinstance(result, dict) and "estimated_deleted_count" in result:
+        response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
+    return Response(status="ok", result=response_result)
 
 
 class MvRequest(BaseModel):

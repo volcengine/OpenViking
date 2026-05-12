@@ -391,6 +391,10 @@ def is_invalid_uri_error(exc: Exception) -> bool:
     )
 
 
+def _not_found_error(resource: str | None, resource_type: str) -> NotFoundError:
+    return NotFoundError(resource or "", resource_type)
+
+
 def map_exception(
     exc: Exception,
     *,
@@ -404,7 +408,7 @@ def map_exception(
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
-        return NotFoundError(resource or str(exc), resource_type)
+        return _not_found_error(resource, resource_type)
     if _is_model_api_key_configuration_error(exc):
         return FailedPreconditionError(
             "Model provider API key is not configured",
@@ -422,7 +426,7 @@ def map_exception(
         return UnavailableError("storage backend", reason=str(exc))
     if isinstance(exc, AGFSHTTPError):
         if exc.status_code == 404 or is_not_found_error(exc):
-            return NotFoundError(resource or str(exc), resource_type)
+            return _not_found_error(resource, resource_type)
         if exc.status_code == 403:
             return PermissionDeniedError(str(exc), resource=resource)
         if exc.status_code == 409:
@@ -436,7 +440,7 @@ def map_exception(
     if isinstance(exc, AGFSClientError):
         message = str(exc)
         if is_not_found_error(exc):
-            return NotFoundError(resource or message, resource_type)
+            return _not_found_error(resource, resource_type)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)
         lowered = message.lower()
@@ -455,7 +459,7 @@ def map_exception(
     message = str(exc)
     lowered = message.lower()
     if is_not_found_error(exc):
-        return NotFoundError(resource or message, resource_type)
+        return _not_found_error(resource, resource_type)
     if is_invalid_uri_error(exc):
         return InvalidURIError(resource or message, message)
     if "permission denied" in lowered or "access denied" in lowered:

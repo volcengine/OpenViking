@@ -113,12 +113,18 @@ async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_p
     client._upload_temp_file = fake_upload
     client._handle_response = lambda _response: {"uri": "viking://resources/imported"}
 
-    await client.import_ovpack(str(pack_file), parent="viking://resources/")
+    await client.import_ovpack(
+        str(pack_file),
+        parent="viking://resources/",
+        on_conflict="skip",
+    )
 
     call = fake_http.calls[-1]
     assert call["path"] == "/api/v1/pack/import"
     assert call["json"]["temp_file_id"] == "upload_pack.ovpack"
+    assert call["json"]["on_conflict"] == "skip"
     assert "file_path" not in call["json"]
+    assert "force" not in call["json"]
 
 
 @pytest.mark.asyncio

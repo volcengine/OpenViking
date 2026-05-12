@@ -142,31 +142,74 @@ class LockManager:
             self._mark_handle_active(handle)
             return True
 
-        # 对路径进行排序，确保加锁顺序一致
         sorted_paths = sorted(paths, key=lambda x: (len(x), x))
-        acquired = []
+        acquired_lock_paths: List[str] = []
 
         try:
             for path in sorted_paths:
+                locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
-                    path,
-                    handle,
-                    timeout=timeout,
+                    path, handle,
+                    timeout=timeout if timeout is not None else self._lock_timeout,
                 )
                 if not success:
-                    # 释放已获得的锁
-                    for p in acquired:
-                        await self._path_lock.release_subtree(p, handle)
+                    await self._path_lock.release_selected(handle, acquired_lock_paths)
                     return False
-                acquired.append(path)
+                newly = [lp for lp in handle.locks if lp not in locks_before]
+                acquired_lock_paths.extend(newly)
 
             self._mark_handle_active(handle)
             return True
 
         except Exception as e:
             logger.error(f"Failed to acquire subtree batch lock: {e}")
-            for p in acquired:
-                await self._path_lock.release_subtree(p, handle)
+            await self._path_lock.release_selected(handle, acquired_lock_paths)
+            return False
+
+    async def acquire_mixed_batch(
+        self,
+        handle: LockHandle,
+        point_paths: List[str],
+        subtree_paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """"""
+        subtree_set = set(subtree_paths)
+        point_only = [p for p in point_paths if p not in subtree_set]
+        all_pairs = [(p, False) for p in point_only] + [(p, True) for p in subtree_set]
+
+        if not all_pairs:
+            self._mark_handle_active(handle)
+            return True
+
+        sorted_pairs = sorted(all_pairs, key=lambda x: (len(x[0]), x[0]))
+        acquired_lock_paths: List[str] = []
+
+        try:
+            for path, is_subtree in sorted_pairs:
+                locks_before = set(handle.locks)
+                if is_subtree:
+                    success = await self._path_lock.acquire_subtree(
+                        path, handle,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
+                    )
+                else:
+                    success = await self._path_lock.acquire_point(
+                        path, handle,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
+                    )
+                if not success:
+                    await self._path_lock.release_selected(handle, acquired_lock_paths)
+                    return False
+                newly = [lp for lp in handle.locks if lp not in locks_before]
+                acquired_lock_paths.extend(newly)
+
+            self._mark_handle_active(handle)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire mixed batch lock: {e}")
+            await self._path_lock.release_selected(handle, acquired_lock_paths)
             return False
 
     async def acquire_mv(

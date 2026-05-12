@@ -8,14 +8,14 @@ for asymmetric retrieval.
 """
 
 import asyncio
-import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 COHERE_MODEL_DIMENSIONS = {
     "embed-v4.0": 1536,

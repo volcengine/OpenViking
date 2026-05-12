@@ -71,7 +71,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 | **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
 | **RelationService** | 关联管理 | relations, link, unlink |
-| **PackService** | 导入导出 | export_ovpack, import_ovpack |
+| **PackService** | 导入导出、备份恢复 | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | 调试服务 | observer (ObserverService) |
 
 ## 双层存储

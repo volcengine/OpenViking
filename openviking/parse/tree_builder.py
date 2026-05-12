@@ -20,7 +20,6 @@ IMPORTANT (v5.0 Architecture):
 - Content splitting is handled by Parser, not TreeBuilder
 """
 
-import logging
 from typing import Optional
 
 from openviking.core.building_tree import BuildingTree
@@ -29,9 +28,10 @@ from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_t
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import parse_code_hosting_url
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TreeBuilder:

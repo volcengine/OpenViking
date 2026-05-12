@@ -107,6 +107,22 @@ class ExtractContext:
                         continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
+    def get_session_timestamp(self) -> str:
+        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
+
+        Fallback 到 datetime.now() 以保证总是返回非空字符串。
+        """
+        from datetime import datetime
+
+        for msg in self.messages:
+            created_at = getattr(msg, "created_at", None)
+            if created_at:
+                try:
+                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                except (ValueError, TypeError):
+                    continue
+        return datetime.now().strftime("%Y%m%d%H%M%S")
+
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
         if not ranges_str or not summary:
@@ -343,7 +359,17 @@ class MemoryUpdater:
                     result.add_error(uri, e)
 
         # Apply delete operations (delete_file_contents is List[MemoryFileContent])
+        # Skip deletes whose URI was just written in the same batch — this happens when the
+        # LLM issues a Replace with the same experience_name (delete old + create same-name new),
+        # which is semantically an Update. Executing the delete would remove the just-written file.
+        upserted_uris = set(result.written_uris + result.edited_uris)
         for file_content in operations.delete_file_contents:
+            if file_content.uri in upserted_uris:
+                tracer.info(
+                    f"[apply_operations] skipping delete for {file_content.uri}: "
+                    "URI was upserted in the same batch (Replace-with-same-name treated as Update)"
+                )
+                continue
             try:
                 await self._apply_delete(file_content.uri, ctx)
                 result.add_deleted(file_content.uri)
@@ -417,6 +443,16 @@ class MemoryUpdater:
                     merge_op = MergeOpFactory.from_field(field)
                     new_value = merge_op.apply(current_value, patch_value)
                     metadata[field.name] = new_value
+
+            # Preserve system-managed metadata from the old file that is not
+            # covered by the schema (e.g. source_trajectories). These fields
+            # are written by the system, never by the LLM, so they would be
+            # silently dropped on every Update without this copy.
+            if old_content and old_content.memory_fields:
+                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
+                for key, val in old_content.memory_fields.items():
+                    if key not in schema_field_names and key not in metadata and val is not None:
+                        metadata[key] = val
 
             # serialize_with_metadata modifies metadata dict, so pass a copy
             new_full_content = serialize_with_metadata(

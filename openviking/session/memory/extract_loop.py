@@ -272,7 +272,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if value is None:
                 continue
 
-            # 统一转为列表
             items = value if isinstance(value, list) else [value]
 
             for item in items:

@@ -293,15 +293,49 @@ class SyncOpenViking:
         """Delete relation"""
         return run_async(self._async_client.unlink(from_uri, uri))
 
-    def export_ovpack(self, uri: str, to: str) -> str:
+    def export_ovpack(self, uri: str, to: str, include_vectors: bool = False) -> str:
         """Export .ovpack file"""
-        return run_async(self._async_client.export_ovpack(uri, to))
+        return run_async(self._async_client.export_ovpack(uri, to, include_vectors=include_vectors))
+
+    def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        return run_async(self._async_client.backup_ovpack(to, include_vectors=include_vectors))
 
     def import_ovpack(
-        self, file_path: str, target: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        target: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file (triggers vectorization by default)"""
-        return run_async(self._async_client.import_ovpack(file_path, target, force, vectorize))
+        return run_async(
+            self._async_client.import_ovpack(
+                file_path,
+                target,
+                on_conflict=on_conflict,
+                vector_mode=vector_mode,
+            )
+        )
+
+    def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        return run_async(
+            self._async_client.restore_ovpack(
+                file_path,
+                on_conflict=on_conflict,
+                vector_mode=vector_mode,
+            )
+        )
+
+    def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return run_async(self._async_client.check_consistency(uri))
 
     def close(self) -> None:
         """Close OpenViking and release resources."""

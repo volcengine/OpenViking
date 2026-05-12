@@ -9,7 +9,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 import math
 import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
@@ -23,6 +23,25 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
+_PORTABLE_SCALAR_FIELDS = frozenset(
+    {
+        "type",
+        "level",
+        "name",
+        "description",
+        "tags",
+        "abstract",
+    }
+)
+
+
+def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
+    if not embedding_msg or not overrides:
+        return
+    for field in _PORTABLE_SCALAR_FIELDS:
+        value = overrides.get(field)
+        if value is not None:
+            embedding_msg.context_data[field] = value
 
 
 def _estimate_embedding_input_tokens(text: str) -> int:
@@ -224,6 +243,7 @@ async def vectorize_directory_meta(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
+    scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -261,6 +281,10 @@ async def vectorize_directory_meta(
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
+        _apply_scalar_overrides(
+            msg_abstract,
+            (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
+        )
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -290,6 +314,10 @@ async def vectorize_directory_meta(
             )
             context_overview.set_vectorize(Vectorize(text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+            _apply_scalar_overrides(
+                msg_overview,
+                (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
+            )
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -314,6 +342,7 @@ async def vectorize_file(
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
+    scalar_override: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -406,6 +435,7 @@ async def vectorize_file(
         if not embedding_msg:
             return
 
+        _apply_scalar_overrides(embedding_msg, scalar_override)
         embedding_msg.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(embedding_msg)
         enqueued = True

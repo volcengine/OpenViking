@@ -99,6 +99,26 @@ def uri_parts(uri: str) -> list[str]:
     return [part for part in normalized[len("viking://") :].split("/") if part]
 
 
+def uri_depth(uri: str) -> int:
+    """Return the number of normalized Viking URI path segments."""
+    return len(uri_parts(uri))
+
+
+def uri_leaf_name(uri: str) -> str:
+    """Return the final normalized Viking URI path segment."""
+    parts = uri_parts(uri)
+    return parts[-1] if parts else ""
+
+
+def relative_uri_path(root_uri: str, uri: str) -> str:
+    """Return uri's slash-separated path relative to root_uri, or empty when not nested."""
+    root_parts = uri_parts(root_uri)
+    parts = uri_parts(uri)
+    if parts == root_parts or parts[: len(root_parts)] != root_parts:
+        return ""
+    return "/".join(parts[len(root_parts) :])
+
+
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the first content segment after a user/agent namespace root."""
     if len(parts) < 2 or parts[0] not in _CONTENT_TYPES_BY_SCOPE:
