@@ -445,9 +445,7 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
-        async def _estimate_deleted_count(
-            target_path: str, real_ctx: RequestContext
-        ) -> int:
+        async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
             vector_store = self._get_vector_store()
             if not vector_store:

@@ -157,7 +157,9 @@ class FSService:
         directory_uri = VikingURI(abstract_uri).parent.uri
         return directory_uri, abstract_uri
 
-    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> Optional[Dict[str, Any]]:
+    async def rm(
+        self, uri: str, ctx: RequestContext, recursive: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
