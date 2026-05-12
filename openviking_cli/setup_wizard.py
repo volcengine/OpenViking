@@ -1113,8 +1113,8 @@ def _wizard_git_credentials() -> None:
             print(f"  {_red('Token is required — skipping this entry.')}")
         else:
             try:
-                saved_path = save_git_credentials(host, token)
-                print(f"  {_green('OK')} Token for {_cyan(host)} saved to {_dim(str(saved_path))}")
+                save_git_credentials(host, token)
+                print(f"  {_green('OK')} Token saved.")
             except OSError as exc:
                 print(f"  {_red(f'Failed to save credentials: {exc}')}")
 

@@ -8,11 +8,10 @@ a running OpenViking server.  HTTP calls are intercepted with httpx.MockTranspor
 
 import json
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import httpx
-import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.git_credentials import inject_token, mask_token_in_url
@@ -49,7 +48,7 @@ async def _make_client(
     with patch(
         "openviking_cli.client.http.load_ovcli_config", return_value=mock_cli_config
     ):
-        client = AsyncHTTPClient(base_url="http://localhost:7779")
+        client = AsyncHTTPClient()
 
     # Replace the internal httpx.AsyncClient transport with our mock.
     transport = _make_mock_transport(captured_requests)
@@ -198,7 +197,7 @@ class TestPreprocessAddResourceToken:
         result = self._preprocess(argv)
         assert "--token" not in result
         assert "mytoken" not in result  # stripped from explicit arg
-        injected_url = next(a for a in result if "github.com" in a)
+        injected_url = next(a for a in result if urlparse(a).hostname == "github.com")
         assert "mytoken@github.com" in injected_url
 
     def test_strips_token_flag_and_value(self):
