@@ -499,7 +499,67 @@ openviking stat viking://resources/my-project/docs
 
 `isLocked` 字段反映路径当前是否被 path lock 持有：路径自身存在有效的 `.path.ovlock`，或者任一祖先目录持有 SUBTREE 锁。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
 
-`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。
+`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。如需对实际文件系统目录项进行精确计数，请改用 [`count()`](#count)。
+
+---
+
+### count()
+
+统计目录下的文件和子目录数量（基于实际文件系统遍历，非向量索引估算）。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 目标目录的 Viking URI |
+| recursive | bool | 否 | False | 是否递归统计所有后代；`False` 时只统计直接子项 |
+| show_all_hidden | bool | 否 | False | 是否包含隐藏文件（文件名以 `.` 开头） |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.count("viking://resources/my-project")
+print(f"files={result['files']}, dirs={result['dirs']}, total={result['total']}")
+
+# 递归统计
+result = client.count("viking://resources/my-project", recursive=True)
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/count?uri={uri}&recursive={bool}&show_all_hidden={bool}
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-project&recursive=true" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking count viking://resources/my-project
+openviking count viking://resources/my-project -r        # 递归
+openviking count viking://resources/my-project -r -a     # 递归并包含隐藏文件
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/my-project",
+    "files": 12,
+    "dirs": 3,
+    "total": 15
+  },
+  "time": 0.01
+}
+```
+
+若 `uri` 不是目录，会返回 `FailedPrecondition` 错误；若 `uri` 不存在，则返回 `NotFound`。
 
 ---
 

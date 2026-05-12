@@ -382,6 +382,21 @@ class SyncOpenViking:
         """Get resource status"""
         return run_async(self._async_client.stat(uri))
 
+    def count(
+        self,
+        uri: str,
+        recursive: bool = False,
+        show_all_hidden: bool = False,
+    ) -> Dict[str, int]:
+        """Count files and sub-directories under a directory."""
+        return run_async(
+            self._async_client.count(
+                uri,
+                recursive=recursive,
+                show_all_hidden=show_all_hidden,
+            )
+        )
+
     def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
         return run_async(self._async_client.mkdir(uri, description=description))
