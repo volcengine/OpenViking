@@ -233,6 +233,34 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_singleton_loads_utf8_bom_config(tmp_path, monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import open_viking_config as config_module
+
+    class _ConfigStub:
+        default_account = "default"
+
+    loaded = {}
+
+    def _from_dict(data):
+        loaded.update(data)
+        return _ConfigStub()
+
+    monkeypatch.setattr(config_module.OpenVikingConfig, "from_dict", _from_dict)
+
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text("\ufeff{}", encoding="utf-8")
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
+    config = config_module.OpenVikingConfigSingleton.initialize(config_path=str(config_path))
+
+    assert config.default_account == "default"
+    assert loaded == {}
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
+
+
 def test_require_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
     import openviking_cli.utils.config.config_loader as loader
 

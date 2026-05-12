@@ -19,18 +19,24 @@ import json
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonicalize_uri,
+    classify_uri,
 )
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSDirectoryNotEmptyError,
+    AGFSHTTPError,
+    AGFSNotSupportedError,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
@@ -619,7 +625,8 @@ class VikingFS:
     ) -> Dict:
         """Content search by pattern or keywords.
 
-        Grep search implemented at VikingFS layer, supports encrypted files.
+        Optimized implementation that uses agfs native grep when possible.
+        Falls back to VikingFS layer implementation for encrypted files.
 
         Args:
             uri: Viking URI
@@ -629,10 +636,171 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
         """
         self._ensure_access(uri, ctx)
         await self.stat(uri, ctx=ctx)
 
+        if self._encryptor:
+            return await self._grep_encrypted(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        try:
+            return await self._grep_with_agfs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+
+        return await self._grep_encrypted(
+            uri=uri,
+            pattern=pattern,
+            exclude_uri=exclude_uri,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+
+    async def _grep_with_agfs(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 5,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep using agfs native implementation.
+
+        This is the optimized path for non-encrypted files.
+        Uses agfs.grep() which performs matching on the server side.
+
+        Prefer pushing filters down to agfs backend:
+        - exclude_uri -> exclude_path
+        - level_limit -> level_limit
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
+        path = self._uri_to_path(uri, ctx=ctx)
+
+        excluded_path = None
+        if exclude_uri:
+            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(normalized_excluded_uri, ctx)
+            excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
+
+        try:
+            result = await asyncio.to_thread(
+                self.agfs.grep,
+                path=path,
+                pattern=pattern,
+                recursive=True,
+                case_insensitive=case_insensitive,
+                stream=False,
+                node_limit=node_limit,
+                exclude_path=excluded_path,
+                level_limit=level_limit,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+            # Capability missing: let the outer caller fall back to the VikingFS implementation.
+            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
+            raise
+
+        matches = result.get("matches", [])
+        results = []
+        files_scanned_set = set()
+
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+
+            agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
+
+            file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
+
+            files_scanned_set.add(file_uri)
+
+            results.append(
+                {
+                    "line": match.get("line", match.get("line_number", 0)),
+                    "uri": file_uri,
+                    "content": match.get("content", ""),
+                }
+            )
+
+            if node_limit and len(results) >= node_limit:
+                break
+
+        # Prefer backend-provided scanned file count if available; otherwise fall back to
+        # counting files that produced at least one match (best-effort).
+        backend_files_scanned = result.get("files_scanned")
+        if isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
+            files_scanned = backend_files_scanned
+        else:
+            files_scanned = len(files_scanned_set)
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
+    async def _grep_encrypted(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 5,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep implementation for encrypted files.
+
+        This implementation decrypts files at VikingFS layer before matching.
+        Used when encryption is enabled or when agfs.grep is not available.
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse (default: 5)
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
@@ -761,6 +929,18 @@ class VikingFS:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
             return [], 1
 
+    def _resolve_grep_match_agfs_path(self, base_path: str, match_file: str) -> str:
+        """Resolve a grep match path (relative to query root) into a full AGFS path."""
+        if match_file == ".":
+            return base_path
+        return f"{base_path.rstrip('/')}/{match_file.lstrip('/')}"
+
+    def _calculate_grep_match_depth(self, match_file: str) -> int:
+        """Calculate relative depth from a grep result path relative to the query root."""
+        if not match_file or match_file == ".":
+            return 0
+        return len([part for part in match_file.split("/") if part])
+
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
         File/directory information.
@@ -844,8 +1024,8 @@ class VikingFS:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -856,8 +1036,8 @@ class VikingFS:
             output: str = "original" or "agent"
             abs_limit: int = 256 (for agent output abstract truncation)
             show_all_hidden: bool = False (list all hidden files, like -a)
-            node_limit: int = 1000 (maximum number of nodes to list)
-            level_limit: int = 3 (maximum depth level to traverse)
+            node_limit: int | None = 1000 (maximum number of nodes to list, None means unlimited)
+            level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
@@ -879,8 +1059,8 @@ class VikingFS:
         self,
         uri: str,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
@@ -889,10 +1069,12 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
@@ -919,36 +1101,39 @@ class VikingFS:
         uri: str,
         abs_limit: int,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri, ctx=ctx)
         all_entries = []
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
+                is_dir = entry.get("isDir", False)
                 new_entry = {
                     "uri": self._path_to_uri(f"{current_path}/{name}", ctx=ctx),
-                    "size": entry.get("size", 0),
-                    "isDir": entry.get("isDir", False),
+                    "size": 0 if is_dir else entry.get("size", 0),
+                    "isDir": is_dir,
                     "modTime": format_simplified(parse_iso_datetime(entry.get("modTime", "")), now),
                 }
                 new_entry["rel_path"] = rel_path
                 if not self._is_accessible(new_entry["uri"], real_ctx):
                     continue
-                if entry.get("isDir"):
+                if is_dir:
                     all_entries.append(new_entry)
                     await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
                 elif not name.startswith("."):
@@ -994,7 +1179,7 @@ class VikingFS:
                     raise mapped from exc
                 raise
             # Fallback to default if .abstract.md doesn't exist
-            return f"# {uri}\n\n[Directory abstract is not ready]"
+            return f"# {uri} [Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -1494,6 +1679,8 @@ class VikingFS:
             return None
         if self._is_legacy_temp_uri_parts(parts):
             return None
+        if scope == "upload":
+            return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
         if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
@@ -1521,6 +1708,8 @@ class VikingFS:
             if parts[1] == ctx.user.user_space_name():
                 return True
             return self._is_legacy_temp_uri_parts(parts)
+        if scope == "upload":
+            return ctx.role == Role.ROOT
         if scope == "_system":
             return False
         return namespace_is_accessible(normalized_uri, ctx)
@@ -1575,11 +1764,12 @@ class VikingFS:
         """Infer context_type from URI. Returns None when ambiguous."""
         from openviking_cli.retrieve import ContextType
 
-        if "/memories" in uri:
+        classification = classify_uri(uri)
+        if classification.is_memory:
             return ContextType.MEMORY
-        elif "/skills" in uri:
+        elif classification.is_skill:
             return ContextType.SKILL
-        elif "/resources" in uri:
+        elif classification.parts[:1] == ("resources",) or "resources" in classification.parts:
             return ContextType.RESOURCE
         return None
 
@@ -2006,7 +2196,7 @@ class VikingFS:
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         all_entries = []
         for entry in entries:
             if len(all_entries) >= node_limit:
@@ -2015,23 +2205,24 @@ class VikingFS:
             raw_time = entry.get("modTime", "")
             parsed_time = now
             if isinstance(raw_time, (int, float)):
-                parsed_time = datetime.fromtimestamp(raw_time)
+                parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
             elif raw_time:
                 if len(raw_time) > 26 and "+" in raw_time:
                     parts = raw_time.split("+")
                     raw_time = parts[0][:26] + "+" + parts[1]
                 parsed_time = parse_iso_datetime(raw_time)
             elif isinstance(entry.get("mtime"), (int, float)):
-                parsed_time = datetime.fromtimestamp(entry["mtime"])
+                parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
+            is_dir = entry.get("isDir", False)
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
-                "size": entry.get("size", 0),
-                "isDir": entry.get("isDir", False),
+                "size": 0 if is_dir else entry.get("size", 0),
+                "isDir": is_dir,
                 "modTime": format_simplified(parsed_time, now),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
-            if entry.get("isDir"):
+            if is_dir:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
@@ -2170,6 +2361,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
+
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 

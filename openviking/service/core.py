@@ -389,6 +389,28 @@ class OpenVikingService:
 
         logger.info("OpenVikingService closed")
 
+    async def reindex(
+        self,
+        *,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        if not self._initialized:
+            await self.initialize()
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        from openviking.service.reindex_executor import get_reindex_executor
+
+        return await get_reindex_executor().execute(
+            uri=uri,
+            mode=mode,
+            wait=wait,
+            ctx=effective_ctx,
+        )
+
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""
         if not self._initialized:

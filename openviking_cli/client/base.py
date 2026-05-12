@@ -63,6 +63,16 @@ class BaseClient(ABC):
         """Wait for all processing to complete."""
         ...
 
+    @abstractmethod
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        ...
+
     # ============= File System =============
 
     @abstractmethod

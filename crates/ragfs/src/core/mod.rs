@@ -18,4 +18,4 @@ pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
-pub use types::{ConfigParameter, ConfigValue, FileInfo, PluginConfig, WriteFlag};
+pub use types::{ConfigParameter, ConfigValue, FileInfo, GrepResult, PluginConfig, WriteFlag};

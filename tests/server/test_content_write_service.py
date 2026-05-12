@@ -71,7 +71,7 @@ async def test_memory_replace_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -82,10 +82,10 @@ async def test_memory_replace_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Updated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Updated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -99,7 +99,7 @@ async def test_memory_append_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -110,10 +110,10 @@ async def test_memory_append_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Original preference\nUpdated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Original preference\nUpdated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -508,6 +508,62 @@ async def test_create_mode_new_file_success(monkeypatch):
 
     assert result["mode"] == "create"
     assert write_calls == [(file_uri, "new content")]
+
+
+@pytest.mark.asyncio
+async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
+    input_uri = "viking://user/memories/new_file.md"
+    canonical_uri = "viking://user/default/memories/new_file.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=canonical_uri,
+        root_uri=root_uri,
+        file_exists=False,
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+
+    write_calls = []
+    vectorize_calls = []
+    refresh_calls = []
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del mode, ctx
+        write_calls.append((uri, content))
+        return content
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del ctx
+        vectorize_calls.append((uri, context_type))
+        return None
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        refresh_calls.append(kwargs)
+        return None
+
+    async def _fake_wait_for_queues(*, timeout):
+        del timeout
+        return None
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+
+    result = await coordinator.write(
+        uri=input_uri, content="new content", mode="create", ctx=ctx, wait=True
+    )
+
+    assert result["uri"] == canonical_uri
+    assert result["root_uri"] == root_uri
+    assert result["context_type"] == "memory"
+    assert write_calls == [(canonical_uri, "new content")]
+    assert vectorize_calls == [(canonical_uri, "memory")]
+    assert refresh_calls[0]["root_uri"] == root_uri
+    assert refresh_calls[0]["modified_uri"] == canonical_uri
 
 
 @pytest.mark.asyncio

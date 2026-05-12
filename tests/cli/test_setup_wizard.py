@@ -279,7 +279,7 @@ class TestConfigBuilding:
 
         assert config is not None
         assert config["storage"]["workspace"] == _workspace_path()
-        assert config["vlm"]["provider"] == "openai"
+        assert config["vlm"]["provider"] == "volcengine"
         assert config["vlm"]["api_key"] == "bp-vlm-test"
         assert config["vlm"]["api_base"] == CLOUD_PROVIDERS[1].default_api_base
         assert config["vlm"]["api_base"] == "https://ark.ap-southeast.bytepluses.com/api/v3"

@@ -278,6 +278,7 @@ class VLMConfig(BaseModel):
         prompt: str = "",
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
@@ -285,6 +286,7 @@ class VLMConfig(BaseModel):
             prompt=prompt,
             thinking=thinking,
             tools=tools,
+            tool_choice=tool_choice,
             messages=messages,
         )
 

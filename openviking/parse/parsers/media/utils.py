@@ -3,10 +3,10 @@
 """Media-related utilities for OpenViking."""
 
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from openviking.core.path_variables import CalendarVariableProvider
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
@@ -87,13 +87,13 @@ def get_media_base_uri(media_type: str) -> str:
         media_type: Media type ("image", "audio", "video")
 
     Returns:
-        Base URI like "viking://resources/images/20250219"
+        Base URI like "viking://resources/images/2025/02/19"
     """
     # Map singular media types to plural directory names
     media_dir_map = {"image": "images", "audio": "audio", "video": "video"}
     media_dir = media_dir_map.get(media_type, media_type)
-    # Get current date in YYYYMMDD format
-    date_str = datetime.now().strftime("%Y%m%d")
+    # Use CalendarVariableProvider to get today's date in YYYY/MM/DD format
+    date_str = CalendarVariableProvider().get_variables()["today"]
     return f"viking://resources/{media_dir}/{date_str}"
 
 

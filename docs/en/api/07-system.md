@@ -243,6 +243,189 @@ ov system wait --timeout 60
 
 ---
 
+### reindex()
+
+Reindex semantic and/or vector artifacts for existing content already stored in OpenViking. This is an operational maintenance API intended for scenarios such as embedding model changes, VLM changes, vector store rebuild, or post-upgrade repair of existing indexes.
+
+This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
+
+**Authentication**
+
+- HTTP endpoint: requires root/admin access when authentication is enabled; root-key requests must include `X-OpenViking-Account`
+- Python embedded mode: uses the current service context
+- Python HTTP client / CLI: sends the current authenticated identity
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI to reindex |
+| mode | str | No | `vectors_only` | Reindex mode: `vectors_only` or `semantic_and_vectors` |
+| wait | bool | No | `true` | Whether to wait for completion |
+
+The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
+
+**Supported URI scopes**
+
+- `viking://`
+- `viking://user`
+- `viking://user/<user_id>`
+- `viking://agent`
+- `viking://agent/<agent_id>`
+- `viking://resources`
+- `viking://resources/...`
+- `viking://user/<user_id>/memories/...`
+- `viking://agent/<agent_id>/memories/...`
+- `viking://agent/<agent_id>/skills`
+- `viking://agent/<agent_id>/skills/<skill_name>`
+
+`viking://session/...` is not supported by `reindex()`.
+
+**Modes**
+
+- `vectors_only`: rebuilds vector-store records from currently recoverable source data without rewriting `.abstract.md` or `.overview.md`
+- `semantic_and_vectors`: regenerates semantic artifacts first, then rebuilds vectors from the refreshed semantic outputs
+
+For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
+
+For `semantic_and_vectors`, semantic generation and vector rebuilding are sequenced by the reindex executor. The semantic refresh step does not enqueue its own background vectorization work; vectors are rebuilt by the reindex step so `wait=true` reflects the reindex operation itself.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.reindex(
+    uri="viking://resources",
+    mode="vectors_only",
+    wait=True,
+)
+print(result)
+```
+
+```python
+result = client.reindex(
+    uri="viking://agent/default/skills",
+    mode="semantic_and_vectors",
+    wait=False,
+)
+print(result["status"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/reindex
+```
+
+There is no `/api/v1/maintenance/reindex` endpoint. Use `/api/v1/content/reindex`.
+
+```bash
+curl -X POST http://localhost:1933/api/v1/content/reindex \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -H "X-OpenViking-Account: default" \
+  -d '{
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "wait": true
+  }'
+```
+
+**CLI**
+
+```bash
+openviking reindex viking://resources --mode vectors_only
+```
+
+```bash
+openviking reindex viking://agent/default/skills --mode semantic_and_vectors --wait false
+```
+
+**Synchronous response (`wait=true`)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "status": "completed",
+    "object_type": "resource",
+    "scanned_records": 120,
+    "rebuilt_records": 118,
+    "unsupported_records": 2,
+    "failed_records": 0,
+    "duration_ms": 1284,
+    "warnings": []
+  },
+  "time": 0.1
+}
+```
+
+**Asynchronous response (`wait=false`)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "object_type": "resource",
+    "status": "accepted",
+    "task_id": "task_xxx"
+  },
+  "time": 0.1
+}
+```
+
+Poll the returned task through the task API:
+
+```bash
+curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
+  -H "X-API-Key: your-key" \
+  -H "X-OpenViking-Account: default"
+```
+
+Reindex background tasks use `task_type="admin_reindex"` and `resource_id` equal to the requested `uri`, so they can also be listed with:
+
+```text
+GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
+```
+
+Task records are kept in memory and can expire or be lost on server restart.
+
+**Result fields**
+
+| Field | Description |
+|-------|-------------|
+| status | `completed` for synchronous completion, `accepted` for background execution |
+| uri | Requested URI after path-variable resolution |
+| object_type | Inferred target type, such as `resource`, `skill`, `memory`, `user_namespace`, `agent_namespace`, `skill_namespace`, or `global_namespace` |
+| mode | Effective reindex mode |
+| scanned_records | Number of records or semantic sources considered |
+| rebuilt_records | Number of vector records successfully rebuilt |
+| unsupported_records | Number of records skipped because no usable vector source was available |
+| failed_records | Number of records that failed while rebuilding |
+| duration_ms | Synchronous run duration in milliseconds |
+| warnings | Recoverable per-record warnings |
+| task_id | Background task ID, present only when `wait=false` |
+
+**Behavior notes**
+
+- Reindex is non-destructive. It uses rebuild/upsert behavior and does not require dropping the vector collection first.
+- `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
+- Namespace reindex operations such as `viking://user` or `viking://agent/default` propagate to their supported child content types.
+- `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
+- `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
+- Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.
+- For resource files, text files can use file content when no summary is available. Non-text files require a generated summary or existing vector record fallback; otherwise they are counted as unsupported.
+
+**Current limitations**
+
+- Reindex uses the best currently recoverable source inputs. It is not guaranteed to replay the exact historical embedding input byte-for-byte in every case.
+- Memory semantic reindex is based on the currently persisted memory tree. It does not reconstruct the original chronological memory-extraction pipeline.
+
+---
+
 ## Observer API
 
 The observer API provides detailed component-level monitoring.

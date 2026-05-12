@@ -1,0 +1,59 @@
+memory_type: trajectories
+description: |
+  A record of agent execution in one business domain within a conversation.
+
+  Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
+  Skip pure chitchat or simple Q&A with no execution trace.
+
+directory: "viking://agent/{{ agent_space }}/memories/trajectories"
+filename_template: "{{ trajectory_name }}.md"
+enabled: true
+operation_mode: "add_only"
+agent_only: true
+
+fields:
+  - name: trajectory_name
+    type: string
+    description: |
+      Lowercase snake_case, ASCII only, max 5 words. Name the task directly and stably.
+      Do not use Chinese. Do not create near-duplicate names for the same task.
+      Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix".
+    merge_op: immutable
+
+  - name: outcome
+    type: string
+    description: |
+      Use exactly one of: success, failure, partial, unfinished, unknown.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Execution trace in EXACTLY this format:
+      - Goal: <what the user wanted to achieve — one sentence>
+      - Trajectory:
+        1. <what the agent aimed to achieve>. 
+           Actions: <summarized interactions, tools used, and summarized responses>. 
+           Progress: <how this shifted the state>.
+        2. <...>. 
+           Actions: <...>. 
+           Progress: <...>.
+        3. <... continue sequentially to capture the entire execution>
+      - Result: <final outcome and any important side effects — one sentence>
+      - Fail reason: <If task succeeded, leave empty or write "None". If failed, provide a detailed analysis of why the failure occurred and suggest how the agent's approach could be improved.>
+
+      Rules for 'Trajectory' section:
+      - STANDALONE COMPLETENESS: The trajectory must be comprehensive enough that a reader can fully understand exactly how the agent performed the task, what attempts it made, and what tools it used, entirely without the raw logs.
+      - EXHAUSTIVE TRACKING: Record every logical interaction, tool use, and system response in chronological order as a numbered list.
+      - SUMMARIZE LONG TEXTS: Do NOT record exact tool responses, raw JSON payloads, or verbatim user/agent messages, especially when they are very long. You MUST use a concise, summarized version that captures the core meaning without losing any key information, constraints, or data points critical to the task.
+      - CAPTURE ALL MISTAKES: You MUST explicitly detail any errors, false attempts, wrong function calls, or agent misunderstandings. Do not gloss over failures, dead ends, or retry loops.
+      - INTENT & PROGRESS TRACKING: Every step must clearly state the current agent intention, summarize the 'Actions/Events' taken, and conclude with 'Progress' (evaluating what was achieved or blocked).
+      - TOOL TRACKING (under 'Actions'): 
+        * Format (Success): "Called <tool_name(s)> -> Response: <summarized output retaining key info>."
+        * Format (Error/Mistake): "Called <tool_name(s)> -> Error/Issue: <summarized error> | Context: <why it failed or why it was the wrong call>."
+
+      General Rules:
+      - Use exactly the 4 labels (Goal, Trajectory, Result, Fail reason) in this exact order.
+      - Goal and Result are ONE sentence each.
+      - No extra headings, free paragraphs, or closing remarks.
+    merge_op: patch

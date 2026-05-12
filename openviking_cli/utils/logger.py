@@ -691,8 +691,9 @@ def get_logger(
         formatter = logging.Formatter(format_string)
         handler.setFormatter(formatter)
 
-        # Add unified trace context filter
-        handler.addFilter(TraceContextFilter())
+        # Add trace id filter
+        from openviking.telemetry.tracer import TraceIdLoggingFilter
+        handler.addFilter(TraceIdLoggingFilter())
 
         logger.addHandler(handler)
         logger.propagate = False

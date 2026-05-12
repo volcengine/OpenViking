@@ -1,0 +1,43 @@
+memory_type: experiences
+description: |
+  A generalizable, reusable insight distilled from agent execution — not a process record.
+  Captures a transferable pattern: what situation triggers it, what approach works, and why.
+
+directory: "viking://agent/{{ agent_space }}/memories/experiences"
+filename_template: "{{ experience_name }}.md"
+enabled: true
+operation_mode: "upsert"
+agent_only: true
+
+fields:
+  - name: experience_name
+    type: string
+    description: |
+      Lowercase snake_case, ASCII only, max 5 words. Name the generalizable pattern, not the specific instance.
+      Do not use Chinese.
+      Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix".
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Structured experience extraction in EXACTLY this 3-section format. This output will be injected directly into an autonomous agent's system prompt, so it MUST be written as strict, executable machine instructions:
+
+      ## Situation
+      <markdown bullets: Entry Conditions. Describe the generalized context, user intent, or overarching scenario that dictates when this entire rule block becomes relevant>
+
+      ## Approach
+      <markdown bullets: Active Execution Logic (The "DOs"). The step-by-step optimized path to success. Use direct imperative commands and explicit IF/THEN/ELSE statements for conditional execution. Do NOT place negative constraints or failure warnings here.>
+
+      ## Reflect
+      <markdown bullets: Hard Guardrails & Principles (The "DON'Ts"). Strict negative rules (e.g., "NEVER do Z"), boundary conditions, and failure-prevention heuristics to avoid past mistakes.>
+
+      Rules:
+      - MUTUAL EXCLUSIVITY (NO REDUNDANCY): Strictly separate active steps from constraints to eliminate redundant information. 'Approach' is ONLY for actionable, positive execution steps to advance the task. 'Reflect' is ONLY for negative boundaries, limits, and "what not to do." Do not repeat the same concept across both sections.
+      - OPTIMIZED EXECUTION PATH: You MUST critically analyze the original trajectory and aggressively trim away conversational noise, redundant retry loops, false starts, and irrelevant setup actions. Outline only the essential, efficient path in 'Approach'.
+      - MACHINE READABILITY (IMPERATIVE VOICE): Address the future agent directly using commanding imperatives (e.g., "Ask the user for X", "Call tool Y").
+      - ABSTRACTION MANDATE: Strip away specific entities, IDs, user names, or raw text from the past trajectory. Use generalized abstract descriptions so the rule applies universally.
+      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
+      - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
+
+    merge_op: patch

@@ -564,6 +564,31 @@ async def test_root_tenant_scoped_requests_allow_explicit_identity():
     assert ctx.user.user_id == "alice"
 
 
+async def test_root_reindex_requests_require_explicit_account():
+    """ROOT reindex must select an account because indexes are account-scoped."""
+    request = _make_request("/api/v1/content/reindex", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Account"):
+        await get_request_context(request, identity)
+
+
+async def test_root_reindex_requests_allow_account_without_user():
+    """ROOT reindex is account-scoped and does not require a user header."""
+    request = _make_request(
+        "/api/v1/content/reindex",
+        headers={"X-OpenViking-Account": "acme"},
+        auth_enabled=True,
+    )
+    identity = ResolvedIdentity(role=Role.ROOT, account_id="acme", user_id="default")
+
+    ctx = await get_request_context(request, identity)
+
+    assert ctx.role == Role.ROOT
+    assert ctx.user.account_id == "acme"
+    assert ctx.user.user_id == "default"
+
+
 async def test_root_monitoring_requests_allow_implicit_default_identity():
     """Observer/debug endpoints keep the existing ROOT monitoring flow."""
     observer_request = _make_request("/api/v1/observer/system", auth_enabled=True)

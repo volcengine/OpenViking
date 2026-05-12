@@ -7,7 +7,7 @@ Handles summarization and key information extraction.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
-from openviking.core.directories import get_context_type_for_uri
+from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -77,7 +77,7 @@ class Summarizer:
 
         for uri, temp_uri in zip(resource_uris, temp_uris, strict=True):
             # Determine context_type based on URI
-            context_type = get_context_type_for_uri(uri)
+            context_type = context_type_for_uri(uri)
 
             enqueue_units: List[Tuple[str, str]] = []
             if is_resources_root(uri) and uri != temp_uri:

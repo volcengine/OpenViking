@@ -976,6 +976,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "user": "alice",
   "agent_id": "my-agent",
   "upload": {
+    "mode": "local",
     "ignore_dirs": "node_modules,.cache,.nx",
     "include": "*.md,*.pdf",
     "exclude": "*.tmp,*.log"
@@ -993,6 +994,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
 | `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
+| `upload.mode` | Temporary upload backend: `"local"` (per-instance disk) or `"shared"` (distributed shared store, required when consumer requests can land on a different server instance than the upload). Per-call override via `OPENVIKING_UPLOAD_MODE`. | `null` (server's `temp_upload.default_mode`, which itself defaults to `"local"`) |
 
 Local directory uploads respect `.gitignore` files (root and nested). `ignore_dirs/include/exclude` apply on top of that.
 
@@ -1023,7 +1025,12 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
-    "cors_origins": ["*"]
+    "cors_origins": ["*"],
+    "temp_upload": {
+      "default_mode": "local",
+      "shared_max_size_bytes": 536870912,
+      "shared_prefix": "viking://upload"
+    }
   }
 }
 ```
@@ -1035,6 +1042,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
+| `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). | `"local"` |
+| `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
+| `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 

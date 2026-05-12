@@ -257,7 +257,9 @@ class VikingClient:
         result = await self.read_content(uri=uri, level="read")
         return result
 
-    async def search(self, query: str, target_uri: Optional[str] = "", limit: int = 10) -> Dict[str, Any]:
+    async def search(
+        self, query: str, target_uri: str | list[str] | None = None, limit: int = 10
+    ) -> Dict[str, Any]:
         # session = self.client.session()
 
         result = await self.client.search(query, target_uri=target_uri, limit=limit)
@@ -363,35 +365,44 @@ class VikingClient:
             return None
 
     async def search_memory(
-        self, query: str, user_id: str, agent_user_id: str, limit: int = 10
+        self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory。"""
         await self._load_namespace_policy()
-        effective_user_id = self._effective_user_id(user_id)
-        user_exists = await self._check_user_exists(effective_user_id)
 
-        if not user_exists:
-            await self._initialize_user(effective_user_id)
-            return {
-                "user_memory": [],
-                "agent_memory": [],
-            }
+        if isinstance(user_ids, str):
+            user_ids = [user_ids]
 
-        uri_user_memory = self._memory_target_uri(effective_user_id)
-        user_memory = await self.client.find(
-            query=query,
-            target_uri=uri_user_memory,
-            limit=limit,
-        )
-        uri_agent_memory = self._agent_memory_target_uri(effective_user_id)
+        all_user_memories = []
+        all_agent_memories = []
+
+        for user_id in user_ids:
+            effective_user_id = self._effective_user_id(user_id)
+            user_exists = await self._check_user_exists(effective_user_id)
+            if not user_exists:
+                await self._initialize_user(effective_user_id)
+                continue
+
+            uri_user_memory = self._memory_target_uri(effective_user_id)
+            user_memory = await self.client.find(
+                query=query,
+                target_uri=uri_user_memory,
+                limit=limit,
+            )
+            all_user_memories.extend(user_memory or [])
+
+        effective_agent_user_id = self._effective_user_id(agent_user_id)
+        uri_agent_memory = self._agent_memory_target_uri(effective_agent_user_id)
         agent_memory = await self.client.find(
             query=query,
             target_uri=uri_agent_memory,
             limit=limit,
         )
+        all_agent_memories.extend(agent_memory or [])
+
         return {
-            "user_memory": user_memory.memories if hasattr(user_memory, "memories") else [],
-            "agent_memory": agent_memory.memories if hasattr(agent_memory, "memories") else [],
+            "user_memory": all_user_memories,
+            "agent_memory": all_agent_memories,
         }
 
     async def grep(

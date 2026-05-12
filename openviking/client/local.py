@@ -56,15 +56,17 @@ class LocalClient(BaseClient):
     def __init__(
         self,
         path: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ):
         """Initialize LocalClient.
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
+            user: Explicit user/account/agent identity for embedded mode
         """
         self._service = OpenVikingService(
             path=path,
-            user=UserIdentifier.the_default_user(),
+            user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
         self._ctx = RequestContext(user=self._user, role=Role.USER)
@@ -154,6 +156,19 @@ class LocalClient(BaseClient):
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
+
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        return await self._service.reindex(
+            uri=uri,
+            mode=mode,
+            wait=wait,
+        )
 
     async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger index building."""

@@ -3,6 +3,71 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "ov_import",
+      "memory_search",
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "setup",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    },
+    {
+      "name": "status",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    }
+  ],
+  "providerAuthEnvVars": {
+    "openviking": [
+      "OPENVIKING_API_KEY",
+      "OPENVIKING_BASE_URL"
+    ]
+  },
+  "skills": [
+    "./skills/install-openviking-memory"
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "openviking",
+        "authMethods": [
+          "api_key",
+          "trusted"
+        ],
+        "envVars": [
+          "OPENVIKING_API_KEY",
+          "OPENVIKING_BASE_URL"
+        ],
+        "cliFlags": {
+          "api_key": [
+            "--base-url",
+            "--api-key"
+          ],
+          "trusted": [
+            "--base-url"
+          ]
+        }
+      }
+    ],
+    "requiresRuntime": true,
+    "cliCommand": "openclaw openviking setup"
+  },
   "uiHints": {
     "baseUrl": {
       "label": "OpenViking Base URL",
@@ -126,9 +191,15 @@
     },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
+    },
+    "commitKeepRecentCount": {
+      "label": "Commit Keep Recent Count",
+      "placeholder": "10",
+      "advanced": true,
+      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
@@ -145,6 +216,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "mode": {
+        "type": "string",
+        "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
+      },
       "baseUrl": {
         "type": "string"
       },
@@ -218,6 +293,11 @@
       },
       "commitTokenThreshold": {
         "type": "number"
+      },
+      "commitKeepRecentCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000
       },
       "bypassSessionPatterns": {
         "type": "array",

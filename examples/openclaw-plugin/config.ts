@@ -38,6 +38,13 @@ export type MemoryOpenVikingConfig = {
   /** @deprecated Use recallMaxInjectedChars. */
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  /**
+   * WM v2: number of most-recent messages to keep live after an afterTurn
+   * commit so the next turn still has immediate context. Forwarded to the
+   * server as `keep_recent_count`. Default 10. The compact path ignores this
+   * value and always passes 0.
+   */
+  commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
@@ -56,9 +63,10 @@ const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
-const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_AGENT_PREFIX = "";
@@ -176,6 +184,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
@@ -190,7 +199,7 @@ export const memoryOpenVikingConfigSchema = {
     const mode = "remote" as const;
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
-    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
+    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -203,15 +212,15 @@ export const memoryOpenVikingConfigSchema = {
     const accountId =
       typeof cfg.accountId === "string" && cfg.accountId.trim()
         ? cfg.accountId.trim()
-        : (process.env.OPENVIKING_ACCOUNT_ID?.trim() || "");
+        : (getEnv("OPENVIKING_ACCOUNT_ID")?.trim() || "");
     const userId =
       typeof cfg.userId === "string" && cfg.userId.trim()
         ? cfg.userId.trim()
-        : (process.env.OPENVIKING_USER_ID?.trim() || "");
+        : (getEnv("OPENVIKING_USER_ID")?.trim() || "");
 
     const hasExplicitAgentScopeMode =
-      typeof cfg.agentScopeMode === "string" || process.env.OPENVIKING_AGENT_SCOPE_MODE !== undefined;
-    const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
+      typeof cfg.agentScopeMode === "string" || getEnv("OPENVIKING_AGENT_SCOPE_MODE") !== undefined;
+    const rawAgentScope = cfg.agentScopeMode ?? getEnv("OPENVIKING_AGENT_SCOPE_MODE");
     const agentScopeMode =
       rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
     const explicitIsolateUserScopeByAgent =
@@ -224,12 +233,12 @@ export const memoryOpenVikingConfigSchema = {
         : undefined;
     const envIsolateUserScopeByAgent =
       explicitIsolateUserScopeByAgent === undefined &&
-      process.env.OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT !== undefined
+      getEnv("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT") !== undefined
         ? envFlag("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT")
         : undefined;
     const envIsolateAgentScopeByUser =
       explicitIsolateAgentScopeByUser === undefined &&
-      process.env.OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER !== undefined
+      getEnv("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER") !== undefined
         ? envFlag("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER")
         : undefined;
     const isolateUserScopeByAgent =
@@ -282,12 +291,22 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract === true,
+      recallPreferAbstract:
+        typeof cfg.recallPreferAbstract === "boolean"
+          ? cfg.recallPreferAbstract
+          : DEFAULT_RECALL_PREFER_ABSTRACT,
       recallMaxInjectedChars,
       recallTokenBudget: recallMaxInjectedChars,
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
+      commitKeepRecentCount: Math.max(
+        0,
+        Math.min(
+          1_000,
+          Math.floor(toNumber(cfg.commitKeepRecentCount, DEFAULT_COMMIT_KEEP_RECENT_COUNT)),
+        ),
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
@@ -432,6 +451,14 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
+    commitKeepRecentCount: {
+      label: "Commit Keep Recent Count",
+      placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
+      advanced: true,
+      help:
+        "Number of most-recent messages to keep live after an afterTurn commit. " +
+        "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

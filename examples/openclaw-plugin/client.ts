@@ -686,20 +686,39 @@ export class OpenVikingClient {
    */
   async commitSession(
     sessionId: string,
-    options?: { wait?: boolean; timeoutMs?: number; agentId?: string },
+    options?: {
+      wait?: boolean;
+      timeoutMs?: number;
+      agentId?: string;
+      /**
+       * WM v2: number of most-recent messages to keep live after commit.
+       * Forwarded as `keep_recent_count` in the POST body. 0 (default)
+       * preserves the pre-v2 "archive everything" behavior.
+       */
+      keepRecentCount?: number;
+    },
   ): Promise<CommitSessionResult> {
+    const keepRecentCount =
+      options?.keepRecentCount != null && Number.isFinite(options.keepRecentCount)
+        ? Math.max(0, Math.floor(options.keepRecentCount))
+        : 0;
     await this.emitRoutingDebug(
       "session commit POST (archive + memory extraction)",
       {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
         sessionId,
         wait: options?.wait ?? false,
+        keepRecentCount,
       },
       options?.agentId,
     );
+    const body: Record<string, unknown> = {};
+    if (keepRecentCount > 0) {
+      body.keep_recent_count = keepRecentCount;
+    }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({}) },
+      { method: "POST", body: JSON.stringify(body) },
       options?.agentId,
     );
 
@@ -761,6 +780,40 @@ export class OpenVikingClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
       { method: "GET" },
       agentId,
+    );
+  }
+
+  async grepSessionArchives(
+    sessionId: string,
+    pattern: string,
+    options: {
+      archiveId?: string;
+      caseInsensitive?: boolean;
+      nodeLimit?: number;
+      levelLimit?: number;
+      agentId?: string;
+    } = {},
+  ): Promise<{
+    matches: Array<{ line: number; uri: string; content: string }>;
+    count: number;
+    match_count?: number;
+    files_scanned?: number;
+  }> {
+    const baseUri = `viking://session/${sessionId}/history`;
+    const uri = options.archiveId ? `${baseUri}/${options.archiveId}` : baseUri;
+    return this.request(
+      "/api/v1/search/grep",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          uri,
+          pattern,
+          case_insensitive: options.caseInsensitive ?? true,
+          ...(options.nodeLimit !== undefined ? { node_limit: options.nodeLimit } : {}),
+          ...(options.levelLimit !== undefined ? { level_limit: options.levelLimit } : {}),
+        }),
+      },
+      options.agentId,
     );
   }
 

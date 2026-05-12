@@ -116,9 +116,7 @@ def acquire_data_dir_lock(data_dir: str) -> str:
     atexit.register(_cleanup)
     # Also try to clean up on SIGTERM (graceful shutdown).
     try:
-        signal.signal(
-            signal.SIGTERM, lambda sig, frame: (_cleanup(), signal.default_int_handler(sig, frame))
-        )
+        signal.signal(signal.SIGTERM, lambda sig, frame: (_cleanup(), sys.exit(0)))
     except (OSError, ValueError):
         # signal.signal() can fail in non-main threads.
         pass
