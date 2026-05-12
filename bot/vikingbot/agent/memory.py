@@ -157,7 +157,7 @@ class MemoryStore:
                 uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
                 score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
                 memory_list.append(f"{i},{uri},{score}")
-            memory_list.append(f'agent_memory[{len(result['agent_memory'])}]:')
+            memory_list.append(f"agent_memory[{len(result['agent_memory'])}]:")
             for i, mem in enumerate(result['agent_memory']):
                 uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
                 score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)

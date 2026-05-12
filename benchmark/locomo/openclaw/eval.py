@@ -20,6 +20,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -765,6 +766,9 @@ def run_ingest(
         samples = load_locomo_data(args.input, args.sample)
         results = []
         skipped_count = 0
+        if shutil.which("openclaw") is None:
+            print("[ERROR] openclaw CLI not found in PATH", file=sys.stderr)
+            sys.exit(1)
 
         for item in samples:
             sample_id = item["sample_id"]
@@ -800,6 +804,8 @@ def run_ingest(
                     reply, usage = send_message(
                         args.base_url, args.token, user_key, msg, args.agent_id
                     )
+
+                    print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
                     compact_ack, compact_wait = compact_via_chat_send(
                         args.base_url,
                         args.token,
@@ -808,8 +814,6 @@ def run_ingest(
                     )
                     compact_status = compact_wait.get("status", "unknown")
                     compact_run_id = compact_ack.get("runId", "")
-
-                    print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
                     print(
                         f"    -> compact(chat.send): runId={compact_run_id} status={compact_status}",
                         file=sys.stderr,

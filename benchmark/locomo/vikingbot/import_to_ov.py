@@ -395,8 +395,8 @@ async def process_single_session(
     ingest_record = ingest_record or {}
     csv_id = display_id or str(sample_id)
     try:
-        user_id = str(sample_id) if args.separate_user_by_sample else csv_id
-        agent_id = str(sample_id) if args.separate_user_by_sample else f"agent_{csv_id}"
+        user_id = str(sample_id) if args.separate_user_by_sample else ""
+        agent_id = str(sample_id) if args.separate_user_by_sample else ""
         account = args.account
         result = await viking_ingest(
             messages,
@@ -815,7 +815,7 @@ def main():
         "--separate-user-by-sample",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to isolate OpenViking user/agent/account by sample (default: true). Use --no-separate-user-by-sample to share empty user/agent/account.",
+        help="Whether to isolate OpenViking user/agent IDs by sample (default: true). Use --no-separate-user-by-sample to use empty user/agent while keeping --account unchanged.",
     )
     parser.add_argument(
         "--parallel-samples",
