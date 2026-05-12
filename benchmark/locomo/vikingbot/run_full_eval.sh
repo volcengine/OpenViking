@@ -229,7 +229,7 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 裁判打分
     echo "[3/3] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20 --engine "$ENGINE"
 
     # 统计结果
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
@@ -266,7 +266,7 @@ if [ -z "$SAMPLE" ]; then
 
     # 裁判打分
     echo "[3/4] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40 --engine "$ENGINE"
 
     # 计算结果
     echo "[4/4] 计算结果..."
@@ -357,7 +357,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         echo "[3/3] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1 --engine "$ENGINE"
 
     # 输出结果
     echo ""
@@ -454,7 +454,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5 --engine "$ENGINE"
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then
