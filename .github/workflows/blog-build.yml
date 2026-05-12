@@ -93,9 +93,25 @@ jobs:
           : "${TOS_ENDPOINT:?Missing TOS_ENDPOINT value}"
           : "${TOS_S3_ENDPOINT:?Missing TOS_S3_ENDPOINT value}"
 
-          aws s3 cp blog/dist "s3://${TOS_BUCKET}/" \
+          DIST_DIR="blog/dist"
+          HTML_CACHE_CONTROL="public, max-age=0, must-revalidate"
+          STATIC_CACHE_CONTROL="public, max-age=31536000, immutable"
+
+          aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
             --recursive \
+            --exclude "assets/*.css" \
+            --exclude "assets/*.js" \
+            --cache-control "${HTML_CACHE_CONTROL}" \
+            --only-show-errors
+
+          aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --exclude "*" \
+            --include "assets/*.css" \
+            --include "assets/*.js" \
+            --cache-control "${STATIC_CACHE_CONTROL}" \
             --only-show-errors
 
       - name: Report TOS deployment failure
