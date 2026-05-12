@@ -17,6 +17,9 @@ on:
       - 'Cargo.toml'
       - '.github/workflows/rust-cli.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -172,6 +175,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     if: startsWith(github.ref, 'refs/tags/cli@')
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
@@ -179,7 +186,7 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '22'
+        node-version: '24'
         registry-url: 'https://registry.npmjs.org'
 
     - name: Get version from tag
@@ -195,13 +202,17 @@ jobs:
       run: ls -R artifacts/
 
     - name: Publish platform packages
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       run: |
         VERSION="${{ steps.get_version.outputs.version }}"
         for pkg_dir in artifacts/cli-*/; do
           pkg_name=$(basename "$pkg_dir")
-          echo "Publishing @openviking/$pkg_name@$VERSION..."
+          package="@openviking/$pkg_name"
+          if npm view "$package@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Skipping $package@$VERSION; already published."
+            continue
+          fi
+
+          echo "Publishing $package@$VERSION..."
           chmod +x "$pkg_dir/bin/ov" 2>/dev/null || true
           cd "$pkg_dir"
           npm publish --access public
@@ -209,8 +220,6 @@ jobs:
         done
 
     - name: Publish wrapper package
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       run: |
         VERSION="${{ steps.get_version.outputs.version }}"
         cd npm/cli
@@ -224,6 +233,11 @@ jobs:
           }
           require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
         "
+
+        if npm view "@openviking/cli@$VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+          echo "Skipping @openviking/cli@$VERSION; already published."
+          exit 0
+        fi
 
         echo "Publishing @openviking/cli@$VERSION..."
         npm publish --access public
