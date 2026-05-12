@@ -536,6 +536,14 @@ curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-pro
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking count viking://resources/my-project
+openviking count viking://resources/my-project -r        # 递归
+openviking count viking://resources/my-project -r -a     # 递归并包含隐藏文件
+```
+
 **响应**
 
 ```json

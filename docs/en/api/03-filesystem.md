@@ -536,6 +536,14 @@ curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-pro
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking count viking://resources/my-project
+openviking count viking://resources/my-project -r        # recursive
+openviking count viking://resources/my-project -r -a     # recursive, include hidden files
+```
+
 **Response**
 
 ```json
