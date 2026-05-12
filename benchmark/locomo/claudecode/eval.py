@@ -56,7 +56,7 @@ FIELDNAMES = [
 ]
 
 OV_HOOK_LOG = None  # resolved per-call using home_dir
-OV_MCP_LOG = "/Users/zhengxiao.wu/Dev/OpenViking-benchmark/benchmark/locomo/claudecode/.tmp/result-ov/mcp-calls.log"
+OV_MCP_LOG = str(SCRIPT_DIR / ".tmp" / "mcp-calls.log")  # observability only
 
 
 def _count_file_lines(path: str) -> int:
@@ -288,6 +288,14 @@ def run_claude_code(
     if ov_agent_id:
         env["OPENVIKING_AGENT_ID"] = ov_agent_id
         env["OPENVIKING_USER"] = ov_agent_id
+    # Disable detached-worker write path (subprocess.run reaps the worker
+    # before persistence). Strip any inherited prod URL/auth that the parent
+    # shell's `claude` shell function exports from the default ovcli.conf.
+    env["OPENVIKING_WRITE_PATH_ASYNC"] = "0"
+    env.pop("OPENVIKING_URL", None)
+    env.pop("OPENVIKING_BASE_URL", None)
+    env.pop("OPENVIKING_API_KEY", None)
+    env.pop("OPENVIKING_BEARER_TOKEN", None)
 
     extra_flags = []
     if hooks_settings:
@@ -325,13 +333,14 @@ def process_question(
     ov_cli_config: Optional[str] = None,
     ov_shared_id: Optional[str] = None,
     ov_preamble_override: Optional[str] = None,
+    shared_cwd: bool = False,
 ) -> dict:
     sample_id = qa["sample_id"]
     qi = qa["question_index"]
     question = qa["question"]
     question_time = qa.get("question_time")
 
-    project_dir = os.path.join(project_root, sample_id)
+    project_dir = project_root if shared_cwd else os.path.join(project_root, sample_id)
 
     if ov_preamble_override is not None:
         ov_preamble = ov_preamble_override + "\n\n" if ov_preamble_override else ""
@@ -490,6 +499,11 @@ def main():
         "--ov-preamble", default=None,
         help="Custom preamble for OV-enabled QA (overrides default)",
     )
+    parser.add_argument(
+        "--shared-cwd", action="store_true",
+        help="Use --project-root directly as cwd for every sample (no per-sample subdir). "
+             "Required when ingest stored CC MEMORY.md in a single shared cwd.",
+    )
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -499,14 +513,15 @@ def main():
     if not api_key and not auth_token:
         print("[INFO] No API key/token provided - assuming subscription auth in HOME", file=sys.stderr)
 
-    # Verify project root has been ingested
-    mapping_path = os.path.join(args.project_root, "sample_mapping.json")
-    if not os.path.exists(mapping_path):
-        print(
-            f"Error: {mapping_path} not found. Run ingest.py first.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Verify project root has been ingested (skip in shared-cwd mode where ingest_e2e.py owns it)
+    if not args.shared_cwd:
+        mapping_path = os.path.join(args.project_root, "sample_mapping.json")
+        if not os.path.exists(mapping_path):
+            print(
+                f"Error: {mapping_path} not found. Run ingest.py first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     data = load_locomo_data(args.input, args.sample)
     qa_items = load_qa_items(data, count=args.count, question_index=args.question_index)
@@ -561,6 +576,7 @@ def main():
                 ov_cli_config=args.ov_cli_config,
                 ov_shared_id=args.ov_shared_id,
                 ov_preamble_override=args.ov_preamble,
+                shared_cwd=args.shared_cwd,
             )
             futures[fut] = qa
 
