@@ -49,10 +49,14 @@ export async function OpenVikingPlugin({ client, directory }) {
       if (prompt) output.system.push(prompt)
     },
 
-    "experimental.chat.messages.transform": async (_input, output) => {
-      await recall.injectRelevantMemories(output)
+    "chat.message": async (input, output) => {
+      try {
+        if (!config.autoRecall?.enabled) return
+        await recall.injectRelevantMemories(input, output)
+      } catch (error) {
+        log("WARN", "recall", "Auto recall failed", { error: error?.message ?? String(error) })
+      }
     },
-
 
     stop: async () => {
       await sessionManager.flushAll({ commit: true })

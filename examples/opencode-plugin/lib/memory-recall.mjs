@@ -11,37 +11,32 @@ const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|�
 const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天|上周|下周|上个月|下个月|去年|明年/i
 
 export function createMemoryRecall({ config }) {
-  async function injectRelevantMemories(output) {
-    try {
-      if (!config.autoRecall?.enabled) return
-      const query = extractLatestUserText(output.messages ?? [])
-      if (!query) return
+  async function injectRelevantMemories(input, output) {
+    if (!config.autoRecall?.enabled) return
+    const query = extractCurrentUserText(output.parts ?? [])
+    if (!query) return
 
-      const rawResults = await performRecallSearch(query)
-      if (rawResults.length === 0) return
+    const rawResults = await performRecallSearch(query)
+    if (rawResults.length === 0) return
 
-      const ranked = pickMemoriesForInjection(
-        rawResults,
-        config.autoRecall.limit,
-        query,
-        config.autoRecall.scoreThreshold,
-      )
-      if (ranked.length === 0) return
+    const ranked = pickMemoriesForInjection(
+      rawResults,
+      config.autoRecall.limit,
+      query,
+      config.autoRecall.scoreThreshold,
+    )
+    if (ranked.length === 0) return
 
-      const processed = postProcessMemories(
-        ranked,
-        config.autoRecall.maxContentChars,
-        config.autoRecall.preferAbstract,
-      )
-      const block = formatMemoryBlock(processed, config.autoRecall.tokenBudget)
-      if (!block) return
+    const processed = postProcessMemories(
+      ranked,
+      config.autoRecall.maxContentChars,
+      config.autoRecall.preferAbstract,
+    )
+    const block = formatMemoryBlock(processed, config.autoRecall.tokenBudget)
+    if (!block) return
 
-      const lastUser = [...output.messages].reverse().find((message) => message.info?.role === "user")
-      if (lastUser && appendToLastTextPart(lastUser, block)) {
-        log("INFO", "recall", `Injected ${processed.length} memories`)
-      }
-    } catch (error) {
-      log("WARN", "recall", "Auto recall failed, skipping silently", { error: error?.message ?? String(error) })
+    if (prependSyntheticRecallPart(input, output, block)) {
+      log("INFO", "recall", `Injected ${processed.length} memories`)
     }
   }
 
@@ -63,20 +58,15 @@ export function createMemoryRecall({ config }) {
   return { injectRelevantMemories }
 }
 
-function extractLatestUserText(messages) {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i]
-    if (message.info?.role !== "user") continue
-    const texts = []
-    for (const part of message.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string") texts.push(part.text)
-    }
-    const joined = texts.join(" ").trim()
-    if (!joined) continue
-    if (joined.includes("<relevant-memories>")) return null
-    return joined
+function extractCurrentUserText(parts) {
+  const texts = []
+  for (const part of parts) {
+    if (part.type !== "text" || typeof part.text !== "string") continue
+    if (part.text.includes("<relevant-memories>")) return null
+    if (!part.synthetic && !part.ignored) texts.push(part.text)
   }
-  return null
+  const joined = texts.join(" ").trim()
+  return joined || null
 }
 
 function buildRecallQueryProfile(query) {
@@ -205,14 +195,18 @@ function formatMemoryBlock(items, tokenBudget) {
   return lines.join("\n")
 }
 
-function appendToLastTextPart(message, injection) {
-  for (let i = (message.parts ?? []).length - 1; i >= 0; i -= 1) {
-    const part = message.parts[i]
-    if (part.type === "text" && typeof part.text === "string") {
-      part.text = `${part.text}\n\n${injection}`
-      return true
-    }
-  }
-  return false
-}
+function prependSyntheticRecallPart(input, output, injection) {
+  const sessionID = input.sessionID ?? output.message?.sessionID
+  const messageID = input.messageID ?? output.message?.id
+  if (!sessionID || !messageID) return false
 
+  output.parts.unshift({
+    id: `prt-ov-recall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "text",
+    text: injection,
+    synthetic: true,
+    sessionID,
+    messageID,
+  })
+  return true
+}

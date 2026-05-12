@@ -16,7 +16,7 @@ The new plugin exposes everything through OpenCode tool hooks and talks to OpenV
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
 - Commits sessions at lifecycle boundaries for memory extraction.
-- Automatically recalls relevant memories and appends them to the latest user message.
+- Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
 
 ## Files
 
