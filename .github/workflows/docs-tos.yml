@@ -94,9 +94,22 @@ jobs:
             *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
           esac
 
-          aws s3 cp docs/.vitepress/dist "s3://${TOS_BUCKET}/" \
+          DIST_DIR="docs/.vitepress/dist"
+          HTML_CACHE_CONTROL="public, max-age=0, must-revalidate"
+          STATIC_CACHE_CONTROL="public, max-age=31536000, immutable"
+
+          aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
             --recursive \
+            --exclude ".git/*" \
+            --exclude "assets/*" \
+            --cache-control "${HTML_CACHE_CONTROL}" \
+            --only-show-errors
+
+          aws s3 cp "${DIST_DIR}/assets" "s3://${TOS_BUCKET}/assets/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --cache-control "${STATIC_CACHE_CONTROL}" \
             --only-show-errors
 
       - name: Report TOS deployment failure

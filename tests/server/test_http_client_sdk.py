@@ -4,8 +4,6 @@
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
 import asyncio
-import io
-import zipfile
 
 import httpx
 import pytest
@@ -13,7 +11,8 @@ import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
-from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
+from tests.server.conftest import SAMPLE_MD_CONTENT, SDK_ROOT_API_KEY, TEST_TMP_DIR
+from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
 @pytest_asyncio.fixture()
@@ -22,6 +21,9 @@ async def http_client(running_server):
     port, svc = running_server
     client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
+        api_key=SDK_ROOT_API_KEY,
+        account="default",
+        user="sdk_test_user",
     )
     await client.initialize()
     yield client, svc
@@ -114,25 +116,16 @@ description: SDK localhost upload test
     assert result["uri"].startswith("viking://agent/default/skills/")
 
 
-def _build_ovpack_bytes() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zf:
-        zf.writestr("pkg/_._meta.json", '{"uri": "viking://resources/pkg"}')
-        zf.writestr("pkg/content.md", "# Demo\n")
-    return buffer.getvalue()
-
-
 async def test_sdk_import_ovpack_from_local_file(http_client):
     client, _ = http_client
     f = TEST_TMP_DIR / "sdk_import.ovpack"
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_bytes(_build_ovpack_bytes())
+    f.write_bytes(build_ovpack_bytes())
 
     uri = await client.import_ovpack(
         str(f),
         parent="viking://resources/imported/",
-        force=True,
-        vectorize=False,
+        on_conflict="overwrite",
     )
     assert uri.startswith("viking://resources/imported/")
 

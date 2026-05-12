@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import importlib
-import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,8 +14,9 @@ import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.storage.errors import EmbeddingConfigurationError
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_LOCAL_MODEL_CACHE_DIR = "~/.cache/openviking/models"
 DEFAULT_LOCAL_DENSE_MODEL = "bge-small-zh-v1.5-f16"

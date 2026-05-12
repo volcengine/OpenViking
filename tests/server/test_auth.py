@@ -323,14 +323,14 @@ async def test_task_endpoints_are_user_scoped():
     alice_task = tracker.create(
         "session_commit",
         resource_id="alice-session",
-        owner_account_id=account_id,
-        owner_user_id="alice",
+        account_id=account_id,
+        user_id="alice",
     )
     bob_task = tracker.create(
         "session_commit",
         resource_id="bob-session",
-        owner_account_id=account_id,
-        owner_user_id="bob",
+        account_id=account_id,
+        user_id="bob",
     )
 
     alice_app = _build_task_http_test_app(

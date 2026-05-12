@@ -127,16 +127,19 @@ type CommandDefinition = {
   handler: (ctx: PluginCommandContext) => CommandResult | Promise<CommandResult>;
 };
 
-type OvImportKind = "resource" | "skill";
-
-type OvImportInput = {
-  kind?: OvImportKind;
+type AddResourceToolInput = {
   source?: string;
-  data?: unknown;
   to?: string;
   parent?: string;
   reason?: string;
   instruction?: string;
+  wait?: boolean;
+  timeout?: number;
+};
+
+type AddSkillToolInput = {
+  source?: string;
+  data?: unknown;
   wait?: boolean;
   timeout?: number;
 };
@@ -304,16 +307,6 @@ function getBoolFlag(flags: Map<string, string | boolean>, name: string): boolea
   return flags.get(name) === true;
 }
 
-function parseImportKind(value: string | undefined): OvImportKind {
-  if (!value) {
-    return "resource";
-  }
-  if (value === "resource" || value === "skill") {
-    return value;
-  }
-  throw new Error("--kind must be resource or skill");
-}
-
 function extractToolSenderId(ctx: unknown): string | undefined {
   if (!ctx || typeof ctx !== "object") {
     return undefined;
@@ -334,29 +327,41 @@ function extractToolSenderId(ctx: unknown): string | undefined {
   return undefined;
 }
 
-export function parseOvImportCommandArgs(args: string): OvImportInput {
+export function parseAddResourceCommandArgs(args: string): AddResourceToolInput {
   const parsed = parseFlagArgs(args);
-  const kind = parseImportKind(getStringFlag(parsed.flags, "kind"));
   const source =
     parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
   if (!source) {
-    throw new Error("Usage: /ov-import <source> [--kind resource|skill] [--to URI] [--parent URI] [--wait]");
+    throw new Error("Usage: /add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]");
   }
   const to = getStringFlag(parsed.flags, "to");
   const parent = getStringFlag(parsed.flags, "parent");
   if (to && parent) {
     throw new Error("Cannot specify both --to and --parent.");
   }
-  if (kind === "skill" && (to || parent || parsed.flags.has("reason") || parsed.flags.has("instruction"))) {
-    throw new Error("--to, --parent, --reason, and --instruction are resource-only options.");
-  }
   return {
-    kind,
     source,
     to,
     parent,
     reason: getStringFlag(parsed.flags, "reason"),
     instruction: getStringFlag(parsed.flags, "instruction"),
+    wait: getBoolFlag(parsed.flags, "wait"),
+    timeout: getNumberFlag(parsed.flags, "timeout"),
+  };
+}
+
+export function parseAddSkillCommandArgs(args: string): AddSkillToolInput {
+  const parsed = parseFlagArgs(args);
+  const source =
+    parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
+  if (!source) {
+    throw new Error("Usage: /add-skill <source> [--wait] [--timeout SEC]");
+  }
+  if (parsed.flags.has("to") || parsed.flags.has("parent") || parsed.flags.has("reason") || parsed.flags.has("instruction")) {
+    throw new Error("--to, --parent, --reason, and --instruction are resource-only options.");
+  }
+  return {
+    source,
     wait: getBoolFlag(parsed.flags, "wait"),
     timeout: getNumberFlag(parsed.flags, "timeout"),
   };
@@ -678,23 +683,8 @@ const contextEnginePlugin = {
       };
     };
 
-    const executeImport = async (input: OvImportInput, agentId?: string) => {
-      const kind = input.kind ?? "resource";
-      if (kind === "skill") {
-        if (input.to || input.parent || input.reason || input.instruction) {
-          throw new Error("to, parent, reason, and instruction are resource-only options.");
-        }
-        return importSkill({
-          path: input.source,
-          data: input.data,
-          wait: input.wait,
-          timeout: input.timeout,
-        }, agentId);
-      }
-      if (input.data !== undefined && input.data !== null) {
-        throw new Error("data is only supported for skill imports.");
-      }
-      return importResource({
+    const addResourceOpenViking = (input: AddResourceToolInput, agentId?: string) =>
+      importResource({
         pathOrUrl: input.source ?? "",
         to: input.to,
         parent: input.parent,
@@ -703,24 +693,31 @@ const contextEnginePlugin = {
         wait: input.wait,
         timeout: input.timeout,
       }, agentId);
-    };
 
-const mergeFindResults = (results: FindResult[]): FindResult => {
-  const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
-    const seen = new Map<string, FindResultItem>();
-    for (const item of items) {
-      if (!seen.has(item.uri)) {
-        seen.set(item.uri, item);
-      }
-    }
-    return Array.from(seen.values());
-  };
-  const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
-  const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
-  const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
-  return {
-    memories,
-    resources,
+    const addSkillOpenViking = (input: AddSkillToolInput, agentId?: string) =>
+      importSkill({
+        path: input.source,
+        data: input.data,
+        wait: input.wait,
+        timeout: input.timeout,
+      }, agentId);
+
+    const mergeFindResults = (results: FindResult[]): FindResult => {
+      const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+        const seen = new Map<string, FindResultItem>();
+        for (const item of items) {
+          if (!seen.has(item.uri)) {
+            seen.set(item.uri, item);
+          }
+        }
+        return Array.from(seen.values());
+      };
+      const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+      const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+      const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+      return {
+        memories,
+        resources,
         skills,
         total: memories.length + resources.length + skills.length,
       };
@@ -836,31 +833,27 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
     api.registerTool(
       (ctx: ToolContext) => ({
-        name: "ov_import",
-        label: "Import (OpenViking)",
+        name: "add_resource",
+        label: "Add Resource (OpenViking)",
         description:
-          "Import an OpenViking resource or skill only when the user explicitly asks to import, add, or index one. " +
-          "Defaults to resource; set kind=skill for SKILL.md, skill directories, raw skill content, or MCP tool dicts.",
+          "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
+          "For a '[media attached: /path ...]' document, set source to that exact local media path. Do not invent OpenViking upload REST endpoints.",
         parameters: Type.Object({
-          kind: Type.Optional(Type.Union([Type.Literal("resource"), Type.Literal("skill")], { description: "Import kind. Default: resource" })),
-          source: Type.Optional(Type.String({ description: "Local path, directory path, public URL, or Git URL" })),
-          data: Type.Optional(Type.Any({ description: "Skill only: raw SKILL.md content or MCP tool dict" })),
-          to: Type.Optional(Type.String({ description: "Resource only: exact target URI, e.g. viking://resources/project-docs" })),
-          parent: Type.Optional(Type.String({ description: "Resource only: parent URI under viking://resources" })),
-          reason: Type.Optional(Type.String({ description: "Resource only: reason or note for adding this resource" })),
-          instruction: Type.Optional(Type.String({ description: "Resource only: processing instruction for semantic extraction" })),
+          source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
+          to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs" })),
+          parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources" })),
+          reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
+          instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
           wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
           timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (isBypassedSession(ctx)) {
-            return makeBypassedToolResult("ov_import");
+            return makeBypassedToolResult("add_resource");
           }
           const session = resolvePluginSessionRouting(ctx);
-          return executeImport({
-            kind: params.kind === "skill" ? "skill" : "resource",
+          return addResourceOpenViking({
             source: typeof params.source === "string" ? params.source : undefined,
-            data: params.data,
             to: typeof params.to === "string" ? params.to : undefined,
             parent: typeof params.parent === "string" ? params.parent : undefined,
             reason: typeof params.reason === "string" ? params.reason : undefined,
@@ -870,7 +863,36 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           }, session.agentId);
         },
       }),
-      { name: "ov_import" },
+      { name: "add_resource" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "add_skill",
+        label: "Add Skill (OpenViking)",
+        description:
+          "Use only when the user explicitly asks to import, add, install, or register a skill into OpenViking. " +
+          "Set source to a local SKILL.md file or skill directory, or data to raw SKILL.md content or an MCP tool dict.",
+        parameters: Type.Object({
+          source: Type.Optional(Type.String({ description: "Local SKILL.md path or skill directory path" })),
+          data: Type.Optional(Type.Any({ description: "Raw SKILL.md content or MCP tool dict" })),
+          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("add_skill");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return addSkillOpenViking({
+            source: typeof params.source === "string" ? params.source : undefined,
+            data: params.data,
+            wait: typeof params.wait === "boolean" ? params.wait : undefined,
+            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "add_skill" },
     );
 
     api.registerTool(
@@ -900,21 +922,41 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     );
 
     api.registerCommand?.({
-      name: "ov-import",
-      description: "Import a resource or skill into OpenViking.",
+      name: "add-resource",
+      description: "Add a resource into OpenViking.",
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
           if (isBypassedSession(ctx)) {
-            const bypassed = makeBypassedToolResult("ov_import");
+            const bypassed = makeBypassedToolResult("add_resource");
             return { text: bypassed.content[0]!.text, details: bypassed.details };
           }
           const session = resolvePluginSessionRouting(ctx);
-          const input = parseOvImportCommandArgs(ctx.args ?? "");
-          const result = await executeImport(input, session.agentId);
+          const input = parseAddResourceCommandArgs(ctx.args ?? "");
+          const result = await addResourceOpenViking(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
-          return { text: `OpenViking import failed: ${err instanceof Error ? err.message : String(err)}` };
+          return { text: `OpenViking add resource failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    api.registerCommand?.({
+      name: "add-skill",
+      description: "Add a skill into OpenViking.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("add_skill");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const input = parseAddSkillCommandArgs(ctx.args ?? "");
+          const result = await addSkillOpenViking(input, session.agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking add skill failed: ${err instanceof Error ? err.message : String(err)}` };
         }
       },
     });

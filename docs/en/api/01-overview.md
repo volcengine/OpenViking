@@ -348,6 +348,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/metrics` | Prometheus metrics export | Optional |
 | GET | `/api/v1/system/status` | System status | Required |
 | POST | `/api/v1/system/wait` | Wait for processing | Required |
+| POST | `/api/v1/system/consistency` | Filesystem/vector-index consistency check | Required |
 
 ### Resources
 
@@ -363,6 +364,8 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 |--------|------|-------------|------------|
 | POST | `/api/v1/pack/export` | Export .ovpack | ROOT/ADMIN |
 | POST | `/api/v1/pack/import` | Import .ovpack | ROOT/ADMIN |
+| POST | `/api/v1/pack/backup` | Back up public scopes | ROOT/ADMIN |
+| POST | `/api/v1/pack/restore` | Restore backup package | ROOT/ADMIN |
 
 ### File System
 
