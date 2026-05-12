@@ -56,6 +56,7 @@ SUCCESS_CSV_FIELDS = [
 # LoCoMo data loading
 # ---------------------------------------------------------------------------
 
+
 def load_locomo_data(path: str, sample_id: Optional[str] = None) -> list[dict]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -84,7 +85,7 @@ def format_locomo_message(msg: dict) -> str:
     img_urls = msg.get("img_url", [])
     if isinstance(img_urls, str) and img_urls:
         img_urls = [img_urls]
-    for _url in (img_urls or []):
+    for _url in img_urls or []:
         caption = msg.get("blip_caption", "")
         if caption:
             line += f"\n  (image: {caption})"
@@ -122,16 +123,18 @@ def build_session_messages(item: dict) -> list[dict]:
             parts.append(format_locomo_message(msg))
         combined = "\n\n".join(parts)
 
-        sessions.append({
-            "message": combined,
-            "meta": {
-                "sample_id": item["sample_id"],
-                "session_key": sk,
-                "session_num": sess_num,
-                "date_time": date_time,
-                "speakers": f"{speaker_a} & {speaker_b}",
-            },
-        })
+        sessions.append(
+            {
+                "message": combined,
+                "meta": {
+                    "sample_id": item["sample_id"],
+                    "session_key": sk,
+                    "session_num": sess_num,
+                    "date_time": date_time,
+                    "speakers": f"{speaker_a} & {speaker_b}",
+                },
+            }
+        )
 
     return sessions
 
@@ -139,6 +142,7 @@ def build_session_messages(item: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Ingest record (deduplication)
 # ---------------------------------------------------------------------------
+
 
 def load_ingest_record(path: str) -> dict:
     try:
@@ -185,6 +189,7 @@ def write_error_log(path: str, sample_id: str, session_key: str, error: str) -> 
 # Claude Code invocation
 # ---------------------------------------------------------------------------
 
+
 def _run_claude_once(
     prompt: str,
     project_dir: str,
@@ -196,10 +201,13 @@ def _run_claude_once(
     """Single claude -p invocation. Returns parsed result dict."""
     cmd = [
         "claude",
-        "-p", prompt,
-        "--output-format", "json",
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
         "--dangerously-skip-permissions",
-        "--setting-sources", "",
+        "--setting-sources",
+        "",
         "--disable-slash-commands",
         "--strict-mcp-config",
     ]
@@ -220,12 +228,22 @@ def _run_claude_once(
 
         stdout = result.stdout.strip()
         if not stdout:
-            return {"response": f"[ERROR] empty stdout: {result.stderr[:200]}", "usage": {}, "duration_ms": 0, "cost": 0}
+            return {
+                "response": f"[ERROR] empty stdout: {result.stderr[:200]}",
+                "usage": {},
+                "duration_ms": 0,
+                "cost": 0,
+            }
 
         try:
             body = json.loads(stdout)
         except json.JSONDecodeError:
-            return {"response": f"[ERROR] JSON parse: {stdout[:200]}", "usage": {}, "duration_ms": 0, "cost": 0}
+            return {
+                "response": f"[ERROR] JSON parse: {stdout[:200]}",
+                "usage": {},
+                "duration_ms": 0,
+                "cost": 0,
+            }
 
         if body.get("is_error"):
             return {
@@ -249,7 +267,9 @@ def _run_claude_once(
         return {"response": f"[ERROR] {e}", "usage": {}, "duration_ms": 0, "cost": 0}
 
 
-def _build_env(home_dir: str, api_key: Optional[str], auth_token: Optional[str], api_url: Optional[str]) -> dict:
+def _build_env(
+    home_dir: str, api_key: Optional[str], auth_token: Optional[str], api_url: Optional[str]
+) -> dict:
     env = os.environ.copy()
     env["HOME"] = home_dir
     if api_key:
@@ -301,70 +321,87 @@ def run_claude_ingest(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Ingest LoCoMo conversations into Claude Code auto-memory"
     )
     parser.add_argument(
-        "--input", default=DEFAULT_DATA_PATH,
+        "--input",
+        default=DEFAULT_DATA_PATH,
         help=f"Path to locomo JSON (default: {DEFAULT_DATA_PATH})",
     )
     parser.add_argument(
-        "--sample", default=None,
+        "--sample",
+        default=None,
         help="Sample index (0-based) or sample_id. Default: all.",
     )
     parser.add_argument(
-        "--project-root", default=DEFAULT_PROJECT_ROOT,
+        "--project-root",
+        default=DEFAULT_PROJECT_ROOT,
         help=f"Root for sample project dirs (default: {DEFAULT_PROJECT_ROOT})",
     )
     parser.add_argument(
-        "--home", default=DEFAULT_HOME,
+        "--home",
+        default=DEFAULT_HOME,
         help=f"Isolated HOME directory (default: {DEFAULT_HOME})",
     )
     parser.add_argument(
-        "--api-url", default=None,
+        "--api-url",
+        default=None,
         help="Custom API base URL (ANTHROPIC_BASE_URL)",
     )
     parser.add_argument(
-        "--api-key", default=None,
+        "--api-key",
+        default=None,
         help="API key (ANTHROPIC_API_KEY)",
     )
     parser.add_argument(
-        "--auth-token", default=None,
+        "--auth-token",
+        default=None,
         help="Auth token (ANTHROPIC_AUTH_TOKEN), alternative to --api-key",
     )
     parser.add_argument(
-        "--model", default=None,
+        "--model",
+        default=None,
         help="Model name/alias (e.g. sonnet, opus)",
     )
     parser.add_argument(
-        "--force-ingest", action="store_true",
+        "--force-ingest",
+        action="store_true",
         help="Re-ingest even if already recorded as done",
     )
     parser.add_argument(
-        "--clear-ingest-record", action="store_true",
+        "--clear-ingest-record",
+        action="store_true",
         help="Clear all ingest records before running",
     )
     parser.add_argument(
-        "--record", default=DEFAULT_INGEST_RECORD,
+        "--record",
+        default=DEFAULT_INGEST_RECORD,
         help=f"Ingest record file (default: {DEFAULT_INGEST_RECORD})",
     )
     parser.add_argument(
-        "--success-csv", default=DEFAULT_SUCCESS_CSV,
+        "--success-csv",
+        default=DEFAULT_SUCCESS_CSV,
         help=f"Success CSV path (default: {DEFAULT_SUCCESS_CSV})",
     )
     parser.add_argument(
-        "--error-log", default=DEFAULT_ERROR_LOG,
+        "--error-log",
+        default=DEFAULT_ERROR_LOG,
         help=f"Error log path (default: {DEFAULT_ERROR_LOG})",
     )
     parser.add_argument(
-        "--timeout", type=int, default=600,
+        "--timeout",
+        type=int,
+        default=600,
         help="Timeout per session in seconds (default: 600)",
     )
     parser.add_argument(
-        "--prompt-prefix", default="",
+        "--prompt-prefix",
+        default="",
         help="Optional prefix prepended before each session's conversation text "
-             "(e.g. to nudge auto-memory). Default: empty (bare conversation).",
+        "(e.g. to nudge auto-memory). Default: empty (bare conversation).",
     )
     args = parser.parse_args()
 
@@ -373,7 +410,10 @@ def main():
     api_url = args.api_url or os.environ.get("ANTHROPIC_BASE_URL")
 
     if not api_key and not auth_token:
-        print("Error: API key required (--api-key/ANTHROPIC_API_KEY or --auth-token/ANTHROPIC_AUTH_TOKEN)", file=sys.stderr)
+        print(
+            "Error: API key required (--api-key/ANTHROPIC_API_KEY or --auth-token/ANTHROPIC_AUTH_TOKEN)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not os.path.exists(args.input):
@@ -430,9 +470,14 @@ def main():
 
             t0 = time.time()
             result = run_claude_ingest(
-                send_msg, project_dir, args.home,
-                api_url=api_url, api_key=api_key, auth_token=auth_token,
-                model=args.model, timeout_sec=args.timeout,
+                send_msg,
+                project_dir,
+                args.home,
+                api_url=api_url,
+                api_key=api_key,
+                auth_token=auth_token,
+                model=args.model,
+                timeout_sec=args.timeout,
             )
             elapsed = time.time() - t0
 
@@ -449,31 +494,39 @@ def main():
                     f"  ({elapsed:.1f}s)",
                     file=sys.stderr,
                 )
-                mark_ingested(sample_id, session_key, ingest_record, {
-                    "date_time": meta["date_time"],
-                    "duration_ms": result.get("duration_ms", 0),
-                })
+                mark_ingested(
+                    sample_id,
+                    session_key,
+                    ingest_record,
+                    {
+                        "date_time": meta["date_time"],
+                        "duration_ms": result.get("duration_ms", 0),
+                    },
+                )
                 save_ingest_record(ingest_record, args.record)
 
-                write_success_csv({
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "sample_id": sample_id,
-                    "session": session_key,
-                    "date_time": meta["date_time"],
-                    "speakers": meta["speakers"],
-                    "input_tokens": usage.get("input_tokens", 0),
-                    "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
-                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0),
-                    "reasoning_tokens": usage.get("reasoning_tokens", 0),
-                    "total_cost_usd": result.get("cost", 0),
-                    "duration_ms": result.get("duration_ms", 0),
-                    "response_preview": response[:100],
-                }, args.success_csv)
+                write_success_csv(
+                    {
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "sample_id": sample_id,
+                        "session": session_key,
+                        "date_time": meta["date_time"],
+                        "speakers": meta["speakers"],
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+                        "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                        "reasoning_tokens": usage.get("reasoning_tokens", 0),
+                        "total_cost_usd": result.get("cost", 0),
+                        "duration_ms": result.get("duration_ms", 0),
+                        "response_preview": response[:100],
+                    },
+                    args.success_csv,
+                )
 
                 success_count += 1
 
-    print(f"\n=== Ingest summary ===", file=sys.stderr)
+    print("\n=== Ingest summary ===", file=sys.stderr)
     print(f"  Total sessions: {total_sessions}", file=sys.stderr)
     print(f"  Succeeded:      {success_count}", file=sys.stderr)
     print(f"  Skipped:        {skip_count}", file=sys.stderr)

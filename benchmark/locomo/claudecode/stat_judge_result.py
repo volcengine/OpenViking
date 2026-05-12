@@ -17,13 +17,15 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description="Statistics for Claude Code QA results")
     parser.add_argument(
-        "--input", default="./result/qa_results.csv",
+        "--input",
+        default="./result/qa_results.csv",
         help="Path to judge result CSV",
     )
     parser.add_argument(
-        "--ingest-csv", default=None,
+        "--ingest-csv",
+        default=None,
         help="Path to ingest_success.csv for ingest-phase token stats. "
-             "Default: auto-detect from --input's directory.",
+        "Default: auto-detect from --input's directory.",
     )
     args = parser.parse_args()
 
@@ -167,30 +169,32 @@ def process_qa_results(input_path: str) -> list[str]:
                 f"  (total: {stats['total']})"
             )
 
-    output.extend([
-        f"\nQA latency:",
-        f"  Total elapsed: {total_elapsed:,.1f}s",
-        f"  Avg elapsed: {avg_elapsed:,.1f}s",
-        f"  Min elapsed: {(min_elapsed or 0.0):,.1f}s",
-        f"  Max elapsed: {(max_elapsed or 0.0):,.1f}s",
-        f"\nQA token usage:",
-        f"  Total input tokens: {total_input_tokens:,}",
-        f"  Total cache creation: {total_cache_creation:,}",
-        f"  Total cache read: {total_cache_read:,}",
-        f"  Total output tokens: {total_output_tokens:,}",
-        f"  Total reasoning tokens: {total_reasoning_tokens:,}",
-        f"  Avg input tokens: {avg_input:,.0f}",
-        f"  Avg cache creation: {avg_cache_creation:,.0f}",
-        f"  Avg cache read: {avg_cache_read:,.0f}",
-        f"  Avg output tokens: {avg_output:,.0f}",
-        f"  Avg reasoning tokens: {avg_reasoning:,.0f}",
-        f"\nQA cost:",
-        f"  Total cost: ${total_cost:,.4f}",
-        f"  Avg cost per question: ${avg_cost:,.4f}",
-        f"\nTurns:",
-        f"  Total turns: {total_turns:,}",
-        f"  Avg turns per question: {avg_turns:,.1f}",
-    ])
+    output.extend(
+        [
+            "\nQA latency:",
+            f"  Total elapsed: {total_elapsed:,.1f}s",
+            f"  Avg elapsed: {avg_elapsed:,.1f}s",
+            f"  Min elapsed: {(min_elapsed or 0.0):,.1f}s",
+            f"  Max elapsed: {(max_elapsed or 0.0):,.1f}s",
+            "\nQA token usage:",
+            f"  Total input tokens: {total_input_tokens:,}",
+            f"  Total cache creation: {total_cache_creation:,}",
+            f"  Total cache read: {total_cache_read:,}",
+            f"  Total output tokens: {total_output_tokens:,}",
+            f"  Total reasoning tokens: {total_reasoning_tokens:,}",
+            f"  Avg input tokens: {avg_input:,.0f}",
+            f"  Avg cache creation: {avg_cache_creation:,.0f}",
+            f"  Avg cache read: {avg_cache_read:,.0f}",
+            f"  Avg output tokens: {avg_output:,.0f}",
+            f"  Avg reasoning tokens: {avg_reasoning:,.0f}",
+            "\nQA cost:",
+            f"  Total cost: ${total_cost:,.4f}",
+            f"  Avg cost per question: ${avg_cost:,.4f}",
+            "\nTurns:",
+            f"  Total turns: {total_turns:,}",
+            f"  Avg turns per question: {avg_turns:,.1f}",
+        ]
+    )
 
     return output
 
@@ -237,10 +241,10 @@ def process_ingest_csv(input_path: str) -> list[str]:
     return [
         "=== Ingest Phase Statistics ===",
         f"Total sessions: {valid_rows:,}",
-        f"\nIngest latency:",
+        "\nIngest latency:",
         f"  Total elapsed: {total_elapsed:,.1f}s",
         f"  Avg elapsed: {(total_elapsed / valid_rows if valid_rows > 0 else 0.0):,.1f}s",
-        f"\nIngest token usage:",
+        "\nIngest token usage:",
         f"  Total input tokens: {total_input_tokens:,}",
         f"  Total cache creation: {total_cache_creation:,}",
         f"  Total cache read: {total_cache_read:,}",
@@ -251,7 +255,7 @@ def process_ingest_csv(input_path: str) -> list[str]:
         f"  Avg cache read: {avg_cache_read:,.0f}",
         f"  Avg output tokens: {avg_output:,.0f}",
         f"  Avg reasoning tokens: {avg_reasoning:,.0f}",
-        f"\nIngest cost:",
+        "\nIngest cost:",
         f"  Total cost: ${total_cost:,.4f}",
         f"  Avg cost per session: ${avg_cost:,.4f}",
     ]

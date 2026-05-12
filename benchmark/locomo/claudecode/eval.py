@@ -71,6 +71,7 @@ def _count_file_lines(path: str) -> int:
 # LoCoMo data loading
 # ---------------------------------------------------------------------------
 
+
 def load_locomo_data(path: str, sample_id: Optional[str] = None) -> list[dict]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -104,8 +105,7 @@ def parse_locomo_datetime(date_str: str) -> Optional[datetime]:
 def get_sample_question_time(sample: dict) -> Optional[str]:
     conversation = sample.get("conversation", {})
     session_keys = [
-        k for k in conversation.keys()
-        if k.startswith("session_") and "date_time" not in k
+        k for k in conversation.keys() if k.startswith("session_") and "date_time" not in k
     ]
     if not session_keys:
         return None
@@ -146,15 +146,17 @@ def load_qa_items(
             category = str(qa.get("category", ""))
             if category == "5":
                 continue
-            items.append({
-                "sample_id": sample_id,
-                "question_index": qi,
-                "question": qa["question"],
-                "answer": str(qa["answer"]),
-                "category": category,
-                "evidence": qa.get("evidence", []),
-                "question_time": question_time,
-            })
+            items.append(
+                {
+                    "sample_id": sample_id,
+                    "question_index": qi,
+                    "question": qa["question"],
+                    "answer": str(qa["answer"]),
+                    "category": category,
+                    "evidence": qa.get("evidence", []),
+                    "question_time": question_time,
+                }
+            )
 
     if count is not None:
         items = items[:count]
@@ -164,6 +166,7 @@ def load_qa_items(
 # ---------------------------------------------------------------------------
 # CSV helpers
 # ---------------------------------------------------------------------------
+
 
 def load_processed_keys(output_path: str) -> set[str]:
     processed: set[str] = set()
@@ -196,6 +199,7 @@ def append_row(output_path: str, row: dict) -> None:
 # Claude Code invocation
 # ---------------------------------------------------------------------------
 
+
 def _run_claude_once(
     prompt: str,
     project_dir: str,
@@ -207,10 +211,13 @@ def _run_claude_once(
     """Single claude -p invocation."""
     cmd = [
         "claude",
-        "-p", prompt,
-        "--output-format", "json",
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
         "--dangerously-skip-permissions",
-        "--setting-sources", "",
+        "--setting-sources",
+        "",
         "--disable-slash-commands",
         "--strict-mcp-config",
     ]
@@ -221,17 +228,33 @@ def _run_claude_once(
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=timeout_sec, cwd=project_dir, env=env,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            cwd=project_dir,
+            env=env,
         )
         stdout = result.stdout.strip()
         if not stdout:
-            return {"response": f"[ERROR] empty stdout: {result.stderr[:200]}", "usage": {}, "duration_ms": 0, "num_turns": 0, "cost": 0}
+            return {
+                "response": f"[ERROR] empty stdout: {result.stderr[:200]}",
+                "usage": {},
+                "duration_ms": 0,
+                "num_turns": 0,
+                "cost": 0,
+            }
 
         try:
             body = json.loads(stdout)
         except json.JSONDecodeError:
-            return {"response": f"[ERROR] JSON parse: {stdout[:200]}", "usage": {}, "duration_ms": 0, "num_turns": 0, "cost": 0}
+            return {
+                "response": f"[ERROR] JSON parse: {stdout[:200]}",
+                "usage": {},
+                "duration_ms": 0,
+                "num_turns": 0,
+                "cost": 0,
+            }
 
         if body.get("is_error"):
             return {
@@ -249,9 +272,21 @@ def _run_claude_once(
             "cost": body.get("total_cost_usd", 0),
         }
     except subprocess.TimeoutExpired:
-        return {"response": "[TIMEOUT]", "usage": {}, "duration_ms": timeout_sec * 1000, "num_turns": 0, "cost": 0}
+        return {
+            "response": "[TIMEOUT]",
+            "usage": {},
+            "duration_ms": timeout_sec * 1000,
+            "num_turns": 0,
+            "cost": 0,
+        }
     except Exception as e:
-        return {"response": f"[ERROR] {e}", "usage": {}, "duration_ms": 0, "num_turns": 0, "cost": 0}
+        return {
+            "response": f"[ERROR] {e}",
+            "usage": {},
+            "duration_ms": 0,
+            "num_turns": 0,
+            "cost": 0,
+        }
 
 
 def run_claude_code(
@@ -317,6 +352,7 @@ def run_claude_code(
 # Question processing
 # ---------------------------------------------------------------------------
 
+
 def process_question(
     qa: dict,
     project_root: str,
@@ -345,14 +381,14 @@ def process_question(
     if ov_preamble_override is not None:
         ov_preamble = ov_preamble_override + "\n\n" if ov_preamble_override else ""
     elif ov_config:
-        ov_preamble = (
-            "If context is insufficient, use OpenViking MCP tools or auto-memory files to find more information.\n\n"
-        )
+        ov_preamble = "If context is insufficient, use OpenViking MCP tools or auto-memory files to find more information.\n\n"
     else:
         ov_preamble = ""
 
     if question_time:
-        prompt = f"{ov_preamble}Current date: {question_time}. Answer the question directly: {question}"
+        prompt = (
+            f"{ov_preamble}Current date: {question_time}. Answer the question directly: {question}"
+        )
     else:
         prompt = f"{ov_preamble}Answer the question directly: {question}"
 
@@ -367,11 +403,18 @@ def process_question(
 
     t0 = time.perf_counter()
     result = run_claude_code(
-        prompt, project_dir, home_dir,
-        api_url=api_url, api_key=api_key, auth_token=auth_token,
-        model=model, timeout_sec=timeout_sec,
-        hooks_settings=hooks_settings, mcp_config=mcp_config,
-        ov_config=ov_config, ov_cli_config=ov_cli_config,
+        prompt,
+        project_dir,
+        home_dir,
+        api_url=api_url,
+        api_key=api_key,
+        auth_token=auth_token,
+        model=model,
+        timeout_sec=timeout_sec,
+        hooks_settings=hooks_settings,
+        mcp_config=mcp_config,
+        ov_config=ov_config,
+        ov_cli_config=ov_cli_config,
         ov_agent_id=(ov_shared_id if ov_shared_id is not None else sample_id),
     )
     elapsed = time.perf_counter() - t0
@@ -419,90 +462,113 @@ def process_question(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run LoCoMo QA evaluation against Claude Code"
-    )
+    parser = argparse.ArgumentParser(description="Run LoCoMo QA evaluation against Claude Code")
     parser.add_argument(
-        "--input", default=DEFAULT_DATA_PATH,
+        "--input",
+        default=DEFAULT_DATA_PATH,
         help=f"Path to locomo JSON (default: {DEFAULT_DATA_PATH})",
     )
     parser.add_argument(
-        "--output", default=DEFAULT_OUTPUT,
+        "--output",
+        default=DEFAULT_OUTPUT,
         help=f"Output CSV path (default: {DEFAULT_OUTPUT})",
     )
     parser.add_argument(
-        "--sample", default=None,
+        "--sample",
+        default=None,
         help="Sample index (0-based) or sample_id. Default: all.",
     )
     parser.add_argument(
-        "--question-index", type=int, default=None,
+        "--question-index",
+        type=int,
+        default=None,
         help="Single question index (0-based) within each sample.",
     )
     parser.add_argument(
-        "--count", type=int, default=None,
+        "--count",
+        type=int,
+        default=None,
         help="Max number of QA items to process.",
     )
     parser.add_argument(
-        "--parallel", type=int, default=5,
+        "--parallel",
+        type=int,
+        default=5,
         help="Concurrent workers (default: 5, be mindful of API rate limits)",
     )
     parser.add_argument(
-        "--project-root", default=DEFAULT_PROJECT_ROOT,
+        "--project-root",
+        default=DEFAULT_PROJECT_ROOT,
         help=f"Root directory for sample project dirs (default: {DEFAULT_PROJECT_ROOT})",
     )
     parser.add_argument(
-        "--home", default=DEFAULT_HOME,
+        "--home",
+        default=DEFAULT_HOME,
         help=f"Isolated HOME directory (default: {DEFAULT_HOME})",
     )
     parser.add_argument(
-        "--api-url", default=None,
+        "--api-url",
+        default=None,
         help="Custom Anthropic-compatible API base URL (ANTHROPIC_BASE_URL)",
     )
     parser.add_argument(
-        "--api-key", default=None,
+        "--api-key",
+        default=None,
         help="API key (ANTHROPIC_API_KEY). Also reads from env if not specified.",
     )
     parser.add_argument(
-        "--auth-token", default=None,
+        "--auth-token",
+        default=None,
         help="Auth token (ANTHROPIC_AUTH_TOKEN), alternative to --api-key",
     )
     parser.add_argument(
-        "--model", default=None,
+        "--model",
+        default=None,
         help="Model name/alias (e.g. sonnet, opus, claude-sonnet-4-6)",
     )
     parser.add_argument(
-        "--timeout", type=int, default=300,
+        "--timeout",
+        type=int,
+        default=300,
         help="Timeout per question in seconds (default: 300)",
     )
     parser.add_argument(
-        "--hooks-settings", default=None,
+        "--hooks-settings",
+        default=None,
         help="Path to hooks settings JSON (passed as --settings to claude)",
     )
     parser.add_argument(
-        "--mcp-config", default=None,
+        "--mcp-config",
+        default=None,
         help="Path to MCP server config JSON (passed as --mcp-config to claude)",
     )
     parser.add_argument(
-        "--ov-config", default=None,
+        "--ov-config",
+        default=None,
         help="Path to ov.conf for OpenViking (sets OPENVIKING_CONFIG_FILE env var)",
     )
     parser.add_argument(
-        "--ov-cli-config", default=None,
+        "--ov-cli-config",
+        default=None,
         help="Path to ovcli.conf (sets OPENVIKING_CLI_CONFIG_FILE; pin local OV)",
     )
     parser.add_argument(
-        "--ov-shared-id", default=None,
+        "--ov-shared-id",
+        default=None,
         help="If set, use this single agent_id/user for all samples (no per-sample isolation). Empty string '' means do NOT set OPENVIKING_AGENT_ID at all (server falls back to 'default').",
     )
     parser.add_argument(
-        "--ov-preamble", default=None,
+        "--ov-preamble",
+        default=None,
         help="Custom preamble for OV-enabled QA (overrides default)",
     )
     parser.add_argument(
-        "--shared-cwd", action="store_true",
+        "--shared-cwd",
+        action="store_true",
         help="Use --project-root directly as cwd for every sample (no per-sample subdir). "
-             "Required when ingest stored CC MEMORY.md in a single shared cwd.",
+        "Required when ingest stored CC MEMORY.md in a single shared cwd.",
     )
     args = parser.parse_args()
 
@@ -511,7 +577,9 @@ def main():
     api_url = args.api_url or os.environ.get("ANTHROPIC_BASE_URL")
 
     if not api_key and not auth_token:
-        print("[INFO] No API key/token provided - assuming subscription auth in HOME", file=sys.stderr)
+        print(
+            "[INFO] No API key/token provided - assuming subscription auth in HOME", file=sys.stderr
+        )
 
     # Verify project root has been ingested (skip in shared-cwd mode where ingest_e2e.py owns it)
     if not args.shared_cwd:
@@ -543,8 +611,7 @@ def main():
 
     processed = load_processed_keys(args.output)
     remaining = [
-        qa for qa in qa_items
-        if f"{qa['sample_id']}_{qa['question_index']}" not in processed
+        qa for qa in qa_items if f"{qa['sample_id']}_{qa['question_index']}" not in processed
     ]
     print(
         f"[INFO] {len(processed)} already done, {len(remaining)} remaining",
@@ -567,9 +634,15 @@ def main():
         for qa in remaining:
             fut = executor.submit(
                 process_question,
-                qa, args.project_root, args.home,
-                api_url, api_key, auth_token, args.model,
-                args.output, args.timeout,
+                qa,
+                args.project_root,
+                args.home,
+                api_url,
+                api_key,
+                auth_token,
+                args.model,
+                args.output,
+                args.timeout,
                 hooks_settings=args.hooks_settings,
                 mcp_config=args.mcp_config,
                 ov_config=args.ov_config,

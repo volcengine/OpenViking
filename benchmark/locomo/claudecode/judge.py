@@ -16,8 +16,8 @@ import os
 import sys
 from pathlib import Path
 
-from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
@@ -81,7 +81,8 @@ Respond with JSON only: {{"is_correct": "CORRECT" or "WRONG", "reasoning": "your
 async def main():
     parser = argparse.ArgumentParser(description="LLM judge for Claude Code QA results")
     parser.add_argument(
-        "--input", default="./result/qa_results.csv",
+        "--input",
+        default="./result/qa_results.csv",
         help="Path to QA result CSV (default: ./result/qa_results.csv)",
     )
     parser.add_argument(
@@ -95,18 +96,24 @@ async def main():
         help="Judge API token (or ARK_API_KEY / OPENAI_API_KEY env var)",
     )
     parser.add_argument(
-        "--model", default="doubao-seed-2-0-pro-260215",
+        "--model",
+        default="doubao-seed-2-0-pro-260215",
         help="Judge model name",
     )
     parser.add_argument(
-        "--parallel", type=int, default=5,
+        "--parallel",
+        type=int,
+        default=5,
         help="Parallel grading requests (default: 5)",
     )
     args = parser.parse_args()
 
     if not args.token:
         print("Error: API token required.", file=sys.stderr)
-        print("  Set ARK_API_KEY env var, or use --token, or create ~/.openviking_benchmark_env", file=sys.stderr)
+        print(
+            "  Set ARK_API_KEY env var, or use --token, or create ~/.openviking_benchmark_env",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not os.path.exists(args.input):
@@ -122,8 +129,7 @@ async def main():
 
     # Find ungraded rows (skip category=5)
     ungraded = [
-        i for i, row in enumerate(rows)
-        if row.get("category", "") != "5" and not row.get("result")
+        i for i, row in enumerate(rows) if row.get("category", "") != "5" and not row.get("result")
     ]
     total = len(rows)
     print(f"Total: {total}, ungraded: {len(ungraded)}", file=sys.stderr)
@@ -153,9 +159,7 @@ async def main():
             response = row.get("response", "")
             print(f"Grading {idx + 1}/{total}: {question[:60]}...", file=sys.stderr)
 
-            is_correct, reasoning = await grade_answer(
-                client, args.model, question, gold, response
-            )
+            is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
 
@@ -166,11 +170,11 @@ async def main():
     await asyncio.gather(*tasks)
 
     correct = sum(
-        1 for row in rows
-        if row.get("category", "") != "5" and row.get("result") == "CORRECT"
+        1 for row in rows if row.get("category", "") != "5" and row.get("result") == "CORRECT"
     )
     graded = sum(
-        1 for row in rows
+        1
+        for row in rows
         if row.get("category", "") != "5" and row.get("result") in ("CORRECT", "WRONG")
     )
     accuracy = correct / graded if graded > 0 else 0.0
