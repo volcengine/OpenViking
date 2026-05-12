@@ -5,16 +5,17 @@
 import asyncio
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
+
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VolcEngineVLM(OpenAIVLM):
@@ -157,7 +158,9 @@ class VolcEngineVLM(OpenAIVLM):
         # 用 tracer.info 打印请求
         tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
         if tools:
-            tracer.info(f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}")
+            tracer.info(
+                f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
+            )
 
         client = self.get_async_client()
 

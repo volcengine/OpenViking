@@ -9,8 +9,10 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
+from openviking_cli.utils import get_logger
+
 _token_tracker_instance = None
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_token_tracker():

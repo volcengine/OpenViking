@@ -73,8 +73,15 @@ pub async fn rm(
     _output_format: OutputFormat,
     _compact: bool,
 ) -> Result<()> {
-    client.rm(uri, recursive).await?;
-    println!("Removed: {}", uri);
+    let result = client.rm(uri, recursive).await?;
+
+    // Try to extract estimated_deleted_count if available
+    if let Some(count) = result.get("estimated_deleted_count").and_then(|v| v.as_u64()) {
+        println!("Removed: {} ({} items)", uri, count);
+    } else {
+        println!("Removed: {}", uri);
+    }
+
     Ok(())
 }
 
@@ -97,6 +104,19 @@ pub async fn stat(
     compact: bool,
 ) -> Result<()> {
     let result = client.stat(uri).await?;
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+pub async fn count(
+    client: &HttpClient,
+    uri: &str,
+    recursive: bool,
+    show_all_hidden: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.count(uri, recursive, show_all_hidden).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

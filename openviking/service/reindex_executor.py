@@ -89,8 +89,8 @@ class ReindexExecutor:
             if tracker.has_running(
                 REINDEX_TASK_TYPE,
                 uri,
-                owner_account_id=ctx.account_id,
-                owner_user_id=ctx.user.user_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
             ):
                 raise OpenVikingError(
                     f"URI {uri} already has a reindex in progress",
@@ -107,8 +107,8 @@ class ReindexExecutor:
         task = tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
-            owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         if task is None:
             raise OpenVikingError(
@@ -376,7 +376,7 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
-        tracker.start(task_id)
+        tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
             result = await self._run(
                 uri=uri,
@@ -384,9 +384,9 @@ class ReindexExecutor:
                 mode=mode,
                 ctx=ctx,
             )
-            tracker.complete(task_id, result)
+            tracker.complete(task_id, result, account_id=ctx.account_id, user_id=ctx.user.user_id)
         except Exception as exc:
-            tracker.fail(task_id, str(exc))
+            tracker.fail(task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id)
 
     async def _reindex_resource(
         self,

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import secrets
 import sqlite3
 import time
@@ -30,8 +29,9 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from openviking.server.oauth.otp import hash_secret
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _SCHEMA = """

@@ -1,6 +1,6 @@
 [package]
 name = "ov_cli"
-version = "0.3.14"
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.91.1"
 authors = ["OpenViking Contributors"]

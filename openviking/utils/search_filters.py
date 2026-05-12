@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
@@ -42,6 +42,73 @@ def merge_time_filter(
     # Preserve any caller-supplied metadata predicates by AND-ing the time range
     # into the existing filter tree instead of replacing it.
     return {"op": "and", "conds": [existing_filter, time_filter]}
+
+
+def merge_level_filter(
+    existing_filter: Optional[Dict[str, Any]],
+    level: Optional[Union[int, str, List[int]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Merge level filter into an existing metadata filter tree."""
+    levels = _resolve_levels(level)
+    if not levels:
+        return existing_filter
+
+    level_filter: Dict[str, Any] = {"op": "must", "field": "level", "conds": levels}
+
+    if not existing_filter:
+        return level_filter
+    # Preserve any caller-supplied metadata predicates by AND-ing the level filter
+    # into the existing filter tree instead of replacing it.
+    return {"op": "and", "conds": [existing_filter, level_filter]}
+
+
+def _resolve_levels(
+    level: Optional[Union[int, str, List[int], List[str]]]
+) -> List[int]:
+    """Resolve level parameter into a list of integers."""
+    if level is None:
+        return []
+
+    if isinstance(level, int):
+        return [level]
+
+    if isinstance(level, list):
+        result = []
+        for item in level:
+            if isinstance(item, int):
+                result.append(item)
+            elif isinstance(item, str):
+                try:
+                    result.append(int(item.strip()))
+                except ValueError:
+                    continue
+        return result
+
+    if isinstance(level, str):
+        level_str = level.strip()
+        if not level_str:
+            return []
+
+        # Support comma-separated values
+        if "," in level_str:
+            parts = level_str.split(",")
+            result = []
+            for part in parts:
+                part = part.strip()
+                if part:
+                    try:
+                        result.append(int(part))
+                    except ValueError:
+                        continue
+            return result
+
+        # Single value
+        try:
+            return [int(level_str)]
+        except ValueError:
+            return []
+
+    return []
 
 
 def normalize_time_field(time_field: Optional[str]) -> str:

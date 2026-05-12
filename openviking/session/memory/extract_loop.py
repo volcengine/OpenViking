@@ -272,7 +272,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if value is None:
                 continue
 
-            # 统一转为列表
             items = value if isinstance(value, list) else [value]
 
             for item in items:
@@ -499,12 +498,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     content = await self.context_provider.execute_tool(
                         ToolCall(id="", name="read", arguments={"uri": uri})
                     )
-                    # 读取出错表示文件不存在
-                    if isinstance(content, Dict):
+                    # 读取出错表示文件不存在（error dict 含 "error" key）
+                    if isinstance(content, Dict) and "error" in content:
                         continue
 
-                    parsed = parse_memory_file_with_fields(content)
-                    refetch_uris[uri] = parsed
+                    # execute_tool(MemoryReadTool) 已经返回 parsed dict，直接使用
+                    refetch_uris[uri] = content
                 except Exception as e:
                     tracer.error("read tool execute fail", e)
         return refetch_uris

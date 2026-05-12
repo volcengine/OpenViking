@@ -180,9 +180,7 @@ class TestImportExportWorkflow:
         await client.rm(original_uri, recursive=True)
 
         # 5. Import
-        import_uri = await client.import_ovpack(
-            str(export_path), "viking://resources/imported/", vectorize=False
-        )
+        import_uri = await client.import_ovpack(str(export_path), "viking://resources/imported/")
 
         # 6. Verify content consistency
         imported_content = ""

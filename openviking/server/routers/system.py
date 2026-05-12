@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -170,6 +171,12 @@ class WaitRequest(BaseModel):
     timeout: Optional[float] = None
 
 
+class ConsistencyRequest(BaseModel):
+    """Request model for filesystem/vector-index consistency checks."""
+
+    uri: str
+
+
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest,
@@ -178,4 +185,19 @@ async def wait_processed(
     """Wait for all processing to complete."""
     service = get_service()
     result = await service.resources.wait_processed(timeout=request.timeout)
+    return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/consistency", tags=["system"])
+async def check_consistency(
+    request: ConsistencyRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Check filesystem/vector-index consistency for a URI subtree."""
+    service = get_service()
+    uri = validate_viking_uri(request.uri)
+    result = await service.check_consistency(
+        uri=uri,
+        ctx=ctx,
+    )
     return Response(status="ok", result=result)
