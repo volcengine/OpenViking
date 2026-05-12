@@ -20,8 +20,8 @@ paths:
 
 eval:
   # The runner default is official if this field is omitted. The OpenViking
-  # memory benchmark config opts into the confirmation-aware TAU-2 prompt when
-  # the referenced TAU-2 checkout contains that upstream fix.
+  # memory benchmark config opts into a confirmation-aware TAU-2 user simulator
+  # prompt; run_eval.py applies that small prompt patch idempotently when needed.
   user_simulator_policy: confirmation_aware
 
 model:
