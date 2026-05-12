@@ -734,14 +734,18 @@ class PersistentIndex(LocalIndex):
     def need_rebuild(self) -> bool:
         """Determine if the index needs rebuilding.
 
-        For persistent indexes, rebuilding is typically not needed as
-        persistence handles compaction. Returns False to avoid unnecessary rebuilds.
+        When the index has no data entries but the store contains data,
+        a rebuild is needed to populate the index from the store.
+        This handles the case where upsert_to_index silently fails
+        for persistent indexes, leaving the store growing but the
+        index empty.
 
         Returns:
-            bool: False (persistent indexes don't require periodic rebuilds)
-
-        Note:
-            Subclasses could override this to implement deletion-ratio-based
-            rebuild triggers if needed for space reclamation.
+            bool: True if index has 0 data entries, False otherwise.
         """
+        try:
+            if self.get_data_count() == 0:
+                return True
+        except Exception:
+            pass
         return False
