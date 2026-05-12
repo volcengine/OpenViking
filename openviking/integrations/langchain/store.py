@@ -99,7 +99,7 @@ class OpenVikingStore(BaseStore):
                 if op.value is None:
                     self.delete(op.namespace, op.key)
                 else:
-                    self.put(op.namespace, op.key, op.value, index=op.index)
+                    self.put(op.namespace, op.key, op.value, index=op.index, ttl=op.ttl)
                 results.append(None)
             elif isinstance(op, SearchOp):
                 results.append(
@@ -151,6 +151,11 @@ class OpenVikingStore(BaseStore):
         *,
         ttl: Any = None,
     ) -> None:
+        if ttl is not None:
+            raise NotImplementedError(
+                "TTL is not supported by OpenVikingStore. "
+                "OpenViking stores LangGraph values as durable content records."
+            )
         namespace = tuple(namespace)
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)

@@ -7,6 +7,7 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
+from langgraph.store.base import PutOp
 
 from openviking.integrations.langchain import (
     InMemoryOpenVikingClient,
@@ -585,6 +586,29 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert semantic[0].value["color"] == "azure"
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
+
+
+def test_langgraph_store_rejects_ttl_writes():
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+
+    with pytest.raises(NotImplementedError, match="TTL is not supported"):
+        store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
+
+
+def test_langgraph_store_batch_rejects_ttl_writes():
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+
+    with pytest.raises(NotImplementedError, match="TTL is not supported"):
+        store.batch(
+            [
+                PutOp(
+                    namespace=("users", "ada"),
+                    key="temporary",
+                    value={"note": "expires"},
+                    ttl=60,
+                )
+            ]
+        )
 
 
 @pytest.mark.parametrize(

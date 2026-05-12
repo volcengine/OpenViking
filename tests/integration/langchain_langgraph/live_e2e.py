@@ -491,7 +491,8 @@ def _call_llm(messages: list[dict[str, str]]) -> str:
 
 def _require_live_env() -> None:
     _require_openviking_live_env()
-    assert os.environ.get("ARK_API_KEY"), "ARK_API_KEY is required for live e2e"
+    if not os.environ.get("ARK_API_KEY"):
+        pytest.skip("ARK_API_KEY is required for live e2e")
 
 
 def _require_openviking_live_env() -> None:
