@@ -517,6 +517,20 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.stat(uri)
 
+    async def count(
+        self,
+        uri: str,
+        recursive: bool = False,
+        show_all_hidden: bool = False,
+    ) -> Dict[str, int]:
+        """Count files and sub-directories under a directory."""
+        await self._ensure_initialized()
+        return await self._client.count(
+            uri,
+            recursive=recursive,
+            show_all_hidden=show_all_hidden,
+        )
+
     # ============= Relation methods =============
 
     async def relations(self, uri: str) -> List[Dict[str, Any]]:

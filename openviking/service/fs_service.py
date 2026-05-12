@@ -199,6 +199,29 @@ class FSService:
         uri = validate_viking_uri(uri)
         return await viking_fs.stat(uri, ctx=ctx)
 
+    async def count(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        recursive: bool = False,
+        show_all_hidden: bool = False,
+    ) -> Dict[str, int]:
+        """Count files and sub-directories under a directory.
+
+        Args:
+            uri: Viking URI (must be a directory).
+            recursive: If True, count all descendants; otherwise only direct children.
+            show_all_hidden: If True, include hidden files/directories.
+        """
+        viking_fs = self._ensure_initialized()
+        uri = validate_viking_uri(uri)
+        return await viking_fs.count(
+            uri,
+            recursive=recursive,
+            show_all_hidden=show_all_hidden,
+            ctx=ctx,
+        )
+
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
         viking_fs = self._ensure_initialized()
