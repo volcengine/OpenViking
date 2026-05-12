@@ -90,8 +90,10 @@ class ZipParser(BaseParser):
 
             if len(extracted_entries) == 1 and extracted_entries[0].is_dir():
                 source_name = dir_kwargs.get("source_name")
-                source_stem = Path(source_name).stem if source_name else None
-                if not source_name or source_stem == extracted_entries[0].name:
+                source_leaf = Path(source_name).name if source_name else None
+                source_stem = Path(source_leaf).stem if source_leaf else None
+                root_name = extracted_entries[0].name
+                if not source_name or source_leaf == root_name or source_stem == root_name:
                     dir_kwargs.pop("source_name", None)
                     result = await parser.parse(str(extracted_entries[0]), **dir_kwargs)
                 else:
