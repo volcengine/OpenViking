@@ -29,6 +29,7 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.utils.agfs_utils import resolve_queuefs_mount_point
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
@@ -121,9 +122,11 @@ class OpenVikingService:
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
+            queue_mount_point = resolve_queuefs_mount_point()
             self._queue_manager = init_queue_manager(
                 agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
+                mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
             )
