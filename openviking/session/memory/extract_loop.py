@@ -30,7 +30,6 @@ from openviking.session.memory.tools import (
 )
 from openviking.session.memory.utils import (
     parse_json_with_stability,
-    parse_memory_file_with_fields,
     pretty_print_messages,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils

@@ -13,7 +13,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
-from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -98,14 +98,14 @@ class MemoryGraph:
                 content = await viking_fs.read_file(uri, ctx=ctx)
                 if not content:
                     continue
-                parsed = parse_memory_file_with_fields(content)
+                mf = MemoryFileUtils.read(content, uri=uri)
             except Exception as e:
                 logger.warning(f"Failed to read/parse {uri}: {e}")
                 continue
 
-            memory_type = parsed.get("memory_type", "")
-            category = parsed.get("category", "")
-            name = parsed.get("name", "")
+            memory_type = mf.memory_type or ""
+            category = mf.extra_fields.get("category", "")
+            name = mf.extra_fields.get("name", "")
             label = name if name else uri.split("/")[-1].replace(".md", "")
 
             nodes[uri] = {
@@ -116,7 +116,7 @@ class MemoryGraph:
                 "category": category,
             }
 
-            for link_data in parsed.get("links", []):
+            for link_data in mf.links:
                 if not isinstance(link_data, dict):
                     continue
                 to_uri = link_data.get("to_uri", "")

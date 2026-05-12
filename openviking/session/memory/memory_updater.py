@@ -610,9 +610,8 @@ class MemoryUpdater:
                 # Read the memory file to get content
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
-                # Use parse_memory_file_with_fields to strip MEMORY_FIELDS comment
-                parsed = parse_memory_file_with_fields(content)
-                abstract = parsed.get("content", "")
+                mf = MemoryFileUtils.read(content, uri=uri)
+                abstract = mf.content
 
                 # Build embedding text from only searchable fields
                 embedding_parts = []
@@ -629,7 +628,7 @@ class MemoryUpdater:
                         for field_name in searchable_fields:
                             if field_name == "content":
                                 continue
-                            field_value = parsed.get(field_name)
+                            field_value = mf.extra_fields.get(field_name)
                             if field_value is not None:
                                 field_str = (
                                     str(field_value)
@@ -694,7 +693,7 @@ class MemoryUpdater:
             directory: Directory path containing memory files
             ctx: Request context
         """
-        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         # Get the schema for this memory type
         registry = self._registry
@@ -748,7 +747,7 @@ class MemoryUpdater:
         for file_path in md_files:
             try:
                 content = await viking_fs.read_file(file_path, ctx=ctx)
-                parsed = parse_memory_file_with_fields(content)
+                mf = MemoryFileUtils.read(content, uri=file_path)
 
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
@@ -756,7 +755,7 @@ class MemoryUpdater:
                 items.append(
                     {
                         "file_name": filename,
-                        "file_content": parsed,
+                        "file_content": mf.to_metadata(),
                     }
                 )
             except Exception as e:
