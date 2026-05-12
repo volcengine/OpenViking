@@ -281,7 +281,7 @@ def run_vikingbot_chat(
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
         end_time = time.time()
         time_cost = end_time - start_time
 
@@ -500,7 +500,7 @@ def main():
     # 创建线程锁，确保多线程写文件安全
     write_lock = threading.Lock()
 
-    if not args.update_mode and os.path.exists(args.output):
+    if not args.update_mode and not args.skip_done and os.path.exists(args.output):
         os.remove(args.output)
 
     # 存储处理后的新行
