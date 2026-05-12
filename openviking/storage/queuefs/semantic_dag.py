@@ -282,13 +282,14 @@ class SemanticDagExecutor:
                             self._is_direct_incremental_update()
                             and not self._path_has_direct_change(child_uri)
                         ):
-                            # Skip subtree entirely: no changed file under this directory.
-                            # Read existing abstract so parent overview can stay incremental.
-                            _, abstract = await self._read_existing_overview_abstract(child_uri)
-                            child_abstract = abstract or ""
-                            self._dir_change_status[child_uri] = False
-                            await self._on_child_done(dir_uri, child_uri, child_abstract)
-                            continue
+                            overview, abstract = await self._read_existing_overview_abstract(
+                                child_uri
+                            )
+                            if overview and abstract:
+                                # Skip subtree: metadata is complete and no changed files under it.
+                                self._dir_change_status[child_uri] = False
+                                await self._on_child_done(dir_uri, child_uri, abstract)
+                                continue
                         asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
