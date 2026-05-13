@@ -251,9 +251,7 @@ class VikingClient:
             await self._initialize_user(effective_user_id)
             return ""
 
-        uri = "viking://user/memories/profile.md"
-        if effective_user_id:
-            uri = f"viking://user/{effective_user_id}/memories/profile.md"
+        uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
         result = await self.read_content(uri=uri, level="read")
         return result
 

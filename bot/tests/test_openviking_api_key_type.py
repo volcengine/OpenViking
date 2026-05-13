@@ -254,6 +254,9 @@ async def test_skill_memory_uri_respects_namespace_policy(monkeypatch):
             }
         ]
 
+    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
+    await client._load_namespace_policy()
+
     assert (
         client._skill_memory_uri("planner", "admin")
         == "viking://agent/workspace/user/admin/memories/skills/planner.md"

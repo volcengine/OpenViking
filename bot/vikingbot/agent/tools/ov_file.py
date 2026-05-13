@@ -252,12 +252,7 @@ class VikingSearchTool(OVFileTool):
                     logger.info(f"openviking_search: searching {user_uri} for query: {query}")
                     results = await search_client.search(query, target_uri=user_uri, limit=20)
                     if results:
-                        if isinstance(results, dict):
-                            memories = results.get("memories", [])
-                        elif isinstance(results, list):
-                            memories = results
-                        else:
-                            memories = []
+                        memories = self._extract_search_items(results).get("memory", [])
                         all_results.extend(memories)
 
                 if not all_results:
