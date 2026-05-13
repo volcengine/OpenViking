@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
 from benchmark.tau2.scripts.run_eval import _summarize
 from benchmark.tau2.scripts.run_memory_v2_eval import (
     _load_scope_prompt,
+    _probe_corpus,
     _runtime_evidence_status,
     _trace_category_summary,
 )
@@ -247,3 +249,40 @@ def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
     assert domain["simulation_count"] == 1
     assert domain["avg_reward"] == 0.5
     assert domain["db_match_rate"] == 0.0
+
+
+def test_probe_corpus_counts_aggregate_and_concrete_matches() -> None:
+    class FakeClient:
+        def search(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                memories=[
+                    SimpleNamespace(
+                        uri="viking://agent/a/memories/trajectories/.overview.md",
+                        score=0.2,
+                    ),
+                    SimpleNamespace(
+                        uri="viking://agent/a/memories/trajectories/concrete.md#chunk_0001",
+                        score=0.1,
+                    ),
+                ]
+            )
+
+        def read(self, uri: str) -> str:
+            return f"body for {uri}"
+
+    probe = _probe_corpus(
+        SimpleNamespace(
+            domain="airline",
+            search_uri="viking://agent/a/memories/trajectories",
+            retrieval_top_k=4,
+        ),
+        FakeClient(),
+    )
+
+    assert probe["match_count"] == 2
+    assert probe["aggregate_match_count"] == 1
+    assert probe["concrete_match_count"] == 1
+    assert probe["aggregate_read_non_empty_count"] == 1
+    assert probe["concrete_read_non_empty_count"] == 1
+    assert probe["matches"][0]["is_aggregate_memory"] is True
+    assert probe["matches"][1]["is_concrete_memory"] is True

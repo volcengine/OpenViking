@@ -195,11 +195,12 @@ def _metrics(results_path: Path) -> dict[str, Any]:
     }
 
 
-def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
-    def is_aggregate_memory_uri(uri: Any) -> bool:
-        value = str(uri or "").split("#", 1)[0]
-        return value.endswith("/.overview.md") or value.endswith("/.abstract.md")
+def _is_aggregate_memory_uri(uri: Any) -> bool:
+    value = str(uri or "").split("#", 1)[0]
+    return value.endswith("/.overview.md") or value.endswith("/.abstract.md")
 
+
+def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
     counters: Counter[str] = Counter()
     decision_nodes: Counter[str] = Counter()
     category_decisions: Counter[str] = Counter()
@@ -262,7 +263,7 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             selected = bool(match.get("selected_for_injection") or match.get("injected"))
             if selected:
                 counters["selected_match_count"] += 1
-            if is_aggregate_memory_uri(match.get("uri")):
+            if _is_aggregate_memory_uri(match.get("uri")):
                 counters["aggregate_memory_candidate_count"] += 1
                 if selected:
                     counters["selected_aggregate_memory_count"] += 1
@@ -552,19 +553,32 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     for match in memories[: args.retrieval_top_k]:
         uri = getattr(match, "uri", "")
         text, read_error = _read_memory_text(client, match)
+        is_aggregate = _is_aggregate_memory_uri(uri)
         row = {
             "uri": uri,
             "score": getattr(match, "score", None),
             "text_chars": len(text),
             "non_empty": bool(str(text).strip()),
+            "is_aggregate_memory": is_aggregate,
+            "is_concrete_memory": not is_aggregate,
         }
         if read_error:
             row["read_error"] = read_error
         reads.append(row)
+    aggregate_match_count = sum(1 for row in reads if row["is_aggregate_memory"])
+    concrete_match_count = sum(1 for row in reads if row["is_concrete_memory"])
     return {
         "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
         "match_count": len(memories),
+        "aggregate_match_count": aggregate_match_count,
+        "concrete_match_count": concrete_match_count,
         "read_non_empty_count": sum(1 for row in reads if row["non_empty"]),
+        "aggregate_read_non_empty_count": sum(
+            1 for row in reads if row["is_aggregate_memory"] and row["non_empty"]
+        ),
+        "concrete_read_non_empty_count": sum(
+            1 for row in reads if row["is_concrete_memory"] and row["non_empty"]
+        ),
         "matches": reads,
     }
 
