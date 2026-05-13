@@ -92,11 +92,29 @@ class SubagentManager:
                 config=self.config,
             )
 
+            # Search experience memory relevant to this subtask
+            task_content = task
+            try:
+                from vikingbot.agent.memory import MemoryStore
+                memory_store = MemoryStore(self.workspace)
+                workspace_id = (
+                    self.sandbox_manager.to_workspace_id(session_key)
+                    if self.sandbox_manager
+                    else "shared"
+                )
+                exp_memory = await memory_store.get_viking_experience_context(
+                    query=task, workspace_id=workspace_id
+                )
+                if exp_memory:
+                    task_content = f"## Agent Experience (relevant to this task)\n{exp_memory}\n\n---\n\n{task}"
+            except Exception as e:
+                logger.warning(f"Subagent [{task_id}] failed to load experience memory: {e}")
+
             # Build messages with subagent-specific prompt
             system_prompt = self._build_subagent_prompt(task)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
+                {"role": "user", "content": task_content},
             ]
 
             # Run agent loop (limited iterations)

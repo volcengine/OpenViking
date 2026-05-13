@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import time
 from typing import Any, Dict, List, Optional
 
@@ -199,6 +198,7 @@ class VikingClient:
     def should_sender_fanout(self) -> bool:
         return self._is_root_key_mode()
 
+
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
         if target_uri:
@@ -365,7 +365,7 @@ class VikingClient:
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
-        """通过上下文消息，检索viking 的user、Agent memory。"""
+        """通过上下文消息，检索viking 的user memory（agent memory 已关闭自动检索）。"""
         await self._load_namespace_policy()
 
         def _extract_memories(result: Any) -> list[Any]:
@@ -383,7 +383,6 @@ class VikingClient:
             user_ids = [user_ids]
 
         all_user_memories = []
-        all_agent_memories = []
 
         for user_id in user_ids:
             effective_user_id = self._effective_user_id(user_id)
@@ -400,19 +399,14 @@ class VikingClient:
             )
             all_user_memories.extend(_extract_memories(user_memory))
 
-        effective_agent_user_id = self._effective_user_id(agent_user_id)
-        uri_agent_memory = self._agent_memory_target_uri(effective_agent_user_id)
-        agent_memory = await self.client.find(
-            query=query,
-            target_uri=uri_agent_memory,
-            limit=limit,
-        )
-        all_agent_memories.extend(_extract_memories(agent_memory))
+        return {"user_memory": all_user_memories, "agent_memory": []}
 
-        return {
-            "user_memory": all_user_memories,
-            "agent_memory": all_agent_memories,
-        }
+    async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
+        """用 query 检索 agent experience 记忆。"""
+        effective_agent_id = self.openviking_config.agent_id or "default"
+        exp_uri = f"viking://agent/{effective_agent_id}/memories/experiences/"
+        result = await self.search(query=query, target_uri=exp_uri, limit=limit)
+        return result.get("memories", [])
 
     async def grep(
         self,
