@@ -13,6 +13,7 @@ from tau2_common import (
     domains,
     load_config,
     output_dir,
+    normalize_litellm_env,
     run_id,
     simulator_policy_report,
     split_file,
@@ -391,12 +392,17 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
 
 def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     errors: list[str] = []
+    llm_env = normalize_litellm_env()
     tau2_info = tau2_context(config)
     policy_report = simulator_policy_report(config)
     if strict and not tau2_info["tau2_repo_exists"]:
         errors.append(f"missing TAU-2 repo: {tau2_info['tau2_repo']}")
     if strict and not tau2_info["tau2_cli_resolved"]:
         errors.append(f"missing TAU-2 CLI: {tau2_info['tau2_cli']}")
+    if strict and not llm_env["has_api_key"]:
+        errors.append("missing LLM API key: set OPENAI_API_KEY or ARK_API_KEY")
+    if strict and not llm_env["has_base_url"]:
+        errors.append("missing OpenAI-compatible base URL: set OPENAI_API_BASE, OPENAI_BASE_URL, or ARK_BASE_URL")
     if strict and not policy_report["supported"]:
         errors.append(
             "configured confirmation-aware user simulator policy requires a TAU-2 "
@@ -421,6 +427,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "status": "failed" if errors else "ok",
         "strict": strict,
         "tau2": tau2_info,
+        "llm_env": llm_env,
         "simulator_policy": policy_report,
         "domains": domains(config),
         "strategies": strategy_ids(config),
@@ -460,6 +467,7 @@ def main() -> int:
     parser.add_argument("--plan-only", action="store_true", help="Only write run_plan.json.")
     parser.add_argument("--execute", action="store_true", help="Execute planned cells.")
     args = parser.parse_args()
+    normalize_litellm_env()
 
     if args.plan_only and args.execute:
         raise SystemExit("--plan-only and --execute are mutually exclusive")

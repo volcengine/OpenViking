@@ -33,6 +33,34 @@ def run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def normalize_litellm_env() -> dict[str, Any]:
+    aliases = []
+    if not os.environ.get("OPENAI_API_KEY") and os.environ.get("ARK_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = os.environ["ARK_API_KEY"]
+        aliases.append("OPENAI_API_KEY<-ARK_API_KEY")
+    ark_base = os.environ.get("ARK_BASE_URL")
+    openai_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL")
+    if not openai_base and ark_base:
+        os.environ["OPENAI_API_BASE"] = ark_base
+        os.environ["OPENAI_BASE_URL"] = ark_base
+        aliases.append("OPENAI_API_BASE<-ARK_BASE_URL")
+    elif os.environ.get("OPENAI_API_BASE") and not os.environ.get("OPENAI_BASE_URL"):
+        os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_API_BASE"]
+        aliases.append("OPENAI_BASE_URL<-OPENAI_API_BASE")
+    elif os.environ.get("OPENAI_BASE_URL") and not os.environ.get("OPENAI_API_BASE"):
+        os.environ["OPENAI_API_BASE"] = os.environ["OPENAI_BASE_URL"]
+        aliases.append("OPENAI_API_BASE<-OPENAI_BASE_URL")
+    return {
+        "aliases": aliases,
+        "has_api_key": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ARK_API_KEY")),
+        "has_base_url": bool(
+            os.environ.get("OPENAI_API_BASE")
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("ARK_BASE_URL")
+        ),
+    }
+
+
 def render_env(value: Any) -> Any:
     if isinstance(value, str):
         def replace(match: re.Match[str]) -> str:

@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tau2_common import normalize_litellm_env
+
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -418,6 +420,7 @@ def main() -> int:
     parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument("--force-train", action="store_true")
     args = parser.parse_args()
+    normalize_litellm_env()
 
     args.tau2_repo = args.tau2_repo.resolve()
     args.run_dir.mkdir(parents=True, exist_ok=True)
