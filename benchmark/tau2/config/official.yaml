@@ -1,0 +1,7 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_official_user_simulator
+
+eval:
+  user_simulator_policy: official
