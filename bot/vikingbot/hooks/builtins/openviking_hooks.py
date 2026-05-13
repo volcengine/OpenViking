@@ -102,21 +102,28 @@ class OpenVikingPostCallHook(Hook):
     async def _get_client(self, workspace_id: str) -> VikingClient:
         return await get_global_client(workspace_id)
 
-    async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
-        ov_client = await self._get_client(workspace_id)
-        config = load_config()
-        openviking_config = config.ov_server
-        if not skill_name:
+    async def _search_skill_experiences(self, workspace_id: str, query: str) -> str:
+        """用 skill 描述检索 experience 记忆，只检索 experiences 目录。"""
+        if not query:
             return ""
         try:
-            skill_owner_user_id = (
-                None if openviking_config.mode == "local" else openviking_config.admin_user_id
-            )
-            skill_memory_uri = ov_client._skill_memory_uri(skill_name, skill_owner_user_id)
-            content = await ov_client.read_content(skill_memory_uri, level="read")
-            return f"\n\n---\n## Skill Memory\n{content}" if content else ""
+            ov_client = await self._get_client(workspace_id)
+            experiences = await ov_client.search_experiences(query, limit=3)
+            logger.info(f"[SKILL_EXP]: found {len(experiences)} experiences, query={query[:50]}")
+            if not experiences:
+                return ""
+            parts = []
+            for exp in experiences:
+                uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
+                score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
+                if score < 0.3:
+                    continue
+                content = await ov_client.read_content(uri, level="read")
+                if content:
+                    parts.append(content)
+            return "\n\n---\n".join(parts) if parts else ""
         except Exception as e:
-            logger.warning(f"Failed to read skill memory for {skill_name}: {e}")
+            logger.warning(f"Failed to search experiences for skill: {e}")
             return ""
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
@@ -125,15 +132,14 @@ class OpenVikingPostCallHook(Hook):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
-                    # logger.debug(f"skill_name={skill_name}")
+                    desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
+                    skill_query = desc_match.group(1).strip() if desc_match else skill_name
 
-                    agent_space_name = context.workspace_id
-                    # logger.debug(f"agent_space_name={agent_space_name}")
-
-                    skill_memory = await self._read_skill_memory(agent_space_name, skill_name)
-                    # logger.debug(f"skill_memory={skill_memory}")
-                    if skill_memory:
-                        result = f"{result}{skill_memory}"
+                    exp_memory = await self._search_skill_experiences(
+                        context.workspace_id, skill_query
+                    )
+                    if exp_memory:
+                        result = f"{result}\n\n---\n## Related Experiences\n{exp_memory}"
 
         return {"tool_name": tool_name, "params": params, "result": result}
 
