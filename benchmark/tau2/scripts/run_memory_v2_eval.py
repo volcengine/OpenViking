@@ -959,13 +959,13 @@ def main() -> int:
     parser.add_argument("--user-llm", required=True)
     parser.add_argument("--agent-llm-args", type=_json, default={})
     parser.add_argument("--user-llm-args", type=_json, default={})
-    parser.add_argument("--openviking-url", required=True)
-    parser.add_argument("--openviking-account", required=True)
-    parser.add_argument("--openviking-user", required=True)
-    parser.add_argument("--openviking-agent-id", required=True)
+    parser.add_argument("--openviking-url")
+    parser.add_argument("--openviking-account")
+    parser.add_argument("--openviking-user")
+    parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
-    parser.add_argument("--search-uri", required=True)
+    parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument(
         "--retrieval-mode",
@@ -976,8 +976,30 @@ def main() -> int:
     parser.add_argument("--scope-prompt-config", type=_json, default={})
     parser.add_argument("--force-train", action="store_true")
     parser.add_argument("--prepare-corpus-only", action="store_true")
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Run the configured TAU-2 agent without OpenViking retrieval.",
+    )
     args = parser.parse_args()
     normalize_litellm_env()
+    if not args.no_memory:
+        missing = [
+            name
+            for name in (
+                "openviking_url",
+                "openviking_account",
+                "openviking_user",
+                "openviking_agent_id",
+                "search_uri",
+            )
+            if not getattr(args, name)
+        ]
+        if missing:
+            parser.error(
+                "OpenViking memory runs require: "
+                + ", ".join("--" + name.replace("_", "-") for name in missing)
+            )
     args.category_reranker = CategoryReranker.from_payload(
         args.category_rerank_config,
         repo_root=REPO_ROOT,
@@ -1000,6 +1022,40 @@ def main() -> int:
     eval_results = args.run_dir / f"{args.run_label}.json"
     trace_path = args.run_dir / f"{args.run_label}.retrieval_trace.jsonl"
     summary_path = args.run_dir / f"{args.run_label}.summary.json"
+
+    if args.no_memory:
+        _run_tau2(
+            tau2_repo=args.tau2_repo,
+            domain=args.domain,
+            split=args.eval_split_name,
+            task_ids=args.task_ids,
+            num_tasks=args.num_tasks,
+            trials=1,
+            max_steps=args.max_steps,
+            max_concurrency=args.max_concurrency,
+            agent=args.base_agent,
+            user=args.user,
+            agent_llm=args.agent_llm,
+            user_llm=args.user_llm,
+            agent_llm_args=args.agent_llm_args,
+            user_llm_args=args.user_llm_args,
+            seed=args.seed,
+            save_to=eval_results,
+        )
+        assert_tau2_results_complete(
+            json.loads(eval_results.read_text()), context=f"{args.domain} eval"
+        )
+        summary = {
+            "run_label": args.run_label,
+            "domain": args.domain,
+            "strategy_id": args.strategy_id,
+            "seed": args.seed,
+            "eval_results": str(eval_results),
+            "metrics": _metrics(eval_results),
+        }
+        _write_json(summary_path, summary)
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        return 0
 
     corpus = _train(args, train_results, corpus_manifest)
     if args.prepare_corpus_only:

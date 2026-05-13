@@ -3,7 +3,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
-from benchmark.tau2.scripts.run_eval import _summarize
+from benchmark.tau2.scripts.run_eval import (
+    _cell_artifacts,
+    _cell_metrics,
+    _summarize,
+    _tau2_command,
+)
 from benchmark.tau2.scripts.run_memory_v2_eval import (
     _load_scope_prompt,
     _probe_corpus,
@@ -256,6 +261,83 @@ def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
     assert domain["simulation_count"] == 1
     assert domain["avg_reward"] == 0.5
     assert domain["db_match_rate"] == 0.0
+
+
+def test_no_memory_strategy_uses_wrapper_command(tmp_path: Path) -> None:
+    config = {
+        "benchmark": {
+            "eval_split_name": "test",
+            "max_steps": 7,
+            "task_max_concurrency": 2,
+            "agent": "llm_agent",
+            "user": "user_simulator",
+            "reasoning_effort": "high",
+        },
+        "model": {
+            "agent_llm": "agent-model",
+            "user_llm": "user-model",
+        },
+        "paths": {
+            "tau2_repo": str(tmp_path / "tau2-bench"),
+            "output_dir": str(tmp_path / "result"),
+        },
+    }
+
+    command = _tau2_command(
+        config,
+        domain="airline",
+        strategy={"id": "no_memory", "memory_backend": "none"},
+        configured_run_id="baseline_run",
+        run_label="baseline_run_airline_no_memory_r1",
+        task_ids=["18"],
+        num_tasks=None,
+        train_num_tasks=None,
+        seed=300,
+    )
+
+    assert command is not None
+    assert command[1].endswith("run_memory_v2_eval.py")
+    assert "--no-memory" in command
+    assert "--openviking-url" not in command
+    assert command[command.index("--strategy-id") + 1] == "no_memory"
+    assert command[command.index("--base-agent") + 1] == "llm_agent"
+    assert command[command.index("--task-id") + 1] == "18"
+    assert command[command.index("--run-dir") + 1].endswith(
+        "result/baseline_run/memory_cells/baseline_run_airline_no_memory_r1"
+    )
+
+
+def test_no_memory_artifacts_read_wrapper_summary_metrics(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    cell = {
+        "memory_backend": "none",
+        "domain": "airline",
+        "strategy_id": "no_memory",
+        "run_label": "baseline_run_airline_no_memory_r1",
+    }
+
+    artifacts = _cell_artifacts(cell, repo=tmp_path / "tau2-bench", out=out)
+    assert set(artifacts) == {"summary", "results"}
+
+    summary_path = Path(artifacts["summary"])
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "simulation_count": 1,
+                    "avg_reward": 0.0,
+                    "db_match_rate": 0.0,
+                }
+            }
+        )
+    )
+
+    assert _cell_metrics(cell, artifacts) == {
+        "simulation_count": 1,
+        "avg_reward": 0.0,
+        "db_match_rate": 0.0,
+    }
 
 
 def test_runtime_evidence_marks_empty_corpus_probe_diagnostic() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -204,38 +205,44 @@ def _tau2_command(
         return None
 
     command = [
-        tau2_cli(config),
-        "run",
+        sys.executable,
+        str(Path(__file__).with_name("run_memory_v2_eval.py")),
+        "--tau2-repo",
+        str(tau2_repo(config)),
+        "--run-dir",
+        str(output_dir(config, configured_run_id) / "memory_cells" / run_label),
+        "--run-label",
+        run_label,
+        "--strategy-id",
+        strategy["id"],
         "--domain",
         domain,
-        "--agent",
-        str(benchmark.get("agent", "llm_agent")),
-        "--user",
-        str(benchmark.get("user", "user_simulator")),
-        "--task-split-name",
+        "--eval-split-name",
         str(benchmark.get("eval_split_name", "test")),
-        "--num-trials",
-        "1",
         "--max-steps",
         str(benchmark.get("max_steps", 200)),
         "--max-concurrency",
         str(benchmark.get("task_max_concurrency", 10)),
+        "--base-agent",
+        str(benchmark.get("agent", "llm_agent")),
+        "--user",
+        str(benchmark.get("user", "user_simulator")),
         "--agent-llm",
         str(model["agent_llm"]),
         "--user-llm",
         str(model["user_llm"]),
-        "--save-to",
-        run_label,
+        "--agent-llm-args",
+        agent_llm_args,
+        "--user-llm-args",
+        user_llm_args,
         "--seed",
         str(seed),
+        "--no-memory",
     ]
 
-    command.extend(["--agent-llm-args", agent_llm_args])
-    command.extend(["--user-llm-args", user_llm_args])
-
     if task_ids:
-        command.append("--task-ids")
-        command.extend(task_ids)
+        for task_id in task_ids:
+            command.extend(["--task-id", task_id])
     elif num_tasks is not None:
         command.extend(["--num-tasks", str(num_tasks)])
 
@@ -336,24 +343,25 @@ def _build_plan(
 
 
 def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, str]:
-    if cell.get("memory_backend") == "openviking":
+    if cell.get("memory_backend") in {"openviking", "none"}:
         run_dir = out / "memory_cells" / cell["run_label"]
-        corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
-        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{corpus_id}"
-        return {
+        artifacts = {
             "summary": str(run_dir / f"{cell['run_label']}.summary.json"),
             "results": str(run_dir / f"{cell['run_label']}.json"),
-            "retrieval_trace": str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl"),
-            "corpus_manifest": str(corpus_dir / "corpus_manifest.json"),
         }
+        if cell.get("memory_backend") == "none":
+            return artifacts
+        corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
+        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{corpus_id}"
+        artifacts["retrieval_trace"] = str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl")
+        artifacts["corpus_manifest"] = str(corpus_dir / "corpus_manifest.json")
+        return artifacts
     return {"results": str(repo / "data" / "simulations" / f"{cell['run_label']}.json")}
 
 
 def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, Any] | None:
-    if cell.get("memory_backend") == "openviking":
-        summary_path = Path(artifacts["summary"])
-        if not summary_path.is_file():
-            return None
+    summary_path = Path(artifacts.get("summary", ""))
+    if summary_path.is_file():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         return summary.get("metrics")
 
@@ -390,6 +398,17 @@ def _memory_corpus_key(cell: dict[str, Any]) -> str:
     return f"{cell['domain']}_{corpus_id}"
 
 
+def _tau2_subprocess_env(repo: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    src = repo / "src"
+    pythonpath_entry = str(src if src.is_dir() else repo)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        pythonpath_entry if not existing else f"{pythonpath_entry}{os.pathsep}{existing}"
+    )
+    return env
+
+
 def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, Any]:
     key = _memory_corpus_key(cell)
     command = list(cell["command"]) + ["--prepare-corpus-only"]
@@ -397,6 +416,7 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
     completed = subprocess.run(
         command,
         cwd=repo,
+        env=_tau2_subprocess_env(repo),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -532,6 +552,7 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
         completed = subprocess.run(
             cell["command"],
             cwd=repo,
+            env=_tau2_subprocess_env(repo),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

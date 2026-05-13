@@ -18,6 +18,7 @@ benchmark/tau2/
 ├── config/
 │   ├── baseline.yaml
 │   ├── category_rerank.yaml
+│   ├── no_memory.yaml
 │   ├── official.yaml
 │   ├── prewrite.yaml
 │   └── trajectory.yaml
@@ -54,6 +55,10 @@ Plan the default benchmark without running TAU-2:
 ```bash
 python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baseline.yaml --plan-only
 ```
+
+Use `config/no_memory.yaml` for same-runner no-memory baselines; it executes
+through the Python wrapper so artifacts and result validation match the memory
+cells.
 
 Add `--preflight` or `--strict-preflight` when you want the runner to write a
 small environment/config check next to the run plan.
