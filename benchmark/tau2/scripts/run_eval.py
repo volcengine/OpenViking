@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from tau2_common import (
+    assert_tau2_results_complete,
     domains,
     load_config,
     normalize_litellm_env,
@@ -52,6 +53,7 @@ def _db_match(sim: dict[str, Any]) -> bool | None:
 
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
     data = json.loads(results_path.read_text(encoding="utf-8"))
+    assert_tau2_results_complete(data, context=str(results_path))
     sims = data.get("simulations") or []
     rewards = [_reward(sim) for sim in sims]
     db_values = [_db_match(sim) for sim in sims]
