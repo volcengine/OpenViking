@@ -62,6 +62,7 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        enable_sort: bool = False,
     ) -> List[Any]:
         """List directory contents.
 
@@ -73,6 +74,12 @@ class FSService:
             abs_limit: int = 256 if output == "agent" else ignore
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            enable_sort: bool = False (default). When True, entries are
+                returned in a deterministic order (files first, then
+                case-folded name asc) and the truncation window is stable.
+                When False (default), entries follow the raw AGFS order.
+                Note: only applied to non-recursive ls; recursive tree()
+                ignores this flag.
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
@@ -95,6 +102,7 @@ class FSService:
                     output="original",
                     show_all_hidden=show_all_hidden,
                     node_limit=node_limit,
+                    enable_sort=enable_sort,
                 )
             return [e.get("uri", "") for e in entries]
 
@@ -116,6 +124,7 @@ class FSService:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                enable_sort=enable_sort,
             )
         return entries
 

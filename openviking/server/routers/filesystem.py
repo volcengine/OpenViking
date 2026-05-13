@@ -29,6 +29,15 @@ async def ls(
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     limit: Optional[int] = Query(None, description="Alias for node_limit"),
+    enable_sort: bool = Query(
+        False,
+        description=(
+            "Whether to return entries in a deterministic order "
+            "(files first, then case-folded name asc) and apply a "
+            "stable truncation window. Defaults to false: entries follow "
+            "the raw AGFS order. Only affects non-recursive ls."
+        ),
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -46,6 +55,7 @@ async def ls(
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
+            enable_sort=enable_sort,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
