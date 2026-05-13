@@ -325,20 +325,6 @@ impl HttpClient {
         self.get("/api/v1/fs/stat", &params).await
     }
 
-    pub async fn count(
-        &self,
-        uri: &str,
-        recursive: bool,
-        show_all_hidden: bool,
-    ) -> Result<serde_json::Value> {
-        let params = vec![
-            ("uri".to_string(), uri.to_string()),
-            ("recursive".to_string(), recursive.to_string()),
-            ("show_all_hidden".to_string(), show_all_hidden.to_string()),
-        ];
-        self.get("/api/v1/fs/count", &params).await
-    }
-
     // ============ Search Methods ============
 
     pub async fn find(

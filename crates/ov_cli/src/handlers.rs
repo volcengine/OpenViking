@@ -1150,33 +1150,6 @@ pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-pub async fn handle_count(
-    uri: String,
-    recursive: bool,
-    show_all_hidden: bool,
-    ctx: CliContext,
-) -> Result<()> {
-    let mut params = vec![uri.clone()];
-    if recursive {
-        params.push("-r".to_string());
-    }
-    if show_all_hidden {
-        params.push("-a".to_string());
-    }
-    print_command_echo("ov count", &params.join(" "), ctx.config.echo_command);
-
-    let client = ctx.get_client();
-    commands::filesystem::count(
-        &client,
-        &uri,
-        recursive,
-        show_all_hidden,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
-}
-
 pub async fn handle_grep(
     uri: String,
     exclude_uri: Option<String>,

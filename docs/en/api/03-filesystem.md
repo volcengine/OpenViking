@@ -499,67 +499,7 @@ openviking stat viking://resources/my-project/docs
 
 The `isLocked` field reports whether the path is currently held by a path lock — either the path itself has a valid `.path.ovlock`, or any ancestor directory holds a SUBTREE lock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
 
-The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index). For an exact count based on the actual filesystem listing, use [`count()`](#count) instead.
-
----
-
-### count()
-
-Count files and sub-directories under a directory based on a real filesystem traversal (not a vector-index estimate).
-
-**Parameters**
-
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| uri | str | Yes | - | Target directory's Viking URI |
-| recursive | bool | No | False | Count all descendants when `True`; otherwise only direct children |
-| show_all_hidden | bool | No | False | Include hidden files (names starting with `.`) |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.count("viking://resources/my-project")
-print(f"files={result['files']}, dirs={result['dirs']}, total={result['total']}")
-
-# Recursive
-result = client.count("viking://resources/my-project", recursive=True)
-```
-
-**HTTP API**
-
-```
-GET /api/v1/fs/count?uri={uri}&recursive={bool}&show_all_hidden={bool}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-project&recursive=true" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking count viking://resources/my-project
-openviking count viking://resources/my-project -r        # recursive
-openviking count viking://resources/my-project -r -a     # recursive, include hidden files
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/my-project",
-    "files": 12,
-    "dirs": 3,
-    "total": 15
-  },
-  "time": 0.01
-}
-```
-
-If `uri` is not a directory, a `FailedPrecondition` error is returned; if `uri` does not exist, `NotFound` is returned.
+The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
 ---
 

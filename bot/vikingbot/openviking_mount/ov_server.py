@@ -18,41 +18,58 @@ class VikingClient:
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
+        self.mode = openviking_config.mode
+        self.api_key_type = (openviking_config.api_key_type or "root").strip().lower()
+        if self.api_key_type not in {"root", "user"}:
+            raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
+
+        self._apikey_manager = None
+        self.admin_user_client = None
+        self._namespace_policy = {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        }
+        self._namespace_policy_loaded = False
+
         if openviking_config.mode == "local":
             self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.agent_id = "default"
             self.account_id = "default"
             self.user_id = "default"
             self.admin_user_id = "default"
-            self._apikey_manager = None
-        else:
-            if agent_id and "#" in agent_id:
-                agent_id = agent_id.split("#", 1)[0]
-            self.client = ov.AsyncHTTPClient(
-                url=openviking_config.server_url,
-                api_key=openviking_config.root_api_key,
-                account=openviking_config.account_id,
-                user=openviking_config.admin_user_id,
-                agent_id=agent_id,
+            return
+
+        if agent_id and "#" in agent_id:
+            agent_id = agent_id.split("#", 1)[0]
+
+        self.agent_id = agent_id
+        self.account_id = openviking_config.account_id
+        self.admin_user_id = openviking_config.admin_user_id
+
+        remote_client_kwargs = {
+            "url": openviking_config.server_url,
+            "api_key": openviking_config.root_api_key,
+            "agent_id": agent_id,
+        }
+        if self._is_root_key_mode():
+            remote_client_kwargs["account"] = openviking_config.account_id
+            remote_client_kwargs["user"] = openviking_config.admin_user_id
+
+        self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
+
+        if self._is_root_key_mode() and self.ov_path:
+            self._apikey_manager = UserApiKeyManager(
+                ov_path=self.ov_path,
+                server_url=openviking_config.server_url,
+                account_id=openviking_config.account_id,
             )
-            self.agent_id = agent_id
-            self.account_id = openviking_config.account_id
-            self.admin_user_id = openviking_config.admin_user_id
-            self._apikey_manager = None
-            if self.ov_path:
-                self._apikey_manager = UserApiKeyManager(
-                    ov_path=self.ov_path,
-                    server_url=openviking_config.server_url,
-                    account_id=openviking_config.account_id,
-                )
-        self.mode = openviking_config.mode
 
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
+        await self._load_namespace_policy()
 
-        # 检查并初始化 admin_user_id（如果配置了）
-        if self.mode == "remote" and self.admin_user_id:
+        if self._is_root_key_mode() and self.admin_user_id:
             user_exists = await self._check_user_exists(self.admin_user_id)
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
@@ -106,6 +123,82 @@ class VikingClient:
     def get_agent_space_name(self, user_id: str) -> str:
         return hashlib.md5(f"{user_id}:{self.agent_id}".encode()).hexdigest()[:12]
 
+    def _is_root_key_mode(self) -> bool:
+        return self.mode == "remote" and self.api_key_type == "root"
+
+    def _is_user_key_mode(self) -> bool:
+        return self.mode == "remote" and self.api_key_type == "user"
+
+    def _effective_user_id(self, user_id: Optional[str]) -> str:
+        if self._is_user_key_mode():
+            return ""
+        return user_id or self.admin_user_id
+
+    async def _load_namespace_policy(self) -> None:
+        if self._namespace_policy_loaded:
+            return
+
+        policy = {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        }
+
+        if self.mode == "remote" and self.account_id:
+            try:
+                accounts = await self.client.admin_list_accounts()
+                for account in accounts or []:
+                    if account.get("account_id") == self.account_id:
+                        policy = {
+                            "isolate_user_scope_by_agent": bool(
+                                account.get("isolate_user_scope_by_agent", False)
+                            ),
+                            "isolate_agent_scope_by_user": bool(
+                                account.get("isolate_agent_scope_by_user", False)
+                            ),
+                        }
+                        break
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load account namespace policy for {self.account_id}: {e}"
+                )
+
+        self._namespace_policy = policy
+        self._namespace_policy_loaded = True
+
+    def _user_space_fragment(self, user_id: Optional[str]) -> str:
+        effective_user_id = self._effective_user_id(user_id)
+        if not effective_user_id:
+            return ""
+        if self._namespace_policy["isolate_user_scope_by_agent"] and self.agent_id:
+            return f"{effective_user_id}/agent/{self.agent_id}"
+        return effective_user_id
+
+    def _agent_space_fragment(self, user_id: Optional[str]) -> str:
+        if not self.agent_id:
+            return ""
+        effective_user_id = self._effective_user_id(user_id)
+        if self._namespace_policy["isolate_agent_scope_by_user"] and effective_user_id:
+            return f"{self.agent_id}/user/{effective_user_id}"
+        return self.agent_id
+
+    def _memory_target_uri(self, user_id: Optional[str]) -> str:
+        user_space = self._user_space_fragment(user_id)
+        if user_space:
+            return f"viking://user/{user_space}/memories/"
+        return "viking://user/memories/"
+
+    def _agent_memory_target_uri(self, user_id: Optional[str]) -> str:
+        agent_space = self._agent_space_fragment(user_id)
+        if agent_space:
+            return f"viking://agent/{agent_space}/memories/"
+        return "viking://agent/memories/"
+
+    def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
+        return f"{self._agent_memory_target_uri(user_id)}skills/{skill_name}.md"
+
+    def should_sender_fanout(self) -> bool:
+        return self._is_root_key_mode()
+
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
         if target_uri:
@@ -149,27 +242,16 @@ class VikingClient:
             return ""
 
     async def read_user_profile(self, user_id: str) -> str:
-        """读取用户 profile。
+        """读取用户 profile。"""
+        await self._load_namespace_policy()
+        effective_user_id = self._effective_user_id(user_id)
+        user_exists = await self._check_user_exists(effective_user_id)
 
-        首先检查用户是否存在，如不存在则初始化用户并返回空字符串。
-        用户存在时，再查询 profile 信息。
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            str: 用户 profile 内容，如果用户不存在或查询失败返回空字符串
-        """
-        # Step 1: 检查用户是否存在
-        user_exists = await self._check_user_exists(user_id)
-
-        # Step 2: 如果用户不存在，初始化用户并直接返回
         if not user_exists:
-            await self._initialize_user(user_id)
+            await self._initialize_user(effective_user_id)
             return ""
 
-        # Step 3: 用户存在，查询 profile
-        uri = f"viking://user/{user_id}/memories/profile.md"
+        uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
         result = await self.read_content(uri=uri, level="read")
         return result
 
@@ -197,10 +279,12 @@ class VikingClient:
         }
 
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
-        user_exists = await self._check_user_exists(user_id)
+        await self._load_namespace_policy()
+        effective_user_id = self._effective_user_id(user_id)
+        user_exists = await self._check_user_exists(effective_user_id)
         if not user_exists:
             return []
-        uri_user_memory = f"viking://user/{user_id}/memories/"
+        uri_user_memory = self._memory_target_uri(effective_user_id)
         result = await self.client.search(query, target_uri=uri_user_memory)
         return (
             [self._matched_context_to_dict(m) for m in result.memories]
@@ -209,16 +293,11 @@ class VikingClient:
         )
 
     async def _check_user_exists(self, user_id: str) -> bool:
-        """检查用户是否存在于账户中。
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            bool: 用户是否存在
-        """
-        if self.mode == "local":
+        """检查用户是否存在于账户中。"""
+        if self.mode == "local" or self._is_user_key_mode():
             return True
+        if not user_id:
+            return False
         try:
             res = await self.client.admin_list_users(self.account_id)
             if not res or len(res) == 0:
@@ -229,22 +308,16 @@ class VikingClient:
             return False
 
     async def _initialize_user(self, user_id: str, role: str = "user") -> bool:
-        """初始化用户。
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            bool: 初始化是否成功
-        """
-        if self.mode == "local":
+        """初始化用户。"""
+        if self.mode == "local" or self._is_user_key_mode():
             return True
+        if not user_id:
+            return False
         try:
             result = await self.client.admin_register_user(
                 account_id=self.account_id, user_id=user_id, role=role
             )
 
-            # Save the API key if returned and we're in remote mode with a valid apikey manager
             if self._apikey_manager and isinstance(result, dict):
                 api_key = result.get("user_key")
                 if api_key:
@@ -258,20 +331,8 @@ class VikingClient:
             return False
 
     async def _get_or_create_user_apikey(self, user_id: str) -> Optional[str]:
-        """获取或创建用户的 API key。
-
-        优先从本地 json 文件获取，如果本地没有则：
-        1. 删除用户（如果存在）
-        2. 重新创建用户
-        3. 保存新的 API key
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            API key 或 None（如果获取失败）
-        """
-        if not self._apikey_manager:
+        """获取或创建用户的 API key。"""
+        if self._is_user_key_mode() or not self._apikey_manager or not user_id:
             return None
 
         # Step 1: Check local storage first
@@ -304,34 +365,49 @@ class VikingClient:
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
-        """通过上下文消息，检索viking 的user、Agent memory。
+        """通过上下文消息，检索viking 的user、Agent memory。"""
+        await self._load_namespace_policy()
 
-        Args:
-            query: Search query
-            user_ids: Single user_id (str) or list of user_ids for memory retrieval
-            agent_user_id: Agent user ID for agent memory space
-            limit: Max results per user
-        """
-        # Normalize user_ids to list
+        def _extract_memories(result: Any) -> list[Any]:
+            if not result:
+                return []
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict):
+                memories = result.get("memories")
+                return memories if isinstance(memories, list) else []
+            memories = getattr(result, "memories", None)
+            return memories if isinstance(memories, list) else []
+
         if isinstance(user_ids, str):
             user_ids = [user_ids]
 
-        # Build target URIs for all users and agent
-        user_uris = [f"viking://user/{user_id}/memories/" for user_id in user_ids]
-        agent_space_name = self.get_agent_space_name(agent_user_id)
-        agent_uri = f"viking://agent/{agent_space_name}/memories/"
-
-        # Query each URI and collect results
         all_user_memories = []
         all_agent_memories = []
 
-        for uri in user_uris + [agent_uri]:
-            result = await self.search(query=query, target_uri=uri, limit=limit)
-            memories = result.get("memories", [])
-            if uri.startswith("viking://agent/"):
-                all_agent_memories.extend(memories)
-            else:
-                all_user_memories.extend(memories)
+        for user_id in user_ids:
+            effective_user_id = self._effective_user_id(user_id)
+            user_exists = await self._check_user_exists(effective_user_id)
+            if not user_exists:
+                await self._initialize_user(effective_user_id)
+                continue
+
+            uri_user_memory = self._memory_target_uri(effective_user_id)
+            user_memory = await self.client.find(
+                query=query,
+                target_uri=uri_user_memory,
+                limit=limit,
+            )
+            all_user_memories.extend(_extract_memories(user_memory))
+
+        effective_agent_user_id = self._effective_user_id(agent_user_id)
+        uri_agent_memory = self._agent_memory_target_uri(effective_agent_user_id)
+        agent_memory = await self.client.find(
+            query=query,
+            target_uri=uri_agent_memory,
+            limit=limit,
+        )
+        all_agent_memories.extend(_extract_memories(agent_memory))
 
         return {
             "user_memory": all_user_memories,
@@ -366,30 +442,30 @@ class VikingClient:
 
         from openviking.message.part import TextPart, ToolPart
 
-        user_exists = await self._check_user_exists(user_id)
-        if not user_exists:
-            success = await self._initialize_user(user_id)
-            if not success:
-                return {"error": "Failed to initialize user"}
+        effective_user_id = self._effective_user_id(user_id)
 
-        # For remote mode, try to get user's API key and create a dedicated client
         client = self.client
         start = time.time()
-        if (
-            self.mode == "remote"
-            and user_id
-            and user_id != self.admin_user_id
-            and self._apikey_manager
-        ):
-            user_api_key = await self._get_or_create_user_apikey(user_id)
-            if user_api_key:
-                # Create a new HTTP client with user's API key
-                client = ov.AsyncHTTPClient(
-                    url=self.openviking_config.server_url,
-                    api_key=user_api_key,
-                    agent_id=self.agent_id,
-                )
-                await client.initialize()
+        if self._is_root_key_mode():
+            user_exists = await self._check_user_exists(effective_user_id)
+            if not user_exists:
+                success = await self._initialize_user(effective_user_id)
+                if not success:
+                    return {"error": "Failed to initialize user"}
+
+            if (
+                effective_user_id
+                and effective_user_id != self.admin_user_id
+                and self._apikey_manager
+            ):
+                user_api_key = await self._get_or_create_user_apikey(effective_user_id)
+                if user_api_key:
+                    client = ov.AsyncHTTPClient(
+                        url=self.openviking_config.server_url,
+                        api_key=user_api_key,
+                        agent_id=self.agent_id,
+                    )
+                    await client.initialize()
 
         create_res = await client.create_session()
         session_id = create_res["session_id"]
@@ -456,7 +532,9 @@ class VikingClient:
         if client is not self.client:
             await client.close()
         logger.info(f"time spent: {time.time() - start}")
-        logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
+        logger.debug(
+            f"Message add ed to OpenViking session {session_id}, api_key_type={self.api_key_type}, user: {effective_user_id}"
+        )
         return {"success": result["status"]}
 
     async def close(self):

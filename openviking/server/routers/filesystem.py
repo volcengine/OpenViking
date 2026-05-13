@@ -122,41 +122,6 @@ async def stat(
         raise
 
 
-@router.get("/count")
-async def count(
-    uri: str = Query(..., description="Viking URI of a directory"),
-    recursive: bool = Query(False, description="Count all descendants recursively"),
-    show_all_hidden: bool = Query(False, description="Include hidden files/directories"),
-    _ctx: RequestContext = Depends(get_request_context),
-):
-    """Count files and sub-directories under a directory.
-
-    Returns a dict with keys ``files``, ``dirs`` and ``total``.
-    """
-    service = get_service()
-    uri = resolve_path_variables(uri)
-    try:
-        result = await service.fs.count(
-            uri,
-            ctx=_ctx,
-            recursive=recursive,
-            show_all_hidden=show_all_hidden,
-        )
-    except AGFSNotFoundError:
-        raise NotFoundError(uri, "file")
-    except AGFSClientError as e:
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
-        raise
-    except Exception as exc:
-        mapped = map_exception(exc, resource=uri)
-        if mapped is not None:
-            raise mapped from exc
-        raise
-    return Response(status="ok", result={"uri": uri, **result})
-
-
 class MkdirRequest(BaseModel):
     """Request model for mkdir."""
 

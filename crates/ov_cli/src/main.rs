@@ -309,17 +309,6 @@ enum Commands {
         /// Viking URI to get metadata for
         uri: String,
     },
-    /// [Data] Count files and sub-directories under a directory
-    Count {
-        /// Directory URI to count
-        uri: String,
-        /// Recurse into all sub-directories
-        #[arg(short, long)]
-        recursive: bool,
-        /// Include hidden files (names starting with ".")
-        #[arg(short, long)]
-        all: bool,
-    },
     /// [Data] Read file content (L2)
     Read {
         /// Viking URI
@@ -1177,11 +1166,6 @@ async fn main() {
         Commands::Rm { uri, recursive } => handlers::handle_rm(uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::Count {
-            uri,
-            recursive,
-            all,
-        } => handlers::handle_count(uri, recursive, all, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {

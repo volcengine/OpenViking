@@ -226,20 +226,6 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def count(
-        self,
-        uri: str,
-        recursive: bool = False,
-        show_all_hidden: bool = False,
-    ) -> Dict[str, int]:
-        """Count files and sub-directories under a directory."""
-        return await self._service.fs.count(
-            uri,
-            ctx=self._ctx,
-            recursive=recursive,
-            show_all_hidden=show_all_hidden,
-        )
-
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)

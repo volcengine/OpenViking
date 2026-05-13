@@ -15,14 +15,17 @@ benchmark/locomo/
 │   ├── run_full_eval.sh        # 一键运行完整评测流程
 │   ├── data/           # 测试数据目录
 │   └── result/         # 评测结果目录
-└── openclaw/           # OpenClaw 评测脚本
-    ├── import_to_ov.py # 导入数据到 OpenViking
-    ├── eval.py         # OpenClaw 评估脚本 (ingest/qa)
-    ├── judge.py        # LLM 裁判打分（适配 OpenClaw）
-    ├── stat_judge_result.py    # 统计评分结果和 token 使用
-    ├── run_full_eval.sh        # 一键运行完整评测流程
-    ├── data/           # 测试数据目录
-    └── result/         # 评测结果目录
+├── openclaw/           # OpenClaw 评测脚本
+│   ├── import_to_ov.py # 导入数据到 OpenViking
+│   ├── eval.py         # OpenClaw 评估脚本 (ingest/qa)
+│   ├── judge.py        # LLM 裁判打分（适配 OpenClaw）
+│   ├── stat_judge_result.py    # 统计评分结果和 token 使用
+│   ├── run_full_eval.sh        # 一键运行完整评测流程
+│   ├── data/           # 测试数据目录
+│   └── result/         # 评测结果目录
+├── mem0/               # mem0 评测脚本（详见 mem0/README.md）
+├── supermemory/        # Supermemory 评测脚本（详见 supermemory/README.md）
+└── claudecode/         # Claude Code 评测脚本（详见 claudecode/README.md）
 ```
 
 ---
