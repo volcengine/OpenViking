@@ -156,16 +156,18 @@ prepared in parallel with `benchmark.corpus_prepare_concurrency`; session
 commits inside one corpus remain serial to preserve OpenViking write semantics.
 
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
-an adapter-local FGMemory-style probe: pre-write recall, annotation category
-rerank, and the retail scope prompt used by the Harness High-TrajView/FGMemory
-route. The category sub-policy follows the S84 component settings, but the
-alignment target is the red-box S89/FGMemory high result: retrieve 6, keep
-same-category candidates, inject at most 2, skip injection when no positive
-category match exists, and apply the scope/applicability prompt at the system
-prompt injection point. Retrieval traces include the query category, candidate
-memory categories, rerank reasons, selected rows, skipped rows, scope prompt
-metadata, and the flat `*_category*_prompt` fields consumed by Harness
-diagnostics.
+an adapter-local FGMemory-style probe: pre-write recall, self-generated runtime
+category signals, and the retail scope prompt used by the Harness
+High-TrajView/FGMemory route. The category sub-policy follows the S84 component
+settings, but the alignment target is the red-box S89/FGMemory high result:
+retrieve 6, keep same-category candidates, inject at most 2, skip injection
+when no positive category match exists, and apply the scope/applicability prompt
+at the system prompt injection point. Runtime categories are generated from the
+local TAU-2 category catalog, current pre-write query text, candidate write tool
+names, retrieved trajectory text, and memory URIs; no Harness sidecar artifact
+is required. Retrieval traces include the query category, candidate memory
+categories, rerank reasons, selected rows, skipped rows, scope prompt metadata,
+and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
 
 ## User Simulator Policy
 
