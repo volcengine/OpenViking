@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/session-start-commit.mjs\"",
+            "command": "node ./scripts/session-start-commit.mjs",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/auto-recall.mjs\"",
+            "command": "node ./scripts/auto-recall.mjs",
             "timeout": 8
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/auto-capture.mjs\"",
+            "command": "node ./scripts/auto-capture.mjs",
             "timeout": 30
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/pre-compact-capture.mjs\"",
+            "command": "node ./scripts/pre-compact-capture.mjs",
             "timeout": 60
           }
         ]
