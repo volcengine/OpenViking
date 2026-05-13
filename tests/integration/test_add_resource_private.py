@@ -16,7 +16,6 @@ import httpx
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.git_credentials import inject_token, mask_token_in_url
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

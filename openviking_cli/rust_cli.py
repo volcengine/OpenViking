@@ -44,8 +44,8 @@ def _cmd_configure_git_credentials(args: list[str]) -> int:
 
     Prompts interactively for any missing values and writes to ovcli.conf.
     """
-    from openviking_cli.utils.git_credentials import save_git_credentials
     from openviking_cli.setup_wizard import _bold, _green, _prompt_api_key, _prompt_required_input
+    from openviking_cli.utils.git_credentials import save_git_credentials
 
     host: str | None = None
     token: str | None = None
@@ -73,7 +73,7 @@ def _cmd_configure_git_credentials(args: list[str]) -> int:
         print("  Error: both host and token are required.", file=sys.stderr)
         return 1
 
-    path = save_git_credentials(host, token)
+    save_git_credentials(host, token)
     print(f"\n  {_green('OK')} Git credentials saved.\n")
     return 0
 
