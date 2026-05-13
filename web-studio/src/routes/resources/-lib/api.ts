@@ -146,7 +146,7 @@ export async function saveFileContent(uri: string, content: string): Promise<voi
         body: {
           uri,
           content,
-          mode: 'overwrite',
+          mode: 'replace',
           wait: true,
         },
       }),
