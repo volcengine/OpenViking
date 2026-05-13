@@ -170,9 +170,14 @@ categories, rerank reasons, selected rows, skipped rows, scope prompt metadata,
 and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
 Each run summary also includes `retrieval_trace_summary`, a compact rollup of
 decision nodes, category decisions, query/memory category sources, selected
-category coverage, and write tool calls. Use it as the first check that a run is
-using this branch's self-generated category signal before opening the JSONL
-trace.
+category coverage, aggregate-vs-concrete memory candidate coverage, and write
+tool calls. Use it as the first check that a run is using this branch's
+self-generated category signal before opening the JSONL trace. Category runs
+whose runtime trace has only aggregate `.overview.md` / `.abstract.md`
+candidates, no memory category coverage, or no selected positive category match
+are marked `runtime_evidence.status=diagnostic`; `scoreboard.json` excludes
+those diagnostic cells from the main reward/DB aggregates while preserving their
+metrics and artifacts for debugging.
 
 ## User Simulator Policy
 

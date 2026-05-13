@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
-from benchmark.tau2.scripts.run_memory_v2_eval import _load_scope_prompt, _trace_category_summary
+from benchmark.tau2.scripts.run_eval import _summarize
+from benchmark.tau2.scripts.run_memory_v2_eval import (
+    _load_scope_prompt,
+    _runtime_evidence_status,
+    _trace_category_summary,
+)
 
 
 def _reranker() -> CategoryReranker:
@@ -173,3 +178,66 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["counts"]["concrete_memory_candidate_count"] == 1
     assert summary["rates"]["concrete_memory_candidate_rate"] == 0.5
     assert summary["rates"]["selected_concrete_memory_rate"] == 0.0
+
+
+def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        retrieval_trace_summary={
+            "trace_present": True,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 1,
+                "memory_category_present_count": 1,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 0.0,
+                "selected_positive_category_match_rate": 0.0,
+            },
+        },
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "no_concrete_memory_candidates" in evidence["reasons"]
+    assert "no_selected_positive_category_match" in evidence["reasons"]
+
+
+def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
+    scoreboard = _summarize(
+        [
+            {
+                "domain": "airline",
+                "strategy_id": "memory_v2_trajectory_category_prewrite",
+                "metrics": {
+                    "simulation_count": 1,
+                    "avg_reward": 1.0,
+                    "db_match_rate": 1.0,
+                },
+                "runtime_evidence": {
+                    "status": "diagnostic",
+                    "reasons": ["no_concrete_memory_candidates"],
+                },
+            },
+            {
+                "domain": "airline",
+                "strategy_id": "memory_v2_trajectory_category_prewrite",
+                "metrics": {
+                    "simulation_count": 1,
+                    "avg_reward": 0.5,
+                    "db_match_rate": 0.0,
+                },
+                "runtime_evidence": {"status": "valid", "reasons": []},
+            },
+        ]
+    )
+
+    domain = scoreboard["strategies"]["memory_v2_trajectory_category_prewrite"][
+        "domains"
+    ]["airline"]
+    assert domain["completed_cell_count"] == 2
+    assert domain["valid_completed_cell_count"] == 1
+    assert domain["diagnostic_cell_count"] == 1
+    assert domain["diagnostic_simulation_count"] == 1
+    assert domain["simulation_count"] == 1
+    assert domain["avg_reward"] == 0.5
+    assert domain["db_match_rate"] == 0.0

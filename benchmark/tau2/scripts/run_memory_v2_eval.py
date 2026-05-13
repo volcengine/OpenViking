@@ -330,6 +330,43 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
     }
 
 
+def _runtime_evidence_status(
+    *,
+    category_rerank: dict[str, Any],
+    retrieval_trace_summary: dict[str, Any],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    if category_rerank.get("enabled"):
+        if not retrieval_trace_summary.get("trace_present"):
+            reasons.append("missing_retrieval_trace")
+        counts = (
+            retrieval_trace_summary.get("counts")
+            if isinstance(retrieval_trace_summary.get("counts"), dict)
+            else {}
+        )
+        rates = (
+            retrieval_trace_summary.get("rates")
+            if isinstance(retrieval_trace_summary.get("rates"), dict)
+            else {}
+        )
+        if int(counts.get("category_applied_event_count") or 0) > 0:
+            if float(rates.get("concrete_memory_candidate_rate") or 0.0) <= 0.0:
+                reasons.append("no_concrete_memory_candidates")
+            if int(counts.get("memory_category_present_count") or 0) <= 0:
+                reasons.append("no_memory_category_coverage")
+            if (
+                int(counts.get("query_category_matched_event_count") or 0) > 0
+                and float(rates.get("selected_positive_category_match_rate") or 0.0)
+                <= 0.0
+            ):
+                reasons.append("no_selected_positive_category_match")
+
+    return {
+        "status": "diagnostic" if reasons else "valid",
+        "reasons": reasons,
+    }
+
+
 def _tool_call_name(tool_call: Any) -> str:
     if isinstance(tool_call, dict):
         return str(tool_call.get("name") or tool_call.get("function", {}).get("name") or "")
@@ -954,6 +991,8 @@ def main() -> int:
     assert_tau2_results_complete(
         json.loads(eval_results.read_text()), context=f"{args.domain} eval"
     )
+    category_summary = args.category_reranker.summary()
+    trace_summary = _trace_category_summary(trace_path)
     summary = {
         "run_label": args.run_label,
         "domain": args.domain,
@@ -961,11 +1000,15 @@ def main() -> int:
         "retrieval_mode": args.retrieval_mode,
         "seed": args.seed,
         "corpus": corpus,
-        "category_rerank": args.category_reranker.summary(),
+        "category_rerank": category_summary,
         "scope_prompt": args.scope_prompt_summary,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
-        "retrieval_trace_summary": _trace_category_summary(trace_path),
+        "retrieval_trace_summary": trace_summary,
+        "runtime_evidence": _runtime_evidence_status(
+            category_rerank=category_summary,
+            retrieval_trace_summary=trace_summary,
+        ),
         "metrics": _metrics(eval_results),
     }
     _write_json(summary_path, summary)

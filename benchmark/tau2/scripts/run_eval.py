@@ -10,22 +10,40 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from tau2_common import (
-    assert_tau2_results_complete,
-    domains,
-    load_config,
-    normalize_litellm_env,
-    output_dir,
-    run_id,
-    simulator_policy_report,
-    split_file,
-    strategy_ids,
-    tau2_cli,
-    tau2_context,
-    tau2_repo,
-    user_simulator_policy,
-    write_json,
-)
+try:
+    from tau2_common import (
+        assert_tau2_results_complete,
+        domains,
+        load_config,
+        normalize_litellm_env,
+        output_dir,
+        run_id,
+        simulator_policy_report,
+        split_file,
+        strategy_ids,
+        tau2_cli,
+        tau2_context,
+        tau2_repo,
+        user_simulator_policy,
+        write_json,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .tau2_common import (
+        assert_tau2_results_complete,
+        domains,
+        load_config,
+        normalize_litellm_env,
+        output_dir,
+        run_id,
+        simulator_policy_report,
+        split_file,
+        strategy_ids,
+        tau2_cli,
+        tau2_context,
+        tau2_repo,
+        user_simulator_policy,
+        write_json,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -345,6 +363,28 @@ def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, 
     return _metrics_from_tau2_results(results_path)
 
 
+def _cell_runtime_evidence(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, Any]:
+    if cell.get("memory_backend") == "openviking":
+        summary_path = Path(artifacts["summary"])
+        if not summary_path.is_file():
+            return {"status": "missing", "reasons": ["missing_summary"]}
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        evidence = summary.get("runtime_evidence")
+        if isinstance(evidence, dict):
+            return {
+                "status": str(evidence.get("status") or "valid"),
+                "reasons": list(evidence.get("reasons") or []),
+            }
+    return {"status": "valid", "reasons": []}
+
+
+def _row_is_valid_evidence(row: dict[str, Any]) -> bool:
+    evidence = row.get("runtime_evidence")
+    if not isinstance(evidence, dict):
+        return True
+    return str(evidence.get("status") or "valid") == "valid"
+
+
 def _memory_corpus_key(cell: dict[str, Any]) -> str:
     corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
     return f"{cell['domain']}_{corpus_id}"
@@ -409,15 +449,22 @@ def _prepare_memory_corpora(plan: dict[str, Any], repo: Path, out: Path) -> list
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     def weighted(rows_for_group: list[dict[str, Any]]) -> dict[str, Any]:
         metric_rows = [row for row in rows_for_group if row.get("metrics")]
+        valid_metric_rows = [row for row in metric_rows if _row_is_valid_evidence(row)]
+        diagnostic_rows = [
+            row for row in metric_rows if not _row_is_valid_evidence(row)
+        ]
         sim_count = sum(int(row["metrics"].get("simulation_count") or 0) for row in metric_rows)
+        valid_sim_count = sum(
+            int(row["metrics"].get("simulation_count") or 0) for row in valid_metric_rows
+        )
         reward_sum = sum(
             float(row["metrics"].get("avg_reward") or 0.0)
             * int(row["metrics"].get("simulation_count") or 0)
-            for row in metric_rows
+            for row in valid_metric_rows
         )
         db_weighted_rows = [
             row
-            for row in metric_rows
+            for row in valid_metric_rows
             if row["metrics"].get("db_match_rate") is not None
             and int(row["metrics"].get("simulation_count") or 0) > 0
         ]
@@ -432,8 +479,11 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "cell_count": len(rows_for_group),
             "completed_cell_count": len(metric_rows),
-            "simulation_count": sim_count,
-            "avg_reward": reward_sum / sim_count if sim_count else None,
+            "valid_completed_cell_count": len(valid_metric_rows),
+            "diagnostic_cell_count": len(diagnostic_rows),
+            "diagnostic_simulation_count": sim_count - valid_sim_count,
+            "simulation_count": valid_sim_count,
+            "avg_reward": reward_sum / valid_sim_count if valid_sim_count else None,
             "db_match_rate": db_sum / db_weight if db_weight else None,
         }
 
@@ -497,6 +547,7 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
         }
         row["artifacts"] = _cell_artifacts(cell, repo, out)
         row["metrics"] = _cell_metrics(cell, row["artifacts"])
+        row["runtime_evidence"] = _cell_runtime_evidence(cell, row["artifacts"])
         rows.append(row)
         write_json(out / "cell_results" / f"{cell['run_label']}.json", row)
         if completed.returncode != 0:
