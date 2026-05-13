@@ -34,6 +34,8 @@ fields:
     description: |
       Procedure-like trajectory view in EXACTLY this format:
 
+      # <trajectory_name>
+      - Domain: <task domain or product area, e.g. airline, retail, software tooling>
       - Trigger: <the reusable user intent or task situation — one sentence>
       - Preconditions:
         1. <state, identity, policy, tool-observation, or confirmation prerequisite>
@@ -48,19 +50,20 @@ fields:
         - <when this memory applies>
         - <when this memory should not be used>
       - Result: <final outcome and important side effects — one sentence>
-      - Evidence: <brief source note from this session, including success/failure/partial status>
+      - Evidence: <brief generalized source note from this session, including success/failure/partial status>
 
       Rules:
       - Write for future agent execution, not for human audit. Prefer clear instructions over chronological narration.
       - Preserve the successful or best-known path: critical reads, required policy checks, confirmation steps, write-tool ordering, and final user-facing completion.
       - Keep negative lessons in Anti-patterns, not mixed into Procedure.
-      - Keep the memory grounded in this session, but abstract away user-specific names, raw IDs, exact payloads, and long tool responses unless they are essential to the reusable procedure.
+      - Keep the memory grounded in this session, but abstract away user-specific names, raw IDs, exact payloads, and long tool responses.
+      - Do not include raw user/order/reservation/payment/card IDs, user names, email/phone/address values, exact dates, case-specific amounts, card suffixes, flight numbers, order numbers, or raw tool payloads. Replace them with semantic descriptions such as "a delivered order", "an ineligible basic-economy reservation", "the saved payment method", or "a policy-ineligible cancellation". Stable policy constants may be kept when they are needed for future execution.
       - Mention tool names when they are part of the reusable path, but summarize observations instead of copying raw JSON.
       - If the session failed or was partial, still write the best reusable lesson: put the corrected approach in Procedure and the failure cause in Anti-patterns / Evidence.
       - Avoid broad SOPs. The Trigger and Applicability Boundary should make this record narrower than a whole domain workflow.
 
       General Rules:
-      - Use exactly the 7 labels above in this exact order.
+      - Use exactly the title, Domain line, and 7 labels above in this exact order.
       - Trigger, Result, and Evidence are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch
