@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 import time
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -191,6 +192,114 @@ def _metrics(results_path: Path) -> dict[str, Any]:
         "db_match_rate": (sum(1 for value in db_known if value) / len(db_known))
         if db_known
         else None,
+    }
+
+
+def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
+    counters: Counter[str] = Counter()
+    decision_nodes: Counter[str] = Counter()
+    category_decisions: Counter[str] = Counter()
+    query_category_sources: Counter[str] = Counter()
+    memory_category_sources: Counter[str] = Counter()
+    selected_memory_category_sources: Counter[str] = Counter()
+    tool_calls: Counter[str] = Counter()
+    trace_rows = 0
+    category_event_count = 0
+
+    if not trace_path.is_file():
+        return {
+            "trace_present": False,
+            "trace_rows": 0,
+            "category_event_count": 0,
+        }
+
+    for line_number, line in enumerate(trace_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        trace_rows += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            counters["json_decode_error_count"] += 1
+            counters[f"json_decode_error_line:{line_number}"] += 1
+            continue
+        if not isinstance(row, dict):
+            counters["non_object_row_count"] += 1
+            continue
+
+        decision_nodes[str(row.get("decision_node") or "unknown")] += 1
+        for call in row.get("tool_calls") or []:
+            if isinstance(call, dict) and call.get("name"):
+                tool_calls[str(call["name"])] += 1
+
+        category = row.get("category_rerank") if isinstance(row.get("category_rerank"), dict) else {}
+        if category:
+            category_event_count += 1
+            if category.get("enabled"):
+                counters["category_enabled_event_count"] += 1
+            if category.get("applied"):
+                counters["category_applied_event_count"] += 1
+            if category.get("decision"):
+                category_decisions[str(category["decision"])] += 1
+            query_category = (
+                category.get("query_category")
+                if isinstance(category.get("query_category"), dict)
+                else {}
+            )
+            if query_category.get("category_source"):
+                query_category_sources[str(query_category["category_source"])] += 1
+            if query_category.get("matched"):
+                counters["query_category_matched_event_count"] += 1
+
+        for match in row.get("matches") or []:
+            if not isinstance(match, dict):
+                continue
+            counters["raw_match_count"] += 1
+            selected = bool(match.get("selected_for_injection") or match.get("injected"))
+            if selected:
+                counters["selected_match_count"] += 1
+            memory_source = match.get("memory_category_source_prompt")
+            if memory_source:
+                counters["memory_category_present_count"] += 1
+                memory_category_sources[str(memory_source)] += 1
+                if selected:
+                    counters["selected_memory_category_present_count"] += 1
+                    selected_memory_category_sources[str(memory_source)] += 1
+            elif match.get("category_rerank_reasons") is not None:
+                counters["memory_category_missing_count"] += 1
+            if match.get("category1_match") or match.get("category2_match"):
+                counters["positive_category_match_count"] += 1
+                if selected:
+                    counters["selected_positive_category_match_count"] += 1
+
+    raw_count = counters["raw_match_count"]
+    selected_count = counters["selected_match_count"]
+    return {
+        "trace_present": True,
+        "trace_rows": trace_rows,
+        "category_event_count": category_event_count,
+        "counts": dict(counters),
+        "decision_nodes": dict(decision_nodes),
+        "category_decisions": dict(category_decisions),
+        "query_category_sources": dict(query_category_sources),
+        "memory_category_sources": dict(memory_category_sources),
+        "selected_memory_category_sources": dict(selected_memory_category_sources),
+        "tool_calls": dict(tool_calls),
+        "rates": {
+            "memory_category_candidate_coverage": (
+                counters["memory_category_present_count"] / raw_count if raw_count else None
+            ),
+            "selected_memory_category_coverage": (
+                counters["selected_memory_category_present_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "selected_positive_category_match_rate": (
+                counters["selected_positive_category_match_count"] / selected_count
+                if selected_count
+                else None
+            ),
+        },
     }
 
 
@@ -829,6 +938,7 @@ def main() -> int:
         "scope_prompt": args.scope_prompt_summary,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
+        "retrieval_trace_summary": _trace_category_summary(trace_path),
         "metrics": _metrics(eval_results),
     }
     _write_json(summary_path, summary)

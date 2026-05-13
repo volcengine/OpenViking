@@ -1,7 +1,8 @@
+import json
 from pathlib import Path
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
-from benchmark.tau2.scripts.run_memory_v2_eval import _load_scope_prompt
+from benchmark.tau2.scripts.run_memory_v2_eval import _load_scope_prompt, _trace_category_summary
 
 
 def _reranker() -> CategoryReranker:
@@ -117,3 +118,54 @@ def test_scope_prompt_skips_unconfigured_domain(tmp_path: Path) -> None:
     assert text == ""
     assert summary["loaded"] is False
     assert summary["skipped_reason"] == "no_domain_scope_prompt"
+
+
+def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
+    trace = tmp_path / "retrieval_trace.jsonl"
+    rows = [
+        {
+            "decision_node": "static_scope_prompt",
+            "retrieval_action_taken": "scope_prompt_static_injection",
+            "injected": True,
+        },
+        {
+            "decision_node": "before_write_tool_call",
+            "retrieval_action_taken": "retrieve_and_inject",
+            "tool_calls": [{"name": "exchange_delivered_order_items"}],
+            "category_rerank": {
+                "enabled": True,
+                "applied": True,
+                "decision": "soft_reranked_keep_category2_matches",
+                "query_category": {
+                    "matched": True,
+                    "category_source": "tau2_category_catalog_keyword_match",
+                },
+            },
+            "matches": [
+                {
+                    "uri": "a",
+                    "selected_for_injection": True,
+                    "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
+                    "category2_match": True,
+                },
+                {
+                    "uri": "b",
+                    "selected_for_injection": False,
+                    "category_rerank_reasons": ["missing_memory_category"],
+                },
+            ],
+        },
+    ]
+    trace.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n"
+    )
+
+    summary = _trace_category_summary(trace)
+
+    assert summary["trace_present"] is True
+    assert summary["decision_nodes"]["before_write_tool_call"] == 1
+    assert summary["category_decisions"]["soft_reranked_keep_category2_matches"] == 1
+    assert summary["query_category_sources"]["tau2_category_catalog_keyword_match"] == 1
+    assert summary["selected_memory_category_sources"]["tau2_category_catalog_keyword_match"] == 1
+    assert summary["tool_calls"]["exchange_delivered_order_items"] == 1
+    assert summary["rates"]["selected_memory_category_coverage"] == 1.0
