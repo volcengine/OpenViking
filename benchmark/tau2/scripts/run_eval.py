@@ -287,9 +287,7 @@ def _build_plan(
         "cell_count": len(cells),
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
-        "corpus_prepare_concurrency": int(
-            config["benchmark"].get("corpus_prepare_concurrency", 1)
-        ),
+        "corpus_prepare_concurrency": int(config["benchmark"].get("corpus_prepare_concurrency", 1)),
         "cells": cells,
     }
 

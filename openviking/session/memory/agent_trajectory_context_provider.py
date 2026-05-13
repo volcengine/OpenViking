@@ -34,7 +34,7 @@ Write the record as a compact procedure-like view of the useful execution patter
 not as a raw transcript. Keep the future agent's decision points, tool path,
 confirmation/write boundary, failure corrections, and applicability boundary.
 Generalize case evidence; do not copy raw user names, identifiers, dates, amounts,
-payment details, or tool payloads into the reusable memory.
+exact budgets, routes, counts, payment details, or tool payloads into the reusable memory.
 Sub-tasks, pivots, errors, and follow-ups are folded into that one record as steps,
 guardrails, or evidence — not separate trajectories.
 
