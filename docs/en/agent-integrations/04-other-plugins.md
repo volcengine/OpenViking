@@ -2,20 +2,70 @@
 
 The repo also ships several community/experimental plugins beyond the headline Claude Code and OpenClaw integrations. They differ in target runtime, integration depth, and maintenance status — read each one's README before adopting.
 
-## Codex Memory MCP Server
+## Codex Memory Plugin
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
 
-A minimal MCP-only server for [Codex](https://github.com/openai/codex). Intentionally narrow scope:
+[Codex](https://github.com/openai/codex) integration with lifecycle hooks and explicit MCP tools. It follows the same install-first shape as the [Claude Code integration](./02-claude-code.md), but uses Codex hook events.
 
-- no lifecycle hooks
-- no background capture worker
-- no writes to `~/.codex`
-- no checked-in build output
+### Install
 
-Codex gets four explicit memory tools: `find`, `remember`, plus a couple more.
+```bash
+node --version    # >= 22
+codex --version   # >= 0.124.0
+codex features list | grep codex_hooks
+```
 
-If you only need explicit memory operations from Codex (no auto-recall or auto-capture), this is the simplest option.
+From an OpenViking checkout:
+
+```bash
+mkdir -p /tmp/ov-codex-mp/.claude-plugin
+ln -s "$(pwd)/examples/codex-memory-plugin" /tmp/ov-codex-mp/openviking-memory
+cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
+{
+  "name": "openviking-codex-local",
+  "plugins": [
+    { "name": "openviking-memory", "source": "./openviking-memory" }
+  ]
+}
+EOF
+
+codex plugin marketplace add /tmp/ov-codex-mp
+cat >> ~/.codex/config.toml <<'EOF'
+
+[plugins."openviking-memory@openviking-codex-local"]
+enabled = true
+EOF
+
+cd examples/codex-memory-plugin
+npm install
+npm run build
+```
+
+### Configure
+
+Use `~/.openviking/ovcli.conf`, shared with the `ov` CLI:
+
+```jsonc
+{
+  "url": "https://ov.example.com",
+  "api_key": "<your-key>",
+  "account": "default",
+  "user": "<your-user>"
+}
+```
+
+Environment variables win over files. Use `OPENVIKING_CLI_CONFIG_FILE` for an alternate `ovcli.conf`; `OPENVIKING_API_KEY` and `OPENVIKING_BEARER_TOKEN` are equivalent.
+
+### What it does
+
+- Auto-recall on `UserPromptSubmit`
+- Incremental capture on `Stop`
+- Commit before compaction on `PreCompact`
+- Orphan cleanup on `SessionStart` startup/clear
+- Manual MCP tools: `openviking_recall`, `openviking_store`, `openviking_forget`, `openviking_health`
+
+Full behavior and validation details are in the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin).
 
 ## OpenCode plugins
 

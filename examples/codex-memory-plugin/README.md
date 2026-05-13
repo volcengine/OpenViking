@@ -12,6 +12,113 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 
 It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `openviking_forget`, `openviking_health`) for manual use.
 
+## Quick Start
+
+Installation is first here, matching the shape of the [Claude Code integration doc](../../docs/en/agent-integrations/02-claude-code.md).
+
+### 1. Install prerequisites
+
+```bash
+node --version    # >= 22
+codex --version   # >= 0.124.0
+```
+
+Make sure `codex_hooks` is enabled:
+
+```bash
+codex features list | grep codex_hooks
+```
+
+### 2. Install the plugin
+
+The plugin lives at `examples/codex-memory-plugin/`.
+
+```bash
+mkdir -p /tmp/ov-codex-mp/.claude-plugin
+ln -s /abs/path/to/OpenViking/examples/codex-memory-plugin /tmp/ov-codex-mp/openviking-memory
+cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
+{
+  "name": "openviking-codex-local",
+  "plugins": [
+    { "name": "openviking-memory", "source": "./openviking-memory" }
+  ]
+}
+EOF
+
+codex plugin marketplace add /tmp/ov-codex-mp
+cat >> ~/.codex/config.toml <<'EOF'
+
+[plugins."openviking-memory@openviking-codex-local"]
+enabled = true
+EOF
+```
+
+For local development, pre-populate Codex's plugin cache so it resolves immediately:
+
+```bash
+INSTALL_DIR=~/.codex/plugins/cache/openviking-codex-local/openviking-memory
+mkdir -p "$INSTALL_DIR"
+cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.2.0"
+```
+
+### 3. Build the MCP server
+
+```bash
+cd examples/codex-memory-plugin
+npm install
+npm run build
+```
+
+### 4. Configure OpenViking
+
+Use the same client config file as the `ov` CLI:
+
+```jsonc
+// ~/.openviking/ovcli.conf
+{
+  "url": "https://ov.example.com",
+  "api_key": "<your-key>",
+  "account": "default",
+  "user": "<your-user>"
+}
+```
+
+Local server mode works without this file; the plugin falls back to `http://127.0.0.1:1933`.
+
+### 5. Start Codex
+
+```bash
+codex
+```
+
+First MCP launch installs runtime deps; later launches reuse them.
+
+## Configuration
+
+Resolution priority, highest to lowest:
+
+1. Environment variables: `OPENVIKING_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`
+2. `ovcli.conf`: `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
+3. `ov.conf`: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`
+4. Built-in defaults
+
+Auth is sent as `Authorization: Bearer <key>` plus legacy `X-API-Key` during migration.
+
+Optional Codex-specific tuning can live under `codex` in `ovcli.conf`:
+
+```jsonc
+{
+  "url": "https://ov.example.com",
+  "api_key": "...",
+  "codex": {
+    "agentId": "codex",
+    "recallLimit": 6,
+    "captureAssistantTurns": false,
+    "autoCommitOnCompact": true
+  }
+}
+```
+
 ## Architecture
 
 ```
@@ -126,111 +233,6 @@ Codex's hook output schema differs from Claude Code's. Notably:
 Unlike Claude Code, **Codex does not support `decision: "approve"`**; only `decision: "block"`. A no-op is `{}` (which is what these scripts emit when there's nothing to add).
 
 Source: [`codex-rs/hooks/schema/generated/`](https://github.com/openai/codex/tree/main/codex-rs/hooks/schema/generated).
-
-## Quick Start
-
-### 1. Install Node.js 22+ and Codex 0.124+
-
-```bash
-node --version    # >= 22
-codex --version   # >= 0.124.0
-```
-
-Make sure `codex_hooks` is enabled (it's stable since April 2026):
-
-```bash
-codex features list | grep codex_hooks
-# codex_hooks  stable  true
-```
-
-### 2. Configure OpenViking client
-
-The plugin reads connection settings from `~/.openviking/ovcli.conf` (the same file the `ov` CLI uses). For a cloud OpenViking deployment:
-
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "<your-key>",
-  "account": "default",
-  "user": "<your-user>"
-}
-```
-
-For a local server, omit `url` and the plugin will fall back to `~/.openviking/ov.conf`'s `server.host` / `server.port`.
-
-Plugin-specific overrides go in an optional `codex` section:
-
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "...",
-  "codex": {
-    "agentId": "codex",
-    "recallLimit": 6,
-    "captureMode": "semantic",
-    "captureAssistantTurns": false,
-    "autoCommitOnCompact": true
-  }
-}
-```
-
-### 3. Install the plugin
-
-The plugin lives at `examples/codex-memory-plugin/` in the OpenViking repo. Once a marketplace ships it, install with:
-
-```bash
-codex plugin marketplace add <marketplace-source>
-# then enable in ~/.codex/config.toml:
-# [plugins."openviking-memory@<marketplace-name>"]
-# enabled = true
-```
-
-For local development, point a tiny marketplace fixture at this directory:
-
-```bash
-mkdir -p /tmp/ov-codex-mp/.claude-plugin
-ln -s /abs/path/to/OpenViking/examples/codex-memory-plugin /tmp/ov-codex-mp/openviking-memory
-cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
-{
-  "name": "openviking-codex-local",
-  "plugins": [
-    { "name": "openviking-memory", "source": "./openviking-memory" }
-  ]
-}
-EOF
-codex plugin marketplace add /tmp/ov-codex-mp
-
-# Enable the plugin
-cat >> ~/.codex/config.toml <<'EOF'
-
-[plugins."openviking-memory@openviking-codex-local"]
-enabled = true
-EOF
-
-# Codex installs plugins lazily — for fastest iteration, copy the plugin into
-# the cache so it resolves immediately:
-INSTALL_DIR=~/.codex/plugins/cache/openviking-codex-local/openviking-memory
-mkdir -p "$INSTALL_DIR"
-cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.2.0"
-```
-
-### 4. Build the MCP server
-
-```bash
-cd examples/codex-memory-plugin
-npm install
-npm run build
-```
-
-The MCP server compiles to `servers/memory-server.js`, which `start-memory-server.mjs` launches via the bootstrapped runtime.
-
-### 5. Start a Codex session
-
-```bash
-codex
-```
-
-The first session installs runtime deps; subsequent sessions skip reinstall.
 
 ## Validation SOP
 
