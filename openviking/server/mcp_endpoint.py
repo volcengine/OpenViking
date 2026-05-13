@@ -339,8 +339,8 @@ _LOCAL_FILE_HINT = (
     "For local files or directories, use the `ov` CLI:\n"
     "  1. Try first: ov add-resource <path>\n"
     "     (if `ov` is already on PATH, this is all you need)\n"
-    "  2. If `ov` is not installed, run:\n"
-    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  2. If `ov` is not installed, install the npm CLI package:\n"
+    "     npm i -g @openviking/cli\n"
     "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
     "configure ~/.openviking/ovcli.conf:\n"
     '       {"url": "https://your-host", "api_key": "your-key"}'

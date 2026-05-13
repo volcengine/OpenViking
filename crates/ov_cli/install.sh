@@ -1,10 +1,12 @@
 #!/bin/bash
 set -e
 
-# OpenViking CLI Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/refs/tags/<TAG>/crates/ov_cli/install.sh | bash
-# Example: curl -fsSL https://raw.githubusercontent.com/volcengine/openviking/refs/tags/cli@0.1.0/crates/ov_cli/install.sh | bash
-# Skip checksum: curl -fsSL ... | SKIP_CHECKSUM=1 bash
+# OpenViking CLI Installer (legacy GitHub Releases path)
+# Prefer npm for new installs:
+#   npm i -g @openviking/cli
+# Alternative TOS installer:
+#   curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash
+# Skip checksum: SKIP_CHECKSUM=1 bash install.sh
 # Custom repo: REPO=owner/repo curl -fsSL ... | bash
 
 REPO="${REPO:-volcengine/openviking}"
