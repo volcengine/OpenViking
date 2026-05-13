@@ -270,6 +270,87 @@ def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
     assert "no_selected_positive_category_match" in evidence["reasons"]
 
 
+def test_runtime_evidence_requires_applied_category_events() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 1,
+            "aggregate_match_count": 0,
+            "concrete_match_count": 1,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_enabled_event_count": 1,
+                "category_applied_event_count": 0,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 1.0,
+                "selected_positive_category_match_rate": 1.0,
+            },
+        },
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "no_category_rerank_applied_events" in evidence["reasons"]
+
+
+def test_runtime_evidence_requires_query_category_coverage() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 1,
+            "aggregate_match_count": 0,
+            "concrete_match_count": 1,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 0,
+                "memory_category_present_count": 1,
+                "memory_category_matched_count": 1,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 1.0,
+                "selected_positive_category_match_rate": 1.0,
+            },
+        },
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "no_query_category_coverage" in evidence["reasons"]
+
+
+def test_runtime_evidence_accepts_valid_category_runtime_coverage() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 2,
+            "aggregate_match_count": 0,
+            "concrete_match_count": 2,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 1,
+                "memory_category_present_count": 2,
+                "memory_category_matched_count": 1,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 1.0,
+                "selected_positive_category_match_rate": 1.0,
+            },
+        },
+    )
+
+    assert evidence == {"status": "valid", "reasons": []}
+
+
 def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
     scoreboard = _summarize(
         [

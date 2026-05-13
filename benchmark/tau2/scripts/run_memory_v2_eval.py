@@ -354,6 +354,8 @@ def _runtime_evidence_status(
     reasons: list[str] = []
     if category_rerank.get("enabled"):
         corpus_probe = corpus_probe if isinstance(corpus_probe, dict) else {}
+        if not corpus_probe:
+            reasons.append("missing_corpus_probe")
         if corpus_probe and int(corpus_probe.get("match_count") or 0) <= 0:
             reasons.append("empty_corpus_probe")
         if int(corpus_probe.get("match_count") or 0) > 0:
@@ -377,7 +379,15 @@ def _runtime_evidence_status(
             if isinstance(retrieval_trace_summary.get("rates"), dict)
             else {}
         )
-        if int(counts.get("category_applied_event_count") or 0) > 0:
+        applied_count = int(counts.get("category_applied_event_count") or 0)
+        if retrieval_trace_summary.get("trace_present"):
+            if int(retrieval_trace_summary.get("category_event_count") or 0) <= 0:
+                reasons.append("no_category_rerank_events")
+            elif applied_count <= 0:
+                reasons.append("no_category_rerank_applied_events")
+        if applied_count > 0:
+            if int(counts.get("query_category_matched_event_count") or 0) <= 0:
+                reasons.append("no_query_category_coverage")
             if float(rates.get("concrete_memory_candidate_rate") or 0.0) <= 0.0:
                 reasons.append("no_concrete_memory_candidates")
             if int(counts.get("memory_category_present_count") or 0) <= 0:

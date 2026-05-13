@@ -179,9 +179,10 @@ category coverage, aggregate-vs-concrete memory candidate coverage, and write
 tool calls. Use it as the first check that a run is using this branch's
 self-generated category signal before opening the JSONL trace. Category runs
 whose runtime trace has only aggregate `.overview.md` / `.abstract.md`
-candidates, no memory category coverage, or no selected positive category match
-are marked `runtime_evidence.status=diagnostic`; `scoreboard.json` excludes
-those diagnostic cells from the main reward/DB aggregates while preserving their
+candidates, no applied category-rerank event, no query or memory category
+coverage, or no selected positive category match are marked
+`runtime_evidence.status=diagnostic`; `scoreboard.json` excludes those
+diagnostic cells from the main reward/DB aggregates while preserving their
 metrics and artifacts for debugging. Corpus manifests also include
 `corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
 aggregate-only corpora can be spotted before reading the eval trace; category
