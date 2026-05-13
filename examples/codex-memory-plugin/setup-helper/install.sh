@@ -144,6 +144,19 @@ mkdir -p "$(dirname "$CACHE_DIR")"
 rm -rf "$CACHE_DIR"
 cp -R "$PLUGIN_DIR" "$CACHE_DIR"
 
+# Codex 0.130 does not inject CODEX_PLUGIN_ROOT into hook subprocess env and
+# does not let hooks.json declare a cwd, so relative paths in hooks.json
+# resolve against the user's cwd (typically ~). Render the placeholder
+# __OPENVIKING_PLUGIN_ROOT__ into the cache copy's absolute path. The repo's
+# checked-in hooks.json keeps the placeholder; only the cached copy is
+# rewritten at install time.
+HOOKS_JSON="$CACHE_DIR/hooks/hooks.json"
+if [ -f "$HOOKS_JSON" ]; then
+  CACHE_ESC="$(printf '%s' "$CACHE_DIR" | sed -e 's/[\\/&]/\\&/g')"
+  sed -i.bak -e "s/__OPENVIKING_PLUGIN_ROOT__/$CACHE_ESC/g" "$HOOKS_JSON"
+  rm -f "${HOOKS_JSON}.bak"
+fi
+
 if [ ! -f "$HOME/.openviking/ovcli.conf" ]; then
   cat >&2 <<'EOF'
 
