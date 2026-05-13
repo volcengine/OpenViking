@@ -26,7 +26,8 @@ strategies:
       apply_nodes:
         - before_write_tool_call
       retrieve_limit: 6
-      inject_limit: 4
+      inject_limit: 2
+      mismatch_policy: keep_positive_match_drop_mismatch
       positive_match_required: true
       no_match_policy: skip_injection
-      search_score_weight: 1.0
+      search_score_weight: 0.0

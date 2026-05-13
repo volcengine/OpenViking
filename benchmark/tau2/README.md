@@ -156,9 +156,11 @@ is retrieved during eval (`experiences` by default, `trajectories` for
 an adapter-local category rerank only at `before_write_tool_call`. The reranker
 loads `config/category_catalog.json`, annotates the runtime query and candidate
 memories from visible text/tool names/URIs, retrieves a wider candidate pool,
-then injects only the top category-aligned memories. Retrieval traces include
-the query category, candidate memory categories, rerank reasons, selected rows,
-and skipped rows.
+then follows the Agent Harness S83/S84 positive-match baseline: retrieve 6,
+keep same-category candidates, inject at most 2, and skip injection when no
+positive category match exists. Retrieval traces include the query category,
+candidate memory categories, rerank reasons, selected rows, skipped rows, and
+the flat `*_category*_prompt` fields consumed by Harness diagnostics.
 
 ## User Simulator Policy
 

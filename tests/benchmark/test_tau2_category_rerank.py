@@ -10,9 +10,11 @@ def _reranker() -> CategoryReranker:
             "catalog_path": "benchmark/tau2/config/category_catalog.json",
             "apply_nodes": ["before_write_tool_call"],
             "retrieve_limit": 6,
-            "inject_limit": 4,
+            "inject_limit": 2,
+            "mismatch_policy": "keep_positive_match_drop_mismatch",
             "positive_match_required": True,
             "no_match_policy": "skip_injection",
+            "search_score_weight": 0.0,
         },
         repo_root=Path(__file__).resolve().parents[2],
     )
@@ -41,8 +43,10 @@ def test_category_rerank_keeps_positive_category_match() -> None:
     )
 
     assert diagnostics["applied"] is True
-    assert diagnostics["decision"] == "positive_category2_match"
+    assert diagnostics["decision"] == "soft_reranked_keep_category2_matches"
+    assert diagnostics["mismatch_policy"] == "keep_positive_match_drop_mismatch"
     assert diagnostics["positive_match_level"] == "category2"
+    assert diagnostics["inject_limit"] == 2
     assert diagnostics["query_category"]["primary_category_id"] == (
         "retail_order_post_shipment_service_request:delivered_order_exchange"
     )
@@ -50,6 +54,12 @@ def test_category_rerank_keeps_positive_category_match() -> None:
         "viking://agent/demo/memories/trajectories/delivered_exchange.md"
     ]
     assert trace_rows[0]["selected_for_injection"] is True
+    assert trace_rows[0]["query_category1_prompt"] == [
+        "retail_order_post_shipment_service_request"
+    ]
+    assert trace_rows[0]["memory_category1_prompt"] == [
+        "retail_order_post_shipment_service_request"
+    ]
     assert trace_rows[1]["selected_for_injection"] is False
     assert trace_rows[1]["skipped_reason"] == "category_rerank"
 
