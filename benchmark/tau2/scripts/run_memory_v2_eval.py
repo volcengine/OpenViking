@@ -727,6 +727,7 @@ def main() -> int:
     parser.add_argument("--category-rerank-config", type=_json, default={})
     parser.add_argument("--scope-prompt-config", type=_json, default={})
     parser.add_argument("--force-train", action="store_true")
+    parser.add_argument("--prepare-corpus-only", action="store_true")
     args = parser.parse_args()
     normalize_litellm_env()
     args.category_reranker = CategoryReranker.from_payload(
@@ -750,6 +751,22 @@ def main() -> int:
     summary_path = args.run_dir / f"{args.run_label}.summary.json"
 
     corpus = _train(args, train_results, corpus_manifest)
+    if args.prepare_corpus_only:
+        print(
+            json.dumps(
+                {
+                    "run_label": args.run_label,
+                    "domain": args.domain,
+                    "strategy_id": args.strategy_id,
+                    "prepare_corpus_only": True,
+                    "corpus": corpus,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+
     trace_path.touch()
     _register_memory_agent(args, trace_path)
     _run_tau2(

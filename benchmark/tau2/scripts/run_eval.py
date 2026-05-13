@@ -6,6 +6,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,7 @@ def _build_plan(
         "cell_count": len(cells),
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
+        "corpus_prepare_concurrency": int(config["benchmark"].get("corpus_prepare_concurrency", 1)),
         "cells": cells,
     }
 
@@ -339,6 +341,67 @@ def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, 
     if not results_path.is_file():
         return None
     return _metrics_from_tau2_results(results_path)
+
+
+def _memory_corpus_key(cell: dict[str, Any]) -> str:
+    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
+    return f"{cell['domain']}_{corpus_id}"
+
+
+def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, Any]:
+    key = _memory_corpus_key(cell)
+    command = list(cell["command"]) + ["--prepare-corpus-only"]
+    print(f"[tau2] preparing corpus {key}", flush=True)
+    completed = subprocess.run(
+        command,
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
+    row = {
+        "domain": cell["domain"],
+        "strategy_id": cell["strategy_id"],
+        "corpus_id": corpus_id,
+        "returncode": completed.returncode,
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+        "artifacts": {
+            "corpus_manifest": str(
+                out / "memory_corpora" / f"{cell['domain']}_{corpus_id}" / "corpus_manifest.json"
+            )
+        },
+    }
+    write_json(out / "corpus_prepare_results" / f"{key}.json", row)
+    if completed.returncode != 0:
+        raise RuntimeError(f"corpus prepare failed: {key} returncode={completed.returncode}")
+    return row
+
+
+def _prepare_memory_corpora(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
+    corpus_cells: dict[str, dict[str, Any]] = {}
+    for cell in plan["cells"]:
+        if cell.get("memory_backend") != "openviking" or not cell.get("train_required"):
+            continue
+        corpus_cells.setdefault(_memory_corpus_key(cell), cell)
+    if not corpus_cells:
+        return []
+
+    worker_count = max(1, int(plan.get("corpus_prepare_concurrency") or 1))
+    if worker_count == 1 or len(corpus_cells) == 1:
+        return [_prepare_memory_corpus(cell, repo, out) for cell in corpus_cells.values()]
+
+    rows: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(_prepare_memory_corpus, cell, repo, out): key
+            for key, cell in corpus_cells.items()
+        }
+        for future in as_completed(futures):
+            rows.append(future.result())
+    return rows
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -405,6 +468,7 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
             "configured user simulator policy is not supported by this TAU-2 checkout: "
             f"{policy_report}"
         )
+    _prepare_memory_corpora(plan, repo, out)
     rows = []
     for cell in plan["cells"]:
         if not cell.get("executable"):
