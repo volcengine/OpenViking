@@ -6,8 +6,10 @@ evaluation. The scope is intentionally narrow:
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
 - trajectory-view retrieval treatment for the refined trajectory prompt.
+- experimental category-reranked pre-write recall on top of trajectory-view memory.
 
-Category rerank and other harness-only diagnostics are intentionally left out.
+Category rerank is opt-in and experimental; it is meant for PR-C review and
+smoke/targeted probes before any productization decision.
 
 ## Layout
 
@@ -15,6 +17,7 @@ Category rerank and other harness-only diagnostics are intentionally left out.
 benchmark/tau2/
 ├── config/
 │   ├── baseline.yaml
+│   ├── category_rerank.yaml
 │   ├── official.yaml
 │   ├── prewrite.yaml
 │   └── trajectory.yaml
@@ -90,6 +93,18 @@ benchmark/tau2/run_full_eval.sh \
   --repeat-count 1
 ```
 
+Plan a one-cell trajectory category-rerank smoke:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/category_rerank.yaml \
+  --domain retail \
+  --strategy-id memory_v2_trajectory_category_prewrite \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
+  --repeat-count 1
+```
+
 Run the Memory V2 8-trial matrix (`retail + airline` x 2 strategies x 8 repeats):
 
 ```bash
@@ -136,6 +151,14 @@ The existing `train_memory_mode: experience_only` value selects the Memory V2
 session-commit path. `search_memory_type` selects which generated memory bucket
 is retrieved during eval (`experiences` by default, `trajectories` for
 `config/trajectory.yaml`).
+
+`config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
+an adapter-local category rerank only at `before_write_tool_call`. The reranker
+loads `config/category_catalog.json`, annotates the runtime query and candidate
+memories from visible text/tool names/URIs, retrieves a wider candidate pool,
+then injects only the top category-aligned memories. Retrieval traces include
+the query category, candidate memory categories, rerank reasons, selected rows,
+and skipped rows.
 
 ## User Simulator Policy
 

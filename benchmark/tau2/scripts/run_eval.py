@@ -26,6 +26,9 @@ from tau2_common import (
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
 def _reward(sim: dict[str, Any]) -> float:
     info = sim.get("reward_info") or {}
     value = info.get("reward", sim.get("reward", 0.0))
@@ -98,6 +101,8 @@ def _tau2_command(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
         search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+        category_rerank = strategy.get("category_rerank")
+        category_rerank = category_rerank if isinstance(category_rerank, dict) else {}
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -146,6 +151,13 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
+        if category_rerank.get("enabled"):
+            command.extend(
+                [
+                    "--category-rerank-config",
+                    json.dumps(category_rerank, ensure_ascii=False, sort_keys=True),
+                ]
+            )
         if task_ids:
             for task_id in task_ids:
                 command.extend(["--task-id", task_id])
@@ -265,6 +277,7 @@ def _build_plan(
                         "corpus_id": strategy.get("corpus_id", strategy["id"]),
                         "retrieval_mode": strategy.get("retrieval_mode"),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
+                        "category_rerank": strategy.get("category_rerank") or {"enabled": False},
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),
@@ -452,6 +465,31 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         if strict and not ok:
             errors.append(f"missing Python module: {module}")
 
+    category_rows = []
+    for strategy in config.get("strategies") or []:
+        category_rerank = strategy.get("category_rerank")
+        if not isinstance(category_rerank, dict) or not category_rerank.get("enabled"):
+            continue
+        raw_catalog_path = category_rerank.get("catalog_path")
+        catalog_path = Path(str(raw_catalog_path or "")).expanduser()
+        if raw_catalog_path and not catalog_path.is_absolute():
+            catalog_path = REPO_ROOT / catalog_path
+        exists = bool(raw_catalog_path and catalog_path.is_file())
+        category_rows.append(
+            {
+                "strategy_id": strategy.get("id"),
+                "catalog_path": str(catalog_path) if raw_catalog_path else None,
+                "exists": exists,
+                "apply_nodes": category_rerank.get("apply_nodes"),
+                "retrieve_limit": category_rerank.get("retrieve_limit"),
+                "inject_limit": category_rerank.get("inject_limit"),
+            }
+        )
+        if strict and not exists:
+            errors.append(
+                f"missing category rerank catalog for {strategy.get('id')}: {raw_catalog_path}"
+            )
+
     report = {
         "status": "failed" if errors else "ok",
         "strict": strict,
@@ -461,6 +499,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,
+        "category_rerank_catalogs": category_rows,
         "split_files": split_rows,
         "errors": errors,
     }

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from category_rerank import CategoryReranker
 from tau2_common import normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
@@ -374,16 +375,24 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 )
             return state
 
-        def _retrieve(self, query: str) -> tuple[str, list[dict[str, Any]]]:
+        def _retrieve(
+            self,
+            query: str,
+            *,
+            decision_node: str,
+        ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
             client = _client(args)
             rows: list[dict[str, Any]] = []
             try:
+                search_limit = args.category_reranker.search_limit(
+                    args.retrieval_top_k,
+                    decision_node=decision_node,
+                )
                 result = client.search(
-                    query=query, target_uri=args.search_uri, limit=args.retrieval_top_k
+                    query=query, target_uri=args.search_uri, limit=search_limit
                 )
                 memories = list(getattr(result, "memories", []) or [])
-                blocks = []
-                for index, match in enumerate(memories[: args.retrieval_top_k], 1):
+                for index, match in enumerate(memories[:search_limit], 1):
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     row = {
@@ -391,13 +400,24 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         "score": getattr(match, "score", None),
                         "level": getattr(match, "level", None),
                         "text_chars": len(text),
+                        "_text": text,
                     }
                     if read_error:
                         row["read_error"] = read_error
                     rows.append(row)
+                selected_rows, trace_rows, category_rerank = args.category_reranker.select(
+                    domain=args.domain,
+                    query=query,
+                    rows=rows,
+                    decision_node=decision_node,
+                    base_limit=args.retrieval_top_k,
+                )
+                blocks = []
+                for index, row in enumerate(selected_rows, 1):
+                    text = str(row.get("_text") or "")
                     if text.strip():
-                        blocks.append(f"Memory {index} ({uri}):\n{text.strip()}")
-                return "\n\n".join(blocks), rows
+                        blocks.append(f"Memory {index} ({row.get('uri', '')}):\n{text.strip()}")
+                return "\n\n".join(blocks), trace_rows, category_rerank
             finally:
                 client.close()
 
@@ -407,7 +427,15 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
 
         @staticmethod
         def _trace_injection_fields(block: str, matches: list[dict[str, Any]]) -> dict[str, Any]:
-            injected_count = sum(1 for row in matches if int(row.get("text_chars") or 0) > 0)
+            injected_count = sum(
+                1
+                for row in matches
+                if row.get("injected")
+                or (
+                    row.get("selected_for_injection", True)
+                    and int(row.get("text_chars") or 0) > 0
+                )
+            )
             return {
                 "injected": bool(block.strip()),
                 "injected_count": injected_count if block.strip() else 0,
@@ -494,7 +522,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             role_value = getattr(role, "value", role)
             if marker_index is not None and str(role_value) == "user":
                 query = str(getattr(message, "content", "") or "")
-                block, matches = self._retrieve(query)
+                block, matches, category_rerank = self._retrieve(query, decision_node="first_user")
                 prompt = (
                     "No OpenViking memory matched this user request."
                     if not block
@@ -508,6 +536,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         "query": query,
                         "match_count": len(matches),
                         "matches": matches,
+                        "category_rerank": category_rerank,
                         **self._trace_injection_fields(block, matches),
                     }
                 )
@@ -518,13 +547,17 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 write_calls = [call for call in tool_calls if _is_write_tool_call(call)]
                 if write_calls:
                     query = _tool_call_query(write_calls, state.messages)
-                    block, matches = self._retrieve(query)
+                    block, matches, category_rerank = self._retrieve(
+                        query,
+                        decision_node="before_write_tool_call",
+                    )
                     self._trace(
                         {
                             "decision_node": "before_write_tool_call",
                             "query": query,
                             "match_count": len(matches),
                             "matches": matches,
+                            "category_rerank": category_rerank,
                             **self._trace_injection_fields(block, matches),
                             "tool_calls": [
                                 {
@@ -600,9 +633,14 @@ def main() -> int:
         choices=["first_user", "prewrite", "first_user_prewrite"],
         default="first_user",
     )
+    parser.add_argument("--category-rerank-config", type=_json, default={})
     parser.add_argument("--force-train", action="store_true")
     args = parser.parse_args()
     normalize_litellm_env()
+    args.category_reranker = CategoryReranker.from_payload(
+        args.category_rerank_config,
+        repo_root=REPO_ROOT,
+    )
 
     args.tau2_repo = args.tau2_repo.resolve()
     args.run_dir.mkdir(parents=True, exist_ok=True)
@@ -642,6 +680,7 @@ def main() -> int:
         "retrieval_mode": args.retrieval_mode,
         "seed": args.seed,
         "corpus": corpus,
+        "category_rerank": args.category_reranker.summary(),
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
         "metrics": _metrics(eval_results),

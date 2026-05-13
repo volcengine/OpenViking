@@ -1,0 +1,32 @@
+extends: trajectory.yaml
+
+benchmark:
+  name: tau2_openviking_trajectory_category_rerank
+
+strategies:
+  - id: memory_v2_trajectory_prewrite
+    label: OpenViking Memory V2 trajectory-view pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+  - id: memory_v2_trajectory_category_prewrite
+    label: OpenViking Memory V2 trajectory-view category-reranked pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      enabled: true
+      catalog_path: benchmark/tau2/config/category_catalog.json
+      apply_nodes:
+        - before_write_tool_call
+      retrieve_limit: 6
+      inject_limit: 4
+      positive_match_required: true
+      no_match_policy: skip_injection
+      search_score_weight: 1.0
