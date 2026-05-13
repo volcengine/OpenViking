@@ -14,7 +14,6 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)

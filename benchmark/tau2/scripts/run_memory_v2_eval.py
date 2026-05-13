@@ -11,7 +11,6 @@ from typing import Any
 
 from tau2_common import normalize_litellm_env
 
-
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRITE_TOOL_PREFIXES = (
@@ -86,7 +85,9 @@ def _metrics(results_path: Path) -> dict[str, Any]:
     return {
         "simulation_count": len(sims),
         "avg_reward": sum(rewards) / len(rewards) if rewards else 0.0,
-        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known)) if db_known else None,
+        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known))
+        if db_known
+        else None,
     }
 
 
@@ -118,12 +119,14 @@ def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
     recent_user = [
         str(getattr(message, "content", "") or "")
         for message in state_messages[-8:]
-        if str(getattr(message, "role", "")) == "user" and str(getattr(message, "content", "") or "").strip()
+        if str(getattr(message, "role", "")) == "user"
+        and str(getattr(message, "content", "") or "").strip()
     ]
     recent_observations = [
         str(getattr(message, "content", "") or "")[:600]
         for message in state_messages[-12:]
-        if str(getattr(message, "role", "")) == "tool" and str(getattr(message, "content", "") or "").strip()
+        if str(getattr(message, "role", "")) == "tool"
+        and str(getattr(message, "content", "") or "").strip()
     ]
     parts = [
         "Before executing write-like tool call(s): " + "; ".join(rendered),
@@ -301,7 +304,9 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     committed = []
     try:
         for sim in data.get("simulations") or []:
-            session_id = f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+            session_id = (
+                f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+            )
             created = client.create_session(session_id=session_id)
             sid = created.get("session_id", session_id)
             for msg in sim.get("messages") or []:
@@ -373,7 +378,9 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             client = _client(args)
             rows: list[dict[str, Any]] = []
             try:
-                result = client.search(query=query, target_uri=args.search_uri, limit=args.retrieval_top_k)
+                result = client.search(
+                    query=query, target_uri=args.search_uri, limit=args.retrieval_top_k
+                )
                 memories = list(getattr(result, "memories", []) or [])
                 blocks = []
                 for index, match in enumerate(memories[: args.retrieval_top_k], 1):
@@ -404,7 +411,9 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             return {
                 "injected": bool(block.strip()),
                 "injected_count": injected_count if block.strip() else 0,
-                "retrieval_action_taken": "retrieve_and_inject" if block.strip() else "retrieve_no_injection",
+                "retrieval_action_taken": "retrieve_and_inject"
+                if block.strip()
+                else "retrieve_no_injection",
             }
 
         def _generate(self, messages):
@@ -476,7 +485,8 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 (
                     i
                     for i, item in enumerate(state.system_messages)
-                    if isinstance(item, SystemMessage) and item.content == "<openviking_memory_not_loaded/>"
+                    if isinstance(item, SystemMessage)
+                    and item.content == "<openviking_memory_not_loaded/>"
                 ),
                 None,
             )
@@ -528,8 +538,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     if block:
                         prompt = (
                             "Before executing the pending write-like tool call, use these "
-                            "OpenViking memories only when they match the current task:\n\n"
-                            + block
+                            "OpenViking memories only when they match the current task:\n\n" + block
                         )
                         assistant_message = self._generate(
                             state.system_messages
@@ -540,6 +549,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             return assistant_message, state
 
     if AGENT_NAME not in registry.get_agents():
+
         def create_openviking_memory_agent(tools, domain_policy, **kwargs):
             return OpenVikingMemoryAgent(
                 tools=tools,

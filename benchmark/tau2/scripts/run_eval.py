@@ -12,8 +12,8 @@ from typing import Any
 from tau2_common import (
     domains,
     load_config,
-    output_dir,
     normalize_litellm_env,
+    output_dir,
     run_id,
     simulator_policy_report,
     split_file,
@@ -55,7 +55,9 @@ def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
     return {
         "simulation_count": len(sims),
         "avg_reward": sum(rewards) / len(rewards) if rewards else 0.0,
-        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known)) if db_known else None,
+        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known))
+        if db_known
+        else None,
     }
 
 
@@ -104,11 +106,7 @@ def _tau2_command(
             "--run-dir",
             str(output_dir(config, configured_run_id) / "memory_cells" / run_label),
             "--corpus-dir",
-            str(
-                output_dir(config, configured_run_id)
-                / "memory_corpora"
-                / f"{domain}_{corpus_id}"
-            ),
+            str(output_dir(config, configured_run_id) / "memory_corpora" / f"{domain}_{corpus_id}"),
             "--run-label",
             run_label,
             "--strategy-id",
@@ -153,7 +151,9 @@ def _tau2_command(
                 command.extend(["--task-id", task_id])
         elif num_tasks is not None:
             command.extend(["--num-tasks", str(num_tasks)])
-        train_num_tasks = train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
+        train_num_tasks = (
+            train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
+        )
         if train_num_tasks is not None:
             command.extend(["--train-num-tasks", str(train_num_tasks)])
         return command
@@ -219,7 +219,9 @@ def _build_plan(
         unknown = selected_strategy_ids - set(strategy_ids(config))
         if unknown:
             raise ValueError(f"unknown strategy ids: {sorted(unknown)}")
-        strategies = [strategy for strategy in strategies if strategy["id"] in selected_strategy_ids]
+        strategies = [
+            strategy for strategy in strategies if strategy["id"] in selected_strategy_ids
+        ]
     cells = []
     plan_domains = domains(config)
     if selected_domains:
@@ -299,9 +301,7 @@ def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, st
             "retrieval_trace": str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl"),
             "corpus_manifest": str(corpus_dir / "corpus_manifest.json"),
         }
-    return {
-        "results": str(repo / "data" / "simulations" / f"{cell['run_label']}.json")
-    }
+    return {"results": str(repo / "data" / "simulations" / f"{cell['run_label']}.json")}
 
 
 def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, Any] | None:
@@ -333,7 +333,9 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if row["metrics"].get("db_match_rate") is not None
             and int(row["metrics"].get("simulation_count") or 0) > 0
         ]
-        db_weight = sum(int(row["metrics"].get("simulation_count") or 0) for row in db_weighted_rows)
+        db_weight = sum(
+            int(row["metrics"].get("simulation_count") or 0) for row in db_weighted_rows
+        )
         db_sum = sum(
             float(row["metrics"]["db_match_rate"])
             * int(row["metrics"].get("simulation_count") or 0)
@@ -409,7 +411,9 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
         rows.append(row)
         write_json(out / "cell_results" / f"{cell['run_label']}.json", row)
         if completed.returncode != 0:
-            raise RuntimeError(f"cell failed: {cell['run_label']} returncode={completed.returncode}")
+            raise RuntimeError(
+                f"cell failed: {cell['run_label']} returncode={completed.returncode}"
+            )
     return rows
 
 
@@ -425,7 +429,9 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     if strict and not llm_env["has_api_key"]:
         errors.append("missing LLM API key: set OPENAI_API_KEY or ARK_API_KEY")
     if strict and not llm_env["has_base_url"]:
-        errors.append("missing OpenAI-compatible base URL: set OPENAI_API_BASE, OPENAI_BASE_URL, or ARK_BASE_URL")
+        errors.append(
+            "missing OpenAI-compatible base URL: set OPENAI_API_BASE, OPENAI_BASE_URL, or ARK_BASE_URL"
+        )
     if strict and not policy_report["supported"]:
         errors.append(
             "configured confirmation-aware user simulator policy requires a TAU-2 "
@@ -469,14 +475,28 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plan or run TAU-2 benchmark cells.")
-    parser.add_argument("--config", type=Path, default=Path(__file__).parents[1] / "config" / "baseline.yaml")
+    parser.add_argument(
+        "--config", type=Path, default=Path(__file__).parents[1] / "config" / "baseline.yaml"
+    )
     parser.add_argument("--run-id", default=run_id())
-    parser.add_argument("--domain", action="append", help="Run only this configured domain; may be repeated.")
-    parser.add_argument("--repeat-count", type=int, help="Override benchmark.repeat_count for smoke runs.")
-    parser.add_argument("--strategy-id", action="append", help="Run only this strategy id; may be repeated.")
-    parser.add_argument("--task-id", action="append", help="Run only this TAU-2 task id; may be repeated.")
-    parser.add_argument("--num-tasks", type=int, help="Run the first N tasks from the selected split.")
-    parser.add_argument("--train-num-tasks", type=int, help="Train OpenViking memory on the first N train tasks.")
+    parser.add_argument(
+        "--domain", action="append", help="Run only this configured domain; may be repeated."
+    )
+    parser.add_argument(
+        "--repeat-count", type=int, help="Override benchmark.repeat_count for smoke runs."
+    )
+    parser.add_argument(
+        "--strategy-id", action="append", help="Run only this strategy id; may be repeated."
+    )
+    parser.add_argument(
+        "--task-id", action="append", help="Run only this TAU-2 task id; may be repeated."
+    )
+    parser.add_argument(
+        "--num-tasks", type=int, help="Run the first N tasks from the selected split."
+    )
+    parser.add_argument(
+        "--train-num-tasks", type=int, help="Train OpenViking memory on the first N train tasks."
+    )
     parser.add_argument(
         "--preflight",
         action="store_true",
