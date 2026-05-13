@@ -547,7 +547,7 @@ class tracer:
     def info(line: str, console: bool = False) -> None:
         """Add an event to the current span."""
         if console:
-            logger.info(line)
+            logger.opt(depth=1).info(line)
         if _otel_tracer is None:
             return
 
@@ -567,7 +567,7 @@ class tracer:
     def info_span(line: str, console: bool = False) -> None:
         """Create a new span with the given name."""
         if console:
-            logger.info(line)
+            logger.opt(depth=1).info(line)
         if _otel_tracer is None:
             return
         with tracer.start_as_current_span(name=line):
@@ -578,9 +578,9 @@ class tracer:
         """Record an error on the current span."""
         if console:
             if e is not None:
-                logger.exception(f"{line}", exc_info=e)
+                logger.opt(depth=1).exception(f"{line}", exc_info=e)
             else:
-                logger.exception(line)
+                logger.opt(depth=1).error(line)
         if _otel_tracer is None:
             return
 
