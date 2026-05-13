@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
-import { Brain, FileText, FolderOpen, Loader2, SearchIcon, SendIcon, Wrench } from 'lucide-react'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Brain, FileText, FolderOpen, Loader2, SearchIcon, SendIcon, Upload, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 
@@ -62,6 +62,7 @@ function displayName(uri: string): { name: string; parent: string } {
 
 function RetrievalPage() {
   const { t } = useTranslation('retrieval')
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [submittedQuery, setSubmittedQuery] = useState('')
   const [resultCount, setResultCount] = useState<number>(10)
@@ -180,7 +181,16 @@ function RetrievalPage() {
           {!hasSubmitted ? (
             <div className="flex min-h-80 flex-col items-center justify-center gap-3 text-center">
               <SearchIcon className="size-10 text-muted-foreground/25" />
-              <p className="text-sm text-muted-foreground/60">{t('empty.title')}</p>
+              <p className="text-sm text-muted-foreground">{t('empty.title')}</p>
+              <p className="text-xs text-muted-foreground/60">{t('empty.description')}</p>
+              <Button
+                size="sm"
+                className="mt-1 gap-1.5"
+                onClick={() => navigate({ to: '/resources', search: { upload: true } })}
+              >
+                <Upload className="size-4" />
+                {t('empty.upload')}
+              </Button>
             </div>
           ) : findQuery.isLoading ? (
             <LoadingHint />

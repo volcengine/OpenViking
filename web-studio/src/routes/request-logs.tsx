@@ -1,6 +1,6 @@
 import * as React from 'react'
-import { createFileRoute } from '@tanstack/react-router'
-import { ActivityIcon, Clock3Icon, EraserIcon, RefreshCwIcon, SearchIcon, ServerCrashIcon } from 'lucide-react'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { ActivityIcon, Clock3Icon, EraserIcon, RefreshCwIcon, SearchIcon, ServerCrashIcon, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '#/components/ui/badge'
@@ -81,6 +81,7 @@ function methodTone(method: string): string {
 
 function RequestLogsRoute() {
   const { t } = useTranslation('requestLogs')
+  const navigate = useNavigate()
   const logs = useRequestLogs()
   const [query, setQuery] = React.useState('')
   const [status, setStatus] = React.useState<StatusFilter>('all')
@@ -178,6 +179,16 @@ function RequestLogsRoute() {
                   {logs.length === 0 ? t('empty.description') : t('empty.filteredDescription')}
                 </p>
               </div>
+              {logs.length === 0 && (
+                <Button
+                  size='sm'
+                  className='mt-1 gap-1.5'
+                  onClick={() => navigate({ to: '/resources', search: { upload: true } })}
+                >
+                  <Upload className='size-4' />
+                  {t('empty.upload')}
+                </Button>
+              )}
             </div>
           ) : (
             <Table>
