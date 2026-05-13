@@ -239,6 +239,25 @@ Resource import supports remote URLs, Git URLs, local files, local directories, 
 
 For HTTP safety, the plugin never sends a direct local filesystem path to the OpenViking server. Local files and directories are first uploaded through `/api/v1/resources/temp_upload`; directories are zipped locally with a pure JavaScript zip implementation before upload.
 
+### Companion workflow: X/Twitter research
+
+OpenViking should own durable context, not every external data source. For X/Twitter research, pair this context engine with [TweetClaw](https://github.com/Xquik-dev/tweetclaw), the `@xquik/tweetclaw` OpenClaw plugin for search tweets, search tweet replies, follower export, user lookup, monitors, webhooks, and approval-gated post or reply actions.
+
+```bash
+openclaw plugins install @xquik/tweetclaw
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+Example prompt:
+
+```text
+Use TweetClaw to search recent tweets and replies about "OpenViking context database".
+Store a concise OpenViking memory with the source query, date, recurring requests,
+representative tweet IDs or links, and next actions.
+```
+
+Keep X/Twitter credentials in local OpenClaw config. Do not store API keys, signing keys, raw cookies, or full timelines in OpenViking memory; store summarized findings and stable references that future agents can recall.
+
 ## Runtime Mode
 
 ![Runtime modes and routing behavior](./images/openclaw-plugin-runtime-routing.png)
