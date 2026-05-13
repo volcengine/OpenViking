@@ -59,6 +59,8 @@ fields:
       - Keep the memory grounded in this session, but abstract away user-specific names, raw IDs, exact payloads, and long tool responses.
       - Do not include raw user/order/reservation/payment/card IDs, user names, email/phone/address values, exact dates, case-specific amounts, exact budgets, route pairs, airport pairs, passenger/bag counts, card suffixes, flight numbers, order numbers, or raw tool payloads. Replace them with semantic descriptions such as "a delivered order", "an ineligible basic-economy reservation", "the saved payment method", or "a policy-ineligible cancellation". Stable policy constants may be kept when they are needed for future execution.
       - The Evidence line is not an exception: it may name the source status and lesson type, but must not carry case-specific values such as exact amounts, routes, dates, counts, product names, or customer-specific state.
+      - Bad Evidence: "a mechanical keyboard exceeded the $200 threshold". Good Evidence: "a product variant exceeded the user-specified threshold".
+      - Bad Evidence: "the ORD-to-LAX reservation on May 12 used card ending 1234". Good Evidence: "a matching reservation required the saved payment method and policy checks before the write action".
       - Mention tool names when they are part of the reusable path, but summarize observations instead of copying raw JSON.
       - If the session failed or was partial, still write the best reusable lesson: put the corrected approach in Procedure and the failure cause in Anti-patterns / Evidence.
       - Avoid broad SOPs. The Trigger and Applicability Boundary should make this record narrower than a whole domain workflow.
