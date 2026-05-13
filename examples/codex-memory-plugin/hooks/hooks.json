@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-recall.mjs",
-            "timeout": 8
+            "timeout": 15
           }
         ]
       }
