@@ -244,13 +244,17 @@ fi
 # function that pulls these from ovcli.conf at invocation time, so the user
 # doesn't have to `export` secrets globally.
 #
-# The wrapper body lives in its own file at $WRAPPER_RC_FILE (full overwrite
-# on every install — no marker parsing needed inside the file). The user's
-# shell rc gets a single one-line source hook (marker-delimited, but content
-# never changes, so the marker-replacement logic is robust by construction).
-# Same pattern pyenv / nvm / fnm use.
+# Source of truth: setup-helper/wrapper.sh in the plugin checkout. The
+# user's shell rc just sources that file directly — no copy step, so any
+# updates land via the next `git fetch + reset --hard` the installer
+# already runs at the top. Same pattern pyenv / nvm / fnm use, except we
+# don't even need an intermediate copy in $HOME.
 
-WRAPPER_RC_FILE="${OPENVIKING_CODEX_WRAPPER_RC:-$HOME/.openviking/codex-plugin.rc.sh}"
+WRAPPER_SRC="$PLUGIN_DIR/setup-helper/wrapper.sh"
+if [ ! -f "$WRAPPER_SRC" ]; then
+  echo "Wrapper source not found at $WRAPPER_SRC" >&2
+  exit 1
+fi
 
 case "${SHELL:-}" in
   */zsh)  RC="$HOME/.zshrc" ;;
@@ -262,135 +266,16 @@ case "${SHELL:-}" in
     ;;
 esac
 
-# The wrapper uses `node` (already a hard requirement of this installer)
-# instead of `jq` so a missing-jq machine doesn't silently lose auth.
+# The user's shell rc gets a single one-line source hook pointing directly
+# at the wrapper source in the cloned plugin checkout. No copy step:
+# updates to wrapper.sh propagate via the `git fetch + reset --hard` the
+# installer runs at the top, with no extra installer step required.
 #
-# It also re-renders the cached .mcp.json's bearer_token_env_var field on
-# every codex launch, based on whichever ovcli.conf the user pointed
-# OPENVIKING_CLI_CONFIG_FILE at this time. That lets a single install
-# handle both authenticated and unauthenticated configs without forcing
-# a re-install when the user swaps configs (e.g. to isolate a benchmark
-# run from production memory).
-#
-# Codex 0.130 hard-fails MCP startup when bearer_token_env_var points at
-# an EMPTY env var ("Environment variable ... is empty"), and also when
-# bearer_token_env_var is present but the env var is unset. So when the
-# resolved api_key is empty, we both drop the field from .mcp.json AND
-# omit OPENVIKING_API_KEY from the env passed to codex.
-read -r -d '' WRAPPER_BODY <<'WRAPPER' || true
-codex() {
-  local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
-  if ! command -v node >/dev/null 2>&1; then
-    command codex "$@"
-    return
-  fi
-
-  # Resolve OV connection settings: existing env > ovcli.conf > nothing.
-  local _ov_url _ov_key _ov_account _ov_user
-  if [ -f "$_ov_conf" ]; then
-    local _ov_env
-    _ov_env=$(node -e '
-      try {
-        const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-        const out = (k, v) => v ? `${k}=${JSON.stringify(String(v))}\n` : "";
-        process.stdout.write(
-          out("OV_URL", c.url) +
-          out("OV_KEY", c.api_key) +
-          out("OV_ACCOUNT", c.account) +
-          out("OV_USER", c.user)
-        );
-      } catch {}
-    ' "$_ov_conf" 2>/dev/null)
-    eval "$_ov_env"
-  fi
-  _ov_url="${OPENVIKING_URL:-${OV_URL:-}}"
-  _ov_key="${OPENVIKING_API_KEY:-${OV_KEY:-}}"
-  _ov_account="${OPENVIKING_ACCOUNT:-${OV_ACCOUNT:-}}"
-  _ov_user="${OPENVIKING_USER:-${OV_USER:-}}"
-  unset OV_URL OV_KEY OV_ACCOUNT OV_USER
-
-  # Sync cache .mcp.json to current OV connection state: rewrite both the
-  # URL (so OPENVIKING_CLI_CONFIG_FILE swaps actually change the target)
-  # and the bearer_token_env_var field (Codex 0.130 hard-fails on empty
-  # bearer env vars, so the field must be absent in no-auth mode). The
-  # node script writes only when something actually changes — idempotent
-  # fast-path so we don't bump file mtime on every codex launch.
-  local _has_key _mcp_url_from_conf
-  if [ -n "$_ov_key" ]; then _has_key=1; else _has_key=0; fi
-  if [ -n "$_ov_url" ]; then
-    # Strip trailing slashes then append /mcp (matching the install-time
-    # resolve_mcp_url logic). OPENVIKING_MCP_URL env can fully override.
-    if [ -n "${OPENVIKING_MCP_URL:-}" ]; then
-      _mcp_url_from_conf="$OPENVIKING_MCP_URL"
-    else
-      _mcp_url_from_conf="${_ov_url%/}/mcp"
-    fi
-  else
-    _mcp_url_from_conf=""
-  fi
-  local _cache_mcp
-  for _cache_mcp in "$HOME"/.codex/plugins/cache/openviking-plugins-local/openviking-memory/*/.mcp.json; do
-    [ -f "$_cache_mcp" ] || continue
-    node -e '
-      const fs = require("node:fs");
-      // node -e: argv is [node, file, hasKey, url] — no [eval] placeholder.
-      const file = process.argv[1];
-      const hasKey = process.argv[2];
-      const url = process.argv[3] || "";
-      const j = JSON.parse(fs.readFileSync(file, "utf8"));
-      const s = j.mcpServers && j.mcpServers["openviking-memory"];
-      if (s) {
-        let changed = false;
-        if (url && s.url !== url) {
-          s.url = url;
-          changed = true;
-        }
-        const cur = s.bearer_token_env_var || "";
-        if (hasKey === "1" && cur !== "OPENVIKING_API_KEY") {
-          s.bearer_token_env_var = "OPENVIKING_API_KEY";
-          changed = true;
-        } else if (hasKey !== "1" && cur) {
-          delete s.bearer_token_env_var;
-          changed = true;
-        }
-        if (changed) {
-          fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
-        }
-      }
-    ' "$_cache_mcp" "$_has_key" "$_mcp_url_from_conf" 2>/dev/null || true
-  done
-
-  # Build env-prefix dynamically so empty values are NOT exported as empty
-  # strings — Codex hard-fails on empty bearer_token_env_var targets.
-  local -a _env_args=()
-  [ -n "$_ov_url" ]     && _env_args+=("OPENVIKING_URL=$_ov_url")
-  [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
-  [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
-  [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
-  _env_args+=("OPENVIKING_AGENT_ID=${OPENVIKING_AGENT_ID:-codex}")
-
-  env "${_env_args[@]}" codex "$@"
-}
-WRAPPER
-
-# Write the wrapper body to its standalone rc file. Full overwrite, no
-# marker logic — re-running the installer always lands the latest wrapper
-# at this path without touching anything else.
-mkdir -p "$(dirname "$WRAPPER_RC_FILE")"
-{
-  echo "# OpenViking codex memory plugin shell wrapper."
-  echo "# Generated by examples/codex-memory-plugin/setup-helper/install.sh."
-  echo "# Re-run the installer to update this file; do not hand-edit."
-  echo ""
-  printf '%s\n' "$WRAPPER_BODY"
-} > "$WRAPPER_RC_FILE"
-echo "Wrote codex() wrapper to $WRAPPER_RC_FILE"
-
-# The user's shell rc gets a single one-line source hook. Its content is
-# constant across installs, so the marker-replacement logic only triggers
-# the cleanup path once (when the user upgrades from a pre-rc-split build
-# that inlined the full wrapper into the rc).
-SOURCE_HOOK="[ -f \"$WRAPPER_RC_FILE\" ] && . \"$WRAPPER_RC_FILE\""
+# The hook content stays stable across installs (only the absolute path
+# matters), so the marker-replacement logic only triggers the legacy
+# cleanup path once when upgrading from a pre-rc-split install that
+# inlined the full wrapper into the rc.
+SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
 SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
 $SOURCE_HOOK
 $WRAPPER_MARKER_END"
