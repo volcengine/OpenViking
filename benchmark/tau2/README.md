@@ -135,7 +135,10 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
 The existing `train_memory_mode: experience_only` value selects the Memory V2
 session-commit path. `search_memory_type` selects which generated memory bucket
 is retrieved during eval (`experiences` by default, `trajectories` for
-`config/trajectory.yaml`).
+`config/trajectory.yaml`). The runner prepares each distinct
+`domain + corpus_id` once before executing eval cells. Different corpora may be
+prepared in parallel with `benchmark.corpus_prepare_concurrency`; session
+commits inside one corpus remain serial to preserve OpenViking write semantics.
 
 ## User Simulator Policy
 

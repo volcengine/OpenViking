@@ -7,6 +7,7 @@ benchmark:
   eval_split_name: test
   repeat_count: 8
   task_max_concurrency: 10
+  corpus_prepare_concurrency: 2
   max_steps: 200
   seed: 300
   agent: llm_agent
