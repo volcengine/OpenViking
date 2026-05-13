@@ -277,6 +277,10 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 if selected:
                     counters["selected_memory_category_present_count"] += 1
                     selected_memory_category_sources[str(memory_source)] += 1
+                if match.get("memory_category1_prompt") or match.get("memory_category2_prompt"):
+                    counters["memory_category_matched_count"] += 1
+                    if selected:
+                        counters["selected_memory_category_matched_count"] += 1
             elif match.get("category_rerank_reasons") is not None:
                 counters["memory_category_missing_count"] += 1
             if match.get("category1_match") or match.get("category2_match"):
@@ -291,6 +295,8 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
         "concrete_memory_candidate_count",
         "selected_aggregate_memory_count",
         "selected_concrete_memory_count",
+        "memory_category_matched_count",
+        "selected_memory_category_matched_count",
     ]:
         counters[key] += 0
     return {
@@ -310,6 +316,14 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             ),
             "selected_memory_category_coverage": (
                 counters["selected_memory_category_present_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "memory_category_match_coverage": (
+                counters["memory_category_matched_count"] / raw_count if raw_count else None
+            ),
+            "selected_memory_category_match_coverage": (
+                counters["selected_memory_category_matched_count"] / selected_count
                 if selected_count
                 else None
             ),
@@ -354,6 +368,8 @@ def _runtime_evidence_status(
                 reasons.append("no_concrete_memory_candidates")
             if int(counts.get("memory_category_present_count") or 0) <= 0:
                 reasons.append("no_memory_category_coverage")
+            if int(counts.get("memory_category_matched_count") or 0) <= 0:
+                reasons.append("no_matched_memory_categories")
             if (
                 int(counts.get("query_category_matched_event_count") or 0) > 0
                 and float(rates.get("selected_positive_category_match_rate") or 0.0)

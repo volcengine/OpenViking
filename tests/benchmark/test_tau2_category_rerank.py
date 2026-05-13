@@ -151,6 +151,8 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
                     "uri": "viking://agent/example/memories/trajectories/.overview.md",
                     "selected_for_injection": True,
                     "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
+                    "memory_category1_prompt": ["retail_order_post_shipment_service_request"],
+                    "memory_category2_prompt": ["delivered_order_exchange"],
                     "category2_match": True,
                 },
                 {
@@ -174,6 +176,8 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["selected_memory_category_sources"]["tau2_category_catalog_keyword_match"] == 1
     assert summary["tool_calls"]["exchange_delivered_order_items"] == 1
     assert summary["rates"]["selected_memory_category_coverage"] == 1.0
+    assert summary["rates"]["memory_category_match_coverage"] == 0.5
+    assert summary["rates"]["selected_memory_category_match_coverage"] == 1.0
     assert summary["counts"]["aggregate_memory_candidate_count"] == 1
     assert summary["counts"]["concrete_memory_candidate_count"] == 1
     assert summary["rates"]["concrete_memory_candidate_rate"] == 0.5
@@ -189,6 +193,7 @@ def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
                 "category_applied_event_count": 1,
                 "query_category_matched_event_count": 1,
                 "memory_category_present_count": 1,
+                "memory_category_matched_count": 0,
             },
             "rates": {
                 "concrete_memory_candidate_rate": 0.0,
@@ -199,6 +204,7 @@ def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
 
     assert evidence["status"] == "diagnostic"
     assert "no_concrete_memory_candidates" in evidence["reasons"]
+    assert "no_matched_memory_categories" in evidence["reasons"]
     assert "no_selected_positive_category_match" in evidence["reasons"]
 
 

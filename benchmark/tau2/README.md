@@ -158,8 +158,8 @@ commits inside one corpus remain serial to preserve OpenViking write semantics.
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
 an adapter-local FGMemory-style probe: pre-write recall, self-generated runtime
 category signals, and the retail scope prompt used by the Harness
-High-TrajView/FGMemory route. The category sub-policy follows the S84 component
-settings, but the alignment target is the red-box S89/FGMemory high result:
+High-TrajView/FGMemory route. The alignment target is the red-box
+S89/FGMemory high result:
 retrieve 6, keep same-category candidates, inject at most 2, skip injection
 when no positive category match exists, and apply the scope/applicability prompt
 at the system prompt injection point. Runtime categories are generated from the
