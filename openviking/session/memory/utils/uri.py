@@ -197,8 +197,6 @@ def is_uri_allowed(
     return False
 
 
-
-
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
     """
     Extract URI-friendly fields from a flat model, ignoring patch objects.
