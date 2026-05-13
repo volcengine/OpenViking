@@ -197,7 +197,10 @@ Skills with available="false" need dependencies installed first - you can try in
             # Use provided memory_users or fall back to [sender_id]
             search_user_ids = memory_users if memory_users else [sender_id]
             viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message, workspace_id=workspace_id, sender_id=sender_id, user_ids=search_user_ids
+                current_message=current_message,
+                workspace_id=workspace_id,
+                sender_id=sender_id,
+                user_ids=search_user_ids,
             )
             logger.info(f"viking_memory={viking_memory}")
             cost = round(_time.time() - start, 2)

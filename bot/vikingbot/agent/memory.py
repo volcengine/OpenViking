@@ -53,9 +53,7 @@ class MemoryStore:
         def get_abstract(m):
             return m.get("abstract", "") if isinstance(m, dict) else getattr(m, "abstract", "")
 
-        filtered_memories = [
-            memory for memory in result if get_score(memory) >= min_score
-        ]
+        filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
 
         user_memories = []
@@ -162,7 +160,10 @@ class MemoryStore:
             if not client:
                 return ""
             result = await client.search_memory(
-                query=current_message, user_ids=search_user_ids, agent_user_id=admin_user_id, limit=30
+                query=current_message,
+                user_ids=search_user_ids,
+                agent_user_id=admin_user_id,
+                limit=30,
             )
             if not result:
                 return ""
@@ -207,7 +208,9 @@ class MemoryStore:
             if not client:
                 return ""
             experiences = await client.search_experiences(query, limit=5)
-            logger.info(f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}")
+            logger.info(
+                f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
+            )
             for i, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)

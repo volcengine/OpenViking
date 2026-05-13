@@ -233,7 +233,7 @@ class ChannelManager:
                     for ch in self.channels.values():
                         # Check if channel has a send method and can handle bot_api messages
                         # OpenAPIChannel identifies itself with name "openapi" and handles bot_api
-                        if hasattr(ch, 'name') and ch.name == "openapi":
+                        if hasattr(ch, "name") and ch.name == "openapi":
                             try:
                                 await ch.send(msg)
                                 handled = True

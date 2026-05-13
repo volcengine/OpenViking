@@ -81,9 +81,9 @@ class BruteforceSearch {
       index = it->second;
       if (sparse_index_) {
         if (sparse_dp) {
-             if (sparse_index_->update_low_level_sparse(index, sparse_dp) != 0) {
-               throw std::runtime_error("Failed to update sparse data");
-             }
+          if (sparse_index_->update_low_level_sparse(index, sparse_dp) != 0) {
+            throw std::runtime_error("Failed to update sparse data");
+          }
         }
       }
     } else {
@@ -91,16 +91,17 @@ class BruteforceSearch {
         if (current_count_ != sparse_index_->rows()) {
           throw std::runtime_error("Sparse/Dense index inconsistency");
         }
-        
+
         if (sparse_dp) {
-             if (sparse_index_->append_low_level_sparse(sparse_dp) != 0) {
-                throw std::runtime_error("Failed to append sparse data");
-             }
+          if (sparse_index_->append_low_level_sparse(sparse_dp) != 0) {
+            throw std::runtime_error("Failed to append sparse data");
+          }
         } else {
-             auto empty_dp = std::make_shared<SparseDatapoint>(std::vector<IndexT>(), std::vector<float>());
-             if (sparse_index_->append_low_level_sparse(empty_dp) != 0) {
-                throw std::runtime_error("Failed to append empty sparse data");
-             }
+          auto empty_dp = std::make_shared<SparseDatapoint>(
+              std::vector<IndexT>(), std::vector<float>());
+          if (sparse_index_->append_low_level_sparse(empty_dp) != 0) {
+            throw std::runtime_error("Failed to append empty sparse data");
+          }
         }
       }
 
@@ -160,10 +161,12 @@ class BruteforceSearch {
       offset_map_[offset_moved] = idx_to_remove;
 
       if (sparse_index_) {
-        // SPDLOG_INFO("remove_point: swapping sparse row {} with {}", idx_to_remove, idx_last);
+        // SPDLOG_INFO("remove_point: swapping sparse row {} with {}",
+        // idx_to_remove, idx_last);
         auto last_row = sparse_index_->get_row(idx_last);
-        if (sparse_index_->update_low_level_sparse(idx_to_remove, last_row) != 0) {
-           SPDLOG_ERROR("Failed to update sparse data during remove");
+        if (sparse_index_->update_low_level_sparse(idx_to_remove, last_row) !=
+            0) {
+          SPDLOG_ERROR("Failed to update sparse data during remove");
         }
       }
     }
@@ -171,7 +174,7 @@ class BruteforceSearch {
     if (sparse_index_) {
       // SPDLOG_INFO("remove_point: popping back sparse row");
       if (sparse_index_->pop_back() != 0) {
-         SPDLOG_ERROR("Failed to pop back sparse data during remove");
+        SPDLOG_ERROR("Failed to pop back sparse data during remove");
       }
     }
 
@@ -199,7 +202,9 @@ class BruteforceSearch {
                        encoded_query.data());
 
     using ResultPair = std::pair<float, uint64_t>;
-    std::priority_queue<ResultPair, std::vector<ResultPair>, std::greater<ResultPair>> pq;
+    std::priority_queue<ResultPair, std::vector<ResultPair>,
+                        std::greater<ResultPair>>
+        pq;
 
     auto dist_func = space_->get_metric_function();
     void* dist_params = space_->get_metric_params();
@@ -223,9 +228,9 @@ class BruteforceSearch {
       }
     } else {
       if (filter_bitmap->empty()) {
-         labels.clear();
-         scores.clear();
-         return;
+        labels.clear();
+        scores.clear();
+        return;
       }
       std::vector<uint32_t> offsets;
       filter_bitmap->get_set_list(offsets);
@@ -303,11 +308,11 @@ class BruteforceSearch {
 
     resize_buffer(loaded_cap);
     in.read(data_buffer_, loaded_cap * loaded_elem_size);
-    
+
     if (in.peek() != EOF) {
-        read_binary(in, next_logical_offset_);
+      read_binary(in, next_logical_offset_);
     } else {
-        next_logical_offset_ = 0;
+      next_logical_offset_ = 0;
     }
 
     rebuild_maps();
@@ -396,7 +401,7 @@ class BruteforceSearch {
       }
     }
     if (current_count_ > 0 && next_logical_offset_ <= max_offset) {
-        next_logical_offset_ = max_offset + 1;
+      next_logical_offset_ = max_offset + 1;
     }
   }
 
@@ -412,12 +417,10 @@ class BruteforceSearch {
 
   float compute_score(
       const void* encoded_query, const char* data_ptr,
-      const std::shared_ptr<SparseDatapointView>& query_sparse_view,
-      size_t idx, MetricFunc<float> dist_func,
-      void* dist_params) const {
+      const std::shared_ptr<SparseDatapointView>& query_sparse_view, size_t idx,
+      MetricFunc<float> dist_func, void* dist_params) const {
     float dense_raw = dist_func(encoded_query, data_ptr, dist_params);
-    float dense_score =
-        reverse_query_score_ ? (1.0f - dense_raw) : dense_raw;
+    float dense_score = reverse_query_score_ ? (1.0f - dense_raw) : dense_raw;
     if (!sparse_index_ || !query_sparse_view ||
         meta_->search_with_sparse_logit_alpha <= 0.0f) {
       return dense_score;

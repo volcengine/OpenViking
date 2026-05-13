@@ -7,14 +7,16 @@ Verifies that memory_diff.json is correctly written to the archive directory
 containing adds, updates, and deletes.
 """
 
-import json
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import MemoryFileContent, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.storage.viking_fs import VikingFS
 
@@ -52,19 +54,15 @@ class TestMemoryDiffArchive:
     async def test_get_memory_type_from_uri(self, compressor):
         """Test memory type extraction from URI."""
         # Test identity.md
-        assert compressor._get_memory_type_from_uri(
-            "memory/user/test/identity.md"
-        ) == "identity"
+        assert compressor._get_memory_type_from_uri("memory/user/test/identity.md") == "identity"
 
         # Test context/project.md
-        assert compressor._get_memory_type_from_uri(
-            "memory/user/test/context/project.md"
-        ) == "project"
+        assert (
+            compressor._get_memory_type_from_uri("memory/user/test/context/project.md") == "project"
+        )
 
         # Test unknown path
-        assert compressor._get_memory_type_from_uri(
-            "memory/user/test/unknown/path"
-        ) == "unknown"
+        assert compressor._get_memory_type_from_uri("memory/user/test/unknown/path") == "unknown"
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_add(self, compressor, mock_viking_fs, mock_ctx):
@@ -111,6 +109,7 @@ class TestMemoryDiffArchive:
     @pytest.mark.asyncio
     async def test_build_memory_diff_update(self, compressor, mock_viking_fs, mock_ctx):
         """Test building memory_diff for modified memory files (updates)."""
+
         # Setup: files exist
         async def mock_read(uri, ctx=None):
             if uri == "memory/user/test/identity.md":
@@ -303,6 +302,7 @@ class TestMemoryDiffArchive:
         # This test verifies the archive_uri parameter is accepted
         # Full integration testing requires extensive mocking that's covered by other tests
         import inspect
+
         sig = inspect.signature(compressor.extract_long_term_memories)
         params = list(sig.parameters.keys())
         assert "archive_uri" in params, "archive_uri parameter should be accepted"
@@ -318,12 +318,14 @@ class TestMemoryDiffStructure:
 
         # We verify this through the actual implementation tests above
         # This is a placeholder for documentation
-        assert set(expected_keys).issubset({
-            "archive_uri",
-            "extracted_at",
-            "operations",
-            "summary",
-        })
+        assert set(expected_keys).issubset(
+            {
+                "archive_uri",
+                "extracted_at",
+                "operations",
+                "summary",
+            }
+        )
 
     def test_operations_structure(self):
         """Verify operations structure in memory_diff."""

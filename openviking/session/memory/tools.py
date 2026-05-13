@@ -8,12 +8,11 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.utils import parse_memory_file_with_fields
 from openviking.session.memory.utils.content import truncate_content
-from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -80,7 +79,6 @@ def add_tool_call_pair_to_messages(
             ),
         }
     )
-
 
 
 class MemoryTool(ABC):
@@ -327,7 +325,6 @@ def get_tool(name: str) -> Optional[MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.get(name)
 
 
-
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
@@ -335,7 +332,6 @@ LLM_TOOLS = ["read"]
 def get_tool_schemas() -> List[Dict[str, Any]]:
     """Get tools exposed to LLM in OpenAI function schema format."""
     return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
-
 
 
 # Register default tools

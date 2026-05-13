@@ -149,7 +149,8 @@ class LockManager:
             for path in sorted_paths:
                 locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
-                    path, handle,
+                    path,
+                    handle,
                     timeout=timeout,
                 )
                 if not success:
@@ -190,12 +191,14 @@ class LockManager:
                 locks_before = set(handle.locks)
                 if is_subtree:
                     success = await self._path_lock.acquire_subtree(
-                        path, handle,
+                        path,
+                        handle,
                         timeout=timeout,
                     )
                 else:
                     success = await self._path_lock.acquire_point(
-                        path, handle,
+                        path,
+                        handle,
                         timeout=timeout,
                     )
                 if not success:

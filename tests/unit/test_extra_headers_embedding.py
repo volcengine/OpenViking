@@ -143,9 +143,7 @@ class TestExtraHeadersViaFactory:
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
 
         with (
-            patch(
-                "openviking.models.embedder.openai_embedders.logger.warning"
-            ) as mock_warning,
+            patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,
             patch(
                 "openviking.models.embedder.base.time.monotonic",
                 side_effect=[0.0, 0.0, 0.0, 1.2],
