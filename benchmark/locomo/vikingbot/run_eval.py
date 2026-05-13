@@ -54,10 +54,11 @@ def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
     results = []
 
     for ev in evidence_list:
+        # 解析 D1:3 -> session_1, index 2
         try:
             parts = ev.split(":")
-            session_num = int(parts[0][1:])
-            msg_index = int(parts[1]) - 1
+            session_num = int(parts[0][1:])  # D1 -> 1
+            msg_index = int(parts[1]) - 1  # 3 -> index 2
 
             session_key = f"session_{session_num}"
             session_messages = conv.get(session_key, [])
@@ -78,6 +79,7 @@ def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
 def parse_locomo_datetime(date_str: str) -> datetime | None:
     """解析 LoCoMo 时间格式，如 '1:56 pm on 8 May, 2023'"""
     try:
+        # 移除时间部分，只保留日期 "8 May, 2023"
         if " on " in date_str:
             date_part = date_str.split(" on ")[-1]
             return datetime.strptime(date_part.strip(), "%d %B, %Y")
@@ -90,12 +92,14 @@ def get_sample_question_time(sample: dict) -> str | None:
     """从 sample 的 conversation 中提取最后一个有内容 session 的时间，返回 ISO 格式日期"""
     conversation = sample.get("conversation", {})
 
+    # 找所有 session_N 字段（非 date_time）
     session_keys = [
         k for k in conversation.keys() if k.startswith("session_") and "date_time" not in k
     ]
     if not session_keys:
         return None
 
+    # 按 session 编号排序，找到最后一个有内容的
     def get_session_num(key):
         try:
             return int(key.replace("session_", ""))
@@ -105,7 +109,8 @@ def get_sample_question_time(sample: dict) -> str | None:
     session_keys.sort(key=get_session_num, reverse=True)
 
     for session_key in session_keys:
-        if conversation.get(session_key):
+        if conversation.get(session_key):  # 有内容
+            # 找到对应的 date_time
             session_num = get_session_num(session_key)
             dt_key = f"session_{session_num}_date_time"
             date_str = conversation.get(dt_key)
@@ -153,17 +158,21 @@ def load_locomo_qa(
     if input_path.lower().endswith(".csv"):
         return load_csv_qa(input_path, count, default_time)
 
+    # 原有JSON格式处理逻辑
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     qa_list = []
+    # 支持数字索引或 sample_id (如 "conv-26")
     if sample_index is not None:
+        # 尝试解析为数字索引
         try:
             idx = int(sample_index)
             if idx < 0 or idx >= len(data):
                 raise ValueError(f"sample index {idx} out of range (0-{len(data) - 1})")
             samples = [data[idx]]
         except ValueError:
+            # 尝试匹配 sample_id
             matched = [s for s in data if s.get("sample_id") == sample_index]
             if not matched:
                 raise ValueError(f"sample_id '{sample_index}' not found")
@@ -178,6 +187,7 @@ def load_locomo_qa(
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
 
+        # 获取对话中的所有说话者
         conv = sample.get("conversation", {})
         speakers = []
         if conv.get("speaker_a"):
@@ -185,6 +195,7 @@ def load_locomo_qa(
         if conv.get("speaker_b"):
             speakers.append(conv["speaker_b"])
 
+        # 如果指定了 question_index，只返回那一个问题
         if question_index is not None:
             if question_index < 0 or question_index >= len(qa_items):
                 raise ValueError(
@@ -249,6 +260,7 @@ def run_vikingbot_chat(
     memory_users: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
+    # 先执行 /new 命令清除会话
     if sample_id:
         new_cmd = [
             "vikingbot",
@@ -261,22 +273,27 @@ def run_vikingbot_chat(
             "--session",
             question_id,
         ]
+        # 添加 --memory-user 参数
         if memory_users:
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
         try:
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
+            # 忽略 /new 命令的错误
             pass
 
+    # 如果有 question_time，注入到 prompt 中
     if question_time:
         prompt = f"Current date: {question_time}. Answer the question directly: {question}"
     else:
         prompt = f"Answer the question directly: {question}"
 
     cmd = ["vikingbot", "chat", "-m", prompt, "-e"]
+    # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
+    # 添加 --memory-user 参数，指定检索哪些用户的记忆
     if memory_users:
         for user in memory_users:
             cmd.extend(["--memory-user", user])
@@ -404,11 +421,14 @@ def main(argv: list[str] | None = None):
     )
     args = parser.parse_args(cleaned_argv)
 
+    # 如果指定了 question-index，自动设置 count=1
     if args.question_index is not None and args.count is None:
         args.count = 1
 
+    # 确保输出目录存在
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
+    # 加载无效题目集合（按问题内容匹配，因为 errors.json 索引可能与数据不匹配）
     invalid_questions = set()
     errors_path = os.path.expanduser(args.errors)
     if os.path.exists(errors_path):
@@ -422,6 +442,7 @@ def main(argv: list[str] | None = None):
     else:
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
+    # --retry-wrong: 从结果 CSV 中提取有效错题
     retry_wrong_questions = None
     if args.retry_wrong:
         retry_wrong_questions = set()
@@ -438,6 +459,7 @@ def main(argv: list[str] | None = None):
         if retry_wrong_samples:
             print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
 
+    # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
     qa_list = load_locomo_qa(
         args.input,
         args.sample,
@@ -447,11 +469,13 @@ def main(argv: list[str] | None = None):
     )
     total = len(qa_list)
 
+    # --retry-wrong: 只保留错题
     if retry_wrong_questions is not None:
         before = len(qa_list)
         qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
         print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
 
+    # 加载已处理的问题
     processed_questions = load_processed_questions(args.output, skip_done=args.skip_done)
     remaining = total - len(processed_questions)
     print(
@@ -476,10 +500,13 @@ def main(argv: list[str] | None = None):
         "tools_used_names",
     ]
 
+    # 创建线程锁，确保多线程写文件安全
     write_lock = threading.Lock()
+    # 存储处理后的新行
     new_rows = []
     processed_count = 0
 
+    # 过滤掉已经处理过的问题
     remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
     remaining_count = len(remaining_qa)
     print(
@@ -487,9 +514,11 @@ def main(argv: list[str] | None = None):
     )
 
     def process_qa(qa_item, idx, total_count):
+        """单个QA处理函数，供多线程调用"""
         question = qa_item["question"]
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
+        # 使用 question_id 作为 session_id，实现完全独立并行
         sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
@@ -525,42 +554,16 @@ def main(argv: list[str] | None = None):
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
         }
 
+        # 线程安全的结果收集
         with write_lock:
             nonlocal processed_count
             new_rows.append(row)
-            q_idx = str(row.get("question_index", ""))
-            found = False
-            for existing_row in existing_rows:
-                if str(existing_row.get("question_index", "")) == q_idx:
-                    existing_row.update(row)
-                    found = True
-                    break
-            if not found:
-                existing_rows.append(row)
             processed_questions.add(question)
             processed_count += 1
-            save_results_locked()
             print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
         return True
 
-    existing_rows = []
-    existing_fieldnames = fieldnames
-    if args.update_mode and os.path.exists(args.output):
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            existing_rows = list(reader)
-            existing_fieldnames = reader.fieldnames or fieldnames
-    elif os.path.exists(args.output):
-        os.remove(args.output)
-
-    def save_results_locked():
-        temp_file = f"{args.output}.tmp"
-        with open(temp_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
-            writer.writeheader()
-            writer.writerows(existing_rows)
-        os.replace(temp_file, args.output)
-
+    # 使用线程池处理：全局并行，每个 question 独立 session
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = []
         for idx, qa_item in enumerate(remaining_qa, 1):
@@ -572,9 +575,47 @@ def main(argv: list[str] | None = None):
             except Exception as e:
                 print(f"Error processing QA item: {str(e)}")
 
-    if args.update_mode:
-        print(f"Updated {len(new_rows)} rows in {args.output}")
+    # 写文件逻辑
+    if args.update_mode and os.path.exists(args.output):
+        # 更新模式：读取现有文件，更新匹配行
+        print(f"Update mode: updating existing file {args.output}")
+        with open(args.output, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_rows = list(reader)
+            existing_fieldnames = reader.fieldnames or fieldnames
+
+        # 更新匹配的行
+        updated_count = 0
+        for new_row in new_rows:
+            q_idx = str(new_row.get("question_index", ""))
+            found = False
+            for row in existing_rows:
+                if str(row.get("question_index", "")) == q_idx:
+                    row.update(new_row)
+                    found = True
+                    updated_count += 1
+                    break
+            if not found:
+                existing_rows.append(new_row)
+                updated_count += 1
+
+        # 写回文件
+        with open(args.output, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+            writer.writeheader()
+            writer.writerows(existing_rows)
+
+        print(f"Updated {updated_count} rows in {args.output}")
     else:
+        # 普通模式：覆盖写入
+        if os.path.exists(args.output):
+            os.remove(args.output)
+
+        with open(args.output, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(new_rows)
+
         print(f"Evaluation completed, results saved to {args.output}")
 
 
