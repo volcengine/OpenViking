@@ -128,11 +128,7 @@ def main():
         sys.exit(doctor_main())
 
     # 0b. ov configure git-credentials
-    if (
-        len(sys.argv) > 2
-        and sys.argv[1] == "configure"
-        and sys.argv[2] == "git-credentials"
-    ):
+    if len(sys.argv) > 2 and sys.argv[1] == "configure" and sys.argv[2] == "git-credentials":
         sys.exit(_cmd_configure_git_credentials(sys.argv[3:]))
 
     # 0c. ov add-resource --token <TOKEN> <URL>  (or any ordering)

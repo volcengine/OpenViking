@@ -27,9 +27,7 @@ def _make_mock_transport(captured_requests: list) -> httpx.MockTransport:
 
     def _handler(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
-        body = json.dumps(
-            {"status": "ok", "result": {"root_uri": "viking://user/resources/test"}}
-        )
+        body = json.dumps({"status": "ok", "result": {"root_uri": "viking://user/resources/test"}})
         return httpx.Response(200, text=body, headers={"content-type": "application/json"})
 
     return httpx.MockTransport(_handler)
@@ -45,16 +43,12 @@ async def _make_client(
     mock_cli_config.root_api_key = None
     mock_cli_config.tenant_id = None
 
-    with patch(
-        "openviking_cli.client.http.load_ovcli_config", return_value=mock_cli_config
-    ):
-        client = AsyncHTTPClient()
+    with patch("openviking_cli.client.http.load_ovcli_config", return_value=mock_cli_config):
+        client = AsyncHTTPClient(base_url="http://localhost:7779")
 
     # Replace the internal httpx.AsyncClient transport with our mock.
     transport = _make_mock_transport(captured_requests)
-    client._http = httpx.AsyncClient(
-        transport=transport, base_url="http://localhost:7779"
-    )
+    client._http = httpx.AsyncClient(transport=transport, base_url="http://localhost:7779")
     return client
 
 
@@ -146,9 +140,7 @@ class TestTokenResolutionPriority:
         env = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
         env["GITHUB_TOKEN"] = "should_not_be_used"
         with patch.dict(os.environ, env, clear=True):
-            client = await _make_client(
-                captured, git_credentials={"github.com": "dict_wins"}
-            )
+            client = await _make_client(captured, git_credentials={"github.com": "dict_wins"})
             await client.add_resource("https://github.com/org/repo")
 
         body = json.loads(captured[0].content)
@@ -204,9 +196,7 @@ class TestPreprocessAddResourceToken:
         argv = ["ov", "add-resource", "https://github.com/org/repo", "--token", "mytoken"]
         result = self._preprocess(argv)
         assert "--token" not in result
-        assert "mytoken" not in " ".join(
-            a for a in result if "github.com" not in a
-        )
+        assert "mytoken" not in " ".join(a for a in result if "github.com" not in a)
 
     def test_no_token_flag_returns_argv_unchanged(self):
         argv = ["ov", "add-resource", "https://github.com/org/repo"]

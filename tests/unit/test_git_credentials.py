@@ -235,9 +235,7 @@ class TestSaveGitCredentials:
 
     def test_preserves_other_conf_keys(self, tmp_path):
         conf_path = tmp_path / "ovcli.conf"
-        conf_path.write_text(
-            json.dumps({"server": {"host": "127.0.0.1"}}), encoding="utf-8"
-        )
+        conf_path.write_text(json.dumps({"server": {"host": "127.0.0.1"}}), encoding="utf-8")
         save_git_credentials("github.com", "tok", config_path=str(conf_path))
         data = json.loads(conf_path.read_text())
         assert data["server"]["host"] == "127.0.0.1"
@@ -259,9 +257,7 @@ class TestSaveGitCredentials:
 
 class TestLoadOvcliGitCredentials:
     def test_returns_none_when_no_file(self, tmp_path):
-        with patch(
-            "openviking_cli.utils.git_credentials.DEFAULT_CONFIG_DIR", tmp_path
-        ):
+        with patch("openviking_cli.utils.git_credentials.DEFAULT_CONFIG_DIR", tmp_path):
             with patch.dict(
                 os.environ,
                 {k: v for k, v in os.environ.items() if "OPENVIKING_CLI" not in k},
