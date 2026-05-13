@@ -339,18 +339,38 @@ class StateMetricCollector(MetricCollector, Refreshable, ABC):
         match_labels: dict,
         labels: dict | None = None,
         label_names: tuple[str, ...] = (),
+        account_id: str | None = None,
     ) -> None:
         """Replace the full gauge series selected by `match_labels` with one fresh value."""
-        registry.gauge_delete_matching(str(metric_name), match_labels=match_labels)
+        if account_id is None:
+            registry.gauge_delete_matching(str(metric_name), match_labels=match_labels)
+        else:
+            registry.gauge_delete_matching(
+                str(metric_name),
+                match_labels=match_labels,
+                account_id=account_id,
+            )
         if labels is None:
-            registry.set_gauge(str(metric_name), float(value))
+            if account_id is None:
+                registry.set_gauge(str(metric_name), float(value))
+            else:
+                registry.set_gauge(str(metric_name), float(value), account_id=account_id)
             return
-        registry.set_gauge(
-            str(metric_name),
-            float(value),
-            labels=labels,
-            label_names=label_names,
-        )
+        if account_id is None:
+            registry.set_gauge(
+                str(metric_name),
+                float(value),
+                labels=labels,
+                label_names=label_names,
+            )
+        else:
+            registry.set_gauge(
+                str(metric_name),
+                float(value),
+                labels=labels,
+                label_names=label_names,
+                account_id=account_id,
+            )
 
 
 class DomainStatsMetricCollector(MetricCollector, Refreshable, ABC):
