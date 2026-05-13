@@ -5,7 +5,7 @@ Long-term semantic memory for [Codex](https://developers.openai.com/codex), powe
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
-- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
+- **Incremental capture on `Stop`** (turn end): append new transcript turns plus Codex's `last_assistant_message` to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` is a hard no-op (short reconnects re-fire `resume` and we don't want to commit a still-active session). See `DESIGN.md` for the full decision tree.
 - **MCP runtime bootstrap is lazy**: the MCP launcher (`start-memory-server.mjs`) installs runtime deps on first MCP invocation, not in a hook.
@@ -213,7 +213,7 @@ Codex injects `additionalContext` into the model turn, so memories arrive withou
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
-Codex's `Stop` fires per turn, not at session end. So `auto-capture.mjs` keeps **one** long-lived OpenViking session per Codex `session_id` and incrementally appends every new user/assistant turn from the rollout JSONL via `/api/v1/sessions/{id}/messages`. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json` and tracks `{ ovSessionId, capturedTurnCount, lastUpdatedAt }`.
+Codex's `Stop` fires per turn, not at session end. So `auto-capture.mjs` keeps **one** long-lived OpenViking session per Codex `session_id` and incrementally appends new capture-eligible transcript turns via `/api/v1/sessions/{id}/messages`. By default that means user turns from the rollout JSONL plus the current `last_assistant_message`; set `captureAssistantTurns=true` only if you also want assistant turns from the transcript stream itself. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json` and tracks `{ ovSessionId, capturedTurnCount, lastAssistantMessageHash, lastUpdatedAt }`.
 
 We do **not** call `/commit` per turn — committing extracts memories, and per-turn extraction would over-fragment the memory tree and waste OV's extractor.
 

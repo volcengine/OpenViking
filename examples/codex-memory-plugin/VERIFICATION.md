@@ -27,11 +27,11 @@ cat > "$STATE_DIR/transcript.jsonl" <<'EOF'
 {"payload":{"role":"assistant","content":"Got it — fuchsia noted."}}
 EOF
 
-OPENVIKING_CONFIG_FILE=$OV_CONF \
-OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-CODEX_PLUGIN_ROOT=$PLUGIN \
-echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl"}' \
-  | node $PLUGIN/scripts/auto-capture.mjs
+echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","last_assistant_message":"Got it — fuchsia noted."}' \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/auto-capture.mjs
 ```
 
 Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session <UUID>"}`.
@@ -39,26 +39,26 @@ Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session <UUID>"}`.
 State file:
 ```bash
 cat $STATE_DIR/state/verify-sess.json
-# {"codexSessionId":"verify-sess","ovSessionId":"<UUID>","capturedTurnCount":2,...}
+# {"codexSessionId":"verify-sess","ovSessionId":"<UUID>","capturedTurnCount":1,"lastAssistantMessageHash":"...",...}
 ```
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/messages.jsonl
+OPENVIKING_CLI_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/messages.jsonl
 # 2 JSONL records: user "fuchsia", assistant "noted"
 ```
 
 ## 2. Stop hook idempotency — re-run without changes is a no-op
 
 ```bash
-echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","last_assistant_message":"Got it — fuchsia noted."}' \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/auto-capture.mjs
 ```
 
-Expect: `{}` (no new turns). `capturedTurnCount` still 2.
+Expect: `{}` (no new turns). `capturedTurnCount` still 1.
 
 ## 3. Stop hook — incremental append
 
@@ -70,8 +70,8 @@ cat >> "$STATE_DIR/transcript.jsonl" <<'EOF'
 {"payload":{"role":"assistant","content":"Updated to mint green."}}
 EOF
 
-echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","last_assistant_message":"Updated to mint green."}' \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/auto-capture.mjs
@@ -84,7 +84,7 @@ Expect: `appended 2 turn(s)` (only the new ones). Re-read
 
 ```bash
 echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","trigger":"manual"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/pre-compact-capture.mjs
@@ -92,14 +92,14 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 
 Expect: `pre-compact commit: <UUID> → N memory item(s) extracted (archived)`.
 
-State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
+State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 2.
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://session/<UUID>
+OPENVIKING_CLI_CONFIG_FILE=$OV_CONF ov ls viking://session/<UUID>
 # messages.jsonl is now size 0 (archived)
 # history/archive_001/ exists with the committed messages
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/history/archive_001/messages.jsonl
+OPENVIKING_CLI_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/history/archive_001/messages.jsonl
 ```
 
 ## 5. Post-compact Stop — fresh OV session
@@ -112,8 +112,8 @@ cat >> "$STATE_DIR/transcript.jsonl" <<'EOF'
 {"payload":{"role":"assistant","content":"Noted serif preference."}}
 EOF
 
-echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","last_assistant_message":"Noted serif preference."}' \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/auto-capture.mjs
@@ -136,7 +136,7 @@ Heuristic should commit it.
 
 ```bash
 echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
@@ -150,7 +150,7 @@ After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 ```bash
 # State dir empty (after 6a). Fire SessionStart-startup again.
 echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
@@ -173,7 +173,7 @@ EOF
 
 OPENVIKING_DEBUG=1 \
 echo '{"session_id":"sess-ccc","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     OPENVIKING_DEBUG=1 \
@@ -194,7 +194,7 @@ cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
 EOF
 
 echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
@@ -210,7 +210,7 @@ heuristic + sweep working together.
 
 ```bash
 echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+  | OPENVIKING_CLI_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
@@ -222,8 +222,8 @@ echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission
 Wait ~60 s for OV's extractor, then:
 
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/<your-user>/memories/
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profile.md
+OPENVIKING_CLI_CONFIG_FILE=$OV_CONF ov ls viking://user/<your-user>/memories/
+OPENVIKING_CLI_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profile.md
 ```
 
 Expect new entries describing the captured preferences (favorite color,

@@ -33,6 +33,7 @@ function defaultState(codexSessionId) {
     codexSessionId,
     ovSessionId: null,
     capturedTurnCount: 0,
+    lastAssistantMessageHash: null,
     createdAt: now,
     lastUpdatedAt: now,
   };

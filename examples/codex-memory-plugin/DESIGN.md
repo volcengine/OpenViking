@@ -15,7 +15,7 @@ events imply "context for a particular codex `session_id` is gone".
   `session_id`, append messages on every `Stop`, and commit it (which
   triggers OV's memory extractor) at session-end-equivalent moments.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, capturedTurnCount, lastAssistantMessageHash, createdAt, lastUpdatedAt }`.
 - **Active window** — state files whose `lastUpdatedAt` is within
   `ACTIVE_WINDOW_MS` (default 2 min) of "now". Used to detect "the codex
   session that just ended".
@@ -124,9 +124,14 @@ forever. Accepted. Future work could add an MCP tool
 ## Stop hook — append only, no commit
 
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
-and appends each new user/assistant turn to the OV session for this codex
-`session_id` (creating one on first append). State is updated:
-`{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
+and appends each new capture-eligible transcript turn to the OV session for
+this codex `session_id` (creating one on first append). By default those are
+user turns; assistant transcript turns are included only when
+`captureAssistantTurns=true`. The current `last_assistant_message` is appended
+separately when `captureLastAssistantOnStop=true` and its hash was not already
+captured. State is updated:
+`{ovSessionId, capturedTurnCount, lastAssistantMessageHash, lastUpdatedAt: now}`.
+Never commits.
 
 ## Edge cases handled
 
@@ -167,7 +172,8 @@ gets extracted independently. Acceptable.
 {
   "codexSessionId": "0193af...",   // codex thread id
   "ovSessionId": "uuid-or-null",    // null means "committed, awaiting next Stop"
-  "capturedTurnCount": 7,            // turns from transcript already appended
+  "capturedTurnCount": 7,            // capture-eligible transcript turns already appended
+  "lastAssistantMessageHash": "...", // last Stop assistant payload captured separately
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }

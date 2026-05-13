@@ -24,6 +24,7 @@
  * cadence. See DESIGN.md §5 ("Sweep trigger").
  */
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
@@ -78,6 +79,16 @@ function extractTextFromContent(content) {
       .join("\n");
   }
   return "";
+}
+
+function normalizeLastAssistantMessage(value) {
+  const text = extractTextFromContent(value).trim();
+  if (!text) return "";
+  return text.length > cfg.captureMaxLength ? text.slice(0, cfg.captureMaxLength) : text;
+}
+
+function hashText(text) {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 function parseTranscript(content) {
@@ -209,7 +220,12 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
-  log("start", { sessionId, transcriptPath });
+  const lastAssistantMessage = normalizeLastAssistantMessage(input.last_assistant_message);
+  log("start", {
+    sessionId,
+    transcriptPath,
+    hasLastAssistantMessage: Boolean(lastAssistantMessage),
+  });
 
   const health = await fetchJSON("/health");
   if (!health) {
@@ -258,6 +274,37 @@ async function main() {
       added = await appendTurns(ovSessionId, newTurns);
       state.capturedTurnCount += added;
       log("appended", { ovSessionId, added });
+    }
+  }
+
+  if (cfg.captureLastAssistantOnStop && lastAssistantMessage) {
+    const hash = hashText(lastAssistantMessage);
+    const allNewTranscriptTurnsAppended = added >= newTurns.length;
+    const alreadyCapturedInTranscript = newTurns.some(
+      (turn) => turn.role === "assistant" && hashText(turn.text) === hash,
+    ) && allNewTranscriptTurnsAppended;
+
+    if (alreadyCapturedInTranscript) {
+      state.lastAssistantMessageHash = hash;
+      log("last_assistant_skip", { reason: "captured_in_transcript" });
+    } else if (state.lastAssistantMessageHash === hash) {
+      log("last_assistant_skip", { reason: "duplicate_hash" });
+    } else {
+      const ovSessionId = await ensureOvSession(state);
+      if (!ovSessionId) {
+        logError("ensure_ov_session", "failed to create OV session for last_assistant_message");
+      } else {
+        const assistantAdded = await appendTurns(ovSessionId, [
+          { role: "assistant", text: lastAssistantMessage },
+        ]);
+        if (assistantAdded > 0) {
+          added += assistantAdded;
+          state.lastAssistantMessageHash = hash;
+          log("appended_last_assistant", { ovSessionId, added: assistantAdded });
+        } else {
+          logError("append_last_assistant", { ovSessionId, attempted: 1, added: assistantAdded });
+        }
+      }
     }
   }
 
