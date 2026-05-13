@@ -85,9 +85,10 @@ def _tau2_command(
         and strategy.get("train_memory_mode") == "experience_only"
     ):
         openviking = config["openviking"]
-        account = f"{openviking['account']}-{configured_run_id}-{domain}-{strategy['id']}"
-        agent_id = f"{openviking['agent_id']}-{domain}-{strategy['id']}"
-        user = f"tau2-{domain}-{strategy['id']}"
+        corpus_id = str(strategy.get("corpus_id") or strategy["id"])
+        account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
+        agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+        user = f"tau2-{domain}-{corpus_id}"
         search_uri = f"viking://agent/{agent_id}/memories/experiences"
         command = [
             sys.executable,
@@ -100,10 +101,12 @@ def _tau2_command(
             str(
                 output_dir(config, configured_run_id)
                 / "memory_corpora"
-                / f"{domain}_{strategy['id']}"
+                / f"{domain}_{corpus_id}"
             ),
             "--run-label",
             run_label,
+            "--strategy-id",
+            strategy["id"],
             "--domain",
             domain,
             "--train-split-name",
@@ -134,6 +137,8 @@ def _tau2_command(
             search_uri,
             "--retrieval-top-k",
             str(openviking.get("retrieval_top_k", 4)),
+            "--retrieval-mode",
+            str(strategy.get("retrieval_mode", "first_user")),
         ]
         if task_ids:
             for task_id in task_ids:
@@ -196,7 +201,7 @@ def _build_plan(
     train_num_tasks: int | None,
     repeat_count_override: int | None,
 ) -> dict[str, Any]:
-    repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 4))
+    repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 8))
     policy_report = simulator_policy_report(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
@@ -241,6 +246,8 @@ def _build_plan(
                         "run_label": run_label,
                         "train_required": bool(strategy.get("train_required")),
                         "memory_backend": strategy.get("memory_backend"),
+                        "corpus_id": strategy.get("corpus_id", strategy["id"]),
+                        "retrieval_mode": strategy.get("retrieval_mode"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),
@@ -267,9 +274,10 @@ def _build_plan(
 
 
 def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, str]:
-    if cell["strategy_id"] == "memory_v2_experience_only":
+    if cell.get("memory_backend") == "openviking":
         run_dir = out / "memory_cells" / cell["run_label"]
-        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{cell['strategy_id']}"
+        corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
+        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{corpus_id}"
         return {
             "summary": str(run_dir / f"{cell['run_label']}.summary.json"),
             "results": str(run_dir / f"{cell['run_label']}.json"),
@@ -282,7 +290,7 @@ def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, st
 
 
 def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, Any] | None:
-    if cell["strategy_id"] == "memory_v2_experience_only":
+    if cell.get("memory_backend") == "openviking":
         summary_path = Path(artifacts["summary"])
         if not summary_path.is_file():
             return None

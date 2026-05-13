@@ -3,14 +3,11 @@
 This directory contains a small OpenViking-style entry point for TAU-2 memory
 evaluation. The first version is intentionally narrow:
 
-- no-memory control;
 - fresh OpenViking Memory V2 experience-only baseline;
-- trajectory / procedure-view treatment;
-- optional pre-write recall.
+- Memory V2 pre-write recall treatment.
 
-Category rerank and other harness-only diagnostics are not migrated here yet.
-The Memory V2 baseline is wired end to end; trajectory / procedure-view remains
-visible in the plan but adapter-pending.
+Trajectory / procedure-view prompts, category rerank, and other harness-only
+diagnostics are intentionally left out of this first PR.
 
 ## Layout
 
@@ -64,35 +61,27 @@ benchmark/tau2/run_full_eval.sh \
   --config benchmark/tau2/config/baseline.yaml \
   --strict-preflight \
   --domain retail \
-  --strategy-id no_memory \
+  --strategy-id memory_v2_experience_only \
   --task-id 5 \
   --repeat-count 1
 ```
 
-Plan a one-cell upstream TAU-2 smoke:
+Plan a one-cell Memory V2 pre-write smoke:
 
 ```bash
 benchmark/tau2/run_full_eval.sh \
   --config benchmark/tau2/config/baseline.yaml \
   --domain retail \
-  --strategy-id no_memory \
+  --strategy-id memory_v2_prewrite \
   --num-tasks 1 \
   --repeat-count 1
 ```
 
-Run with execution enabled after TAU-2, model credentials, and OpenViking are
-configured:
-
-```bash
-benchmark/tau2/run_full_eval.sh --config benchmark/tau2/config/prewrite.yaml --execute
-```
-
-Run the Memory V2 8-trial baseline (`retail + airline` x 4 repeats):
+Run the Memory V2 8-trial matrix (`retail + airline` x 2 strategies x 8 repeats):
 
 ```bash
 benchmark/tau2/run_full_eval.sh \
   --config benchmark/tau2/config/baseline.yaml \
-  --strategy-id memory_v2_experience_only \
   --execute
 ```
 
@@ -117,19 +106,17 @@ Start the OpenViking service before executing memory cells, and verify it with
 `OPENVIKING_URL` explicitly so local custom memory templates do not pollute the
 Memory V2 baseline.
 
-## Memory Adapter Boundary
+## Memory Adapter
 
-`no_memory` cells run through the external TAU-2 CLI. `memory_v2_experience_only`
-cells run through a small TAU-2 agent adapter in this directory:
+`memory_v2_experience_only` and `memory_v2_prewrite` cells run through a small
+TAU-2 agent adapter in this directory:
 
 - train by writing TAU-2 training conversations into OpenViking sessions;
 - evaluate by retrieving OpenViking experience memory at the first user turn;
+- for pre-write recall, retrieve again before write-like tool calls and
+  regenerate that step with the matched memories;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
-
-The trajectory / procedure-view treatment is kept in the same plan but remains
-`adapter_status: pending`; `--execute` fails fast if that strategy is selected
-before its adapter is implemented.
 
 ## User Simulator Policy
 

@@ -5,9 +5,8 @@ benchmark:
     - airline
   train_split_name: train
   eval_split_name: test
-  repeat_count: 4
+  repeat_count: 8
   task_max_concurrency: 10
-  strategy_concurrency: 4
   max_steps: 200
   agent: llm_agent
   user: user_simulator
@@ -27,7 +26,6 @@ eval:
 model:
   agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
   user_llm: ${TAU2_USER_LLM:-openai/doubao-seed-2-0-pro-260215}
-  evaluator_llm: ${TAU2_EVALUATOR_LLM:-openai/doubao-seed-2-0-pro-260215}
   temperature: 0.0
 
 openviking:
@@ -38,26 +36,17 @@ openviking:
   replay_write_policy: read_only
 
 strategies:
-  - id: no_memory
-    label: No memory
-    memory_backend: none
-    train_required: false
   - id: memory_v2_experience_only
     label: OpenViking Memory V2 experience-only
     memory_backend: openviking
-    adapter_status: ready
     train_required: true
+    corpus_id: memory_v2_experience_only
     train_memory_mode: experience_only
     retrieval_mode: first_user
-  - id: trajectory_procedure_view
-    label: OpenViking trajectory procedure view
+  - id: memory_v2_prewrite
+    label: OpenViking Memory V2 pre-write recall
     memory_backend: openviking
-    adapter_status: pending
     train_required: true
-    train_memory_mode: trajectory_procedure_view
-    operation_mode: add_only
-    retrieval_mode: first_user
-
-features:
-  prewrite_recall:
-    enabled: false
+    corpus_id: memory_v2_experience_only
+    train_memory_mode: experience_only
+    retrieval_mode: prewrite

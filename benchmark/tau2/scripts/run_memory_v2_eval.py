@@ -13,6 +13,15 @@ from tau2_common import normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+READ_TOOL_PREFIXES = (
+    "get_",
+    "find_",
+    "list_",
+    "search_",
+    "calculate",
+    "think",
+    "transfer_",
+)
 
 
 def _json(text: str) -> dict[str, Any]:
@@ -67,6 +76,32 @@ def _metrics(results_path: Path) -> dict[str, Any]:
         "avg_reward": sum(rewards) / len(rewards) if rewards else 0.0,
         "db_match_rate": (sum(1 for value in db_known if value) / len(db_known)) if db_known else None,
     }
+
+
+def _is_write_tool_call(tool_call: Any) -> bool:
+    name = str(getattr(tool_call, "name", "") or "")
+    return bool(name) and not name.startswith(READ_TOOL_PREFIXES)
+
+
+def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
+    rendered = []
+    for call in tool_calls:
+        rendered.append(
+            f"{getattr(call, 'name', 'unknown_tool')}("
+            f"{json.dumps(getattr(call, 'arguments', {}) or {}, ensure_ascii=False, sort_keys=True)}"
+            ")"
+        )
+    recent_user = [
+        str(getattr(message, "content", "") or "")
+        for message in state_messages[-8:]
+        if str(getattr(message, "role", "")) == "user" and str(getattr(message, "content", "") or "").strip()
+    ]
+    return (
+        "Before executing write-like tool call(s): "
+        + "; ".join(rendered)
+        + "\nRecent user context: "
+        + " | ".join(recent_user[-3:])
+    )
 
 
 def _message_text(message: dict[str, Any]) -> tuple[str, str]:
@@ -248,9 +283,10 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     class OpenVikingMemoryAgent(LLMAgent):
         def get_init_state(self, message_history=None):
             state = super().get_init_state(message_history)
-            state.system_messages.append(
-                SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
-            )
+            if args.retrieval_mode == "first_user":
+                state.system_messages.append(
+                    SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
+                )
             return state
 
         def _retrieve(self, query: str) -> tuple[str, list[dict[str, Any]]]:
@@ -280,6 +316,10 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 return "\n\n".join(blocks), rows
             finally:
                 client.close()
+
+        def _trace(self, event: dict[str, Any]) -> None:
+            with trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
 
         def _generate(self, messages):
             def _is_empty_assistant(response) -> bool:
@@ -366,21 +406,48 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     + block
                 )
                 state.system_messages[marker_index] = SystemMessage(role="system", content=prompt)
-                with trace_path.open("a", encoding="utf-8") as handle:
-                    handle.write(
-                        json.dumps(
-                            {
-                                "query": query,
-                                "match_count": len(matches),
-                                "matches": matches,
-                            },
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        )
-                        + "\n"
-                    )
+                self._trace(
+                    {
+                        "decision_node": "first_user",
+                        "query": query,
+                        "match_count": len(matches),
+                        "matches": matches,
+                    }
+                )
 
             assistant_message = self._generate(state.system_messages + state.messages)
+            if args.retrieval_mode == "prewrite":
+                tool_calls = list(getattr(assistant_message, "tool_calls", None) or [])
+                write_calls = [call for call in tool_calls if _is_write_tool_call(call)]
+                if write_calls:
+                    query = _tool_call_query(write_calls, state.messages)
+                    block, matches = self._retrieve(query)
+                    self._trace(
+                        {
+                            "decision_node": "before_write_tool_call",
+                            "query": query,
+                            "match_count": len(matches),
+                            "matches": matches,
+                            "tool_calls": [
+                                {
+                                    "name": getattr(call, "name", ""),
+                                    "arguments": getattr(call, "arguments", {}) or {},
+                                }
+                                for call in write_calls
+                            ],
+                        }
+                    )
+                    if block:
+                        prompt = (
+                            "Before executing the pending write-like tool call, use these "
+                            "OpenViking experience memories only when they match the current task:\n\n"
+                            + block
+                        )
+                        assistant_message = self._generate(
+                            state.system_messages
+                            + state.messages
+                            + [SystemMessage(role="system", content=prompt)]
+                        )
             state.messages.append(assistant_message)
             return assistant_message, state
 
@@ -394,6 +461,7 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--corpus-dir", type=Path)
     parser.add_argument("--run-label", required=True)
+    parser.add_argument("--strategy-id", default="memory_v2_experience_only")
     parser.add_argument("--domain", required=True)
     parser.add_argument("--train-split-name", default="train")
     parser.add_argument("--eval-split-name", default="test")
@@ -418,6 +486,7 @@ def main() -> int:
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
     parser.add_argument("--search-uri", required=True)
     parser.add_argument("--retrieval-top-k", type=int, default=4)
+    parser.add_argument("--retrieval-mode", choices=["first_user", "prewrite"], default="first_user")
     parser.add_argument("--force-train", action="store_true")
     args = parser.parse_args()
     normalize_litellm_env()
@@ -433,6 +502,7 @@ def main() -> int:
     summary_path = args.run_dir / f"{args.run_label}.summary.json"
 
     corpus = _train(args, train_results, corpus_manifest)
+    trace_path.touch()
     _register_memory_agent(args, trace_path)
     _run_tau2(
         tau2_repo=args.tau2_repo,
@@ -455,7 +525,8 @@ def main() -> int:
     summary = {
         "run_label": args.run_label,
         "domain": args.domain,
-        "strategy_id": "memory_v2_experience_only",
+        "strategy_id": args.strategy_id,
+        "retrieval_mode": args.retrieval_mode,
         "corpus": corpus,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
