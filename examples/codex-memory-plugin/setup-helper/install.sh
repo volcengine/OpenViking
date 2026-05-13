@@ -3,7 +3,9 @@ set -euo pipefail
 
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$HOME/.openviking/openviking-repo}"
-REPO_REF="${OPENVIKING_REPO_REF:-main}"
+# Accept both OPENVIKING_REPO_REF and OPENVIKING_REPO_BRANCH so users can
+# reuse the same env var across the claude-code and codex installers.
+REPO_REF="${OPENVIKING_REPO_REF:-${OPENVIKING_REPO_BRANCH:-main}}"
 MARKETPLACE_NAME="${OPENVIKING_CODEX_MARKETPLACE_NAME:-openviking-plugins-local}"
 MARKETPLACE_ROOT="${OPENVIKING_CODEX_MARKETPLACE_ROOT:-$HOME/.codex/${MARKETPLACE_NAME}-marketplace}"
 PLUGIN_NAME="openviking-memory"
