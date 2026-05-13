@@ -1,11 +1,13 @@
 {
   "mcpServers": {
     "openviking-memory": {
-      "command": "node",
-      "args": [
-        "scripts/start-memory-server.mjs"
-      ],
-      "cwd": "."
+      "url": "__OPENVIKING_MCP_URL__",
+      "bearer_token_env_var": "OPENVIKING_API_KEY",
+      "env_http_headers": {
+        "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+        "X-OpenViking-User": "OPENVIKING_USER",
+        "X-OpenViking-Agent": "OPENVIKING_AGENT_ID"
+      }
     }
   }
 }

@@ -1,6 +1,6 @@
 # Codex Memory Plugin
 
-Long-term semantic memory for [Codex](https://developers.openai.com/codex). Auto-recalls relevant memories on every prompt, incrementally captures each turn, and commits to OpenViking's memory extractor before compaction — the model doesn't need to call any MCP tool explicitly.
+Long-term semantic memory for [Codex](https://developers.openai.com/codex). Auto-recalls relevant memories on every prompt, incrementally captures each turn, commits to OpenViking's memory extractor before compaction, and wires Codex up to OpenViking's native `/mcp` endpoint so the model can `search` / `store` / `read` / `grep` / `glob` / `list` / `forget` / `add_resource` memories directly — no local MCP server to maintain.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
 
@@ -14,15 +14,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 The installer checks `codex`, `git`, and Node.js 22+, refreshes (or clones on first run) `~/.openviking/openviking-repo`, registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`, and pre-populates Codex's plugin cache so the plugin resolves immediately. Rerunning the installer is idempotent — it always pulls latest before installing.
 
-It uses `~/.openviking/ovcli.conf` when present; otherwise the plugin falls back to `http://127.0.0.1:1933` unless `OPENVIKING_URL` / `OPENVIKING_API_KEY` are set in the env.
+It reads `~/.openviking/ovcli.conf` for the OpenViking URL, renders the `/mcp` endpoint into the cached `.mcp.json`, and appends a `codex()` shell function to your rc that pulls `OPENVIKING_API_KEY` (and `_ACCOUNT` / `_USER`) from ovcli.conf at every codex invocation. The API key stays in `ovcli.conf`; the `.mcp.json` on disk only references `OPENVIKING_API_KEY` via `bearer_token_env_var`, never embeds it.
 
-After install, start Codex:
+After install:
 
 ```bash
-codex
+source ~/.zshrc    # or ~/.bashrc
+codex              # first run: review /hooks once when prompted
 ```
-
-Codex will prompt `/hooks` to review the four new lifecycle hooks the first time — approve them once. From then on, recall runs on every prompt and capture runs on every `Stop`.
 
 ### Manual setup
 
@@ -34,58 +33,29 @@ codex --version   # >= 0.130.0
 codex features list | grep codex_hooks
 ```
 
-Enable plugin lifecycle hooks in `~/.codex/config.toml`:
+Three steps the installer does for you, that you can do manually:
 
-```toml
-[features]
-plugin_hooks = true
-```
+1. **Shell function wrapper** in `~/.zshrc` / `~/.bashrc` that promotes ovcli.conf into env vars before exec'ing codex:
 
-From an OpenViking checkout, register a local marketplace:
+   ```bash
+   codex() {
+     local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
+     if [ -f "$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
+       OPENVIKING_URL="${OPENVIKING_URL:-$(jq -r '.url // empty' "$_ov_conf")}" \
+       OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-$(jq -r '.api_key // empty' "$_ov_conf")}" \
+       OPENVIKING_ACCOUNT="${OPENVIKING_ACCOUNT:-$(jq -r '.account // empty' "$_ov_conf")}" \
+       OPENVIKING_USER="${OPENVIKING_USER:-$(jq -r '.user // empty' "$_ov_conf")}" \
+       OPENVIKING_AGENT_ID="${OPENVIKING_AGENT_ID:-codex}" \
+         command codex "$@"
+     else
+       command codex "$@"
+     fi
+   }
+   ```
 
-```bash
-mkdir -p /tmp/ov-codex-mp/.claude-plugin
-ln -s "$(pwd)/examples/codex-memory-plugin" /tmp/ov-codex-mp/openviking-memory
-cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
-{
-  "name": "openviking-plugins-local",
-  "plugins": [
-    { "name": "openviking-memory", "source": "./openviking-memory" }
-  ]
-}
-EOF
+2. **Plugin install** via a local marketplace pointing at the plugin directory. See `setup-helper/install.sh` for the exact `codex plugin marketplace add` invocation.
 
-codex plugin marketplace add /tmp/ov-codex-mp
-cat >> ~/.codex/config.toml <<'EOF'
-
-[plugins."openviking-memory@openviking-plugins-local"]
-enabled = true
-EOF
-```
-
-Pre-populate Codex's cache so the plugin resolves on first launch:
-
-```bash
-INSTALL_DIR=~/.codex/plugins/cache/openviking-plugins-local/openviking-memory
-mkdir -p "$INSTALL_DIR"
-cp -R "$(pwd)/examples/codex-memory-plugin" "$INSTALL_DIR/0.4.1"
-```
-
-Configure the OpenViking client, sharing the same file as the `ov` CLI:
-
-```jsonc
-// ~/.openviking/ovcli.conf
-{
-  "url": "https://ov.example.com",
-  "api_key": "<your-key>",
-  "account": "default",
-  "user": "<your-user>"
-}
-```
-
-For local-server mode (`http://127.0.0.1:1933`) you can skip this file.
-
-`npm install && npm run build` is only needed when editing `src/memory-server.ts` — the checked-in plugin already includes `servers/memory-server.js`.
+3. **Placeholder rendering**: the checked-in `.mcp.json` keeps `__OPENVIKING_MCP_URL__` and `hooks/hooks.json` keeps `__OPENVIKING_PLUGIN_ROOT__`; both must be `sed`-substituted to absolute values when the plugin is copied into Codex's cache (`~/.codex/plugins/cache/...`). The installer does this automatically.
 
 ## Configuration
 
@@ -93,19 +63,19 @@ Resolution priority for every connection / identity field — env vars always wi
 
 1. **Environment variables** (`OPENVIKING_*`)
 2. **`ovcli.conf`** — `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`** — `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (top-level `server.*` + optional `codex.*` tuning block)
+3. **`ov.conf`** — `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (`server.*` + optional `codex.*` tuning block)
 4. **Built-in defaults** (`http://127.0.0.1:1933`, unauthenticated)
 
-Setting `OPENVIKING_URL` alone is enough to run in env-var-only mode (no config files needed) — useful for daemon-spawned agents.
+Hooks resolve this chain on every fire (changes to ovcli.conf take effect on the next hook). The MCP server URL is baked into `.mcp.json` at install time (changing the URL requires a re-install); the API key is read fresh from env on every codex launch via `bearer_token_env_var`, so rotating `OPENVIKING_API_KEY` in ovcli.conf only requires a codex restart, not a re-install.
 
-Auth is sent as `Authorization: Bearer <api_key>` plus the legacy `X-API-Key` header during the transition window.
+Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
 ### Key environment variables
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | Full server URL |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | — | API key (sent as `Authorization: Bearer` either way) |
+| `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | Full server URL (the `/mcp` endpoint is derived from this at install time) |
+| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | — | API key, sent as `Authorization: Bearer` |
 | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT_ID` | — | Multi-tenant identity headers |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | Alternate `ovcli.conf` path |
 | `OPENVIKING_CONFIG_FILE` | `~/.openviking/ov.conf` | Alternate `ov.conf` path |
@@ -135,13 +105,11 @@ The full field list is in the [plugin README](https://github.com/volcengine/Open
 | Hook | When | Behavior |
 |------|------|----------|
 | `SessionStart` (matcher `clear\|startup`) | Fresh process, `/new`, or `/clear` | Active-window heuristic: if exactly one other state file was touched in the last 2 min, commit it (the just-ended session). Idle-TTL sweep at the tail picks up SIGTERM/`/exit` orphans older than 30 min. `source=resume` is a hard no-op. |
-| `UserPromptSubmit` | Every prompt | Search OpenViking, rank, inject top results into `hookSpecificOutput.additionalContext`. |
+| `UserPromptSubmit` | Every prompt | Search OpenViking REST `/search/find`, rank, inject top results into `hookSpecificOutput.additionalContext`. |
 | `Stop` | Every turn end | Append new user/assistant turns to the long-lived OpenViking session keyed by Codex `session_id`. No commit per turn. |
 | `PreCompact` | Before Codex summarizes | Catch-up append + commit so OpenViking's extractor runs against the full pre-compact transcript, then null `ovSessionId` so the next `Stop` opens a fresh OV session. |
 
 `Stop` deliberately does not commit per turn — committing extracts memories, and per-turn extraction would over-fragment the memory tree. The decision tree behind which hook seals which OV session is in [`DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md).
-
-The MCP server (`servers/memory-server.js`) is launched lazily by `scripts/start-memory-server.mjs` on first MCP invocation — `npm ci` runs into `${CODEX_PLUGIN_DATA}/runtime` once and is reused after that.
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
@@ -150,26 +118,21 @@ Codex fires no hook on process exit. If you `/exit` without `/compact`, the OV s
 1. The next `SessionStart` (source=startup|clear) idle-TTL sweep commits any state file older than 30 min.
 2. The active-window heuristic catches the orphan if you `/new` or `/clear` shortly after.
 
-If you need to preserve memory from a specific session, run `/compact` first or call `openviking_store` with the conclusions you want kept.
-
 ## MCP tools
 
-For explicit memory operations, the plugin also exposes four MCP tools:
+The plugin wires Codex up to OpenViking's built-in `/mcp` endpoint via streamable HTTP. Tool list, per-tool semantics, and protocol details live in the [MCP Integration Guide](../guides/06-mcp-integration.md) — not duplicated here.
 
-- `openviking_recall` — search memories
-- `openviking_store` — store a memory by creating a short OV session and committing
-- `openviking_forget` — delete an exact memory URI
-- `openviking_health` — server reachability check
+`.mcp.json` ships with the OV server URL rendered at install time and uses `bearer_token_env_var: "OPENVIKING_API_KEY"` plus `env_http_headers` for the multi-tenant identity headers. The API key never lands on disk in `.mcp.json`; it's pulled from env at codex launch by the shell function wrapper.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `MCP startup failed: connection closed: initialize response` | MCP launcher couldn't find the script (e.g., stale plugin cache) | Re-run the [one-line installer](#one-line-installer-recommended) — it now refreshes `~/.openviking/openviking-repo` |
+| `MCP server is not logged in. Run codex mcp login` | `OPENVIKING_API_KEY` not in env at codex launch, and OV server returned 401, so Codex fell back to OAuth | Make sure the `codex()` shell function is sourced (`type codex` should say "shell function") and `ovcli.conf` has `api_key` |
 | `4 hooks need review before they can run` | First-launch security review | Open `/hooks` in Codex and approve |
+| `hook (failed) exited with code 1` after approval | Stale `hooks.json` placeholder; cache wasn't re-rendered | Rerun the one-line installer |
 | Hook runs but recall returns nothing | OpenViking server unreachable or wrong URL | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| Remote auth 401/403 | API key wrong or multi-tenant headers missing | Check `OPENVIKING_API_KEY`; multi-tenant also needs `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
-| `Stop` hook timeout | Server slow + sync write path | Raise the `Stop` timeout in `hooks/hooks.json` |
+| Remote auth 401/403 from hooks but MCP works (or vice versa) | env vs ovcli.conf mismatch | Hooks re-read ovcli.conf every fire; MCP reads env only at codex start. Restart codex if you changed env. |
 
 Verbose debug logging: set `OPENVIKING_DEBUG=1` or `codex.debug=true` in `ovcli.conf` to write JSON-Lines events to `~/.openviking/logs/codex-hooks.log`.
 
@@ -177,15 +140,16 @@ Verbose debug logging: set `OPENVIKING_DEBUG=1` or `codex.debug=true` in `ovcli.
 
 | Aspect | Claude Code Plugin | Codex Plugin |
 |--------|--------------------|--------------|
-| Plugin root env | `CLAUDE_PLUGIN_ROOT` | `CODEX_PLUGIN_ROOT` |
+| Plugin root env | `CLAUDE_PLUGIN_ROOT` (expanded by CC) | `CODEX_PLUGIN_ROOT` (NOT expanded by Codex 0.130; installer renders absolute paths) |
 | `UserPromptSubmit` output | `decision: "approve"` + `additionalContext` | `additionalContext` only — `approve` is not a Codex output |
 | Compaction hook | n/a | `PreCompact` — full-transcript commit before context loss |
 | Config section | `claude_code` | `codex` |
 | Default config file | `~/.openviking/ov.conf` | `~/.openviking/ovcli.conf`, falls back to `ov.conf` |
+| MCP server | Local stdio (CC's `.mcp.json` doesn't support env-var Bearer) | Streamable-HTTP to OpenViking's native `/mcp` |
 
 ## See also
 
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — full env-var list, validation SOP, architecture diagram
 - [`DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — commit decision tree
-- [MCP Integration Guide](../guides/06-mcp-integration.md) — for clients without lifecycle hooks
+- [MCP Integration Guide](../guides/06-mcp-integration.md) — protocol, tools, and how OpenViking exposes `/mcp`
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup

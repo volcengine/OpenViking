@@ -1,4 +1,4 @@
-# Verification SOP — codex plugin (v0.4.1)
+# Verification SOP — codex plugin (v0.5.0)
 
 End-to-end smoke test against a live OpenViking server. Run this whenever the
 hook scripts change. Takes ~3 minutes; the only async wait is OV's memory
