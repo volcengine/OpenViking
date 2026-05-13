@@ -168,6 +168,11 @@ names, retrieved trajectory text, and memory URIs; no Harness sidecar artifact
 is required. Retrieval traces include the query category, candidate memory
 categories, rerank reasons, selected rows, skipped rows, scope prompt metadata,
 and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
+Each run summary also includes `retrieval_trace_summary`, a compact rollup of
+decision nodes, category decisions, query/memory category sources, selected
+category coverage, and write tool calls. Use it as the first check that a run is
+using this branch's self-generated category signal before opening the JSONL
+trace.
 
 ## User Simulator Policy
 
