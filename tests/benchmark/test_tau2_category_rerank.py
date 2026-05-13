@@ -258,9 +258,24 @@ def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
     assert domain["db_match_rate"] == 0.0
 
 
+def test_runtime_evidence_marks_empty_corpus_probe_diagnostic() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={"match_count": 0},
+        retrieval_trace_summary={"trace_present": True, "counts": {}, "rates": {}},
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "empty_corpus_probe" in evidence["reasons"]
+
+
 def test_probe_corpus_counts_aggregate_and_concrete_matches() -> None:
     class FakeClient:
-        def search(self, **_: object) -> SimpleNamespace:
+        def __init__(self) -> None:
+            self.limit: int | None = None
+
+        def search(self, **kwargs: object) -> SimpleNamespace:
+            self.limit = int(kwargs["limit"])
             return SimpleNamespace(
                 memories=[
                     SimpleNamespace(
@@ -277,15 +292,19 @@ def test_probe_corpus_counts_aggregate_and_concrete_matches() -> None:
         def read(self, uri: str) -> str:
             return f"body for {uri}"
 
+    client = FakeClient()
     probe = _probe_corpus(
         SimpleNamespace(
+            category_reranker=_reranker(),
             domain="airline",
             search_uri="viking://agent/a/memories/trajectories",
             retrieval_top_k=4,
         ),
-        FakeClient(),
+        client,
     )
 
+    assert client.limit == 6
+    assert probe["probe_limit"] == 6
     assert probe["match_count"] == 2
     assert probe["aggregate_match_count"] == 1
     assert probe["concrete_match_count"] == 1

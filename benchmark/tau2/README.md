@@ -180,8 +180,10 @@ those diagnostic cells from the main reward/DB aggregates while preserving their
 metrics and artifacts for debugging. Corpus manifests also include
 `corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
 aggregate-only corpora can be spotted before reading the eval trace; category
-runs whose corpus probe has matches but no concrete matches are also marked
-diagnostic.
+runs whose corpus probe is empty, or has matches but no concrete matches, are
+also marked diagnostic. The corpus probe uses the category `retrieve_limit`
+when category rerank is enabled, so the probe width matches the runtime
+pre-write search width.
 
 ## User Simulator Policy
 

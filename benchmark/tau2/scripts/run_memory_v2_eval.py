@@ -354,6 +354,8 @@ def _runtime_evidence_status(
     reasons: list[str] = []
     if category_rerank.get("enabled"):
         corpus_probe = corpus_probe if isinstance(corpus_probe, dict) else {}
+        if corpus_probe and int(corpus_probe.get("match_count") or 0) <= 0:
+            reasons.append("empty_corpus_probe")
         if int(corpus_probe.get("match_count") or 0) > 0:
             if int(corpus_probe.get("concrete_match_count") or 0) <= 0:
                 reasons.append("no_concrete_corpus_probe_matches")
@@ -554,14 +556,20 @@ def _read_memory_text(client: Any, match: Any) -> tuple[str, str | None]:
 
 
 def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
+    probe_limit = args.retrieval_top_k
+    if hasattr(args, "category_reranker"):
+        probe_limit = args.category_reranker.search_limit(
+            probe_limit,
+            decision_node="before_write_tool_call",
+        )
     result = client.search(
         query=f"{args.domain} customer service order reservation booking cancellation exchange return update",
         target_uri=args.search_uri,
-        limit=args.retrieval_top_k,
+        limit=probe_limit,
     )
     memories = list(getattr(result, "memories", []) or [])
     reads = []
-    for match in memories[: args.retrieval_top_k]:
+    for match in memories[:probe_limit]:
         uri = getattr(match, "uri", "")
         text, read_error = _read_memory_text(client, match)
         is_aggregate = _is_aggregate_memory_uri(uri)
@@ -580,6 +588,7 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     concrete_match_count = sum(1 for row in reads if row["is_concrete_memory"])
     return {
         "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
+        "probe_limit": probe_limit,
         "match_count": len(memories),
         "aggregate_match_count": aggregate_match_count,
         "concrete_match_count": concrete_match_count,
