@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import shutil
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from tau2_common import normalize_litellm_env
+from tau2_common import assert_tau2_results_complete, normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,6 +45,27 @@ def _add_tau2_to_path(tau2_repo: Path) -> None:
     src = tau2_repo / "src"
     sys.path.insert(0, str(REPO_ROOT))
     sys.path.insert(0, str(src if src.is_dir() else tau2_repo))
+
+
+def _patch_tau2_auxiliary_llm_defaults(llm: str, llm_args: dict[str, Any]) -> None:
+    # TAU-2 exposes agent/user LLMs in TextRunConfig, but NL assertion scoring
+    # still reads module defaults. Keep the evaluator on the same configured
+    # model so benchmark runs do not fall back to inaccessible upstream defaults.
+    patches = {
+        "DEFAULT_LLM_NL_ASSERTIONS": llm,
+        "DEFAULT_LLM_NL_ASSERTIONS_ARGS": deepcopy(llm_args),
+        "DEFAULT_LLM_ENV_INTERFACE": llm,
+        "DEFAULT_LLM_ENV_INTERFACE_ARGS": deepcopy(llm_args),
+    }
+    for module_name in (
+        "tau2.config",
+        "tau2.evaluator.evaluator_nl_assertions",
+        "tau2.environment.utils.interface_agent",
+    ):
+        module = importlib.import_module(module_name)
+        for name, value in patches.items():
+            if hasattr(module, name):
+                setattr(module, name, deepcopy(value))
 
 
 def _save_to_arg(path: Path) -> str:
@@ -174,6 +197,7 @@ def _run_tau2(
     save_to: Path,
 ):
     _add_tau2_to_path(tau2_repo)
+    _patch_tau2_auxiliary_llm_defaults(agent_llm, agent_llm_args)
     from tau2.data_model.simulation import RunConfig, TextRunConfig
     from tau2.run import run_domain
 
@@ -300,6 +324,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     )
 
     data = json.loads(train_results.read_text())
+    assert_tau2_results_complete(data, context=f"{args.domain} train")
     client = _client(args)
     committed = []
     try:
@@ -651,6 +676,9 @@ def main() -> int:
         user_llm_args=args.user_llm_args,
         seed=args.seed,
         save_to=eval_results,
+    )
+    assert_tau2_results_complete(
+        json.loads(eval_results.read_text()), context=f"{args.domain} eval"
     )
     summary = {
         "run_label": args.run_label,

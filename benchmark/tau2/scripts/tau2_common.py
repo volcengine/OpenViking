@@ -11,7 +11,6 @@ from typing import Any
 
 import yaml
 
-
 TAU2_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = TAU2_DIR.parents[1]
 CONFIRMATION_AWARE_UPSTREAM_PR = "https://github.com/sierra-research/tau2-bench/pull/297"
@@ -63,6 +62,7 @@ def normalize_litellm_env() -> dict[str, Any]:
 
 def render_env(value: Any) -> Any:
     if isinstance(value, str):
+
         def replace(match: re.Match[str]) -> str:
             name = match.group(1)
             default = match.group(2) or ""
@@ -79,11 +79,7 @@ def render_env(value: Any) -> Any:
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = deep_merge(merged[key], value)
         else:
             merged[key] = value
@@ -123,6 +119,41 @@ def write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def tau2_result_failures(data: dict[str, Any], *, expected_trials: int = 1) -> list[str]:
+    tasks = data.get("tasks") or []
+    simulations = data.get("simulations") or []
+    failures: list[str] = []
+    if tasks:
+        expected = len(tasks) * expected_trials
+        if len(simulations) != expected:
+            failures.append(f"expected {expected} simulations, found {len(simulations)}")
+
+    for sim in simulations:
+        info = sim.get("info") or {}
+        termination_reason = str(sim.get("termination_reason") or "")
+        if info.get("failed_after_attempts") or "infrastructure_error" in termination_reason:
+            failures.append(
+                "task="
+                f"{sim.get('task_id')} trial={sim.get('trial', 0)} "
+                f"termination={termination_reason} error={info.get('error') or info.get('error_type')}"
+            )
+        elif not sim.get("messages"):
+            failures.append(
+                f"task={sim.get('task_id')} trial={sim.get('trial', 0)} has no messages"
+            )
+    return failures
+
+
+def assert_tau2_results_complete(
+    data: dict[str, Any], *, context: str, expected_trials: int = 1
+) -> None:
+    failures = tau2_result_failures(data, expected_trials=expected_trials)
+    if failures:
+        preview = "; ".join(failures[:5])
+        more = f"; ... {len(failures) - 5} more" if len(failures) > 5 else ""
+        raise RuntimeError(f"{context} produced invalid TAU-2 results: {preview}{more}")
 
 
 def strategy_ids(config: dict[str, Any]) -> list[str]:
@@ -219,9 +250,7 @@ def user_simulator_policy(config: dict[str, Any]) -> str:
     policy = config.get("eval", {}).get("user_simulator_policy", "official")
     policy = str(policy)
     if policy not in {"official", "confirmation_aware"}:
-        raise ValueError(
-            "eval.user_simulator_policy must be 'official' or 'confirmation_aware'"
-        )
+        raise ValueError("eval.user_simulator_policy must be 'official' or 'confirmation_aware'")
     return policy
 
 
