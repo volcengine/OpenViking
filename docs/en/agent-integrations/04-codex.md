@@ -85,6 +85,8 @@ Hooks resolve this chain on every fire (changes to ovcli.conf take effect on the
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
+For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), the installer renders `.mcp.json` *without* `bearer_token_env_var`. This avoids Codex falling back to its OAuth dance when `OPENVIKING_API_KEY` is unset/empty. Identity headers (`OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT_ID`) still flow through `env_http_headers` regardless.
+
 ### Key environment variables
 
 | Variable | Default | Notes |

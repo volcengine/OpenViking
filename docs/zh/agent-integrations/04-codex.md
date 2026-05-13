@@ -85,6 +85,8 @@ Hook 每次触发都重新解析这条优先级链——改完 ovcli.conf 下一
 
 鉴权头同时发给 REST API（hook 用）和 `/mcp` endpoint（模型用）：`Authorization: Bearer <api_key>`。
 
+对于**无鉴权的本地 OV**（`ovcli.conf` 没有 `api_key`，或者根本没 ovcli.conf），installer 渲染 `.mcp.json` 时**不会**写入 `bearer_token_env_var`。这是有意的——如果保留 `bearer_token_env_var` 但 `OPENVIKING_API_KEY` 是空/未设置，Codex 会把它当成"需要鉴权但没配"然后回落到 OAuth dance，导致无鉴权模式不可用。多租户身份头（`OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT_ID`）通过 `env_http_headers` 仍然正常传。
+
 ### 关键环境变量
 
 | 环境变量 | 默认值 | 说明 |

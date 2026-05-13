@@ -89,6 +89,8 @@ The shell function wrapper handles step 1 for you by promoting ovcli.conf fields
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
+For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), the installer renders `.mcp.json` *without* `bearer_token_env_var`. This is intentional — if `bearer_token_env_var` were present but `OPENVIKING_API_KEY` were unset/empty, Codex would interpret that as "auth required but not configured" and fall back to its OAuth dance, breaking unauth mode. The shell-function wrapper still exports identity headers (`OPENVIKING_ACCOUNT` / `_USER` / `_AGENT_ID`) via `env_http_headers` so multi-tenant identity still works.
+
 Optional Codex-specific tuning lives under `codex` in `ovcli.conf`:
 
 ```jsonc

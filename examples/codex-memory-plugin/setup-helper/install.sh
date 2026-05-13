@@ -195,13 +195,46 @@ if [ -f "$HOOKS_JSON" ]; then
   rm -f "${HOOKS_JSON}.bak"
 fi
 
-# Render the OpenViking /mcp URL into the cached .mcp.json. The repo's
-# checked-in .mcp.json keeps the __OPENVIKING_MCP_URL__ placeholder.
+# Detect whether the user has an OpenViking API key configured anywhere.
+# When they don't (typical for a local unauth OV), we render .mcp.json
+# WITHOUT bearer_token_env_var, so Codex doesn't see an empty
+# OPENVIKING_API_KEY at MCP launch and trigger its OAuth fallback for
+# what should be an unauthenticated server.
+detect_api_key() {
+  if [ -n "${OPENVIKING_API_KEY:-}" ] || [ -n "${OPENVIKING_BEARER_TOKEN:-}" ]; then
+    echo "1"
+    return
+  fi
+  if [ -f "$OVCLI_CONF" ]; then
+    node -e '
+      try {
+        const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+        process.stdout.write(c.api_key ? "1" : "0");
+      } catch { process.stdout.write("0"); }
+    ' "$OVCLI_CONF" 2>/dev/null || echo "0"
+    return
+  fi
+  echo "0"
+}
+HAS_API_KEY="$(detect_api_key)"
+
+# Render the OpenViking /mcp URL into the cached .mcp.json (and drop the
+# bearer_token_env_var line in no-auth mode). The repo's checked-in
+# .mcp.json keeps the placeholder + always-present bearer field; the cache
+# copy is what Codex actually loads.
 MCP_JSON="$CACHE_DIR/.mcp.json"
 if [ -f "$MCP_JSON" ]; then
-  MCP_URL_ESC="$(printf '%s' "$MCP_URL" | sed -e 's/[\\/&]/\\&/g')"
-  sed -i.bak -e "s|__OPENVIKING_MCP_URL__|$MCP_URL_ESC|g" "$MCP_JSON"
-  rm -f "${MCP_JSON}.bak"
+  node - "$MCP_JSON" "$MCP_URL" "$HAS_API_KEY" <<'NODE'
+const fs = require("node:fs");
+const [, , file, url, hasKey] = process.argv;
+const j = JSON.parse(fs.readFileSync(file, "utf8"));
+const s = j.mcpServers["openviking-memory"];
+s.url = url;
+if (hasKey !== "1") {
+  delete s.bearer_token_env_var;
+}
+fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
+NODE
 fi
 
 # ----- Shell rc wrapper -----
@@ -298,13 +331,14 @@ EOF
   printf '\n%s\n' "$WRAPPER_BLOCK" >> "$RC"
 fi
 
-if [ ! -f "$OVCLI_CONF" ]; then
+if [ ! -f "$OVCLI_CONF" ] && [ "$HAS_API_KEY" != "1" ]; then
   cat >&2 <<EOF
 
-Note: $OVCLI_CONF was not found.
-The plugin will hit $MCP_URL with no Bearer token.
-Either create ovcli.conf (see https://docs.openviking.ai/zh/guides/03-deployment#cli)
-or export OPENVIKING_URL / OPENVIKING_API_KEY before running codex.
+Note: $OVCLI_CONF was not found and no OPENVIKING_API_KEY in env.
+The plugin is installed in unauthenticated mode targeting $MCP_URL.
+To enable Bearer auth later, create ovcli.conf with an api_key (see
+https://docs.openviking.ai/zh/guides/03-deployment#cli) and re-run this
+installer — the bearer_token_env_var field will be re-added to .mcp.json.
 EOF
 fi
 
@@ -314,6 +348,7 @@ Installed $PLUGIN_ID (version $PLUGIN_VERSION).
 Marketplace: $MARKETPLACE_ROOT
 Plugin cache: $CACHE_DIR
 MCP endpoint: $MCP_URL
+MCP auth: $([ "$HAS_API_KEY" = "1" ] && echo "Bearer (OPENVIKING_API_KEY)" || echo "none (unauthenticated)")
 
 Next:
 EOF
