@@ -10,10 +10,27 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 
 ### Install
 
+Recommended one-line installer:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+```
+
+It installs from a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`, and uses `~/.openviking/ovcli.conf` for the OpenViking connection when present.
+
+Manual setup:
+
 ```bash
 node --version    # >= 22
 codex --version   # >= 0.124.0
 codex features list | grep codex_hooks
+```
+
+Enable plugin lifecycle hooks:
+
+```toml
+[features]
+plugin_hooks = true
 ```
 
 From an OpenViking checkout:
@@ -36,11 +53,17 @@ cat >> ~/.codex/config.toml <<'EOF'
 [plugins."openviking-memory@openviking-plugins-local"]
 enabled = true
 EOF
-
-cd examples/codex-memory-plugin
-npm install
-npm run build
 ```
+
+For local development, pre-populate Codex's cache so it resolves immediately:
+
+```bash
+INSTALL_DIR=~/.codex/plugins/cache/openviking-plugins-local/openviking-memory
+mkdir -p "$INSTALL_DIR"
+cp -R "$(pwd)/examples/codex-memory-plugin" "$INSTALL_DIR/0.4.0"
+```
+
+`npm install && npm run build` is only required when editing the TypeScript MCP server source; the checked-in plugin already includes `servers/memory-server.js`.
 
 ### Configure
 

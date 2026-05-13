@@ -16,7 +16,19 @@ It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `op
 
 Installation is first here, matching the shape of the [Claude Code integration doc](../../docs/en/agent-integrations/02-claude-code.md).
 
-### 1. Install prerequisites
+### One-line installer (recommended)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+```
+
+The installer checks `codex`, `git`, and Node.js 22+, clones OpenViking to `~/.openviking/openviking-repo` if needed, registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`, and pre-populates Codex's plugin cache so the plugin resolves immediately. It uses `~/.openviking/ovcli.conf` when present; otherwise the plugin falls back to `http://127.0.0.1:1933`.
+
+If you'd rather do it by hand, use the manual setup below.
+
+### Manual setup
+
+#### 1. Install prerequisites
 
 ```bash
 node --version    # >= 22
@@ -29,7 +41,14 @@ Make sure `codex_hooks` is enabled:
 codex features list | grep codex_hooks
 ```
 
-### 2. Install the plugin
+Plugin lifecycle hooks also require `plugin_hooks`:
+
+```toml
+[features]
+plugin_hooks = true
+```
+
+#### 2. Install the plugin
 
 The plugin lives at `examples/codex-memory-plugin/`.
 
@@ -61,15 +80,7 @@ mkdir -p "$INSTALL_DIR"
 cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.0"
 ```
 
-### 3. Build the MCP server
-
-```bash
-cd examples/codex-memory-plugin
-npm install
-npm run build
-```
-
-### 4. Configure OpenViking
+#### 3. Configure OpenViking
 
 Use the same client config file as the `ov` CLI:
 
@@ -85,13 +96,25 @@ Use the same client config file as the `ov` CLI:
 
 Local server mode works without this file; the plugin falls back to `http://127.0.0.1:1933`.
 
-### 5. Start Codex
+#### 4. Start Codex
 
 ```bash
 codex
 ```
 
 First MCP launch installs runtime deps; later launches reuse them.
+
+### Development from source
+
+Only needed when editing `src/memory-server.ts`:
+
+```bash
+cd examples/codex-memory-plugin
+npm install
+npm run build
+```
+
+`codex exec` does not reliably fire plugin lifecycle hooks in current Codex builds. For hook validation, use an interactive `codex` session or the scripts in `hooks/hooks.json` with synthetic JSON input.
 
 ## Configuration
 
