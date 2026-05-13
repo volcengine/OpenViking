@@ -19,7 +19,6 @@ from openviking.utils.zip_safe import (
     safe_extract_zip,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -147,7 +146,6 @@ class TestNormalizeZipFilenames:
             zf.writestr(info, "content")
         # Manually patch the raw zip to remove UTF-8 flag
         # (Python's ZipFile may set it automatically for non-ASCII)
-        raw = buf.getvalue()
         # The flag_bits field is at offset 6 in the local file header
         # This is complex; instead test the logic paths individually
         # by directly calling with a pre-mangled ZipInfo

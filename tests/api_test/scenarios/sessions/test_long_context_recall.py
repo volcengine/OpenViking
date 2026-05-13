@@ -1,8 +1,7 @@
-import pytest
-import json
-import uuid
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 
@@ -70,8 +69,8 @@ class TestLongContextRecall:
             assert commit_data.get("status") == "ok"
 
             commit_result = commit_data["result"]
-            assert commit_result.get("archived") == True, "Messages should be archived"
-            print(f"会话提交成功，archived=True")
+            assert commit_result.get("archived"), "Messages should be archived"
+            print("会话提交成功，archived=True")
 
             # 6. 等待异步任务完成
             task_id = commit_result.get("task_id")
@@ -114,7 +113,7 @@ class TestLongContextRecall:
                 or "results" in search_result
             )
 
-            print(f"✓ 长程上下文召回测试通过")
+            print("✓ 长程上下文召回测试通过")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):

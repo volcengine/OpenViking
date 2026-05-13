@@ -1,10 +1,8 @@
-import pytest
-import json
-import uuid
-import time
 import os
 import shutil
-from config import Config
+import time
+import uuid
+
 from conftest import create_test_file
 
 
@@ -157,12 +155,12 @@ class TestAccountIsolation:
             assert has_memories_final or has_resources_final, "❌ FAILED: Search returns no results"
 
             print("\n" + "=" * 80)
-            print(f"✅ TEST PASSED! 所有断言通过！")
+            print("✅ TEST PASSED! 所有断言通过！")
             print(f"   - 初始 processed: {initial_processed}")
             print(f"   - 最终 processed: {final_processed}")
-            print(f"   - 搜索功能正常")
+            print("   - 搜索功能正常")
             if initial_processed > 0:
-                print(f"   - Processed 没有归零 ✓")
+                print("   - Processed 没有归零 ✓")
             print("=" * 80)
         finally:
             # 清理临时文件
@@ -171,7 +169,7 @@ class TestAccountIsolation:
 
     def test_consecutive_health_checks(self, api_client):
         """附加测试：连续健康检查，验证系统稳定性"""
-        for i in range(5):
+        for _ in range(5):
             response = api_client.is_healthy()
             assert response.status_code == 200
             health_data = response.json()

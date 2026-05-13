@@ -1,8 +1,7 @@
-import pytest
-import json
-import uuid
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 
@@ -81,20 +80,18 @@ class TestRelationLink:
             )
 
             # 8. 验证资源A能被搜索到
-            found_a = False
             for field in ["resources", "memories", "results"]:
                 if field in search_result:
                     items = search_result[field]
                     for item in items:
                         if "uri" in item and uri_a in item["uri"]:
-                            found_a = True
                             # 验证关系是否被正确返回
                             if "relations" in item:
                                 relations = item["relations"]
                                 print(f"资源A的关系: {relations}")
                             break
 
-            print(f"✓ 关系链接测试通过")
+            print("✓ 关系链接测试通过")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir_a):

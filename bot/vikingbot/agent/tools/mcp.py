@@ -172,15 +172,17 @@ async def connect_mcp_servers(
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             elif transport_type == "sse":
+                cfg_headers = cfg.headers or {}
 
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
                     timeout: httpx.Timeout | None = None,
                     auth: httpx.Auth | None = None,
+                    cfg_headers: dict[str, str] = cfg_headers,
                 ) -> httpx.AsyncClient:
                     merged_headers = {
                         "Accept": "application/json, text/event-stream",
-                        **(cfg.headers or {}),
+                        **cfg_headers,
                         **(headers or {}),
                     }
                     return httpx.AsyncClient(

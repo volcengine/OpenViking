@@ -213,11 +213,6 @@ async def test_privacy_config_service_uses_policy_aware_user_root(service):
     )
 
     current = await privacy.get_current(ctx, "skill", "policy-skill")
-    stored = await service.viking_fs.read_file(
-        "viking://user/privacy_user_policy/agent/demo-agent/privacy/skill/policy-skill/current.json",
-        ctx=ctx,
-    )
-
     assert current is not None
 
 

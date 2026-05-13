@@ -14,22 +14,20 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context
 from openviking.core.namespace import (
-    agent_space_fragment,
-    user_space_fragment,
-    to_user_space,
     to_agent_space,
+    to_user_space,
 )
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.session.memory.dataclass import ResolvedOperations
-from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -428,7 +426,7 @@ class SessionCompressorV2:
 
             exp_dir = exp_provider._render_experience_dir(ctx)
 
-            async def _single_existing_experience_uri() -> List[str]:
+            async def _single_existing_experience_uri(exp_dir: str | None = exp_dir) -> List[str]:
                 if not exp_dir:
                     return []
                 try:

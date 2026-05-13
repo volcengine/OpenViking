@@ -342,7 +342,7 @@ class VikingAddResourceTool(OVFileTool):
             else:
                 return "Failed to add resource"
         except httpx.ReadTimeout:
-            return f"Request timed out. The resource addition task may still be processing on the server side."
+            return "Request timed out. The resource addition task may still be processing on the server side."
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
@@ -635,7 +635,7 @@ class VikingMultiReadTool(OVFileTool):
             # 构建结果
             result_lines = [f"Multi-read results for {len(uris)} resources (level: {level}):"]
 
-            for i, result in enumerate(results, 1):
+            for result in results:
                 uri = result["uri"]
                 content = result["content"]
                 success = result["success"]

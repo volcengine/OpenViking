@@ -7,8 +7,9 @@ These tests target pure/static methods on Session and related helpers,
 so they don't need a running OpenViking server.
 """
 
-from openviking.session.session import Session, WM_SEVEN_SECTIONS
-
+from openviking.message.message import Message
+from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.session.session import WM_SEVEN_SECTIONS, Session
 
 # -----------------------------------------------------------------------
 # Helpers
@@ -606,9 +607,6 @@ class TestMergeWmSectionsEdgeCases:
 # -----------------------------------------------------------------------
 # _format_message_for_wm
 # -----------------------------------------------------------------------
-
-from openviking.message.message import Message
-from openviking.message.part import TextPart, ToolPart, ContextPart
 
 
 def _msg(role, parts):

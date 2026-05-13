@@ -3,10 +3,9 @@
 """Tests for OpenAIRerankClient extra_headers support."""
 
 from unittest.mock import Mock, patch
-import pytest
 
-from openviking_cli.utils.config.rerank_config import RerankConfig
 from openviking.models.rerank.openai_rerank import OpenAIRerankClient
+from openviking_cli.utils.config.rerank_config import RerankConfig
 
 
 def test_openai_rerank_client_init_with_extra_headers():
@@ -76,7 +75,7 @@ def test_rerank_batch_includes_extra_headers(mock_post):
     )
 
     # Call rerank_batch
-    result = client.rerank_batch(query="test query", documents=["doc1", "doc2"])
+    client.rerank_batch(query="test query", documents=["doc1", "doc2"])
 
     # Verify the request included extra_headers
     assert mock_post.called
@@ -104,7 +103,7 @@ def test_rerank_batch_without_extra_headers(mock_post):
         api_key="test-key", api_base="https://api.example.com/v1", model_name="gpt-4"
     )
 
-    result = client.rerank_batch(query="test query", documents=["doc1"])
+    client.rerank_batch(query="test query", documents=["doc1"])
 
     assert mock_post.called
     call_kwargs = mock_post.call_args.kwargs

@@ -1,7 +1,7 @@
 import json
 
 import lark_oapi as lark
-from lark_oapi.api.contact.v3 import *
+from lark_oapi.api.contact.v3 import GetUserRequest
 
 
 def main():
@@ -12,7 +12,7 @@ def main():
     request: GetUserRequest = GetUserRequest.builder().user_id("").user_id_type("open_id").build()
 
     # 发起请求
-    response: GetUserResponse = client.contact.v3.user.get(request)
+    response = client.contact.v3.user.get(request)
 
     # 处理失败返回
     if not response.success():

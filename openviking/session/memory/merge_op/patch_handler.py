@@ -1259,7 +1259,6 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     final_content = line_ending.join(result_lines)
 
     # Check if all results are successful (including no-change cases)
-    all_successful = all(result.get("success", False) for result in diff_results)
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:

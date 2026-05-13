@@ -117,8 +117,6 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         code hosting URL
     """
     all_domains = _get_all_domains()
-    host = _extract_host(url)
-
     # Handle git@ SSH URLs: git@host:org/repo.git
     if url.startswith("git@"):
         if ":" not in url[4:]:
