@@ -208,7 +208,9 @@ class MemoryStore:
             if not client:
                 return ""
             experiences = await client.search_experiences(query, limit=5)
-            logger.info(f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}")
+            logger.info(
+                f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
+            )
             for i, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)

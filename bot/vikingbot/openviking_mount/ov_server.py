@@ -198,7 +198,6 @@ class VikingClient:
     def should_sender_fanout(self) -> bool:
         return self._is_root_key_mode()
 
-
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
         if target_uri:
