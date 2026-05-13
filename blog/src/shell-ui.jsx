@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  BlogContext, pickLocale, ReadingProgress, TOC,
+  BlogContext, ExternalArrowIcon, pickLocale, ReadingProgress, TOC,
   getAllPosts, getAllTags, getPostBySlug, neighbors,
 } from './blog-components';
 import {
@@ -188,7 +188,7 @@ export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
                 {a.avatar ? <img src={a.avatar} className="b-author__avatar" alt="" /> : null}
                 <div>
                   <div className="b-author__name">
-                    {a.github ? <a href={`https://github.com/${a.github}`} target="_blank" rel="noreferrer">{a.name} ↗</a> : a.name}
+                    {a.github ? <a href={`https://github.com/${a.github}`} target="_blank" rel="noreferrer">{a.name}<ExternalArrowIcon /></a> : a.name}
                   </div>
                   {a.role ? <div className="b-author__role">{pickLocale(a.role, effectiveLang)}</div> : null}
                 </div>

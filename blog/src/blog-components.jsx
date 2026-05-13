@@ -105,6 +105,15 @@ export const Mark = ({ children }) => <mark className="b-mark">{children}</mark>
 
 /* ---------- links ---------- */
 
+export function ExternalArrowIcon() {
+  return (
+    <svg className="b-a__ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <path d="M3.2 8.8 8.8 3.2" />
+      <path d="M5.25 3.2H8.8v3.55" />
+    </svg>
+  );
+}
+
 export function A({ href = '#', children, external }) {
   const isExt = external ?? /^(https?:|mailto:)/.test(href);
   const { navigate } = useBlog();
@@ -117,7 +126,7 @@ export function A({ href = '#', children, external }) {
   return (
     <a className={`b-a ${isExt ? 'b-a--ext' : ''}`} href={href} onClick={onClick}
        target={isExt ? '_blank' : undefined} rel={isExt ? 'noreferrer' : undefined}>
-      {children}{isExt ? <span className="b-a__ext" aria-hidden="true">↗</span> : null}
+      {children}{isExt ? <ExternalArrowIcon /> : null}
     </a>
   );
 }

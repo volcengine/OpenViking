@@ -49,7 +49,7 @@ button { font: inherit; color: inherit; }
 
 .b-a { color: var(--th-accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: pointer; }
 .b-a:hover { text-decoration-thickness: 2px; }
-.b-a__ext { display: inline-block; transform: translateY(-2px); font-size: 0.75em; margin-left: 2px; opacity: 0.7; }
+.b-a__ext { display: inline-block; width: 0.75em; height: 0.75em; margin-left: 2px; transform: translateY(-2px); opacity: 0.72; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; fill: none; overflow: visible; }
 
 .b-ul, .b-ol { margin: 0 0 1.4em; padding-left: 1.6em; max-width: 68ch; }
 .b-ul .b-li, .b-ol .b-li { margin: 0.4em 0; }

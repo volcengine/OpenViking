@@ -61,7 +61,7 @@ function DirectoryDepthDemo({ t }) {
           ))}
         </div>
       </div>
-      <div style={{ marginTop: '1rem', display: 'grid', gap: '0.45rem' }}>
+      <div style={{ marginTop: '1rem', display: 'grid', gap: '0.45rem', minWidth: 0 }}>
         {rows.map(row => {
           const active = visible.includes(row);
           return (
@@ -74,7 +74,11 @@ function DirectoryDepthDemo({ t }) {
                 borderRadius: 'var(--th-radius)',
                 fontFamily: 'var(--th-font-mono)',
                 fontSize: '0.82rem',
-                marginLeft: `${row.level * 1.25}rem`,
+                lineHeight: 1.45,
+                marginLeft: `min(${row.level * 1.25}rem, 18vw)`,
+                minWidth: 0,
+                maxWidth: '100%',
+                overflowWrap: 'anywhere',
                 background: active ? 'color-mix(in oklab, var(--th-accent) 10%, transparent)' : 'transparent',
               }}
             >
