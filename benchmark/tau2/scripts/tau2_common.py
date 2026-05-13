@@ -207,6 +207,9 @@ def _ensure_confirmation_aware_prompt(repo: Path) -> bool:
         text = path.read_text(encoding="utf-8")
         if _has_confirmation_aware_prompt(text):
             continue
+        backup = path.with_suffix(path.suffix + ".openviking.bak")
+        if not backup.exists():
+            backup.write_text(text, encoding="utf-8")
         path.write_text(text.rstrip() + CONFIRMATION_AWARE_APPENDIX + "\n", encoding="utf-8")
         patched = True
     return patched
@@ -252,6 +255,11 @@ def simulator_policy_report(config: dict[str, Any]) -> dict[str, Any]:
         "patch_applied": patch_applied,
         "patch_mode": patch_mode,
         "prompt_files": [str(path) for path in prompt_paths],
+        "backup_files": [
+            str(path.with_suffix(path.suffix + ".openviking.bak"))
+            for path in prompt_paths
+            if path.with_suffix(path.suffix + ".openviking.bak").exists()
+        ],
         "claim_boundary": claim_boundary,
     }
 

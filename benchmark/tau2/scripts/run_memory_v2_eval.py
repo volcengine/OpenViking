@@ -237,6 +237,14 @@ def _wait_task(client: Any, task_id: str | None, timeout: int) -> dict[str, Any]
     raise TimeoutError(f"OpenViking task {task_id} did not finish within {timeout}s: {last}")
 
 
+def _read_memory_text(client: Any, match: Any) -> tuple[str, str | None]:
+    try:
+        return client.read(getattr(match, "uri", "")), None
+    except Exception as exc:
+        fallback = getattr(match, "abstract", "") or getattr(match, "overview", "") or ""
+        return fallback, f"{type(exc).__name__}: {exc}"
+
+
 def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     result = client.search(
         query=f"{args.domain} customer service order reservation booking cancellation exchange return update",
@@ -247,19 +255,16 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     reads = []
     for match in memories[: args.retrieval_top_k]:
         uri = getattr(match, "uri", "")
-        text = ""
-        try:
-            text = client.read(uri)
-        except Exception:
-            text = getattr(match, "abstract", "") or getattr(match, "overview", "") or ""
-        reads.append(
-            {
-                "uri": uri,
-                "score": getattr(match, "score", None),
-                "text_chars": len(text),
-                "non_empty": bool(str(text).strip()),
-            }
-        )
+        text, read_error = _read_memory_text(client, match)
+        row = {
+            "uri": uri,
+            "score": getattr(match, "score", None),
+            "text_chars": len(text),
+            "non_empty": bool(str(text).strip()),
+        }
+        if read_error:
+            row["read_error"] = read_error
+        reads.append(row)
     return {
         "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
         "match_count": len(memories),
@@ -373,19 +378,16 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 blocks = []
                 for index, match in enumerate(memories[: args.retrieval_top_k], 1):
                     uri = getattr(match, "uri", "")
-                    text = ""
-                    try:
-                        text = client.read(uri)
-                    except Exception:
-                        text = getattr(match, "abstract", "") or getattr(match, "overview", "") or ""
-                    rows.append(
-                        {
-                            "uri": uri,
-                            "score": getattr(match, "score", None),
-                            "level": getattr(match, "level", None),
-                            "text_chars": len(text),
-                        }
-                    )
+                    text, read_error = _read_memory_text(client, match)
+                    row = {
+                        "uri": uri,
+                        "score": getattr(match, "score", None),
+                        "level": getattr(match, "level", None),
+                        "text_chars": len(text),
+                    }
+                    if read_error:
+                        row["read_error"] = read_error
+                    rows.append(row)
                     if text.strip():
                         blocks.append(f"Memory {index} ({uri}):\n{text.strip()}")
                 return "\n\n".join(blocks), rows
