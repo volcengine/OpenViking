@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -40,9 +41,14 @@ def _add_tau2_to_path(tau2_repo: Path) -> None:
 
 
 def _save_to_arg(path: Path) -> str:
-    # TAU-2 run_domain appends ".json" to save_to. Keep our artifact paths
-    # stable by passing the stem when callers hand us a JSON path.
+    # Some TAU-2 versions append ".json"; newer versions treat save_to as a
+    # run directory and write results.json under it.
     return str(path.with_suffix("") if path.suffix == ".json" else path)
+
+
+def _compat_results_path(path: Path) -> Path:
+    run_dir = path.with_suffix("") if path.suffix == ".json" else path
+    return run_dir / "results.json"
 
 
 def _reward(sim: dict[str, Any]) -> float:
@@ -141,13 +147,17 @@ def _run_tau2(
     save_to: Path,
 ):
     _add_tau2_to_path(tau2_repo)
-    from tau2.data_model.simulation import RunConfig
+    from tau2.data_model.simulation import RunConfig, TextRunConfig
     from tau2.run import run_domain
 
+    compat_results = _compat_results_path(save_to)
     if save_to.exists():
         save_to.unlink()
-    return run_domain(
-        RunConfig(
+    if compat_results.parent.is_dir():
+        shutil.rmtree(compat_results.parent)
+    config_cls = TextRunConfig if getattr(RunConfig, "__origin__", None) is not None else RunConfig
+    result = run_domain(
+        config_cls(
             domain=domain,
             task_split_name=split,
             task_ids=task_ids,
@@ -166,6 +176,9 @@ def _run_tau2(
             log_level="INFO",
         )
     )
+    if not save_to.exists() and compat_results.exists():
+        shutil.copyfile(compat_results, save_to)
+    return result
 
 
 def _client(args: argparse.Namespace):
@@ -452,7 +465,18 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             return assistant_message, state
 
     if AGENT_NAME not in registry.get_agents():
-        registry.register_agent(OpenVikingMemoryAgent, AGENT_NAME)
+        def create_openviking_memory_agent(tools, domain_policy, **kwargs):
+            return OpenVikingMemoryAgent(
+                tools=tools,
+                domain_policy=domain_policy,
+                llm=kwargs.get("llm"),
+                llm_args=kwargs.get("llm_args"),
+            )
+
+        if hasattr(registry, "register_agent"):
+            registry.register_agent(OpenVikingMemoryAgent, AGENT_NAME)
+        else:
+            registry.register_agent_factory(create_openviking_memory_agent, AGENT_NAME)
 
 
 def main() -> int:
