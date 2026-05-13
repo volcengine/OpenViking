@@ -488,7 +488,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 prompt = (
                     "No OpenViking memory matched this user request."
                     if not block
-                    else "Use these OpenViking experience memories only when they match the current task:\n\n"
+                    else "Use these OpenViking memories only when they match the current task:\n\n"
                     + block
                 )
                 state.system_messages[marker_index] = SystemMessage(role="system", content=prompt)
@@ -528,7 +528,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     if block:
                         prompt = (
                             "Before executing the pending write-like tool call, use these "
-                            "OpenViking experience memories only when they match the current task:\n\n"
+                            "OpenViking memories only when they match the current task:\n\n"
                             + block
                         )
                         assistant_message = self._generate(

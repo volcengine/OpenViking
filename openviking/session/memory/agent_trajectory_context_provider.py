@@ -24,14 +24,18 @@ TRAJECTORY_MEMORY_TYPE = "trajectories"
 
 
 class AgentTrajectoryContextProvider(SessionExtractContextProvider):
-    """Phase 1 provider: extract trajectory summaries from conversation."""
+    """Phase 1 provider: extract reusable trajectory-view memories."""
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Summarize this agent session as a trajectory record.
+        return f"""You are a memory extraction agent. Convert this agent session into a reusable trajectory-view memory.
 
-One session = one trajectory. Always output exactly one, no exceptions.
-Sub-tasks, pivots, errors, and follow-ups are numbered steps inside that one record — not separate trajectories.
+One session = one trajectory-view record. Always output exactly one record.
+Write the record as a compact procedure-like view of the useful execution pattern,
+not as a raw transcript. Keep the future agent's decision points, tool path,
+confirmation/write boundary, failure corrections, and applicability boundary.
+Sub-tasks, pivots, errors, and follow-ups are folded into that one record as steps,
+guardrails, or evidence — not separate trajectories.
 
 Output a JSON object with a `trajectories` array containing exactly one item.
 Follow field descriptions in the schema. JSON only, no explanation.

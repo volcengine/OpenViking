@@ -90,7 +90,12 @@ def _tau2_command(
         account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
         agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
         user = f"tau2-{domain}-{corpus_id}"
-        search_uri = f"viking://agent/{agent_id}/memories/experiences"
+        search_memory_type = str(strategy.get("search_memory_type", "experiences"))
+        if search_memory_type not in {"experiences", "trajectories"}:
+            raise ValueError(
+                f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
+            )
+        search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -257,6 +262,7 @@ def _build_plan(
                         "memory_backend": strategy.get("memory_backend"),
                         "corpus_id": strategy.get("corpus_id", strategy["id"]),
                         "retrieval_mode": strategy.get("retrieval_mode"),
+                        "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),

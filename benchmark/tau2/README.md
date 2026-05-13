@@ -1,13 +1,13 @@
 # TAU-2 Benchmark
 
 This directory contains a small OpenViking-style entry point for TAU-2 memory
-evaluation. The first version is intentionally narrow:
+evaluation. The scope is intentionally narrow:
 
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
+- trajectory-view retrieval treatment for the refined trajectory prompt.
 
-Trajectory / procedure-view prompts, category rerank, and other harness-only
-diagnostics are intentionally left out of this first PR.
+Category rerank and other harness-only diagnostics are intentionally left out.
 
 ## Layout
 
@@ -16,7 +16,8 @@ benchmark/tau2/
 ├── config/
 │   ├── baseline.yaml
 │   ├── official.yaml
-│   └── prewrite.yaml
+│   ├── prewrite.yaml
+│   └── trajectory.yaml
 ├── scripts/
 │   ├── run_eval.py
 │   ├── setup_tau2_repo.sh
@@ -77,6 +78,18 @@ benchmark/tau2/run_full_eval.sh \
   --repeat-count 1
 ```
 
+Plan a one-cell trajectory-view smoke:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/trajectory.yaml \
+  --domain retail \
+  --strategy-id memory_v2_trajectory_view \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
+  --repeat-count 1
+```
+
 Run the Memory V2 8-trial matrix (`retail + airline` x 2 strategies x 8 repeats):
 
 ```bash
@@ -104,19 +117,25 @@ and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
 Start the OpenViking service before executing memory cells, and verify it with
 `ov status`. For evidence runs, use a clean OpenViking workspace/config and set
 `OPENVIKING_URL` explicitly so local custom memory templates do not pollute the
-Memory V2 baseline.
+Memory V2 baseline. For trajectory-view evidence, start the service from this
+branch and inspect generated trajectory files; changing `search_uri` alone does
+not prove the new trajectory prompt was used.
 
 ## Memory Adapter
 
-`memory_v2_experience_only` and `memory_v2_prewrite` cells run through a small
-TAU-2 agent adapter in this directory:
+Memory V2 cells run through a small TAU-2 agent adapter in this directory:
 
 - train by writing TAU-2 training conversations into OpenViking sessions;
-- evaluate by retrieving OpenViking experience memory at the first user turn;
+- evaluate by retrieving OpenViking memory at the first user turn;
 - for pre-write recall, retrieve again before write-like tool calls and
   regenerate that step with the matched memories;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
+
+The existing `train_memory_mode: experience_only` value selects the Memory V2
+session-commit path. `search_memory_type` selects which generated memory bucket
+is retrieved during eval (`experiences` by default, `trajectories` for
+`config/trajectory.yaml`).
 
 ## User Simulator Policy
 

@@ -1,0 +1,22 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_trajectory_view
+
+strategies:
+  - id: memory_v2_trajectory_view
+    label: OpenViking Memory V2 trajectory-view first-user recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user
+  - id: memory_v2_trajectory_prewrite
+    label: OpenViking Memory V2 trajectory-view pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
