@@ -371,6 +371,17 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         upsert_operations = operations.upsert_operations
 
+        # Fill uris before registering page_ids — resolve_operations leaves uris empty,
+        # supplement_operation_uris is normally called later in memory_updater,
+        # but we need uris now to build the page_id → URI mapping.
+        registry = self.context_provider._get_registry()
+        supplement_operation_uris(
+            operations,
+            registry,
+            extract_context=self._extract_context,
+            isolation_handler=self._isolation_handler,
+        )
+
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
