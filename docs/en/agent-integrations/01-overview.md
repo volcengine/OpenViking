@@ -8,9 +8,9 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 |-------------|----------|
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks, no MCP tool calls required from the model |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine + hooks + tools + runtime manager, deep lifecycle integration |
-| **LangChain / LangGraph** | [LangChain and LangGraph](./05-langchain-langgraph.md) — session context backend, chat history, retriever, `viking_*` tools, LangGraph store, and middleware for agent workflows |
-| **Codex** | [Codex Memory Plugin](./04-other-plugins.md#codex-memory-plugin) — lifecycle hooks for auto-recall, incremental capture, and pre-compact commit |
-| **OpenCode** | [Other community plugins](./04-other-plugins.md) — explicit-tool and context-injection variants |
+| **Codex** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall, incremental capture, and pre-compact commit |
+| **LangChain / LangGraph** | [LangChain and LangGraph](./06-langchain-langgraph.md) — session context backend, chat history, retriever, `viking_*` tools, LangGraph store, and middleware for agent workflows |
+| **OpenCode** | [Other community plugins](./05-other-plugins.md) — explicit-tool and context-injection variants |
 | **Cursor / Trae / Manus / Claude Desktop / ChatGPT / …** | [MCP Integration Guide](../guides/06-mcp-integration.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **Hermes Agent (Nous Research)** | [Hermes — OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — first-class OpenViking memory provider, no plugin install needed |
 

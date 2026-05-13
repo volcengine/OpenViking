@@ -47,4 +47,4 @@ tools = create_openviking_tools(
 - `examples/langchain-langgraph/langgraph/agent/live_app.py`
 - `examples/langchain-langgraph/langgraph/middleware/quick_app.py`
 
-更完整的英文说明见 [LangChain and LangGraph](../../en/agent-integrations/05-langchain-langgraph.md)。
+更完整的英文说明见 [LangChain and LangGraph](../../en/agent-integrations/06-langchain-langgraph.md)。

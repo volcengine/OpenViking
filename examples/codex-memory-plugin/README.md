@@ -77,7 +77,7 @@ For local development, pre-populate Codex's plugin cache so it resolves immediat
 ```bash
 INSTALL_DIR=~/.codex/plugins/cache/openviking-plugins-local/openviking-memory
 mkdir -p "$INSTALL_DIR"
-cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.0"
+cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.1"
 ```
 
 #### 3. Configure OpenViking

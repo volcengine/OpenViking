@@ -3,11 +3,9 @@
     "openviking-memory": {
       "command": "node",
       "args": [
-        "${CODEX_PLUGIN_ROOT}/scripts/start-memory-server.mjs"
+        "scripts/start-memory-server.mjs"
       ],
-      "env": {
-        "OPENVIKING_CONFIG_FILE": "${OPENVIKING_CONFIG_FILE}"
-      }
+      "cwd": "."
     }
   }
 }

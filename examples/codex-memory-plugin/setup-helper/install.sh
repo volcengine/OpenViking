@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$HOME/.openviking/openviking-repo}"
+REPO_REF="${OPENVIKING_REPO_REF:-main}"
 MARKETPLACE_NAME="${OPENVIKING_CODEX_MARKETPLACE_NAME:-openviking-plugins-local}"
 MARKETPLACE_ROOT="${OPENVIKING_CODEX_MARKETPLACE_ROOT:-$HOME/.codex/${MARKETPLACE_NAME}-marketplace}"
 PLUGIN_NAME="openviking-memory"
@@ -33,7 +34,11 @@ if [ ! -e "$REPO_DIR/.git" ]; then
     echo "$REPO_DIR exists but is not a git checkout." >&2
     exit 1
   fi
-  git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
+else
+  echo "Refreshing existing OpenViking checkout at $REPO_DIR ($REPO_REF)..."
+  git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_REF"
+  git -C "$REPO_DIR" reset --hard FETCH_HEAD
 fi
 
 PLUGIN_DIR="$REPO_DIR/examples/codex-memory-plugin"

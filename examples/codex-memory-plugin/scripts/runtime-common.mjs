@@ -3,19 +3,23 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const INSTALL_TIMEOUT_MS = 120000;
 
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const FALLBACK_PLUGIN_DATA_ROOT = join(homedir(), ".openviking", "codex-memory-plugin");
 const RUNTIME_ENV_META_PATH = ".runtime-env.json";
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const PLUGIN_ROOT_FROM_SCRIPT = resolve(SCRIPT_DIR, "..");
 
 export function getRuntimePaths() {
-  const pluginRoot = process.env.CODEX_PLUGIN_ROOT;
+  // Codex 0.130 does not expand ${CODEX_PLUGIN_ROOT} in .mcp.json args and does
+  // not always inject CODEX_PLUGIN_ROOT into MCP child env, so fall back to the
+  // script's own location (scripts/ lives directly under the plugin root).
+  const pluginRoot = process.env.CODEX_PLUGIN_ROOT || PLUGIN_ROOT_FROM_SCRIPT;
   const pluginDataRoot = process.env.CODEX_PLUGIN_DATA || FALLBACK_PLUGIN_DATA_ROOT;
-
-  if (!pluginRoot) throw new Error("CODEX_PLUGIN_ROOT is not set");
 
   const runtimeRoot = join(pluginDataRoot, "runtime");
 

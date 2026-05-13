@@ -1,6 +1,6 @@
 {
   "name": "codex-openviking-memory",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "OpenViking memory plugin for Codex — hooks (recall/capture/pre-compact) + MCP server for explicit memory operations.",
   "type": "module",
   "scripts": {
