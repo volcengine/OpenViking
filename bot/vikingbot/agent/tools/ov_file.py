@@ -264,7 +264,9 @@ class VikingSearchTool(OVFileTool):
                     results = await search_client.search(query, target_uri=user_uri, limit=20)
                     if results:
                         memories = [
-                            item for item in self._extract_search_items(results) if item.get("type") == "memory"
+                            item
+                            for item in self._extract_search_items(results)
+                            if item.get("type") == "memory"
                         ]
                         all_results.extend(memories)
 
