@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
@@ -86,89 +85,6 @@ def test_category_rerank_skips_non_target_node() -> None:
         "viking://agent/demo/memories/trajectories/one.md"
     ]
     assert trace_rows[0]["selected_for_injection"] is True
-    assert trace_rows[1]["selected_for_injection"] is False
-
-
-def test_category_rerank_prefers_annotation_sidecar(tmp_path: Path) -> None:
-    sidecar = tmp_path / "annotations.jsonl"
-    memory_uri = "viking://agent/demo/memories/trajectories/sidecar_exchange.md"
-    query_subject = (
-        "tau2_query_signature_tau2_retail_pre_write_action_tools_exchange_delivered_order_items"
-    )
-    rows = [
-        {
-            "schema_version": "memory_category_annotation.v0",
-            "annotation_id": f"query:{query_subject}:abc123",
-            "request_id": f"query:{query_subject}:abc123",
-            "subject": {
-                "subject_type": "query",
-                "subject_id": query_subject,
-                "domain": "retail",
-            },
-            "category": {
-                "category1": "sidecar_query_family",
-                "category2": "sidecar_exact",
-                "category_source": "existing_catalog",
-                "confidence": 1.0,
-            },
-        },
-        {
-            "schema_version": "memory_category_annotation.v0",
-            "annotation_id": "memory:sidecar_exchange:abc123",
-            "request_id": "memory:sidecar_exchange:abc123",
-            "subject": {
-                "subject_type": "memory",
-                "subject_id": "sidecar_exchange",
-                "subject_ref": memory_uri,
-                "domain": "retail",
-            },
-            "category": {
-                "category1": "sidecar_query_family",
-                "category2": "sidecar_exact",
-                "category_source": "llm_prompt",
-                "confidence": 1.0,
-            },
-        },
-    ]
-    sidecar.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    reranker = CategoryReranker.from_payload(
-        {
-            "enabled": True,
-            "catalog_path": "benchmark/tau2/config/category_catalog.json",
-            "annotation_files": [str(sidecar)],
-            "apply_nodes": ["before_write_tool_call"],
-            "retrieve_limit": 6,
-            "inject_limit": 1,
-            "mismatch_policy": "keep_positive_match_drop_mismatch",
-            "no_match_policy": "skip_injection",
-        },
-        repo_root=Path(__file__).resolve().parents[2],
-    )
-
-    selected, trace_rows, diagnostics = reranker.select(
-        domain="retail",
-        query="Before executing write-like tool call(s): exchange_delivered_order_items({})",
-        rows=[
-            {
-                "uri": memory_uri,
-                "score": 0.1,
-                "_text": "This text would otherwise look like cancel_pending_order.",
-            },
-            {
-                "uri": "viking://agent/demo/memories/trajectories/catalog_exchange.md",
-                "score": 0.9,
-                "_text": "Use exchange_delivered_order_items for a delivered order exchange.",
-            },
-        ],
-        decision_node="before_write_tool_call",
-        base_limit=2,
-    )
-
-    assert diagnostics["annotation_sidecar"]["row_count"] == 2
-    assert diagnostics["query_category"]["annotation_id"] == f"query:{query_subject}:abc123"
-    assert [row["uri"] for row in selected] == [memory_uri]
-    assert trace_rows[0]["memory_category1_prompt"] == "sidecar_query_family"
-    assert trace_rows[0]["query_category2_prompt"] == "sidecar_exact"
     assert trace_rows[1]["selected_for_injection"] is False
 
 

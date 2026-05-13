@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +97,6 @@ class CategoryReranker:
         apply_nodes: set[str],
         catalog: dict[str, list[CategoryEntry]],
         load_report: dict[str, Any],
-        annotation_index: dict[str, Any],
         retrieve_limit: int | None,
         inject_limit: int | None,
         mismatch_policy: str,
@@ -110,7 +108,6 @@ class CategoryReranker:
         self.apply_nodes = apply_nodes
         self.catalog = catalog
         self.load_report = load_report
-        self.annotation_index = annotation_index
         self.retrieve_limit = retrieve_limit
         self.inject_limit = inject_limit
         self.mismatch_policy = mismatch_policy
@@ -127,7 +124,6 @@ class CategoryReranker:
             catalog, load_report = _load_catalog(payload.get("catalog_path"), repo_root=repo_root)
             if not load_report.get("loaded"):
                 raise ValueError(f"category rerank catalog failed to load: {load_report}")
-            annotation_index = _load_annotation_index(payload, repo_root=repo_root)
         else:
             catalog = {}
             load_report = {
@@ -137,7 +133,6 @@ class CategoryReranker:
                 "category_count": 0,
                 "errors": [],
             }
-            annotation_index = _empty_annotation_index()
         mismatch_policy = str(payload.get("mismatch_policy") or "").strip()
         positive_match_required = _as_bool(
             payload.get("positive_match_required"),
@@ -150,7 +145,6 @@ class CategoryReranker:
             apply_nodes=apply_nodes,
             catalog=catalog,
             load_report=load_report,
-            annotation_index=annotation_index,
             retrieve_limit=_as_int(payload.get("retrieve_limit"), 0) or None,
             inject_limit=_as_int(payload.get("inject_limit"), 0) or None,
             mismatch_policy=mismatch_policy or "none",
@@ -175,7 +169,6 @@ class CategoryReranker:
             "no_match_policy": self.no_match_policy,
             "search_score_weight": self.search_score_weight,
             "catalog": self.load_report,
-            "annotation_sidecar": _annotation_summary(self.annotation_index),
         }
 
     def select(
@@ -205,18 +198,17 @@ class CategoryReranker:
                 "positive_match_required": self.positive_match_required,
                 "selection_policy": "score_sort",
                 "catalog": self.load_report,
-                "annotation_sidecar": _annotation_summary(self.annotation_index),
-                "loaded_files": _loaded_files(self.load_report, self.annotation_index),
-                "load_errors": _load_errors(self.load_report, self.annotation_index),
+                "loaded_files": _loaded_files(self.load_report),
+                "load_errors": self.load_report.get("errors") or [],
             }
             return selected, trace_rows, diagnostics
 
         domain_entries = self.catalog.get(str(domain).lower(), [])
-        query_annotation = _query_annotation(
-            self.annotation_index,
+        query_annotation = _annotate_text(
             domain_entries,
-            domain=domain,
-            query=query,
+            query,
+            trigger_field="query_triggers",
+            subject_type="query",
         )
         scored = []
         candidates = []
@@ -228,11 +220,11 @@ class CategoryReranker:
                     str(row.get("level") or ""),
                 ]
             )
-            memory_annotation = _memory_annotation(
-                self.annotation_index,
+            memory_annotation = _annotate_text(
                 domain_entries,
-                row=row,
-                text=memory_text,
+                memory_text,
+                trigger_field="memory_triggers",
+                subject_type="memory",
             )
             score, reasons, match_flags = _candidate_score(
                 query_annotation,
@@ -324,171 +316,16 @@ class CategoryReranker:
             "candidate_count": len(candidates),
             "candidates": candidates,
             "catalog": self.load_report,
-            "annotation_sidecar": _annotation_summary(self.annotation_index),
-            "loaded_files": _loaded_files(self.load_report, self.annotation_index),
-            "load_errors": _load_errors(self.load_report, self.annotation_index),
+            "loaded_files": _loaded_files(self.load_report),
+            "load_errors": self.load_report.get("errors") or [],
         }
         return selected, trace_rows, diagnostics
 
 
-def _loaded_files(
-    load_report: dict[str, Any],
-    annotation_index: dict[str, Any] | None = None,
-) -> list[str]:
-    files: list[str] = []
+def _loaded_files(load_report: dict[str, Any]) -> list[str]:
     if load_report.get("loaded") and load_report.get("path"):
-        files.append(str(load_report["path"]))
-    if isinstance(annotation_index, dict):
-        files.extend(str(row.get("path")) for row in annotation_index.get("loaded_files") or [])
-    return files
-
-
-def _load_errors(
-    load_report: dict[str, Any],
-    annotation_index: dict[str, Any] | None = None,
-) -> list[Any]:
-    errors = list(load_report.get("errors") or [])
-    if isinstance(annotation_index, dict):
-        errors.extend(annotation_index.get("load_errors") or [])
-    return errors
-
-
-def _empty_annotation_index() -> dict[str, Any]:
-    return {
-        "by_key": {},
-        "loaded_files": [],
-        "load_errors": [],
-        "row_count": 0,
-        "enabled": False,
-    }
-
-
-def _annotation_summary(index: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "enabled": bool(index.get("enabled")),
-        "loaded": bool(index.get("loaded_files")),
-        "loaded_files": index.get("loaded_files") or [],
-        "row_count": index.get("row_count") or 0,
-        "key_count": len(index.get("by_key") or {}),
-        "load_errors": index.get("load_errors") or [],
-    }
-
-
-def _resolve_path(raw_path: Any, *, repo_root: Path) -> Path:
-    path = Path(str(raw_path)).expanduser()
-    if not path.is_absolute():
-        path = repo_root / path
-    return path
-
-
-def _split_path_text(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, dict):
-        return [item for raw in value.values() for item in _split_path_text(raw)]
-    text = str(value or "").strip()
-    if not text:
-        return []
-    return [part.strip() for part in re.split(r"[:\n,]", text) if part.strip()]
-
-
-def _annotation_file_values(payload: dict[str, Any]) -> list[str]:
-    values = _split_path_text(payload.get("annotation_files"))
-    env_names = _as_list(payload.get("annotation_files_env")) or [
-        "OPENVIKING_TAU2_CATEGORY_ANNOTATION_FILES",
-        "AGENT_HARNESS_TAU2_CATEGORY_ANNOTATION_FILES",
-    ]
-    for name in env_names:
-        values.extend(_split_path_text(os.environ.get(name)))
-    return list(dict.fromkeys(values))
-
-
-def _category_payload(annotation: dict[str, Any]) -> dict[str, Any]:
-    category = annotation.get("category") if isinstance(annotation.get("category"), dict) else {}
-    ranking = (
-        annotation.get("ranking_features")
-        if isinstance(annotation.get("ranking_features"), dict)
-        else {}
-    )
-    catalog_match = (
-        category.get("catalog_match") if isinstance(category.get("catalog_match"), dict) else {}
-    )
-    payload = {
-        "subject_type": (
-            annotation.get("subject", {}).get("subject_type")
-            if isinstance(annotation.get("subject"), dict)
-            else None
-        ),
-        "category_source": category.get("category_source")
-        or ranking.get("category_source")
-        or "annotation_sidecar",
-        "matched": True,
-        "primary_category_id": catalog_match.get("matched_category_id"),
-        "category1": category.get("category1") or ranking.get("category1"),
-        "category2": category.get("category2") or ranking.get("category2"),
-        "confidence": category.get("confidence") or ranking.get("confidence"),
-        "catalog_match_decision": catalog_match.get("decision"),
-        "annotation_id": annotation.get("annotation_id") or annotation.get("request_id"),
-    }
-    return {key: value for key, value in payload.items() if value not in (None, "", [])}
-
-
-def _slug_identity(value: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip())
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_.-")
-    return cleaned
-
-
-def _annotation_lookup_keys(value: Any) -> list[str]:
-    text = str(value or "").strip()
-    if not text:
-        return []
-    slug = _slug_identity(text)
-    keys = [text, slug]
-    if text.startswith("viking://"):
-        keys.extend([f"openviking_memory_{slug}", f"openviking_memory_{text}"])
-    return list(dict.fromkeys(key for key in keys if key))
-
-
-def _annotation_index_put(index: dict[str, Any], key: Any, annotation: dict[str, Any]) -> None:
-    for candidate in _annotation_lookup_keys(key):
-        index["by_key"][candidate] = annotation
-
-
-def _load_annotation_index(payload: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
-    index = _empty_annotation_index()
-    index["enabled"] = True
-    for raw_path in _annotation_file_values(payload):
-        path = _resolve_path(raw_path, repo_root=repo_root)
-        if not path.is_file():
-            index["load_errors"].append({"path": str(path), "error": "file_not_found"})
-            continue
-        loaded = 0
-        with path.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    index["load_errors"].append(
-                        {"path": str(path), "line": line_number, "error": str(exc)}
-                    )
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                subject = row.get("subject") if isinstance(row.get("subject"), dict) else {}
-                for key in (
-                    row.get("annotation_id"),
-                    row.get("request_id"),
-                    subject.get("subject_id"),
-                    subject.get("subject_ref"),
-                ):
-                    _annotation_index_put(index, key, row)
-                loaded += 1
-        index["row_count"] += loaded
-        index["loaded_files"].append({"path": str(path), "rows": loaded})
-    return index
+        return [str(load_report["path"])]
+    return []
 
 
 def _load_catalog(raw_path: Any, *, repo_root: Path) -> tuple[dict[str, list[CategoryEntry]], dict[str, Any]]:
@@ -583,103 +420,6 @@ def _annotate_text(
         "confidence": min(1.0, 0.45 + 0.1 * len(matches)) if matches else 0.0,
         "matches": matches[:5],
     }
-
-
-_WRITE_TOOL_PREFIXES = (
-    "toggle_",
-    "enable_",
-    "disable_",
-    "set_",
-    "reset_",
-    "update_",
-    "modify_",
-    "cancel_",
-    "book_",
-    "exchange_",
-    "return_",
-    "grant_",
-    "reboot_",
-)
-
-
-def _lookup_annotation(index: dict[str, Any], keys: list[str], *, subject_type: str) -> dict[str, Any] | None:
-    by_key = index.get("by_key") if isinstance(index.get("by_key"), dict) else {}
-    for key in keys:
-        for candidate in _annotation_lookup_keys(key):
-            row = by_key.get(candidate)
-            if not isinstance(row, dict):
-                continue
-            subject = row.get("subject") if isinstance(row.get("subject"), dict) else {}
-            if subject.get("subject_type") == subject_type:
-                return row
-    return None
-
-
-def _query_signature_from_text(domain: str, query: str) -> str | None:
-    names = []
-    for name in re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", query):
-        if name.startswith(_WRITE_TOOL_PREFIXES):
-            names.append(name)
-    if not names:
-        return None
-    return "|".join(
-        [
-            "tau2",
-            str(domain).strip().lower() or "unknown",
-            "pre_write_action",
-            "tools=" + ",".join(sorted(set(names))),
-        ]
-    )
-
-
-def _query_annotation(
-    index: dict[str, Any],
-    entries: list[CategoryEntry],
-    *,
-    domain: str,
-    query: str,
-) -> dict[str, Any]:
-    signature = _query_signature_from_text(domain, query)
-    keys = [query]
-    if signature:
-        signature_slug = _slug_identity(signature)
-        keys.extend([signature, signature_slug, f"tau2_query_signature_{signature_slug}"])
-    annotation = _lookup_annotation(index, keys, subject_type="query")
-    if annotation:
-        payload = _category_payload(annotation)
-        payload["subject_type"] = "query"
-        payload["category_source"] = payload.get("category_source") or "annotation_sidecar"
-        if signature:
-            payload["query_signature"] = signature
-        return payload
-    return _annotate_text(
-        entries,
-        query,
-        trigger_field="query_triggers",
-        subject_type="query",
-    )
-
-
-def _memory_annotation(
-    index: dict[str, Any],
-    entries: list[CategoryEntry],
-    *,
-    row: dict[str, Any],
-    text: str,
-) -> dict[str, Any]:
-    keys = [str(row.get("uri") or ""), str(row.get("memory_id") or "")]
-    annotation = _lookup_annotation(index, keys, subject_type="memory")
-    if annotation:
-        payload = _category_payload(annotation)
-        payload["subject_type"] = "memory"
-        payload["category_source"] = payload.get("category_source") or "annotation_sidecar"
-        return payload
-    return _annotate_text(
-        entries,
-        text,
-        trigger_field="memory_triggers",
-        subject_type="memory",
-    )
 
 
 def _values(payload: dict[str, Any], key: str) -> set[str]:

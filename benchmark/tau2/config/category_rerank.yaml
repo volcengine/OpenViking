@@ -23,9 +23,6 @@ strategies:
     category_rerank:
       enabled: true
       catalog_path: benchmark/tau2/config/category_catalog.json
-      annotation_files_env:
-        - OPENVIKING_TAU2_CATEGORY_ANNOTATION_FILES
-        - AGENT_HARNESS_TAU2_CATEGORY_ANNOTATION_FILES
       apply_nodes:
         - before_write_tool_call
       retrieve_limit: 6
