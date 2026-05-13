@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from enum import Enum
 from typing import (
+    Annotated,
     Any,
     Dict,
     List,
@@ -20,7 +21,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, model_validator
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -47,10 +48,19 @@ class LinkType(str, Enum):
 
 
 class WikiLink(BaseModel):
-    """Link output by LLM during extraction, using temporary page_ids."""
+    """Link output by LLM during extraction, using temporary page_ids.
 
-    f: int = Field(..., description="From page_id (temporary)")
-    t: int = Field(..., description="To page_id (temporary)")
+    f and t use WithJsonSchema to appear as required int in the JSON schema
+    sent to the LLM, but parse as Optional[int] to tolerate null values.
+    Invalid links (null f/t) are filtered in _resolve_links.
+    """
+
+    f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="From page_id (temporary)"
+    )
+    t: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="To page_id (temporary)"
+    )
     link_type: LinkType = Field(LinkType.RELATED_TO, description="Relationship type")
     weight: float = Field(1.0, description="Association weight 0~1")
     match_text: Optional[str] = Field(
