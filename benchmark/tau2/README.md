@@ -179,7 +179,9 @@ are marked `runtime_evidence.status=diagnostic`; `scoreboard.json` excludes
 those diagnostic cells from the main reward/DB aggregates while preserving their
 metrics and artifacts for debugging. Corpus manifests also include
 `corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
-aggregate-only corpora can be spotted before reading the eval trace.
+aggregate-only corpora can be spotted before reading the eval trace; category
+runs whose corpus probe has matches but no concrete matches are also marked
+diagnostic.
 
 ## User Simulator Policy
 

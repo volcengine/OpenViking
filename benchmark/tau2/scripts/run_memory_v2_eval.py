@@ -349,9 +349,20 @@ def _runtime_evidence_status(
     *,
     category_rerank: dict[str, Any],
     retrieval_trace_summary: dict[str, Any],
+    corpus_probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
     if category_rerank.get("enabled"):
+        corpus_probe = corpus_probe if isinstance(corpus_probe, dict) else {}
+        if int(corpus_probe.get("match_count") or 0) > 0:
+            if int(corpus_probe.get("concrete_match_count") or 0) <= 0:
+                reasons.append("no_concrete_corpus_probe_matches")
+            if (
+                int(corpus_probe.get("aggregate_match_count") or 0)
+                == int(corpus_probe.get("match_count") or 0)
+            ):
+                reasons.append("aggregate_only_corpus_probe")
+
         if not retrieval_trace_summary.get("trace_present"):
             reasons.append("missing_retrieval_trace")
         counts = (
@@ -1038,6 +1049,7 @@ def main() -> int:
         "runtime_evidence": _runtime_evidence_status(
             category_rerank=category_summary,
             retrieval_trace_summary=trace_summary,
+            corpus_probe=corpus.get("corpus_probe") if isinstance(corpus, dict) else None,
         ),
         "metrics": _metrics(eval_results),
     }

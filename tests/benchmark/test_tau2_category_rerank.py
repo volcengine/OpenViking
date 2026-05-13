@@ -189,6 +189,11 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
 def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
     evidence = _runtime_evidence_status(
         category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 1,
+            "aggregate_match_count": 1,
+            "concrete_match_count": 0,
+        },
         retrieval_trace_summary={
             "trace_present": True,
             "counts": {
@@ -205,6 +210,8 @@ def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
     )
 
     assert evidence["status"] == "diagnostic"
+    assert "aggregate_only_corpus_probe" in evidence["reasons"]
+    assert "no_concrete_corpus_probe_matches" in evidence["reasons"]
     assert "no_concrete_memory_candidates" in evidence["reasons"]
     assert "no_matched_memory_categories" in evidence["reasons"]
     assert "no_selected_positive_category_match" in evidence["reasons"]
