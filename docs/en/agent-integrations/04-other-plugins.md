@@ -23,7 +23,7 @@ mkdir -p /tmp/ov-codex-mp/.claude-plugin
 ln -s "$(pwd)/examples/codex-memory-plugin" /tmp/ov-codex-mp/openviking-memory
 cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
 {
-  "name": "openviking-codex-local",
+  "name": "openviking-plugins-local",
   "plugins": [
     { "name": "openviking-memory", "source": "./openviking-memory" }
   ]
@@ -33,7 +33,7 @@ EOF
 codex plugin marketplace add /tmp/ov-codex-mp
 cat >> ~/.codex/config.toml <<'EOF'
 
-[plugins."openviking-memory@openviking-codex-local"]
+[plugins."openviking-memory@openviking-plugins-local"]
 enabled = true
 EOF
 

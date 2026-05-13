@@ -38,7 +38,7 @@ mkdir -p /tmp/ov-codex-mp/.claude-plugin
 ln -s /abs/path/to/OpenViking/examples/codex-memory-plugin /tmp/ov-codex-mp/openviking-memory
 cat > /tmp/ov-codex-mp/.claude-plugin/marketplace.json <<'EOF'
 {
-  "name": "openviking-codex-local",
+  "name": "openviking-plugins-local",
   "plugins": [
     { "name": "openviking-memory", "source": "./openviking-memory" }
   ]
@@ -48,7 +48,7 @@ EOF
 codex plugin marketplace add /tmp/ov-codex-mp
 cat >> ~/.codex/config.toml <<'EOF'
 
-[plugins."openviking-memory@openviking-codex-local"]
+[plugins."openviking-memory@openviking-plugins-local"]
 enabled = true
 EOF
 ```
@@ -56,7 +56,7 @@ EOF
 For local development, pre-populate Codex's plugin cache so it resolves immediately:
 
 ```bash
-INSTALL_DIR=~/.codex/plugins/cache/openviking-codex-local/openviking-memory
+INSTALL_DIR=~/.codex/plugins/cache/openviking-plugins-local/openviking-memory
 mkdir -p "$INSTALL_DIR"
 cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.0"
 ```
