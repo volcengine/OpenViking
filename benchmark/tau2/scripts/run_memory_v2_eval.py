@@ -740,7 +740,10 @@ def main() -> int:
         repo_root=REPO_ROOT,
     )
 
-    args.tau2_repo = args.tau2_repo.resolve()
+    args.tau2_repo = args.tau2_repo.expanduser().resolve()
+    args.run_dir = args.run_dir.expanduser().resolve()
+    if args.corpus_dir:
+        args.corpus_dir = args.corpus_dir.expanduser().resolve()
     args.run_dir.mkdir(parents=True, exist_ok=True)
     corpus_dir = args.corpus_dir or args.run_dir
     corpus_dir.mkdir(parents=True, exist_ok=True)
