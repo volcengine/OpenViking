@@ -1,9 +1,8 @@
-import pytest
-import json
-import uuid
 import concurrent.futures
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 

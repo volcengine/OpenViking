@@ -1,7 +1,6 @@
-import pytest
-import json
-import uuid
 import os
+import uuid
+
 from conftest import create_test_file
 
 

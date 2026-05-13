@@ -4,15 +4,14 @@ import argparse
 import json
 import os
 import shutil
-from urllib.parse import urlparse
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-
 
 PLAYER_IDS = [f"player_{i}" for i in range(1, 7)]
 WEREWOLF_CHANNEL_IDS = ["god", *PLAYER_IDS]

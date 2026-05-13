@@ -1,9 +1,8 @@
-import pytest
-import json
-import uuid
-import time
 import os
 import shutil
+import time
+import uuid
+
 from conftest import create_test_file
 
 

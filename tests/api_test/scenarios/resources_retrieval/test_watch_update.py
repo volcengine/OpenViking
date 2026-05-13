@@ -1,9 +1,7 @@
-import pytest
-import json
-import uuid
-import time
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 
@@ -48,7 +46,7 @@ class TestWatchUpdate:
             if response.status_code == 200:
                 stat_data = response.json()
                 if stat_data.get("status") == "ok":
-                    print(f"资源状态验证成功")
+                    print("资源状态验证成功")
 
             # 5. 执行搜索验证
             response = api_client.find(unique_keyword)
@@ -79,7 +77,7 @@ class TestWatchUpdate:
             health_data = response.json()
             assert health_data.get("status") == "ok"
 
-            print(f"✓ 定时监听更新测试通过，资源已被正确索引")
+            print("✓ 定时监听更新测试通过，资源已被正确索引")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):

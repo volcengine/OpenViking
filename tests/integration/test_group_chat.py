@@ -288,7 +288,7 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
             console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
 
         # 等待向量化完成
-        console.print(f"  [yellow]等待向量化完成...[/yellow]")
+        console.print("  [yellow]等待向量化完成...[/yellow]")
         client.wait_processed()
 
         # 验证隔离

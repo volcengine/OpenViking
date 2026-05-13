@@ -1,5 +1,3 @@
-import pytest
-import json
 import uuid
 
 
@@ -34,14 +32,14 @@ class TestSessionDeleteCleanup:
         session_result = session_data["result"]
         assert "session_id" in session_result
         assert session_result["session_id"] == session_id
-        print(f"会话验证存在 ✓")
+        print("会话验证存在 ✓")
 
         # 3. 添加消息（验证删除后消息也被清理）
         response = api_client.add_message(session_id, "user", f"测试消息 {random_id}")
         assert response.status_code == 200
         msg_data = response.json()
         assert msg_data.get("status") == "ok"
-        print(f"消息添加成功")
+        print("消息添加成功")
 
         # 4. 再次验证会话存在
         response = api_client.get_session(session_id)
@@ -56,7 +54,7 @@ class TestSessionDeleteCleanup:
         assert response.status_code == 200
         delete_data = response.json()
         assert delete_data.get("status") == "ok"
-        print(f"会话删除成功")
+        print("会话删除成功")
 
         # 6. 验证删除后无法获取会话
         response = api_client.get_session(session_id)
@@ -70,10 +68,10 @@ class TestSessionDeleteCleanup:
                 assert error_info.get("code") == "NOT_FOUND", (
                     f"Error code should be NOT_FOUND, got {error_info.get('code')}"
                 )
-                print(f"删除后获取会话返回 NOT_FOUND 错误 ✓")
+                print("删除后获取会话返回 NOT_FOUND 错误 ✓")
             else:
                 # 如果没有返回错误，可能是API行为不同
-                print(f"⚠️ 警告：删除后仍能获取会话，API行为可能不符合预期")
+                print("⚠️ 警告：删除后仍能获取会话，API行为可能不符合预期")
         else:
             # 非200状态码也是预期的
             assert response.status_code in [404, 410], (
@@ -85,10 +83,10 @@ class TestSessionDeleteCleanup:
         response = api_client.add_message(session_id, "user", "Another message")
         # 应该返回错误
         if response.status_code != 200:
-            print(f"删除后无法添加消息 ✓")
+            print("删除后无法添加消息 ✓")
         else:
             data = response.json()
             if data.get("status") == "error":
-                print(f"删除后添加消息返回错误 ✓")
+                print("删除后添加消息返回错误 ✓")
 
-        print(f"✓ 会话删除与清理测试通过")
+        print("✓ 会话删除与清理测试通过")

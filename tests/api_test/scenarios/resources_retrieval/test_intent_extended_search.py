@@ -1,8 +1,7 @@
-import pytest
-import json
-import uuid
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 
@@ -32,7 +31,7 @@ class TestIntentExtendedSearch:
 
             add_data = response.json()
             assert add_data.get("status") == "ok"
-            print(f"资源添加成功")
+            print("资源添加成功")
 
             # 3. 等待处理完成
             response = api_client.wait_processed()
@@ -55,7 +54,7 @@ class TestIntentExtendedSearch:
             assert response.status_code == 200
             msg_data = response.json()
             assert msg_data.get("status") == "ok"
-            print(f"消息添加成功")
+            print("消息添加成功")
 
             # 6. 执行搜索（带会话上下文）
             # 根据API文档，search支持session_id参数
@@ -99,7 +98,7 @@ class TestIntentExtendedSearch:
                                 f"Score should be between 0 and 1, got {item['score']}"
                             )
 
-            print(f"✓ 意图扩展搜索测试通过")
+            print("✓ 意图扩展搜索测试通过")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):

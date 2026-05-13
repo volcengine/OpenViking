@@ -8,8 +8,6 @@ from typing import Any, Callable, Coroutine
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
-
-
 from vikingbot.session.manager import SessionManager
 
 # Default interval: 30 minutes

@@ -1,9 +1,8 @@
-import pytest
-import json
-import uuid
-import time
 import os
 import shutil
+import time
+import uuid
+
 from conftest import create_test_file
 
 
@@ -83,13 +82,13 @@ class TestDeleteSync:
             response = api_client.fs_stat(resource_uri)
             # 资源应该不存在
             if response.status_code != 200:
-                print(f"删除后资源不存在于文件系统 ✓")
+                print("删除后资源不存在于文件系统 ✓")
             else:
                 stat_data = response.json()
                 if stat_data.get("status") == "error":
-                    print(f"删除后资源不存在于文件系统 ✓")
+                    print("删除后资源不存在于文件系统 ✓")
 
-            print(f"✓ 资源删除索引同步测试通过")
+            print("✓ 资源删除索引同步测试通过")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):

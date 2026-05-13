@@ -5,8 +5,6 @@
 import json
 from typing import Any, Optional
 
-from openviking_cli.exceptions import NotFoundError
-
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.helpers import (
     canonicalize_values,
@@ -21,6 +19,7 @@ from openviking.privacy.models import UserPrivacyConfigMeta, UserPrivacyConfigVe
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
+from openviking_cli.exceptions import NotFoundError
 
 
 class UserPrivacyConfigService:

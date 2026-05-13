@@ -6,8 +6,9 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.config.loader import load_config
-from ..base import Hook, HookContext
+
 from ...session import Session
+from ..base import Hook, HookContext
 
 try:
     import openviking as ov

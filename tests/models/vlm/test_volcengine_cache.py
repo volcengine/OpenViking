@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VolcEngineVLM cache logic."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+import pytest
+
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM as VLMClass
 
 

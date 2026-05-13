@@ -1,8 +1,8 @@
-import pytest
 import json
-import uuid
 import os
 import shutil
+import uuid
+
 from conftest import create_test_file
 
 
@@ -88,7 +88,7 @@ class TestGrepValidation:
             # 6. 验证搜索结果结构正确
             assert grep_result is not None, "Grep result should not be None"
 
-            print(f"✓ Grep验证测试通过")
+            print("✓ Grep验证测试通过")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):

@@ -1,9 +1,8 @@
-import pytest
-import json
-import uuid
-import time
 import os
 import shutil
+import time
+import uuid
+
 from conftest import create_test_file
 
 
@@ -81,9 +80,9 @@ class TestPackConsistency:
             if response.status_code == 200:
                 stat_data = response.json()
                 if stat_data.get("status") == "ok":
-                    print(f"资源状态验证成功 ✓")
+                    print("资源状态验证成功 ✓")
 
-            print(f"✓ Pack一致性测试通过，资源已正确索引")
+            print("✓ Pack一致性测试通过，资源已正确索引")
         finally:
             # 清理临时文件
             if os.path.exists(temp_dir):
