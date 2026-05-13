@@ -196,10 +196,11 @@ const zhCN = {
     clear: '清空',
     description: '查看当前 Studio 会话发出的 API 请求，包括状态、耗时和请求标识。',
     empty: {
-      description: '当前无日志信息，先开始您的第一次调用吧！',
+      description: '先开始您的第一次调用吧！',
       filteredDescription: '调整搜索内容或状态筛选，扩大可见日志范围。',
       filteredTitle: '没有匹配的请求',
-      title: '当前无日志信息，先开始您的第一次调用吧！',
+      title: '当前无日志信息',
+      upload: '上传文件',
     },
     eyebrow: 'Studio 遥测',
     filters: {
@@ -410,7 +411,9 @@ const zhCN = {
       topN: '检索结果（Top{{count}}）',
     },
     empty: {
-      title: '当前无日志信息，先开始您的第一次调用吧！',
+      title: '当前还没有可检索的上下文',
+      description: '先上传您的第一份资源吧～',
+      upload: '上传文件',
     },
     error: '检索出错',
     noResults: {
