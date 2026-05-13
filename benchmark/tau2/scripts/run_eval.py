@@ -69,6 +69,7 @@ def _tau2_command(
     task_ids: list[str] | None,
     num_tasks: int | None,
     train_num_tasks: int | None,
+    seed: int,
 ) -> list[str] | None:
     benchmark = config["benchmark"]
     model = config["model"]
@@ -139,6 +140,8 @@ def _tau2_command(
             str(openviking.get("retrieval_top_k", 4)),
             "--retrieval-mode",
             str(strategy.get("retrieval_mode", "first_user")),
+            "--seed",
+            str(seed),
         ]
         if task_ids:
             for task_id in task_ids:
@@ -176,6 +179,8 @@ def _tau2_command(
         str(model["user_llm"]),
         "--save-to",
         run_label,
+        "--seed",
+        str(seed),
     ]
 
     command.extend(["--agent-llm-args", agent_llm_args])
@@ -202,6 +207,7 @@ def _build_plan(
     repeat_count_override: int | None,
 ) -> dict[str, Any]:
     repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 8))
+    base_seed = int(config["benchmark"].get("seed", 300))
     policy_report = simulator_policy_report(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
@@ -220,6 +226,7 @@ def _build_plan(
         split_path = split_file(config, domain)
         for strategy in strategies:
             for repeat_index in range(repeat_count):
+                seed = base_seed + repeat_index
                 run_label = f"{configured_run_id}_{domain}_{strategy['id']}_r{repeat_index + 1}"
                 command = _tau2_command(
                     config,
@@ -230,6 +237,7 @@ def _build_plan(
                     task_ids=task_ids,
                     num_tasks=num_tasks,
                     train_num_tasks=train_num_tasks,
+                    seed=seed,
                 )
                 non_executable_reason = None
                 if command is None:
@@ -243,6 +251,7 @@ def _build_plan(
                         "strategy_id": strategy["id"],
                         "strategy_label": strategy.get("label", strategy["id"]),
                         "repeat_index": repeat_index + 1,
+                        "seed": seed,
                         "run_label": run_label,
                         "train_required": bool(strategy.get("train_required")),
                         "memory_backend": strategy.get("memory_backend"),

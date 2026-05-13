@@ -10,4 +10,4 @@ strategies:
     train_required: true
     corpus_id: memory_v2_experience_only
     train_memory_mode: experience_only
-    retrieval_mode: prewrite
+    retrieval_mode: first_user_prewrite

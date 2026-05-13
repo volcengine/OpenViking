@@ -14,14 +14,20 @@ from tau2_common import normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
-READ_TOOL_PREFIXES = (
-    "get_",
-    "find_",
-    "list_",
-    "search_",
-    "calculate",
-    "think",
-    "transfer_",
+WRITE_TOOL_PREFIXES = (
+    "toggle_",
+    "enable_",
+    "disable_",
+    "set_",
+    "reset_",
+    "update_",
+    "modify_",
+    "cancel_",
+    "book_",
+    "exchange_",
+    "return_",
+    "grant_",
+    "reboot_",
 )
 
 
@@ -84,17 +90,29 @@ def _metrics(results_path: Path) -> dict[str, Any]:
     }
 
 
+def _tool_call_name(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("name") or tool_call.get("function", {}).get("name") or "")
+    return str(getattr(tool_call, "name", "") or "")
+
+
+def _tool_call_arguments(tool_call: Any) -> Any:
+    if isinstance(tool_call, dict):
+        return tool_call.get("arguments") or tool_call.get("function", {}).get("arguments") or {}
+    return getattr(tool_call, "arguments", {}) or {}
+
+
 def _is_write_tool_call(tool_call: Any) -> bool:
-    name = str(getattr(tool_call, "name", "") or "")
-    return bool(name) and not name.startswith(READ_TOOL_PREFIXES)
+    name = _tool_call_name(tool_call)
+    return bool(name) and name.startswith(WRITE_TOOL_PREFIXES)
 
 
 def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
     rendered = []
     for call in tool_calls:
         rendered.append(
-            f"{getattr(call, 'name', 'unknown_tool')}("
-            f"{json.dumps(getattr(call, 'arguments', {}) or {}, ensure_ascii=False, sort_keys=True)}"
+            f"{_tool_call_name(call) or 'unknown_tool'}("
+            f"{json.dumps(_tool_call_arguments(call), ensure_ascii=False, sort_keys=True)}"
             ")"
         )
     recent_user = [
@@ -102,12 +120,18 @@ def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
         for message in state_messages[-8:]
         if str(getattr(message, "role", "")) == "user" and str(getattr(message, "content", "") or "").strip()
     ]
-    return (
-        "Before executing write-like tool call(s): "
-        + "; ".join(rendered)
-        + "\nRecent user context: "
-        + " | ".join(recent_user[-3:])
-    )
+    recent_observations = [
+        str(getattr(message, "content", "") or "")[:600]
+        for message in state_messages[-12:]
+        if str(getattr(message, "role", "")) == "tool" and str(getattr(message, "content", "") or "").strip()
+    ]
+    parts = [
+        "Before executing write-like tool call(s): " + "; ".join(rendered),
+        "Recent user context: " + " | ".join(recent_user[-3:]),
+    ]
+    if recent_observations:
+        parts.append("Recent tool observations: " + " | ".join(recent_observations[-4:]))
+    return "\n".join(parts)
 
 
 def _message_text(message: dict[str, Any]) -> tuple[str, str]:
@@ -213,6 +237,37 @@ def _wait_task(client: Any, task_id: str | None, timeout: int) -> dict[str, Any]
     raise TimeoutError(f"OpenViking task {task_id} did not finish within {timeout}s: {last}")
 
 
+def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
+    result = client.search(
+        query=f"{args.domain} customer service order reservation booking cancellation exchange return update",
+        target_uri=args.search_uri,
+        limit=args.retrieval_top_k,
+    )
+    memories = list(getattr(result, "memories", []) or [])
+    reads = []
+    for match in memories[: args.retrieval_top_k]:
+        uri = getattr(match, "uri", "")
+        text = ""
+        try:
+            text = client.read(uri)
+        except Exception:
+            text = getattr(match, "abstract", "") or getattr(match, "overview", "") or ""
+        reads.append(
+            {
+                "uri": uri,
+                "score": getattr(match, "score", None),
+                "text_chars": len(text),
+                "non_empty": bool(str(text).strip()),
+            }
+        )
+    return {
+        "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
+        "match_count": len(memories),
+        "read_non_empty_count": sum(1 for row in reads if row["non_empty"]),
+        "matches": reads,
+    }
+
+
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
     if corpus_manifest.is_file() and not args.force_train:
         return json.loads(corpus_manifest.read_text())
@@ -268,6 +323,12 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     finally:
         client.close()
 
+    client = _client(args)
+    try:
+        corpus_probe = _probe_corpus(args, client)
+    finally:
+        client.close()
+
     manifest = {
         "domain": args.domain,
         "train_results": str(train_results),
@@ -280,6 +341,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         },
         "committed_sessions": committed,
         "committed_session_count": len(committed),
+        "corpus_probe": corpus_probe,
     }
     _write_json(corpus_manifest, manifest)
     return manifest
@@ -296,7 +358,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     class OpenVikingMemoryAgent(LLMAgent):
         def get_init_state(self, message_history=None):
             state = super().get_init_state(message_history)
-            if args.retrieval_mode == "first_user":
+            if args.retrieval_mode in {"first_user", "first_user_prewrite"}:
                 state.system_messages.append(
                     SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
                 )
@@ -333,6 +395,15 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
         def _trace(self, event: dict[str, Any]) -> None:
             with trace_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+        @staticmethod
+        def _trace_injection_fields(block: str, matches: list[dict[str, Any]]) -> dict[str, Any]:
+            injected_count = sum(1 for row in matches if int(row.get("text_chars") or 0) > 0)
+            return {
+                "injected": bool(block.strip()),
+                "injected_count": injected_count if block.strip() else 0,
+                "retrieval_action_taken": "retrieve_and_inject" if block.strip() else "retrieve_no_injection",
+            }
 
         def _generate(self, messages):
             def _is_empty_assistant(response) -> bool:
@@ -425,11 +496,12 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         "query": query,
                         "match_count": len(matches),
                         "matches": matches,
+                        **self._trace_injection_fields(block, matches),
                     }
                 )
 
             assistant_message = self._generate(state.system_messages + state.messages)
-            if args.retrieval_mode == "prewrite":
+            if args.retrieval_mode in {"prewrite", "first_user_prewrite"}:
                 tool_calls = list(getattr(assistant_message, "tool_calls", None) or [])
                 write_calls = [call for call in tool_calls if _is_write_tool_call(call)]
                 if write_calls:
@@ -441,10 +513,11 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                             "query": query,
                             "match_count": len(matches),
                             "matches": matches,
+                            **self._trace_injection_fields(block, matches),
                             "tool_calls": [
                                 {
-                                    "name": getattr(call, "name", ""),
-                                    "arguments": getattr(call, "arguments", {}) or {},
+                                    "name": _tool_call_name(call),
+                                    "arguments": _tool_call_arguments(call),
                                 }
                                 for call in write_calls
                             ],
@@ -510,7 +583,11 @@ def main() -> int:
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
     parser.add_argument("--search-uri", required=True)
     parser.add_argument("--retrieval-top-k", type=int, default=4)
-    parser.add_argument("--retrieval-mode", choices=["first_user", "prewrite"], default="first_user")
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=["first_user", "prewrite", "first_user_prewrite"],
+        default="first_user",
+    )
     parser.add_argument("--force-train", action="store_true")
     args = parser.parse_args()
     normalize_litellm_env()
@@ -551,6 +628,7 @@ def main() -> int:
         "domain": args.domain,
         "strategy_id": args.strategy_id,
         "retrieval_mode": args.retrieval_mode,
+        "seed": args.seed,
         "corpus": corpus,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
