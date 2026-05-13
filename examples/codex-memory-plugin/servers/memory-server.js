@@ -200,7 +200,7 @@ function formatMemoryResults(items) {
 }
 const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.accountId, config.userId, config.agentId, config.timeoutMs);
 const server = new McpServer({ name: "openviking-memory-codex", version: "0.1.0" });
-server.tool("find", "Find OpenViking long-term memory.", {
+server.tool("openviking_recall", "Find OpenViking long-term memory.", {
     query: z.string().describe("Find query"),
     target_uri: z.string().optional().describe("Find scope URI, default viking://user/memories"),
     limit: z.number().optional().describe("Max results, default 6"),
@@ -218,7 +218,7 @@ server.tool("find", "Find OpenViking long-term memory.", {
     }
     return { content: [{ type: "text", text: formatMemoryResults(items) }] };
 });
-server.tool("remember", "Store information in OpenViking long-term memory.", {
+server.tool("openviking_store", "Store information in OpenViking long-term memory.", {
     text: z.string().describe("Information to store"),
     role: z.string().optional().describe("Message role, default user"),
 }, async ({ text, role }) => {
@@ -254,7 +254,7 @@ server.tool("remember", "Store information in OpenViking long-term memory.", {
             await client.deleteSession(sessionId).catch(() => { });
     }
 });
-server.tool("forget", "Delete an exact OpenViking memory URI. Use find first if you only have a query.", {
+server.tool("openviking_forget", "Delete an exact OpenViking memory URI. Use openviking_recall first if you only have a query.", {
     uri: z.string().describe("Exact memory URI to delete"),
 }, async ({ uri }) => {
     if (!isMemoryUri(uri)) {
@@ -263,7 +263,7 @@ server.tool("forget", "Delete an exact OpenViking memory URI. Use find first if 
     await client.deleteUri(uri);
     return { content: [{ type: "text", text: `Deleted memory: ${uri}` }] };
 });
-server.tool("health", "Check whether the OpenViking server is reachable.", {}, async () => {
+server.tool("openviking_health", "Check whether the OpenViking server is reachable.", {}, async () => {
     const ok = await client.healthCheck();
     const text = ok
         ? `OpenViking is reachable at ${config.baseUrl}.`

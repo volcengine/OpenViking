@@ -220,20 +220,20 @@ async function resolveTargetUri(targetUri) {
   return `viking://${scope}/${space}/${parts.join("/")}`;
 }
 
-async function searchScope(query, targetUri, limit) {
+async function searchScope(query, targetUri, limit, bucket = "memories") {
   const resolvedUri = await resolveTargetUri(targetUri);
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
   });
-  return result?.memories || [];
+  return result?.[bucket] || [];
 }
 
 async function searchAll(query, limit) {
   const [userMems, agentMems, agentSkills] = await Promise.all([
     searchScope(query, "viking://user/memories", limit),
     searchScope(query, "viking://agent/memories", limit),
-    searchScope(query, "viking://agent/skills", limit),
+    searchScope(query, "viking://agent/skills", limit, "skills"),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
   log("search_complete", { scope: "agent", rawCount: agentMems.length, topScores: agentMems.slice(0, 3).map((m) => m.score) });

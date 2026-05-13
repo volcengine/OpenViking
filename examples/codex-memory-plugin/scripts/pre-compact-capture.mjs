@@ -104,6 +104,7 @@ function extractTurns(entries) {
     }
 
     if (role !== "user" && role !== "assistant") continue;
+    if (role === "assistant" && !cfg.captureAssistantTurns) continue;
     const trimmed = text.trim();
     if (!trimmed) continue;
 
@@ -139,12 +140,16 @@ async function ensureOvSession(state) {
 }
 
 async function appendTurns(ovSessionId, turns) {
+  let appended = 0;
   for (const turn of turns) {
-    await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
+    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ role: turn.role, content: turn.text }),
     });
+    if (!result) break;
+    appended += 1;
   }
+  return appended;
 }
 
 function countExtracted(commit) {
@@ -205,6 +210,13 @@ async function main() {
     return;
   }
 
+  if (newTurns.length > 0 && !state.ovSessionId && cfg.captureMode === "keyword" && !hasCaptureKeyword(newTurns)) {
+    log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
+    await saveState(state);
+    noop();
+    return;
+  }
+
   if (newTurns.length > 0) {
     const ovSessionId = await ensureOvSession(state);
     if (!ovSessionId) {
@@ -212,9 +224,15 @@ async function main() {
       noop();
       return;
     }
-    await appendTurns(ovSessionId, newTurns);
-    state.capturedTurnCount = allTurns.length;
-    log("appended_catchup", { ovSessionId, added: newTurns.length });
+    const added = await appendTurns(ovSessionId, newTurns);
+    state.capturedTurnCount += added;
+    log("appended_catchup", { ovSessionId, added });
+    if (added < newTurns.length) {
+      logError("append_failed_keep_state", { ovSessionId, attempted: newTurns.length, added });
+      await saveState(state);
+      noop(`pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`);
+      return;
+    }
   }
 
   if (!state.ovSessionId) {
@@ -258,6 +276,10 @@ async function main() {
   noop(
     `pre-compact commit: ${ovSessionId} → ${extracted} memory item(s) extracted${commit.archived ? " (archived)" : ""}`,
   );
+}
+
+function hasCaptureKeyword(turns) {
+  return turns.some((turn) => /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text));
 }
 
 main().catch((err) => { logError("uncaught", err); noop(); });

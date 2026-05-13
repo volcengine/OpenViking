@@ -113,6 +113,7 @@ function extractTurns(rolloutEntries) {
     }
 
     if (role !== "user" && role !== "assistant") continue;
+    if (role === "assistant" && !cfg.captureAssistantTurns) continue;
     const trimmed = text.trim();
     if (!trimmed) continue;
 
@@ -152,12 +153,16 @@ async function ensureOvSession(state) {
 }
 
 async function appendTurns(ovSessionId, turns) {
+  let appended = 0;
   for (const turn of turns) {
-    await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
+    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ role: turn.role, content: turn.text }),
     });
+    if (!result) break;
+    appended += 1;
   }
+  return appended;
 }
 
 async function commitOvSession(ovSessionId) {
@@ -237,15 +242,21 @@ async function main() {
     newTurns: newTurns.length,
   });
 
+  if (cfg.captureMode === "keyword" && newTurns.length > 0 && !hasCaptureKeyword(newTurns)) {
+    log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
+    await saveState(state);
+    noop();
+    return;
+  }
+
   let added = 0;
   if (newTurns.length > 0) {
     const ovSessionId = await ensureOvSession(state);
     if (!ovSessionId) {
       logError("ensure_ov_session", "failed to create OV session");
     } else {
-      await appendTurns(ovSessionId, newTurns);
-      added = newTurns.length;
-      state.capturedTurnCount = allTurns.length;
+      added = await appendTurns(ovSessionId, newTurns);
+      state.capturedTurnCount += added;
       log("appended", { ovSessionId, added });
     }
   }
@@ -259,6 +270,10 @@ async function main() {
   } else {
     noop();
   }
+}
+
+function hasCaptureKeyword(turns) {
+  return turns.some((turn) => /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text));
 }
 
 main().catch((err) => { logError("uncaught", err); noop(); });

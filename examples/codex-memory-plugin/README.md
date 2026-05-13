@@ -58,7 +58,7 @@ For local development, pre-populate Codex's plugin cache so it resolves immediat
 ```bash
 INSTALL_DIR=~/.codex/plugins/cache/openviking-codex-local/openviking-memory
 mkdir -p "$INSTALL_DIR"
-cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.2.0"
+cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.0"
 ```
 
 ### 3. Build the MCP server
