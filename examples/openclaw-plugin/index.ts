@@ -22,7 +22,7 @@ import {
 import {
   clampScore,
   postProcessMemories,
-  formatMemoryLines,
+  pickMemoriesForInjection,
 } from "./memory-ranking.js";
 import { withTimeout } from "./process-manager.js";
 import {
@@ -1090,29 +1090,58 @@ const contextEnginePlugin = {
             };
           }
 
-          const memories = postProcessMemories(result.memories ?? [], {
-            limit,
+          const leafOnly = (result.memories ?? []).filter((m) => !m.level || m.level === 2);
+          const processed = postProcessMemories(leafOnly, {
+            limit: requestLimit,
             scoreThreshold,
           });
+          const memories = pickMemoriesForInjection(processed, limit, query);
           if (memories.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant OpenViking memories found." }],
               details: { count: 0, total: result.total ?? 0, scoreThreshold },
             };
           }
+          const { lines: memoryLines } = await buildMemoryLinesWithBudget(
+            memories,
+            (uri) => recallClient.read(uri, session.agentId),
+            {
+              recallPreferAbstract: false,
+              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+            },
+          );
+          if (memoryLines.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No complete OpenViking memories fit recallMaxInjectedChars=${cfg.recallMaxInjectedChars}.`,
+                },
+              ],
+              details: {
+                count: 0,
+                memories,
+                total: result.total ?? memories.length,
+                scoreThreshold,
+                requestLimit,
+                recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+              },
+            };
+          }
           return {
             content: [
               {
                 type: "text",
-                text: `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}`,
+                text: `Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`,
               },
             ],
             details: {
-              count: memories.length,
+              count: memoryLines.length,
               memories,
               total: result.total ?? memories.length,
               scoreThreshold,
               requestLimit,
+              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
             },
           };
         },

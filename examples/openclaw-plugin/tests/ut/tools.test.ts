@@ -48,7 +48,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setupPlugin(clientOverrides?: Record<string, unknown>) {
+function setupPlugin(
+  clientOverrides?: Record<string, unknown>,
+  pluginConfigOverrides?: Record<string, unknown>,
+) {
   const tools = new Map<string, ToolDef>();
   const factoryTools = new Map<string, (ctx: Record<string, unknown>) => ToolDef>();
   const commands = new Map<string, CommandDef>();
@@ -88,6 +91,7 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
+      ...pluginConfigOverrides,
     },
     logger: {
       info: vi.fn(),
@@ -173,6 +177,133 @@ describe("Tool: memory_recall (registration)", () => {
     expect(props).toHaveProperty("limit");
     expect(props).toHaveProperty("scoreThreshold");
     expect(props).toHaveProperty("targetUri");
+  });
+
+  it("fills L2 content and filters explicit recall results like auto-recall", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const targetUri = String(body.target_uri ?? "");
+        const memories =
+          targetUri.includes("user")
+            ? [
+                makeMemory({
+                  uri: "viking://user/default/memories/high",
+                  abstract: "Abstract only text",
+                  score: 0.92,
+                }),
+                makeMemory({
+                  uri: "viking://user/default/memories/low",
+                  abstract: "Low score text",
+                  score: 0.05,
+                }),
+              ]
+            : [];
+        return okResponse({ memories, total: memories.length });
+      }
+
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        expect(requestUrl.searchParams.get("uri")).toBe("viking://user/default/memories/high");
+        return okResponse("Full L2 content from read");
+      }
+
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      recallLimit: 1,
+      recallPreferAbstract: true,
+      recallScoreThreshold: 0.2,
+    });
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_recall");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({ sessionId: "test-session", agentId: "main" });
+    const result = await tool.execute("tc-memory-recall", {
+      query: "backend preference",
+      limit: 1,
+      scoreThreshold: 0.2,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Full L2 content from read");
+    expect(result.content[0]!.text).not.toContain("Abstract only text");
+    expect(result.content[0]!.text).not.toContain("Low score text");
+
+    const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
+      String(calledUrl).includes("/api/v1/search/find")
+    );
+    expect(findCalls).toHaveLength(2);
+    for (const [, init] of findCalls) {
+      const body = JSON.parse(String((init as RequestInit).body));
+      expect(body.limit).toBe(20);
+      expect(body.score_threshold).toBe(0);
+    }
+  });
+
+  it("applies recallMaxInjectedChars to explicit memory_recall output", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const targetUri = String(body.target_uri ?? "");
+        const memories =
+          targetUri.includes("user")
+            ? [
+                makeMemory({
+                  uri: "viking://user/default/memories/large",
+                  abstract: "Large abstract",
+                  score: 0.95,
+                }),
+                makeMemory({
+                  uri: "viking://user/default/memories/small",
+                  abstract: "Small abstract",
+                  score: 0.9,
+                }),
+              ]
+            : [];
+        return okResponse({ memories, total: memories.length });
+      }
+
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        const uri = requestUrl.searchParams.get("uri");
+        return okResponse(uri?.endsWith("/large") ? "x".repeat(200) : "short");
+      }
+
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      recallLimit: 2,
+      recallMaxInjectedChars: 20,
+      recallScoreThreshold: 0.2,
+    });
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_recall");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({ sessionId: "test-session", agentId: "main" });
+    const result = await tool.execute("tc-memory-recall-budget", {
+      query: "backend preference",
+      limit: 2,
+      scoreThreshold: 0.2,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Found 1 memories");
+    expect(result.content[0]!.text).toContain("- [preferences] short");
+    expect(result.content[0]!.text).not.toContain("x".repeat(200));
+    expect(result.details.count).toBe(1);
   });
 });
 
