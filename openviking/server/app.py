@@ -30,6 +30,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Respo
 from openviking.server.routers import (
     admin_router,
     bot_router,
+    console_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -214,10 +215,12 @@ def create_app(
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
         )
+        from openviking.observability.usage_audit import init_usage_audit_from_server_config
 
         init_metrics_from_server_config(config, app=app, service=service)
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
+        await init_usage_audit_from_server_config(config, app=app, service=service)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -273,7 +276,9 @@ def create_app(
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
+        from openviking.observability.usage_audit import shutdown_usage_audit
 
+        await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if oauth_gc_task is not None:
@@ -472,6 +477,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
+    app.include_router(console_router)
     app.include_router(search_router)
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)

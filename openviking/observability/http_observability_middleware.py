@@ -194,6 +194,12 @@ class ShardedInflightCounter:
                 result.update(self._shards[i])
         return result
 
+    def clear(self) -> None:
+        """Clear all inflight counters. Intended for tests and shutdown hygiene."""
+        for i in range(self._num_shards):
+            with self._locks[i]:
+                self._shards[i].clear()
+
 
 # Global sharded inflight counter instance
 # Using 16 shards provides good balance between memory and contention reduction
@@ -677,6 +683,10 @@ def apply_http_metrics_finalize(
             status=str(root_attrs.http_status_code or 500),
             duration_seconds=elapsed,
             account_id=final_account_id,
+            request_id=root_attrs.request_id,
+            user_id=root_attrs.user_id,
+            agent_id=root_attrs.agent_id,
+            url_path=root_attrs.url_path,
         )
 
     except (TypeError, ValueError, AttributeError) as e:
