@@ -150,7 +150,7 @@ class LockManager:
                 locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
                     path, handle,
-                    timeout=timeout if timeout is not None else self._lock_timeout,
+                    timeout=timeout,
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -191,12 +191,12 @@ class LockManager:
                 if is_subtree:
                     success = await self._path_lock.acquire_subtree(
                         path, handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=timeout,
                     )
                 else:
                     success = await self._path_lock.acquire_point(
                         path, handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=timeout,
                     )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
