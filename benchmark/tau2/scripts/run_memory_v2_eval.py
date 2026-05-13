@@ -631,6 +631,9 @@ def main() -> int:
     normalize_litellm_env()
 
     args.tau2_repo = args.tau2_repo.resolve()
+    args.run_dir = args.run_dir.resolve()
+    if args.corpus_dir is not None:
+        args.corpus_dir = args.corpus_dir.resolve()
     args.run_dir.mkdir(parents=True, exist_ok=True)
     corpus_dir = args.corpus_dir or args.run_dir
     corpus_dir.mkdir(parents=True, exist_ok=True)
