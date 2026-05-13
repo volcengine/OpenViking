@@ -228,7 +228,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             # If model returned final operations, check if refetch is needed
             if operations is not None:
-                final_operations = await self.resolve_operations(operations)
+                final_operations, raw_links = await self.resolve_operations(operations)
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
@@ -242,7 +242,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
                     continue
                 # Refetch not needed — register page_ids and resolve links
-                await self.finalize_operations(final_operations)
+                await self.finalize_operations(final_operations, raw_links)
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             tracer.error(
@@ -275,7 +275,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         return final_operations, tools_used
 
-    async def resolve_operations(self, operations) -> ResolvedOperations:
+    async def resolve_operations(self, operations) -> tuple[ResolvedOperations, List]:
         tracer.info(f"operations={JsonUtils.dumps(operations)}")
         upsert_operations: List[ResolvedOperation] = []
         delete_file_contents: List[MemoryFile] = []
@@ -328,11 +328,14 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 delete_file_contents.append(old_content)
 
         # 构建 ResolvedOperations
+        raw_links = getattr(operations, "links", None) or []
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
             errors=errors,
         )
+
+        return resolved, raw_links
         # 调用 supplement_operation_uris 填充 uris
         if self._isolation_handler:
             supplement_operation_uris(
@@ -356,7 +359,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # of inheriting 100+ IDs from register_new_page_id.
         return resolved
 
-    async def finalize_operations(self, operations: ResolvedOperations) -> None:
+    async def finalize_operations(self, operations: ResolvedOperations, raw_links: List) -> None:
         """Register new page_ids and resolve links after refetch is complete.
 
         Must be called after resolve_operations() and any refetch rounds,
@@ -378,13 +381,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
         tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
-        resolved_links = self._resolve_links(operations, upsert_operations)
+        resolved_links = self._resolve_links(raw_links)
 
         operations.resolved_links = resolved_links
 
-    def _resolve_links(
-        self, operations, upsert_operations: List[ResolvedOperation]
-    ) -> List[StoredLink]:
+    def _resolve_links(self, raw_links: List) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs.
 
         Returns a flat list of StoredLink objects. Each link is stored once.
@@ -393,7 +394,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         """
         from datetime import datetime, timezone
 
-        raw_links = getattr(operations, "links", None)
         if not raw_links:
             return []
 
