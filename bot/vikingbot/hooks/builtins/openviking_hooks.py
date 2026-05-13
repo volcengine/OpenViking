@@ -6,8 +6,9 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.config.loader import load_config
-from ..base import Hook, HookContext
+
 from ...session import Session
+from ..base import Hook, HookContext
 
 try:
     import openviking as ov
@@ -39,7 +40,6 @@ class OpenVikingCompactHook(Hook):
     async def _get_client(self, workspace_id: str) -> VikingClient:
         return await get_global_client(workspace_id)
 
-
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_key.safe_name()
@@ -58,7 +58,9 @@ class OpenVikingCompactHook(Hook):
                     "users_count": 0,
                 }
 
-            admin_result = await client.commit(session_id, vikingbot_session.messages, admin_user_id)
+            admin_result = await client.commit(
+                session_id, vikingbot_session.messages, admin_user_id
+            )
 
             messages_by_sender = defaultdict(list)
             for msg in vikingbot_session.messages:
@@ -72,7 +74,9 @@ class OpenVikingCompactHook(Hook):
 
                 async def commit_with_semaphore(user_id: str, user_messages: list):
                     async with semaphore:
-                        return await client.commit(f"{session_id}_{user_id}", user_messages, user_id)
+                        return await client.commit(
+                            f"{session_id}_{user_id}", user_messages, user_id
+                        )
 
                 user_tasks = []
                 for user_id, user_messages in messages_by_sender.items():
@@ -132,7 +136,9 @@ class OpenVikingPostCallHook(Hook):
                     desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
                     skill_query = desc_match.group(1).strip() if desc_match else skill_name
 
-                    exp_memory = await self._search_skill_experiences(context.workspace_id, skill_query)
+                    exp_memory = await self._search_skill_experiences(
+                        context.workspace_id, skill_query
+                    )
                     if exp_memory:
                         result = f"{result}\n\n---\n## Related Experiences\n{exp_memory}"
 

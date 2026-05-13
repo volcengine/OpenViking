@@ -14,22 +14,20 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context
 from openviking.core.namespace import (
-    agent_space_fragment,
-    user_space_fragment,
-    to_user_space,
     to_agent_space,
+    to_user_space,
 )
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.session.memory.dataclass import ResolvedOperations
-from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -38,7 +36,6 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
-
 
 
 class SessionCompressorV2:
@@ -190,8 +187,8 @@ class SessionCompressorV2:
                 # 固定文件名 schema（如 soul.md、identity.md）只需 POINT 锁，
                 # 避免因 SUBTREE 锁阻塞子目录（trajectories/experiences）的并发加锁。
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-                point_lock_dirs: list = []   # 固定文件名 schema → POINT 锁
-                subtree_lock_dirs: list = [] # 变量文件名 schema → SUBTREE 锁
+                point_lock_dirs: list = []  # 固定文件名 schema → POINT 锁
+                subtree_lock_dirs: list = []  # 变量文件名 schema → SUBTREE 锁
                 for schema in schemas:
                     if not schema.directory:
                         continue
@@ -405,7 +402,10 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
         for traj_uri in written_trajectory_uris:
             try:
-                from openviking.session.memory.utils.content import deserialize_content as _deser_content
+                from openviking.session.memory.utils.content import (
+                    deserialize_content as _deser_content,
+                )
+
                 traj_content = _deser_content(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
             except Exception as e:
                 logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
@@ -426,7 +426,7 @@ class SessionCompressorV2:
 
             exp_dir = exp_provider._render_experience_dir(ctx)
 
-            async def _single_existing_experience_uri() -> List[str]:
+            async def _single_existing_experience_uri(exp_dir: str | None = exp_dir) -> List[str]:
                 if not exp_dir:
                     return []
                 try:
@@ -463,7 +463,9 @@ class SessionCompressorV2:
 
             all_exp_uris = exp_written_uris + exp_edited_uris
             if not all_exp_uris:
-                candidate_uris = list(dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or []))
+                candidate_uris = list(
+                    dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or [])
+                )
                 candidate_exp_uris = [
                     uri
                     for uri in candidate_uris
@@ -601,9 +603,7 @@ class SessionCompressorV2:
                 f"{op.memory_type}(uris={op.uris!r})"
                 for op in getattr(operations, "upsert_operations", [])
             ]
-            _delete_uris_raw = [
-                dc.uri for dc in getattr(operations, "delete_file_contents", [])
-            ]
+            _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
             tracer.info(
                 f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
             )
@@ -613,12 +613,13 @@ class SessionCompressorV2:
             # superseding experience inherits the old source_trajectories.
             inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
 
-
-
             registry = provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
             result = await updater.apply_operations(
-                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
+                operations,
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
             )
 
             tracer.info(
@@ -629,17 +630,11 @@ class SessionCompressorV2:
 
             contexts: List[Context] = []
             for uri in result.written_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_write", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
             for uri in result.edited_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_edit", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
             for uri in result.deleted_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_delete", context_type="memory")
-                )
+                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
 
             return list(result.written_uris), list(result.edited_uris), contexts, inheritance_map
         except Exception as e:
@@ -688,7 +683,9 @@ class SessionCompressorV2:
             if not supersedes_name:
                 continue
             if not exp_dir:
-                logger.warning(f"[supersedes] cannot resolve '{supersedes_name}': no experience dir")
+                logger.warning(
+                    f"[supersedes] cannot resolve '{supersedes_name}': no experience dir"
+                )
                 continue
 
             old_uri = f"{exp_dir.rstrip('/')}/{supersedes_name}.md"
@@ -742,7 +739,10 @@ class SessionCompressorV2:
         This is the system-side management of source_trajectories — the LLM never
         outputs this field; the pipeline appends the batch after a write or edit.
         """
-        from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+        from openviking.session.memory.utils.content import (
+            deserialize_full,
+            serialize_with_metadata,
+        )
 
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:

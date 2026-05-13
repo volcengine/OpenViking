@@ -31,8 +31,7 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
   }
 
   if (max_id != static_cast<int>(fields.size()) - 1) {
-    throw std::invalid_argument(
-        "Field ids must be contiguous from 0 to N-1");
+    throw std::invalid_argument("Field ids must be contiguous from 0 to N-1");
   }
 
   std::vector<bool> seen(fields.size(), false);

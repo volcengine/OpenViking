@@ -65,7 +65,8 @@ class SparseDataHolder {
     index_with_sparse_bias_ =
         (index_with_sparse_bias_alpha != 0.0 ? true : false);
     search_with_sparse_bias_ =
-        (search_with_sparse_bias_alpha != 0.0 ? true : false);  // For compatibility
+        (search_with_sparse_bias_alpha != 0.0 ? true
+                                              : false);  // For compatibility
     index_with_sparse_bias_alpha_ = index_with_sparse_bias_alpha;
     search_with_sparse_bias_alpha_ = search_with_sparse_bias_alpha;
     if (search_use_l2) {

@@ -59,9 +59,24 @@ async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
     bare_viking_fs._uri_to_path = lambda uri, ctx=None: "/fake/resources"
     bare_viking_fs._ctx_or_default = lambda ctx=None: ctx
     bare_viking_fs._ls_entries = lambda path: [
-        {"name": ".watch_tasks.json", "isDir": False, "size": 10, "modTime": "2026-01-01T00:00:00+00:00"},
-        {"name": ".watch_tasks.json.bak", "isDir": False, "size": 10, "modTime": "2026-01-01T00:00:00+00:00"},
-        {"name": ".watch_tasks.json.tmp", "isDir": False, "size": 10, "modTime": "2026-01-01T00:00:00+00:00"},
+        {
+            "name": ".watch_tasks.json",
+            "isDir": False,
+            "size": 10,
+            "modTime": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "name": ".watch_tasks.json.bak",
+            "isDir": False,
+            "size": 10,
+            "modTime": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "name": ".watch_tasks.json.tmp",
+            "isDir": False,
+            "size": 10,
+            "modTime": "2026-01-01T00:00:00+00:00",
+        },
         {"name": "public.txt", "isDir": False, "size": 5, "modTime": "2026-01-01T00:00:00+00:00"},
     ]
     bare_viking_fs._path_to_uri = lambda path, ctx=None: f"viking://resources/{path.split('/')[-1]}"

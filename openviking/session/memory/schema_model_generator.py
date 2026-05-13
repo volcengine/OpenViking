@@ -188,7 +188,6 @@ class SchemaModelGenerator:
         self._union_model = MemoryDataWrapper
         return self._union_model
 
-
     def create_structured_operations_model(self, role_scope: RoleScope) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
@@ -225,16 +224,14 @@ class SchemaModelGenerator:
                 List[flat_model],  # type: ignore
                 Field(
                     default_factory=list,
-                    description=f"{mt.memory_type} memories: {mt.description} (top-level field, do not nest inside other arrays)"
+                    description=f"{mt.memory_type} memories: {mt.description} (top-level field, do not nest inside other arrays)",
                 ),
             )
 
         # Only expose delete_uris when at least one schema supports it.
         # add_only schemas (e.g. trajectories) never delete existing records,
         # so excluding this field prevents the LLM from hallucinating fake URIs.
-        has_deletable_schema = any(
-            mt.operation_mode != "add_only" for mt in enabled_memory_types
-        )
+        has_deletable_schema = any(mt.operation_mode != "add_only" for mt in enabled_memory_types)
         if has_deletable_schema:
             field_definitions["delete_uris"] = (
                 List[str],
@@ -297,7 +294,6 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
 
     def get_memory_data_json_schema(self) -> Dict[str, Any]:
         """

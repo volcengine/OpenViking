@@ -36,9 +36,7 @@ class VolcengineApiKeyCollection(ICollection):
             ClientForDataApi._global_host.get(region or "") if region else None
         )
         if not resolved_host:
-            raise ValueError(
-                "host or region is required for Volcengine API key data-plane access"
-            )
+            raise ValueError("host or region is required for Volcengine API key data-plane access")
         self.data_client = ClientForDataApiWithApiKey(api_key, resolved_host)
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
@@ -55,17 +53,12 @@ class VolcengineApiKeyCollection(ICollection):
         message = ""
         if isinstance(result, dict):
             message = (
-                result.get("message")
-                or result.get("msg")
-                or result.get("error")
-                or response.text
+                result.get("message") or result.get("msg") or result.get("error") or response.text
             )
         else:
             message = response.text
 
-        return ConnectionError(
-            f"Request to {action} failed: {response.status_code} {message}"
-        )
+        return ConnectionError(f"Request to {action} failed: {response.status_code} {message}")
 
     @staticmethod
     def _sanitize_uri_value(v: Any) -> Any:
@@ -244,6 +237,7 @@ class VolcengineApiKeyCollection(ICollection):
 
     def get_meta_data(self):
         from openviking.storage.collection_schemas import CollectionSchemas
+
         return {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,

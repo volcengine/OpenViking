@@ -4,17 +4,15 @@
 Tests for MemoryIsolationHandler.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from openviking.message.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking_cli.session.user_id import UserIdentifier
 from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
-    RoleScope,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def create_message(role: str, role_id: str, content: str = "test") -> Message:
@@ -371,7 +369,9 @@ class TestCalculateMemoryUris:
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_multiple_users_agents(self, mock_generate_uri):
         """Test calculate_memory_uris with multiple users and agents."""
-        mock_generate_uri.side_effect = lambda **kwargs: f"viking://user/{kwargs.get('user_space')}/memories/test"
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/test"
+        )
 
         ctx = create_ctx()
         messages = [create_message("user", "user_a")]
