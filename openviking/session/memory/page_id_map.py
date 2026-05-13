@@ -40,10 +40,9 @@ class PageIdMap:
         return page_id
 
     def register_new_page_id(self, uri: str, page_id: int) -> None:
-        if uri in self._uri_to_id:
-            return  # URI already registered
         self._id_to_uri[page_id] = uri
-        self._uri_to_id[uri] = page_id
+        if uri not in self._uri_to_id:
+            self._uri_to_id[uri] = page_id
 
     def resolve(self, page_id: int) -> Optional[str]:
         """Resolve page_id to URI."""

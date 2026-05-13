@@ -381,11 +381,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
         tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
-        resolved_links = self._resolve_links(raw_links)
+        resolved_links = self._resolve_links(raw_links, upsert_operations)
 
         operations.resolved_links = resolved_links
 
-    def _resolve_links(self, raw_links: List) -> List[StoredLink]:
+    def _resolve_links(self, raw_links: List, upsert_operations: List = None) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs.
 
         Returns a flat list of StoredLink objects. Each link is stored once.
@@ -397,6 +397,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not raw_links:
             return []
 
+        # Build fallback map from upsert operations: page_id → first URI
+        op_page_map = {}
+        if upsert_operations:
+            for op in upsert_operations:
+                if op.page_id is not None and op.uris:
+                    op_page_map[op.page_id] = op.uris[0]
+
         resolved_links = []
         now = datetime.now(timezone.utc).isoformat()
 
@@ -406,6 +413,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 continue
             from_uri = self._page_id_map.resolve(link.f)
             to_uri = self._page_id_map.resolve(link.t)
+
+            # Fallback: resolve from upsert operations and register into page_id_map
+            if not from_uri and link.f in op_page_map:
+                from_uri = op_page_map[link.f]
+                self._page_id_map.register_new_page_id(from_uri, link.f)
+            if not to_uri and link.t in op_page_map:
+                to_uri = op_page_map[link.t]
+                self._page_id_map.register_new_page_id(to_uri, link.t)
+
             if not from_uri or not to_uri:
                 tracer.error(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
                 continue
