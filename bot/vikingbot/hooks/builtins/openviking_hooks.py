@@ -106,6 +106,7 @@ class OpenVikingPostCallHook(Hook):
         try:
             ov_client = await self._get_client(workspace_id)
             experiences = await ov_client.search_experiences(query, limit=3)
+            logger.info(f"[SKILL_EXP]: found {len(experiences)} experiences, query={query[:50]}")
             if not experiences:
                 return ""
             parts = []
