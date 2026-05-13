@@ -111,9 +111,6 @@ class MemoryTypeSchema(BaseModel):
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
     )
-    link_enabled: bool = Field(
-        True, description="Whether this memory type supports link extraction"
-    )
 
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template

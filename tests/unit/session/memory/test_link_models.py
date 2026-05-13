@@ -71,16 +71,6 @@ class TestStoredLink:
         assert "direction" not in d
 
 
-class TestMemoryTypeSchemaLinkEnabled:
-    def test_default_link_enabled(self):
-        schema = MemoryTypeSchema(memory_type="test")
-        assert schema.link_enabled is True
-
-    def test_link_enabled_false(self):
-        schema = MemoryTypeSchema(memory_type="test", link_enabled=False)
-        assert schema.link_enabled is False
-
-
 class TestResolvedOperationsLinks:
     def test_default_empty_links(self):
         ops = ResolvedOperations(

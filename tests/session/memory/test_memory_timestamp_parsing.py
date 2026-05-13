@@ -27,7 +27,7 @@ def _message(*, created_at: str, role: str = "user", text: str = "hello") -> Mes
 @pytest.fixture
 def stub_provider_config(monkeypatch):
     config = SimpleNamespace(
-        memory=SimpleNamespace(eager_prefetch=False, prefetch_search_topn=5),
+        memory=SimpleNamespace(eager_prefetch=False, prefetch_search_topn=5, link_enabled=True),
         language_fallback="en",
     )
     monkeypatch.setattr(

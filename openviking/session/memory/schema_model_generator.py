@@ -115,8 +115,11 @@ class SchemaModelGenerator:
                     Field(None, description=desc),
                 )
 
-        # Add page_id field for link resolution when link_enabled
-        if getattr(memory_type, "link_enabled", True):
+        # Add page_id field for link resolution when link_enabled globally
+        from openviking_cli.utils.config import get_openviking_config
+        config = get_openviking_config()
+        link_enabled = config.memory.link_enabled if config.memory else False
+        if link_enabled:
             field_definitions["page_id"] = (
                 Optional[int],
                 Field(
@@ -250,14 +253,18 @@ class SchemaModelGenerator:
                 Field(default_factory=list, description="Delete operations as URI strings"),
             )
 
-        # Add links field for link extraction
-        field_definitions["links"] = (
-            List[WikiLink],
-            Field(
-                default_factory=list,
-                description="Links between memory pages. Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to).",
-            ),
-        )
+        # Add links field for link extraction (only when enabled globally)
+        from openviking_cli.utils.config import get_openviking_config
+        config = get_openviking_config()
+        link_enabled = config.memory.link_enabled if config.memory else False
+        if link_enabled:
+            field_definitions["links"] = (
+                List[WikiLink],
+                Field(
+                    default_factory=list,
+                    description="Links between memory pages. Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to).",
+                ),
+            )
 
         # Create model using create_model
         StructuredMemoryOperations = create_model(

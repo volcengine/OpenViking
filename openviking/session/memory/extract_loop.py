@@ -37,6 +37,7 @@ from openviking.session.memory.utils.uri import supplement_operation_uris
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -131,7 +132,11 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        self._expected_fields = ["delete_uris", "links"]
+        config = get_openviking_config()
+        self._link_enabled = config.memory.link_enabled if config.memory else False
+        self._expected_fields = ["delete_uris"]
+        if self._link_enabled:
+            self._expected_fields.append("links")
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -172,18 +177,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         await self._mark_cache_breakpoint(messages)
 
-        # Initialize PageIdMap for link resolution
-        self._page_id_map = PageIdMap()
-        # Inject PageIdMap into context provider so it can annotate read results
-        self.context_provider.set_page_id_map(self._page_id_map)
+        # Initialize PageIdMap for link resolution (only when links are enabled)
+        if self._link_enabled:
+            self._page_id_map = PageIdMap()
+            # Inject PageIdMap into context provider so it can annotate read results
+            self.context_provider.set_page_id_map(self._page_id_map)
 
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
 
-        # Register prefetched files in PageIdMap
-        for uri in self.context_provider.read_file_contents:
-            self._page_id_map.get_page_id(uri)
+        # Register prefetched files in PageIdMap (only when links are enabled)
+        if self._link_enabled:
+            for uri in self.context_provider.read_file_contents:
+                self._page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
             iteration += 1
@@ -356,6 +363,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
         so that existing files discovered by refetch get 1-99 page_ids
         instead of 100+ IDs from register_new_page_id.
         """
+        if not self._link_enabled:
+            return
+
         upsert_operations = operations.upsert_operations
 
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id

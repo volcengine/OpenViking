@@ -15,7 +15,6 @@ description: |
 directory: "viking://agent/{{ agent_space }}/memories/tools"
 filename_template: "{{ tool_name }}.md"
 enabled: true
-link_enabled: true
 content_template: |
   Tool: {{ tool_name }}
 

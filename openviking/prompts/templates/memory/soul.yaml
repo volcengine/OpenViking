@@ -4,7 +4,6 @@ description: |
 directory: "viking://agent/{{ agent_space }}/memories"
 filename_template: "soul.md"
 enabled: true
-link_enabled: false
 operation_mode: "upsert"
 content_template: |
   # soul.md - Who You Are

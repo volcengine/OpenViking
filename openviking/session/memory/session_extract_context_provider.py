@@ -69,6 +69,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
+        self._link_enabled = config.memory.link_enabled if config.memory else False
         self._page_id_map = None  # Set by ExtractLoop before prefetch
 
     @property
@@ -134,7 +135,10 @@ All memory content MUST be written in {output_language}.
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
+"""
 
+        if self._link_enabled:
+            goal += f"""
 ## Page ID (IMPORTANT)
 Every item you create or edit MUST have a "page_id" field:
 - For existing items (from read results): use the page_id shown (e.g., [page_id: 1])
@@ -161,7 +165,6 @@ For each link:
 - "weight": 0.0-1.0, how strong the relationship is (default 1.0)
 
 Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
-
 """
 
         return goal

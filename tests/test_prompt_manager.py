@@ -181,7 +181,7 @@ def test_context_provider_schema_directories_use_prompt_manager_resolved_templat
     monkeypatch.setattr(
         "openviking.session.memory.session_extract_context_provider.get_openviking_config",
         lambda: SimpleNamespace(
-            memory=SimpleNamespace(custom_templates_dir="", eager_prefetch=False)
+            memory=SimpleNamespace(custom_templates_dir="", eager_prefetch=False, prefetch_search_topn=5, link_enabled=True)
         ),
     )
 
