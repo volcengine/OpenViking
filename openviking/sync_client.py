@@ -196,6 +196,7 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -211,6 +212,7 @@ class SyncOpenViking:
                 since=since,
                 until=until,
                 time_field=time_field,
+                level=level,
             )
         )
 

@@ -31,7 +31,6 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.storage.expr import PathScope
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -41,6 +40,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -1420,6 +1420,7 @@ class VikingFS:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
+        level: Optional[List[int]] = None,
     ):
         """Complex search with session context.
 
@@ -1541,6 +1542,7 @@ class VikingFS:
                 limit=limit,
                 score_threshold=score_threshold,
                 scope_dsl=filter,
+                level=level,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

@@ -17,7 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import _resolve_levels, merge_time_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -79,7 +79,7 @@ class FindRequest(BaseModel):
     since: Optional[str] = None
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
-    level: Optional[List[int]] = None
+    level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
 
 
@@ -146,7 +146,7 @@ async def find(
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
-            level=request.level,
+            level=_resolve_levels(request.level) or None,
         ),
     )
     result = execution.result
@@ -189,6 +189,7 @@ async def search(
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
+            level=_resolve_levels(request.level) or None,
         )
 
     execution = await run_operation(
