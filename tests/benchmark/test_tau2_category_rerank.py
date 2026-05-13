@@ -9,6 +9,7 @@ from benchmark.tau2.scripts.run_eval import (
     _summarize,
     _tau2_command,
 )
+from benchmark.tau2.scripts.tau2_common import load_config
 from benchmark.tau2.scripts.run_memory_v2_eval import (
     _load_scope_prompt,
     _probe_corpus,
@@ -32,6 +33,53 @@ def _reranker() -> CategoryReranker:
         },
         repo_root=Path(__file__).resolve().parents[2],
     )
+
+
+def _has_key_fragment(value: object, fragment: str) -> bool:
+    if isinstance(value, dict):
+        return any(
+            fragment in str(key).lower() or _has_key_fragment(item, fragment)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_key_fragment(item, fragment) for item in value)
+    return False
+
+
+def test_category_rerank_config_matches_s89_alignment_shape() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = load_config(repo_root / "benchmark/tau2/config/category_rerank.yaml")
+    strategies = {row["id"]: row for row in config["strategies"]}
+    category_strategy = strategies["memory_v2_trajectory_category_prewrite"]
+
+    assert config["benchmark"]["reasoning_effort"] == "high"
+    assert config["openviking"]["retrieval_top_k"] == 4
+    assert category_strategy["memory_backend"] == "openviking"
+    assert category_strategy["train_memory_mode"] == "experience_only"
+    assert category_strategy["search_memory_type"] == "trajectories"
+    assert category_strategy["retrieval_mode"] == "first_user_prewrite"
+    assert category_strategy["corpus_id"] == "memory_v2_trajectory_view"
+
+    category_rerank = category_strategy["category_rerank"]
+    assert category_rerank["enabled"] is True
+    assert category_rerank["apply_nodes"] == ["before_write_tool_call"]
+    assert category_rerank["retrieve_limit"] == 6
+    assert category_rerank["inject_limit"] == 2
+    assert category_rerank["mismatch_policy"] == "keep_positive_match_drop_mismatch"
+    assert category_rerank["positive_match_required"] is True
+    assert category_rerank["no_match_policy"] == "skip_injection"
+    assert category_rerank["search_score_weight"] == 0.0
+
+    scope_prompt = category_strategy["scope_prompt"]
+    assert scope_prompt["enabled"] is True
+    assert scope_prompt["injection_point"] == "system_prompt"
+    assert scope_prompt["domain_files"] == {
+        "retail": "benchmark/tau2/config/scope_prompts/retail_same_order_variant_guard.md"
+    }
+
+    assert "memory_v2_trajectory_prewrite" in strategies
+    assert not _has_key_fragment(category_strategy, "annotation")
+    assert not _has_key_fragment(category_strategy, "sidecar")
 
 
 def test_category_rerank_keeps_positive_category_match() -> None:
