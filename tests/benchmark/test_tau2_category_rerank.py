@@ -143,13 +143,13 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
             },
             "matches": [
                 {
-                    "uri": "a",
+                    "uri": "viking://agent/example/memories/trajectories/.overview.md",
                     "selected_for_injection": True,
                     "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
                     "category2_match": True,
                 },
                 {
-                    "uri": "b",
+                    "uri": "viking://agent/example/memories/trajectories/concrete.md",
                     "selected_for_injection": False,
                     "category_rerank_reasons": ["missing_memory_category"],
                 },
@@ -169,3 +169,7 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["selected_memory_category_sources"]["tau2_category_catalog_keyword_match"] == 1
     assert summary["tool_calls"]["exchange_delivered_order_items"] == 1
     assert summary["rates"]["selected_memory_category_coverage"] == 1.0
+    assert summary["counts"]["aggregate_memory_candidate_count"] == 1
+    assert summary["counts"]["concrete_memory_candidate_count"] == 1
+    assert summary["rates"]["concrete_memory_candidate_rate"] == 0.5
+    assert summary["rates"]["selected_concrete_memory_rate"] == 0.0

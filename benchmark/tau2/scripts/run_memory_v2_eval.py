@@ -196,6 +196,10 @@ def _metrics(results_path: Path) -> dict[str, Any]:
 
 
 def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
+    def is_aggregate_memory_uri(uri: Any) -> bool:
+        value = str(uri or "").split("#", 1)[0]
+        return value.endswith("/.overview.md") or value.endswith("/.abstract.md")
+
     counters: Counter[str] = Counter()
     decision_nodes: Counter[str] = Counter()
     category_decisions: Counter[str] = Counter()
@@ -258,6 +262,14 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             selected = bool(match.get("selected_for_injection") or match.get("injected"))
             if selected:
                 counters["selected_match_count"] += 1
+            if is_aggregate_memory_uri(match.get("uri")):
+                counters["aggregate_memory_candidate_count"] += 1
+                if selected:
+                    counters["selected_aggregate_memory_count"] += 1
+            else:
+                counters["concrete_memory_candidate_count"] += 1
+                if selected:
+                    counters["selected_concrete_memory_count"] += 1
             memory_source = match.get("memory_category_source_prompt")
             if memory_source:
                 counters["memory_category_present_count"] += 1
@@ -274,6 +286,13 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
 
     raw_count = counters["raw_match_count"]
     selected_count = counters["selected_match_count"]
+    for key in [
+        "aggregate_memory_candidate_count",
+        "concrete_memory_candidate_count",
+        "selected_aggregate_memory_count",
+        "selected_concrete_memory_count",
+    ]:
+        counters[key] += 0
     return {
         "trace_present": True,
         "trace_rows": trace_rows,
@@ -296,6 +315,14 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             ),
             "selected_positive_category_match_rate": (
                 counters["selected_positive_category_match_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "concrete_memory_candidate_rate": (
+                counters["concrete_memory_candidate_count"] / raw_count if raw_count else None
+            ),
+            "selected_concrete_memory_rate": (
+                counters["selected_concrete_memory_count"] / selected_count
                 if selected_count
                 else None
             ),
