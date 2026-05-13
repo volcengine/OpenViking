@@ -5,17 +5,23 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
+from openviking.metrics.exporters.prometheus import PrometheusExporter
+
 router = APIRouter(tags=["metrics"])
 
 
 @router.get("/metrics")
 async def metrics(request: Request):
     """Return Prometheus metrics in text exposition format."""
-    observer = getattr(request.app.state, "prometheus_observer", None)
-    if observer is None:
+    exporters = getattr(request.app.state, "metrics_exporters", [])
+    prometheus_exporter = next(
+        (exporter for exporter in exporters if isinstance(exporter, PrometheusExporter)),
+        None,
+    )
+    if prometheus_exporter is None:
         return PlainTextResponse(status_code=404, content="Prometheus metrics are disabled.\n")
 
     return PlainTextResponse(
-        content=observer.render_metrics(),
+        content=await prometheus_exporter.export(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )

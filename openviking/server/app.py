@@ -19,6 +19,7 @@ from openviking.server.routers import (
     admin_router,
     bot_router,
     config_router,
+    console_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -35,8 +36,6 @@ from openviking.server.routers import (
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking.storage.observers import PrometheusObserver
-from openviking.storage.observers.prometheus_observer import set_prometheus_observer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
@@ -111,12 +110,17 @@ def create_app(
                 config.host,
             )
 
-        app.state.prometheus_observer = None
+        from openviking.metrics.global_api import init_metrics_from_server_config
+        from openviking.observability.usage_audit import init_usage_audit_from_server_config
+
         if config.telemetry.prometheus.enabled:
-            observer = PrometheusObserver()
-            app.state.prometheus_observer = observer
-            set_prometheus_observer(observer)
+            config.observability.metrics.enabled = True
+            config.observability.metrics.exporters.prometheus.enabled = True
+
+        init_metrics_from_server_config(config, app=app, service=service)
+        if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
+        await init_usage_audit_from_server_config(config, app=app, service=service)
 
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
@@ -130,7 +134,11 @@ def create_app(
         yield
 
         # Cleanup
-        set_prometheus_observer(None)
+        from openviking.metrics.global_api import shutdown_metrics_async
+        from openviking.observability.usage_audit import shutdown_usage_audit
+
+        await shutdown_usage_audit(app=app)
+        await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             try:
@@ -158,6 +166,16 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    from openviking.observability.http_observability_middleware import (
+        create_http_observability_middleware,
+    )
+
+    http_observability_middleware = create_http_observability_middleware()
+
+    @app.middleware("http")
+    async def add_http_observability(request: Request, call_next: Callable):
+        return await http_observability_middleware(request, call_next)
 
     # Add request timing middleware
     @app.middleware("http")
@@ -215,6 +233,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
+    app.include_router(console_router)
     app.include_router(search_router)
     app.include_router(relations_router)
     app.include_router(sessions_router)

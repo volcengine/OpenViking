@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -31,6 +31,94 @@ class PrometheusConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class MetricsAccountDimensionConfig(BaseModel):
+    """Account-dimension configuration for metrics label injection."""
+
+    enabled: bool = True
+    max_active_accounts: int = 100
+    metric_allowlist: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class PrometheusExporterConfig(BaseModel):
+    """Prometheus exporter configuration."""
+
+    enabled: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class OTelExporterConfig(BaseModel):
+    """OpenTelemetry exporter configuration."""
+
+    class TLSConfig(BaseModel):
+        """TLS configuration for OTLP exporters."""
+
+        insecure: bool = False
+
+        model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    protocol: str = "grpc"
+    tls: TLSConfig = Field(default_factory=TLSConfig)
+    endpoint: str = "localhost:4317"
+    service_name: str = "openviking-server"
+    export_interval_ms: int = 10000
+    headers: Dict[str, str] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class MetricsExportersConfig(BaseModel):
+    """Metrics exporters configuration."""
+
+    prometheus: PrometheusExporterConfig = Field(default_factory=PrometheusExporterConfig)
+    otel: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+
+    model_config = {"extra": "forbid"}
+
+
+class MetricsConfig(BaseModel):
+    """Metrics subsystem configuration."""
+
+    enabled: bool = False
+    account_dimension: MetricsAccountDimensionConfig = Field(
+        default_factory=MetricsAccountDimensionConfig
+    )
+    exporters: MetricsExportersConfig = Field(default_factory=MetricsExportersConfig)
+
+    model_config = {"extra": "forbid"}
+
+
+class UsageAuditConfig(BaseModel):
+    """Product usage and audit projection configuration."""
+
+    enabled: bool = True
+    backend: Literal["sqlite"] = "sqlite"
+    sqlite_path: Optional[str] = None
+    queue_size: int = Field(10_000, gt=0)
+    batch_size: int = Field(500, gt=0)
+    flush_interval_seconds: float = Field(1.0, gt=0)
+    shutdown_flush_timeout_seconds: float = Field(3.0, gt=0)
+    audit_retention_per_account: int = Field(1000, ge=0)
+    timezone: str = "local"
+    inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
+class ObservabilityConfig(BaseModel):
+    """Server-side observability configuration."""
+
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    usage_audit: UsageAuditConfig = Field(default_factory=UsageAuditConfig)
+    traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+    logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+
+    model_config = {"extra": "forbid"}
+
+
 class TelemetryConfig(BaseModel):
     """Telemetry configuration."""
 
@@ -52,6 +140,7 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     model_config = {"extra": "forbid"}
 

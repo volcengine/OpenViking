@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import Depends, Header, Request
 
 from openviking.server.identity import RequestContext, ResolvedIdentity, Role
+from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -146,7 +147,7 @@ async def get_request_context(
     if auth_mode == "trusted" and not identity.user_id:
         raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")
 
-    return RequestContext(
+    ctx = RequestContext(
         user=UserIdentifier(
             identity.account_id or "default",
             identity.user_id or "default",
@@ -154,6 +155,13 @@ async def get_request_context(
         ),
         role=identity.role,
     )
+    update_root_span_identity(
+        request_state=request.state,
+        account_id=identity.account_id,
+        user_id=identity.user_id,
+        agent_id=identity.agent_id,
+    )
+    return ctx
 
 
 def require_role(*allowed_roles: Role):
