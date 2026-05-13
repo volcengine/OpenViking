@@ -6,10 +6,10 @@ evaluation. The scope is intentionally narrow:
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
 - trajectory-view retrieval treatment for the refined trajectory prompt.
-- experimental category-reranked pre-write recall on top of trajectory-view memory.
+- experimental FGMemory-style pre-write recall on top of trajectory-view memory.
 
-Category rerank is opt-in and experimental; it is meant for PR-C review and
-smoke/targeted probes before any productization decision.
+The FGMemory-style route is opt-in and experimental; it is meant for PR-C
+review and smoke/targeted probes before any productization decision.
 
 ## Layout
 
@@ -93,7 +93,7 @@ benchmark/tau2/run_full_eval.sh \
   --repeat-count 1
 ```
 
-Plan a one-cell trajectory category-rerank smoke:
+Plan a one-cell trajectory FGMemory-style category-rerank smoke:
 
 ```bash
 benchmark/tau2/run_full_eval.sh \
@@ -153,14 +153,16 @@ is retrieved during eval (`experiences` by default, `trajectories` for
 `config/trajectory.yaml`).
 
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
-an adapter-local category rerank only at `before_write_tool_call`. The reranker
-loads `config/category_catalog.json`, annotates the runtime query and candidate
-memories from visible text/tool names/URIs, retrieves a wider candidate pool,
-then follows the Agent Harness S83/S84 positive-match baseline: retrieve 6,
-keep same-category candidates, inject at most 2, and skip injection when no
-positive category match exists. Retrieval traces include the query category,
-candidate memory categories, rerank reasons, selected rows, skipped rows, and
-the flat `*_category*_prompt` fields consumed by Harness diagnostics.
+an adapter-local FGMemory-style probe: pre-write recall, annotation category
+rerank, and the retail scope prompt used by the Harness High-TrajView/FGMemory
+route. The category sub-policy follows the S84 component settings, but the
+alignment target is the red-box S89/FGMemory high result: retrieve 6, keep
+same-category candidates, inject at most 2, skip injection when no positive
+category match exists, and apply the scope/applicability prompt at the system
+prompt injection point. Retrieval traces include the query category, candidate
+memory categories, rerank reasons, selected rows, skipped rows, scope prompt
+metadata, and the flat `*_category*_prompt` fields consumed by Harness
+diagnostics.
 
 ## User Simulator Policy
 

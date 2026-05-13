@@ -103,6 +103,8 @@ def _tau2_command(
         search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
         category_rerank = strategy.get("category_rerank")
         category_rerank = category_rerank if isinstance(category_rerank, dict) else {}
+        scope_prompt = strategy.get("scope_prompt")
+        scope_prompt = scope_prompt if isinstance(scope_prompt, dict) else {}
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -156,6 +158,13 @@ def _tau2_command(
                 [
                     "--category-rerank-config",
                     json.dumps(category_rerank, ensure_ascii=False, sort_keys=True),
+                ]
+            )
+        if scope_prompt.get("enabled"):
+            command.extend(
+                [
+                    "--scope-prompt-config",
+                    json.dumps(scope_prompt, ensure_ascii=False, sort_keys=True),
                 ]
             )
         if task_ids:
@@ -278,6 +287,7 @@ def _build_plan(
                         "retrieval_mode": strategy.get("retrieval_mode"),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "category_rerank": strategy.get("category_rerank") or {"enabled": False},
+                        "scope_prompt": strategy.get("scope_prompt") or {"enabled": False},
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),
@@ -490,6 +500,40 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
                 f"missing category rerank catalog for {strategy.get('id')}: {raw_catalog_path}"
             )
 
+    scope_prompt_rows = []
+    for strategy in config.get("strategies") or []:
+        scope_prompt = strategy.get("scope_prompt")
+        if not isinstance(scope_prompt, dict) or not scope_prompt.get("enabled"):
+            continue
+        domain_files = scope_prompt.get("domain_files")
+        domain_files = domain_files if isinstance(domain_files, dict) else {}
+        domain_texts = scope_prompt.get("domain_texts")
+        domain_texts = domain_texts if isinstance(domain_texts, dict) else {}
+        for domain in domains(config):
+            raw_prompt_path = domain_files.get(domain)
+            prompt_path = None
+            exists = False
+            if raw_prompt_path:
+                prompt_path = Path(str(raw_prompt_path)).expanduser()
+                if not prompt_path.is_absolute():
+                    prompt_path = REPO_ROOT / prompt_path
+                exists = prompt_path.is_file()
+                if strict and not exists:
+                    errors.append(
+                        f"missing scope prompt file for {strategy.get('id')} {domain}: "
+                        f"{raw_prompt_path}"
+                    )
+            scope_prompt_rows.append(
+                {
+                    "strategy_id": strategy.get("id"),
+                    "domain": domain,
+                    "configured": bool(raw_prompt_path or domain_texts.get(domain)),
+                    "prompt_path": str(prompt_path) if prompt_path else None,
+                    "exists": exists,
+                    "injection_point": scope_prompt.get("injection_point", "system_prompt"),
+                }
+            )
+
     report = {
         "status": "failed" if errors else "ok",
         "strict": strict,
@@ -500,6 +544,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "strategies": strategy_ids(config),
         "imports": import_rows,
         "category_rerank_catalogs": category_rows,
+        "scope_prompts": scope_prompt_rows,
         "split_files": split_rows,
         "errors": errors,
     }

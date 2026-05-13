@@ -9,8 +9,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from category_rerank import CategoryReranker
-from tau2_common import normalize_litellm_env
+try:
+    from category_rerank import CategoryReranker
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .category_rerank import CategoryReranker
+
+try:
+    from tau2_common import normalize_litellm_env
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .tau2_common import normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -35,6 +42,14 @@ def _json(text: str) -> dict[str, Any]:
     return json.loads(text) if text else {}
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -55,6 +70,70 @@ def _save_to_arg(path: Path) -> str:
 def _compat_results_path(path: Path) -> Path:
     run_dir = path.with_suffix("") if path.suffix == ".json" else path
     return run_dir / "results.json"
+
+
+def _resolve_repo_path(raw_path: Any, *, repo_root: Path) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return path
+
+
+def _domain_value(mapping: Any, domain: str) -> Any:
+    if isinstance(mapping, dict):
+        return mapping.get(domain) or mapping.get(str(domain).lower())
+    return None
+
+
+def _load_scope_prompt(
+    payload: dict[str, Any] | None,
+    *,
+    domain: str,
+    repo_root: Path,
+) -> tuple[str, dict[str, Any]]:
+    payload = payload if isinstance(payload, dict) else {}
+    enabled = _as_bool(payload.get("enabled"), default=False)
+    summary: dict[str, Any] = {
+        "enabled": enabled,
+        "domain": domain,
+        "injection_point": str(payload.get("injection_point") or "system_prompt"),
+        "loaded": False,
+        "loaded_files": [],
+        "text_chars": 0,
+    }
+    if not enabled:
+        summary["skipped_reason"] = "disabled"
+        return "", summary
+
+    text = str(_domain_value(payload.get("domain_texts"), domain) or "").strip()
+    raw_path = _domain_value(payload.get("domain_files"), domain)
+    if raw_path:
+        path = _resolve_repo_path(raw_path, repo_root=repo_root)
+        summary["loaded_files"] = [str(path)]
+        if not path.is_file():
+            raise FileNotFoundError(f"scope prompt file not found for {domain}: {path}")
+        text = path.read_text(encoding="utf-8").strip()
+
+    if not text:
+        summary["skipped_reason"] = "no_domain_scope_prompt"
+        return "", summary
+
+    summary["loaded"] = True
+    summary["text_chars"] = len(text)
+    return text, summary
+
+
+def _scope_prompt_text(prompt: str) -> str:
+    if not prompt.strip():
+        return ""
+    return (
+        "Use this OpenViking memory applicability guard together with retrieved "
+        "memories. Current tool observations and the current user request remain "
+        "authoritative.\n\n"
+        "<procedure_memory>\n"
+        f"{prompt.strip()}\n"
+        "</procedure_memory>"
+    )
 
 
 def _reward(sim: dict[str, Any]) -> float:
@@ -369,6 +448,18 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     class OpenVikingMemoryAgent(LLMAgent):
         def get_init_state(self, message_history=None):
             state = super().get_init_state(message_history)
+            scope_prompt = _scope_prompt_text(args.scope_prompt_text)
+            if scope_prompt:
+                state.system_messages.append(SystemMessage(role="system", content=scope_prompt))
+                self._trace(
+                    {
+                        "decision_node": "static_scope_prompt",
+                        "retrieval_action_taken": "scope_prompt_static_injection",
+                        "scope_prompt": args.scope_prompt_summary,
+                        "injected": True,
+                        "injected_count": 1,
+                    }
+                )
             if args.retrieval_mode in {"first_user", "first_user_prewrite"}:
                 state.system_messages.append(
                     SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
@@ -634,11 +725,17 @@ def main() -> int:
         default="first_user",
     )
     parser.add_argument("--category-rerank-config", type=_json, default={})
+    parser.add_argument("--scope-prompt-config", type=_json, default={})
     parser.add_argument("--force-train", action="store_true")
     args = parser.parse_args()
     normalize_litellm_env()
     args.category_reranker = CategoryReranker.from_payload(
         args.category_rerank_config,
+        repo_root=REPO_ROOT,
+    )
+    args.scope_prompt_text, args.scope_prompt_summary = _load_scope_prompt(
+        args.scope_prompt_config,
+        domain=args.domain,
         repo_root=REPO_ROOT,
     )
 
@@ -681,6 +778,7 @@ def main() -> int:
         "seed": args.seed,
         "corpus": corpus,
         "category_rerank": args.category_reranker.summary(),
+        "scope_prompt": args.scope_prompt_summary,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
         "metrics": _metrics(eval_results),

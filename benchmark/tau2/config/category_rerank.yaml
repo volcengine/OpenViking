@@ -1,7 +1,7 @@
 extends: trajectory.yaml
 
 benchmark:
-  name: tau2_openviking_trajectory_category_rerank
+  name: tau2_openviking_fgmemory_category_rerank
 
 strategies:
   - id: memory_v2_trajectory_prewrite
@@ -13,7 +13,7 @@ strategies:
     search_memory_type: trajectories
     retrieval_mode: first_user_prewrite
   - id: memory_v2_trajectory_category_prewrite
-    label: OpenViking Memory V2 trajectory-view category-reranked pre-write recall
+    label: OpenViking Memory V2 trajectory-view FGMemory-style pre-write recall
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
@@ -31,3 +31,8 @@ strategies:
       positive_match_required: true
       no_match_policy: skip_injection
       search_score_weight: 0.0
+    scope_prompt:
+      enabled: true
+      injection_point: system_prompt
+      domain_files:
+        retail: benchmark/tau2/config/scope_prompts/retail_same_order_variant_guard.md

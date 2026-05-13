@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from benchmark.tau2.scripts.category_rerank import CategoryReranker
+from benchmark.tau2.scripts.run_memory_v2_eval import _load_scope_prompt
 
 
 def _reranker() -> CategoryReranker:
@@ -85,3 +86,34 @@ def test_category_rerank_skips_non_target_node() -> None:
     ]
     assert trace_rows[0]["selected_for_injection"] is True
     assert trace_rows[1]["selected_for_injection"] is False
+
+
+def test_scope_prompt_loads_domain_file(tmp_path: Path) -> None:
+    prompt = tmp_path / "retail_scope.md"
+    prompt.write_text("<custom_memory_applicability_guard>same order</custom_memory_applicability_guard>")
+
+    text, summary = _load_scope_prompt(
+        {"enabled": True, "domain_files": {"retail": str(prompt)}},
+        domain="retail",
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+
+    assert "same order" in text
+    assert summary["enabled"] is True
+    assert summary["loaded"] is True
+    assert summary["loaded_files"] == [str(prompt)]
+
+
+def test_scope_prompt_skips_unconfigured_domain(tmp_path: Path) -> None:
+    prompt = tmp_path / "retail_scope.md"
+    prompt.write_text("retail only")
+
+    text, summary = _load_scope_prompt(
+        {"enabled": True, "domain_files": {"retail": str(prompt)}},
+        domain="airline",
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+
+    assert text == ""
+    assert summary["loaded"] is False
+    assert summary["skipped_reason"] == "no_domain_scope_prompt"
