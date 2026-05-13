@@ -196,10 +196,11 @@ const en = {
     clear: 'Clear',
     description: 'Inspect API calls made by this Studio session, including status, latency, and request identifiers.',
     empty: {
-      description: 'No logs yet — start your first API call!',
+      description: 'Start your first API call!',
       filteredDescription: 'Adjust the query or status filter to broaden the visible log entries.',
       filteredTitle: 'No matching requests',
-      title: 'No logs yet — start your first API call!',
+      title: 'No logs yet',
+      upload: 'Upload File',
     },
     eyebrow: 'Studio telemetry',
     filters: {
@@ -410,7 +411,9 @@ const en = {
       topN: 'Search Results (Top{{count}})',
     },
     empty: {
-      title: 'No logs yet — start your first retrieval!',
+      title: 'No retrievable context yet',
+      description: 'Upload your first resource to get started.',
+      upload: 'Upload File',
     },
     error: 'Search failed',
     noResults: {
