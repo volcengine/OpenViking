@@ -156,9 +156,14 @@ prepared in parallel with `benchmark.corpus_prepare_concurrency`; session
 commits inside one corpus remain serial to preserve OpenViking write semantics.
 
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
-an adapter-local FGMemory-style probe: pre-write recall, annotation category
-rerank, and the retail scope prompt used by the Harness High-TrajView/FGMemory
-route. The category sub-policy follows the S84 component settings, but the
+an adapter-local FGMemory-style probe: pre-write recall, category rerank with
+Harness `memory_category_annotation.v0` sidecar support, and the retail scope
+prompt used by the Harness High-TrajView/FGMemory route. When sidecar files are
+provided through `OPENVIKING_TAU2_CATEGORY_ANNOTATION_FILES` or
+`AGENT_HARNESS_TAU2_CATEGORY_ANNOTATION_FILES`, the reranker uses those
+query/memory annotations first; otherwise it falls back to the local category
+catalog keyword classifier for smoke runs. The category sub-policy follows the
+S84 component settings, but the
 alignment target is the red-box S89/FGMemory high result: retrieve 6, keep
 same-category candidates, inject at most 2, skip injection when no positive
 category match exists, and apply the scope/applicability prompt at the system

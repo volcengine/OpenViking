@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,6 +31,24 @@ from tau2_common import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _split_path_text(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, dict):
+        return [item for raw in value.values() for item in _split_path_text(raw)]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"[:\n,]", text) if part.strip()]
+
+
+def _resolve_repo_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
 
 
 def _reward(sim: dict[str, Any]) -> float:
@@ -547,15 +567,37 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         if not isinstance(category_rerank, dict) or not category_rerank.get("enabled"):
             continue
         raw_catalog_path = category_rerank.get("catalog_path")
-        catalog_path = Path(str(raw_catalog_path or "")).expanduser()
-        if raw_catalog_path and not catalog_path.is_absolute():
-            catalog_path = REPO_ROOT / catalog_path
+        catalog_path = _resolve_repo_path(str(raw_catalog_path or ""))
         exists = bool(raw_catalog_path and catalog_path.is_file())
+        annotation_env_names = _split_path_text(category_rerank.get("annotation_files_env")) or [
+            "OPENVIKING_TAU2_CATEGORY_ANNOTATION_FILES",
+            "AGENT_HARNESS_TAU2_CATEGORY_ANNOTATION_FILES",
+        ]
+        raw_annotation_files = _split_path_text(category_rerank.get("annotation_files"))
+        for env_name in annotation_env_names:
+            raw_annotation_files.extend(_split_path_text(os.environ.get(env_name)))
+        annotation_files = []
+        for raw_annotation_file in dict.fromkeys(raw_annotation_files):
+            annotation_path = _resolve_repo_path(raw_annotation_file)
+            annotation_exists = annotation_path.is_file()
+            annotation_files.append(
+                {
+                    "path": str(annotation_path),
+                    "exists": annotation_exists,
+                }
+            )
+            if strict and not annotation_exists:
+                errors.append(
+                    f"missing category annotation sidecar for {strategy.get('id')}: "
+                    f"{raw_annotation_file}"
+                )
         category_rows.append(
             {
                 "strategy_id": strategy.get("id"),
                 "catalog_path": str(catalog_path) if raw_catalog_path else None,
                 "exists": exists,
+                "annotation_files_env": annotation_env_names,
+                "annotation_files": annotation_files,
                 "apply_nodes": category_rerank.get("apply_nodes"),
                 "retrieve_limit": category_rerank.get("retrieve_limit"),
                 "inject_limit": category_rerank.get("inject_limit"),
