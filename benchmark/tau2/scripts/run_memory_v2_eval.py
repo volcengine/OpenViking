@@ -280,13 +280,20 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 client.close()
 
         def _generate(self, messages):
+            def _is_empty_assistant(response) -> bool:
+                content = str(getattr(response, "content", "") or "")
+                tool_calls = getattr(response, "tool_calls", None) or []
+                return not content.strip() and not tool_calls
+
             try:
-                return generate(
+                response = generate(
                     model=self.llm,
                     tools=self.tools,
                     messages=messages,
                     **self.llm_args,
                 )
+                if not _is_empty_assistant(response):
+                    return response
             except json.JSONDecodeError:
                 retry_messages = messages + [
                     SystemMessage(
@@ -297,22 +304,40 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         ),
                     )
                 ]
-                try:
-                    return generate(
-                        model=self.llm,
-                        tools=self.tools,
-                        messages=retry_messages,
-                        **self.llm_args,
+            else:
+                retry_messages = messages + [
+                    SystemMessage(
+                        role="system",
+                        content=(
+                            "Retry the last assistant step once. Return either a useful "
+                            "natural language response or a valid tool call; do not return "
+                            "an empty assistant message."
+                        ),
                     )
-                except json.JSONDecodeError as exc:
-                    return AssistantMessage(
-                        role="assistant",
-                        content="I need to continue with the available task information.",
-                        raw_data={
-                            "openviking_memory_agent_error": "invalid_tool_call_json",
-                            "error": str(exc),
-                        },
-                    )
+                ]
+            try:
+                response = generate(
+                    model=self.llm,
+                    tools=self.tools,
+                    messages=retry_messages,
+                    **self.llm_args,
+                )
+                if not _is_empty_assistant(response):
+                    return response
+                return AssistantMessage(
+                    role="assistant",
+                    content="I need to continue with the available task information.",
+                    raw_data={"openviking_memory_agent_error": "empty_assistant_message"},
+                )
+            except json.JSONDecodeError as exc:
+                return AssistantMessage(
+                    role="assistant",
+                    content="I need to continue with the available task information.",
+                    raw_data={
+                        "openviking_memory_agent_error": "invalid_tool_call_json",
+                        "error": str(exc),
+                    },
+                )
 
         def generate_next_message(self, message, state: LLMAgentState):
             if isinstance(message, MultiToolMessage):
