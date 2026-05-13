@@ -292,17 +292,37 @@ If step 6 returns no leaf memories, check:
 | `autoCommitOnCompact`   | `true`  | Commit the full transcript on `PreCompact` |
 | `debug`                 | `false` | Write structured debug logs |
 
-Connection settings (URL, account, user, api_key) come from `ovcli.conf` plus standard env overrides:
+Connection settings resolve in this strict priority — env vars always win:
 
-- `OPENVIKING_CONFIG_FILE`: alternate config path (defaults to `~/.openviking/ovcli.conf`, then `~/.openviking/ov.conf`)
-- `OPENVIKING_URL`: override server URL
-- `OPENVIKING_API_KEY`: override API key
-- `OPENVIKING_ACCOUNT`: override account
-- `OPENVIKING_USER`: override user
-- `OPENVIKING_AGENT_ID`: override agent identity
+1. **Environment variables** (`OPENVIKING_*`)
+2. **`ovcli.conf`** — CLI client config (`url`, `api_key`, `account`, `user`, `agent_id`)
+3. **`ov.conf`** — server config (`server.*` + optional `codex.*` tuning block)
+4. **Built-in defaults**
+
+Setting `OPENVIKING_URL` alone is enough to run in env-var-only mode (no config files needed) — useful for daemon-spawned agents.
+
+File-path overrides (aligned with `ov` CLI and `claude-code-memory-plugin`):
+
+- `OPENVIKING_CLI_CONFIG_FILE` — alternate `ovcli.conf` path (default `~/.openviking/ovcli.conf`)
+- `OPENVIKING_CONFIG_FILE` — alternate `ov.conf` path (default `~/.openviking/ov.conf`). For backward compat, if this points at an ovcli-shaped file (top-level `url`/`api_key`, no `server` section), it is treated as the CLI config.
+
+Connection / identity overrides:
+
+- `OPENVIKING_URL` / `OPENVIKING_BASE_URL` — server URL
+- `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` — API key (sent as `Authorization: Bearer` either way)
+- `OPENVIKING_ACCOUNT` — account
+- `OPENVIKING_USER` — user
+- `OPENVIKING_AGENT_ID` — agent identity
+
+State-file / SessionStart tuning:
+
 - `OPENVIKING_CODEX_STATE_DIR`: state file directory (default `~/.openviking/codex-plugin-state`)
 - `OPENVIKING_CODEX_ACTIVE_WINDOW_MS`: SessionStart active-window threshold in ms (default `120000` = 2 min)
 - `OPENVIKING_CODEX_IDLE_TTL_MS`: SessionStart idle-TTL sweep threshold in ms (default `1800000` = 30 min)
+
+### Auth header
+
+Requests send both `Authorization: Bearer <api_key>` (primary — required by OpenViking Cloud) and `X-API-Key` (legacy — accepted by older self-hosted servers). The legacy header will be dropped once `X-API-Key` is fully retired upstream.
 
 ## Hook timeouts
 
