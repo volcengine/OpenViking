@@ -404,6 +404,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if op.page_id is not None and op.uris:
                     op_page_map[op.page_id] = op.uris[0]
 
+        tracer.info(f"_resolve_links: page_id_map={self._page_id_map._id_to_uri}, "
+                    f"op_page_map={op_page_map}, raw_links_count={len(raw_links)}")
+
         resolved_links = []
         now = datetime.now(timezone.utc).isoformat()
 
@@ -423,7 +426,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 self._page_id_map.register_new_page_id(to_uri, link.t)
 
             if not from_uri or not to_uri:
-                tracer.error(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}")
+                tracer.error(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
+                             f"from_uri={from_uri}, to_uri={to_uri}, "
+                             f"op_page_map_keys={list(op_page_map.keys())}")
                 continue
 
             stored_link = StoredLink(
