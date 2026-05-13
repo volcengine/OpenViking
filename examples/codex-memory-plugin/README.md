@@ -5,12 +5,12 @@ Long-term semantic memory for [Codex](https://developers.openai.com/codex), powe
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
-- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
+- **Incremental capture on `Stop`** (turn end): append the new user turns to a single long-lived OpenViking session keyed by Codex `session_id`. Set `captureAssistantTurns=true` to include assistant transcript turns too. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` is a hard no-op (short reconnects re-fire `resume` and we don't want to commit a still-active session). See `DESIGN.md` for the full decision tree.
-- **MCP runtime bootstrap is lazy**: the MCP launcher (`start-memory-server.mjs`) installs runtime deps on first MCP invocation, not in a hook.
+- **Native MCP registration**: the installer points Codex at the OpenViking server's built-in `/mcp` endpoint for explicit tools.
 
-It also exposes explicit MCP tools (`openviking_recall`, `openviking_store`, `openviking_forget`, `openviking_health`) for manual use.
+Explicit MCP tools are served by OpenViking itself, not by a bundled helper server. Codex receives the same native tool set documented in the [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md), such as `search`, `read`, `list`, `store`, `add_resource`, `grep`, `glob`, `forget`, and `health`.
 
 ## Quick Start
 
@@ -22,7 +22,14 @@ Installation is first here, matching the shape of the [Claude Code integration d
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
 ```
 
-The installer checks `codex`, `git`, and Node.js 22+, clones OpenViking to `~/.openviking/openviking-repo` if needed, registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`, and pre-populates Codex's plugin cache so the plugin resolves immediately. It uses `~/.openviking/ovcli.conf` when present; otherwise the plugin falls back to `http://127.0.0.1:1933`.
+The installer checks `codex`, `git`, and Node.js 22+, clones OpenViking to `~/.openviking/openviking-repo` if needed, registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`, optionally registers `mcp_servers.openviking` with Codex's native HTTP MCP transport, and pre-populates Codex's plugin cache so the plugin resolves immediately. It uses `~/.openviking/ovcli.conf` when present; otherwise the plugin falls back to `http://127.0.0.1:1933`.
+
+Native MCP tools are recommended but optional. In an interactive shell the installer asks whether to enable them; in non-interactive runs the default is enabled. Use `OPENVIKING_CODEX_ENABLE_MCP=0` for a hooks-only install; this removes the installer-managed `mcp_servers.openviking` entry if one exists:
+
+```bash
+OPENVIKING_CODEX_ENABLE_MCP=0 \
+  bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+```
 
 If you'd rather do it by hand, use the manual setup below.
 
@@ -72,6 +79,23 @@ enabled = true
 EOF
 ```
 
+#### 3. Optional: enable native MCP tools
+
+This registers OpenViking's server-side `/mcp` endpoint with Codex. Skip it if you want hooks-only behavior.
+
+```toml
+[mcp_servers.openviking]
+url = "https://ov.example.com/mcp"
+bearer_token_env_var = "OPENVIKING_API_KEY"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+
+[mcp_servers.openviking.http_headers]
+"X-OpenViking-Account" = "default"
+"X-OpenViking-User" = "<your-user>"
+"X-OpenViking-Agent" = "codex"
+```
+
 For local development, pre-populate Codex's plugin cache so it resolves immediately:
 
 ```bash
@@ -80,7 +104,9 @@ mkdir -p "$INSTALL_DIR"
 cp -R /abs/path/to/OpenViking/examples/codex-memory-plugin "$INSTALL_DIR/0.4.0"
 ```
 
-#### 3. Configure OpenViking
+Run `codex mcp get openviking` to inspect the native MCP registration when enabled.
+
+#### 4. Configure OpenViking
 
 Use the same client config file as the `ov` CLI:
 
@@ -94,25 +120,26 @@ Use the same client config file as the `ov` CLI:
 }
 ```
 
-Local server mode works without this file; the plugin falls back to `http://127.0.0.1:1933`.
+The hooks read `ovcli.conf` directly. Codex's native HTTP MCP transport does not read that file, so `~/.codex/config.toml` needs a literal `/mcp` URL and `bearer_token_env_var` as shown above. Start Codex with the matching bearer token in the environment:
 
-#### 4. Start Codex
+```bash
+export OPENVIKING_API_KEY=<your-key>
+codex
+```
+
+Local server mode works without this file; hooks and MCP both fall back to `http://127.0.0.1:1933` if you configure that URL.
+
+#### 5. Start Codex
 
 ```bash
 codex
 ```
 
-First MCP launch installs runtime deps; later launches reuse them.
+Inside Codex, run `/mcp` to confirm the `openviking` entry points at your OpenViking `/mcp` URL and authenticates successfully.
 
 ### Development from source
 
-Only needed when editing `src/memory-server.ts`:
-
-```bash
-cd examples/codex-memory-plugin
-npm install
-npm run build
-```
+No build step is required. The plugin scripts are plain Node.js modules and the explicit MCP tools are served by the OpenViking server.
 
 `codex exec` does not reliably fire plugin lifecycle hooks in current Codex builds. For hook validation, use an interactive `codex` session or the scripts in `hooks/hooks.json` with synthetic JSON input.
 
@@ -126,6 +153,8 @@ Resolution priority, highest to lowest:
 4. Built-in defaults
 
 Auth is sent as `Authorization: Bearer <key>` plus legacy `X-API-Key` during migration.
+
+Native MCP auth is handled by Codex, not by the hook scripts. The installer writes `mcp_servers.openviking.bearer_token_env_var` to `~/.codex/config.toml`; keep that env var set when starting Codex.
 
 Optional Codex-specific tuning can live under `codex` in `ovcli.conf`:
 
@@ -141,6 +170,8 @@ Optional Codex-specific tuning can live under `codex` in `ovcli.conf`:
   }
 }
 ```
+
+The native MCP server has its own Codex config entry. Codex's HTTP MCP transport does not read `ovcli.conf`, so the installer resolves that file once and writes a literal URL/header block to `~/.codex/config.toml`. If you change the OpenViking URL/account/user later, rerun the installer or update `mcp_servers.openviking` manually.
 
 ## Architecture
 
@@ -167,16 +198,12 @@ Optional Codex-specific tuning can live under `codex` in `ovcli.conf`:
                     │ /api/v1/content/read                      │
                     └───────────────────────────────────────────┘
 
-   ┌──────────────────────────────────────┐
-   │  MCP Server (memory-server.ts)       │
-   │  Tools for explicit use:             │
-   │  • openviking_recall                 │
-   │  • openviking_store                  │
-   │  • openviking_forget                 │
-   │  • openviking_health                 │
-   │  Lazily npm ci's its runtime on      │
-   │  first launch.                       │
-   └──────────────────────────────────────┘
+   Codex native MCP transport
+      │
+      ▼
+   OpenViking server /mcp
+   Tools for explicit use: search, read, list, store, add_resource, grep,
+   glob, forget, health (plus any server-version-specific aliases).
 ```
 
 ## How It Works
@@ -199,7 +226,7 @@ On `startup` or `clear`, the script:
 
 On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry. A transient OV outage shouldn't lose memory.
 
-MCP runtime install does **not** live in this hook — it lazily runs from `scripts/start-memory-server.mjs` on first MCP launch.
+MCP registration does **not** live in this hook. The installer writes Codex's native HTTP MCP config to `~/.codex/config.toml`.
 
 ### Auto-recall (every UserPromptSubmit)
 
@@ -234,11 +261,11 @@ Two fallbacks recover the orphan:
 1. **Idle-TTL sweep**: the next `SessionStart` (source=startup|clear) on the same machine commits any state file older than 30 min (`OPENVIKING_CODEX_IDLE_TTL_MS`). So as long as you start another codex session within ~30 min, the orphan is reclaimed.
 2. **Active-window heuristic**: if you run `/new` or `/clear` shortly after the orphaned session was last touched, the heuristic catches it as the unique "recently-active" state and commits it deterministically.
 
-The remaining limitation: if you never start another codex on this machine, no sweep runs and the OV session stays open server-side. If you care about preserving memory from a particular session before exiting, run `/compact` first or call `openviking_store` with the conclusions you want kept.
+The remaining limitation: if you never start another codex on this machine, no sweep runs and the OV session stays open server-side. If you care about preserving memory from a particular session before exiting, run `/compact` first or call the native MCP `store` tool with the conclusions you want kept.
 
 ### MCP tools (explicit, on demand)
 
-The MCP server provides tools for when Codex or the user needs explicit memory operations. See "Tools" below.
+The OpenViking server's native `/mcp` endpoint provides tools for when Codex or the user needs explicit memory operations. See "MCP Tools" below.
 
 ## Codex hook output schema
 
@@ -313,7 +340,6 @@ If step 6 returns no leaf memories, check:
 | `captureMaxLength`      | `24000` | Max text length for capture |
 | `captureTimeoutMs`      | `30000` | HTTP request timeout for capture/commit (ms) |
 | `captureAssistantTurns` | `false` | Include assistant turns in transcript-incremental capture |
-| `captureLastAssistantOnStop` | `true` | Capture `last_assistant_message` separately on every Stop |
 | `autoCommitOnCompact`   | `true`  | Commit the full transcript on `PreCompact` |
 | `debug`                 | `false` | Write structured debug logs |
 
@@ -349,13 +375,15 @@ State-file / SessionStart tuning:
 
 Requests send both `Authorization: Bearer <api_key>` (primary — required by OpenViking Cloud) and `X-API-Key` (legacy — accepted by older self-hosted servers). The legacy header will be dropped once `X-API-Key` is fully retired upstream.
 
+For native MCP, Codex sends `Authorization: Bearer $OPENVIKING_API_KEY` from `bearer_token_env_var` plus the static account/user/agent headers written under `[mcp_servers.openviking.http_headers]`.
+
 ## Hook timeouts
 
 | Hook | Default timeout | Notes |
 |------|-----------------|-------|
-| `SessionStart`     | `120s` | First session may need time to install runtime deps |
+| `SessionStart`     | `30s`  | Orphan commit / idle sweep |
 | `UserPromptSubmit` | `8s`   | Recall must stay fast — keep `timeoutMs` low |
-| `Stop`             | `45s`  | Gives capture room to finish |
+| `Stop`             | `30s`  | Gives capture room to finish |
 | `PreCompact`       | `60s`  | Whole transcript posts plus commit |
 
 ## Debug logging
@@ -364,37 +392,7 @@ Set `OPENVIKING_DEBUG=1` or `codex.debug=true` in `ovcli.conf` to write structur
 
 ## MCP Tools
 
-### `openviking_recall`
-
-Search OpenViking memory.
-
-Parameters:
-
-- `query`: search query
-- `target_uri`: optional search scope, default `viking://user/memories`
-- `limit`: optional max results
-- `score_threshold`: optional minimum score
-
-### `openviking_store`
-
-Store a memory by creating a short OpenViking session, adding the text, and committing. Memory creation is extraction-dependent; the tool reports when OpenViking commits the session but extracts zero items.
-
-Parameters:
-
-- `text`: information to store
-- `role`: optional message role, default `user`
-
-### `openviking_forget`
-
-Delete an exact memory URI. Use `openviking_recall` first to find the URI.
-
-Parameters:
-
-- `uri`: exact `viking://user/.../memories/...` or `viking://agent/.../memories/...`
-
-### `openviking_health`
-
-Check server reachability.
+Codex uses OpenViking's native `/mcp` endpoint. Current deployed servers expose `search`, `read`, `list`, `store`, `add_resource`, `grep`, `glob`, `forget`, and `health`; newer server builds may expose aliases such as `find` and `remember`. See the [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md) for schemas and examples.
 
 ## Plugin Structure
 
@@ -407,19 +405,14 @@ codex-memory-plugin/
 ├── scripts/
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
 │   ├── debug-log.mjs            # Structured JSONL logger
-│   ├── runtime-common.mjs       # Plugin data root + install-state helpers
-│   ├── bootstrap-runtime.mjs    # SessionStart installer
-│   ├── start-memory-server.mjs  # Launches MCP server through the runtime
 │   ├── auto-recall.mjs          # UserPromptSubmit hook
 │   ├── auto-capture.mjs         # Stop hook
-│   └── pre-compact-capture.mjs  # PreCompact hook (commits full transcript)
-├── servers/
-│   └── memory-server.js         # Compiled MCP server (checked in)
-├── src/
-│   └── memory-server.ts         # MCP server source
-├── .mcp.json                    # MCP server definition (consumed by Codex)
+│   ├── pre-compact-capture.mjs  # PreCompact hook (commits full transcript)
+│   ├── session-start-commit.mjs # SessionStart orphan commit / idle sweep
+│   └── session-state.mjs        # State-file persistence
+├── setup-helper/
+│   └── install.sh               # Installs hooks plugin + native /mcp config
 ├── package.json
-├── tsconfig.json
 └── README.md
 ```
 

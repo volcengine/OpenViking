@@ -229,7 +229,31 @@ OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profi
 Expect new entries describing the captured preferences (favorite color,
 serif fonts, etc.) with timestamps from this run.
 
-## 8. Codex CLI smoke test (requires codex auth)
+## 8. Optional native MCP registration smoke
+
+The plugin no longer ships a private stdio MCP server. If native MCP is
+enabled, Codex should point at OpenViking server `/mcp`.
+
+```bash
+codex mcp get openviking --json
+# Expect transport.type = "streamable_http", url = ".../mcp",
+# and bearer_token_env_var = "OPENVIKING_API_KEY" (or your chosen env var).
+```
+
+Inside an interactive Codex session, run `/mcp` and call `health`. A live
+OpenViking server should expose native tools such as `search`, `read`, `list`,
+`store`/`remember`, `add_resource`, `grep`, `glob`, `forget`, and `health`
+depending on the server version.
+
+Hooks-only installs are valid too:
+
+```bash
+OPENVIKING_CODEX_ENABLE_MCP=0 \
+  bash examples/codex-memory-plugin/setup-helper/install.sh
+# Expect any installer-managed mcp_servers.openviking section to be removed.
+```
+
+## 9. Codex CLI smoke test (requires codex auth)
 
 ```bash
 codex plugin marketplace add /path/to/OpenViking-codex-marketplace   # if not already

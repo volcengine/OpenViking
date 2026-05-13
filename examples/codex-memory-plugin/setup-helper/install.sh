@@ -9,6 +9,29 @@ PLUGIN_NAME="openviking-memory"
 PLUGIN_ID="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 CODEX_CONFIG="${CODEX_CONFIG_FILE:-$HOME/.codex/config.toml}"
 
+ENABLE_NATIVE_MCP="${OPENVIKING_CODEX_ENABLE_MCP:-}"
+if [ -z "$ENABLE_NATIVE_MCP" ]; then
+  if [ -t 0 ]; then
+    printf 'Enable OpenViking native MCP tools in Codex? [Y/n] '
+    read -r MCP_REPLY || MCP_REPLY=""
+    case "$MCP_REPLY" in
+      n|N|no|No|NO) ENABLE_NATIVE_MCP=0 ;;
+      *) ENABLE_NATIVE_MCP=1 ;;
+    esac
+  else
+    ENABLE_NATIVE_MCP=1
+  fi
+fi
+
+case "$ENABLE_NATIVE_MCP" in
+  1|true|TRUE|yes|YES|y|Y) ENABLE_NATIVE_MCP=1 ;;
+  0|false|FALSE|no|NO|n|N) ENABLE_NATIVE_MCP=0 ;;
+  *)
+    echo "Invalid OPENVIKING_CODEX_ENABLE_MCP=$ENABLE_NATIVE_MCP (expected 1/0 or true/false)." >&2
+    exit 1
+    ;;
+esac
+
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "Missing required command: $1" >&2
@@ -59,14 +82,17 @@ EOF
 
 codex plugin marketplace add "$MARKETPLACE_ROOT" >/dev/null 2>&1 || true
 
-node - "$CODEX_CONFIG" "$PLUGIN_ID" <<'NODE'
+node - "$CODEX_CONFIG" "$PLUGIN_ID" "$ENABLE_NATIVE_MCP" <<'NODE'
 const fs = require("node:fs");
-const path = process.argv[2];
+const os = require("node:os");
+const pathMod = require("node:path");
+const configPath = process.argv[2];
 const pluginId = process.argv[3];
+const enableNativeMcp = process.argv[4] === "1";
 
 let text = "";
 try {
-  text = fs.readFileSync(path, "utf8");
+  text = fs.readFileSync(configPath, "utf8");
 } catch {
   text = "";
 }
@@ -127,11 +153,143 @@ function ensurePluginEnabled(src, pluginId) {
   return lines.join("\n").replace(/\n*$/, "\n");
 }
 
+function removeSection(src, section) {
+  let lines = src.split(/\n/);
+  const header = `[${section}]`;
+
+  while (true) {
+    const start = lines.findIndex((line) => line.trim() === header);
+    if (start === -1) break;
+
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^\s*\[/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    lines.splice(start, end - start);
+  }
+
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\n*$/, "\n");
+}
+
+function removeNativeMcpServer(src) {
+  const withoutSections = removeSection(
+    removeSection(src, "mcp_servers.openviking.http_headers"),
+    "mcp_servers.openviking",
+  );
+  return withoutSections
+    .replace(/^# OpenViking native MCP endpoint, managed by examples\/codex-memory-plugin\/setup-helper\/install\.sh\n/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n*$/, "\n");
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function expandHome(filePath) {
+  if (!filePath) return filePath;
+  if (filePath === "~") return os.homedir();
+  if (filePath.startsWith("~/")) return pathMod.join(os.homedir(), filePath.slice(2));
+  return filePath;
+}
+
+function readJson(filePath) {
+  if (!filePath) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function str(value, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function looksLikeOvcli(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  if (obj.server && typeof obj.server === "object") return false;
+  return typeof obj.url === "string" || typeof obj.api_key === "string";
+}
+
+function loadOpenVikingConnection() {
+  const cliPath = expandHome(process.env.OPENVIKING_CLI_CONFIG_FILE)
+    || pathMod.join(os.homedir(), ".openviking", "ovcli.conf");
+  const ovPath = expandHome(process.env.OPENVIKING_CONFIG_FILE)
+    || pathMod.join(os.homedir(), ".openviking", "ov.conf");
+
+  let cliFile = readJson(cliPath) || {};
+  let ovFile = readJson(ovPath) || {};
+  if (process.env.OPENVIKING_CONFIG_FILE && !process.env.OPENVIKING_CLI_CONFIG_FILE && looksLikeOvcli(ovFile)) {
+    cliFile = ovFile;
+    ovFile = {};
+  }
+
+  const server = ovFile.server || {};
+  const codex = ovFile.codex || {};
+  const host = str(server.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
+  const port = Number.isFinite(Number(server.port)) ? Number(server.port) : 1933;
+  const baseUrl = str(process.env.OPENVIKING_URL, "")
+    || str(process.env.OPENVIKING_BASE_URL, "")
+    || str(cliFile.url, "")
+    || str(server.url, "")
+    || `http://${host}:${Math.trunc(port)}`;
+
+  const bearerTokenEnvVar = process.env.OPENVIKING_BEARER_TOKEN && !process.env.OPENVIKING_API_KEY
+    ? "OPENVIKING_BEARER_TOKEN"
+    : "OPENVIKING_API_KEY";
+
+  return {
+    mcpUrl: `${baseUrl.replace(/\/+$/, "")}/mcp`,
+    bearerTokenEnvVar,
+    account: str(process.env.OPENVIKING_ACCOUNT, "") || str(cliFile.account, "") || str(codex.accountId, ""),
+    user: str(process.env.OPENVIKING_USER, "") || str(cliFile.user, "") || str(codex.userId, ""),
+    agentId: str(process.env.OPENVIKING_AGENT_ID, "") || str(cliFile.agent_id, "") || str(codex.agentId, "codex"),
+  };
+}
+
+function ensureNativeMcpServer(src) {
+  const conn = loadOpenVikingConnection();
+  let next = removeNativeMcpServer(src);
+
+  const lines = [
+    "# OpenViking native MCP endpoint, managed by examples/codex-memory-plugin/setup-helper/install.sh",
+    "[mcp_servers.openviking]",
+    `url = ${tomlString(conn.mcpUrl)}`,
+    `bearer_token_env_var = ${tomlString(conn.bearerTokenEnvVar)}`,
+    "startup_timeout_sec = 30",
+    "tool_timeout_sec = 120",
+  ];
+
+  const headers = [];
+  if (conn.account) headers.push(["X-OpenViking-Account", conn.account]);
+  if (conn.user) headers.push(["X-OpenViking-User", conn.user]);
+  if (conn.agentId) headers.push(["X-OpenViking-Agent", conn.agentId]);
+
+  if (headers.length > 0) {
+    lines.push("", "[mcp_servers.openviking.http_headers]");
+    for (const [key, value] of headers) {
+      lines.push(`${tomlString(key)} = ${tomlString(value)}`);
+    }
+  }
+
+  const prefix = next.trimEnd();
+  return `${prefix}${prefix ? "\n\n" : ""}${lines.join("\n")}\n`;
+}
+
 text = ensurePluginEnabled(text, pluginId);
 text = ensureSectionLine(text, "features", "plugin_hooks", "true");
+if (enableNativeMcp) {
+  text = ensureNativeMcpServer(text);
+} else {
+  text = removeNativeMcpServer(text);
+}
 
-fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
-fs.writeFileSync(path, text);
+fs.mkdirSync(pathMod.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, text);
 NODE
 
 CACHE_DIR="$HOME/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$PLUGIN_VERSION"
@@ -143,7 +301,7 @@ if [ ! -f "$HOME/.openviking/ovcli.conf" ]; then
   cat >&2 <<'EOF'
 
 Note: ~/.openviking/ovcli.conf was not found.
-The plugin will use http://127.0.0.1:1933 unless OPENVIKING_URL / OPENVIKING_API_KEY are set.
+Hooks and native MCP will default to http://127.0.0.1:1933 unless OPENVIKING_URL is set.
 EOF
 fi
 
@@ -151,6 +309,24 @@ cat <<EOF
 Installed $PLUGIN_ID.
 Marketplace: $MARKETPLACE_ROOT
 Plugin cache: $CACHE_DIR
+EOF
+
+if [ "$ENABLE_NATIVE_MCP" -eq 1 ]; then
+  cat <<EOF
+Native MCP: mcp_servers.openviking in $CODEX_CONFIG
+
+Before starting Codex, make sure the bearer env var configured above is set
+(usually OPENVIKING_API_KEY). Hooks can read ovcli.conf directly; Codex's
+native HTTP MCP transport reads auth from the configured env var.
+EOF
+else
+  cat <<EOF
+Native MCP: disabled/removed (hooks-only install). Enable later by re-running with
+OPENVIKING_CODEX_ENABLE_MCP=1.
+EOF
+fi
+
+cat <<EOF
 
 Restart Codex with:
   codex

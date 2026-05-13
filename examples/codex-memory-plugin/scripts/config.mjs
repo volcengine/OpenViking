@@ -7,10 +7,9 @@
  *   3. ov.conf — the server config (server.* + optional codex.* block for tuning)
  *   4. Built-in defaults
  *
- * Mirrors examples/claude-code-memory-plugin/scripts/config.mjs so the
- * hook surface and the MCP server (src/memory-server.ts imports loadConfig
- * from here) resolve identity identically. Aligning the two prevents
- * silent identity drift between auto-capture and explicit `remember` calls.
+ * Mirrors examples/claude-code-memory-plugin/scripts/config.mjs where the
+ * hook surfaces overlap, while explicit MCP tools are provided by the
+ * OpenViking server's native /mcp endpoint.
  *
  * File-path env vars:
  *   OPENVIKING_CLI_CONFIG_FILE  alternate ovcli.conf path  (preferred)
@@ -228,7 +227,6 @@ export function loadConfig() {
     ))),
     captureTimeoutMs,
     captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cx.captureAssistantTurns === true),
-    captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
 

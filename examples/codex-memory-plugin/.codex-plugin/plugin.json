@@ -17,18 +17,16 @@
     "codex"
   ],
   "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "OpenViking Memory",
     "shortDescription": "Long-term semantic memory for Codex",
-    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit; on every Stop (turn end) append the new user/assistant turns to a long-lived OpenViking session keyed by codex session_id; on PreCompact commit that session so OV's extractor produces durable memories before context is summarized; on SessionStart(source=clear) commit any orphaned prior session before /clear discards it. Also exposes explicit MCP tools (openviking_recall, openviking_store, openviking_forget, openviking_health) for manual use.",
+    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit; on every Stop (turn end) append new transcript turns to a long-lived OpenViking session keyed by codex session_id; on PreCompact commit that session so OV's extractor produces durable memories before context is summarized; on SessionStart(source=startup|clear) commit orphaned prior sessions with the active-window heuristic and idle-TTL sweep. The installer also registers OpenViking's native /mcp endpoint for explicit tools such as search, read, store, add_resource, grep, glob, forget, and health.",
     "developerName": "OpenViking",
     "category": "Productivity",
     "capabilities": [
       "Memory recall",
       "Auto memory capture",
-      "Manual memory storage",
-      "Manual memory deletion"
+      "Native OpenViking MCP tools"
     ],
     "websiteURL": "https://github.com/volcengine/OpenViking"
   }

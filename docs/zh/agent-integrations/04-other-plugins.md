@@ -2,20 +2,29 @@
 
 仓库里还附带了几个未在 Claude Code 和 OpenClaw 主集成中介绍的社区/实验性插件。它们在目标 runtime、集成深度和维护状态上各有差异，使用前请先阅读各自的 README。
 
-## Codex 记忆 MCP Server
+## Codex 记忆插件
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
 
-面向 [Codex](https://github.com/openai/codex) 的最小化 MCP-only 服务，刻意保持窄边界：
+面向 [Codex](https://github.com/openai/codex) 的生命周期 hook 集成，并把显式工具接到 OpenViking server 原生 `/mcp`：
 
-- 不挂生命周期 hook
-- 不跑后台捕获 worker
-- 不写 `~/.codex`
-- 不留 build 产物
+- `UserPromptSubmit` 自动召回并注入相关记忆
+- `Stop` 增量追加对话 turn 到同一个 OpenViking session
+- `PreCompact` 在 Codex 压缩上下文前提交 session，触发记忆抽取
+- `SessionStart(startup|clear)` 用 active-window heuristic 和 idle-TTL sweep 清理 orphan session
+- 显式工具不再由插件自带 stdio server 提供，而是统一走 OpenViking server 的 `/mcp`
 
-Codex 拿到的只是几个显式记忆工具：`find`、`remember`，外加几个辅助。
+推荐安装：
 
-如果你只需要 Codex 显式调用记忆（不需要自动召回/捕获），这是最简方案。
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+```
+
+安装器会启用本地 `openviking-memory@openviking-plugins-local` 插件、打开 `features.plugin_hooks = true`，并可选地在 `~/.codex/config.toml` 写入 `mcp_servers.openviking`，指向 OpenViking server 的原生 `/mcp`。交互式运行时会询问是否启用 MCP；如果只想装 hooks，可设置 `OPENVIKING_CODEX_ENABLE_MCP=0`，已有的安装器管理的 `mcp_servers.openviking` 会被移除。
+
+hook 会读取 `~/.openviking/ovcli.conf`；但 Codex 的 HTTP MCP transport 不读这个文件，所以 MCP URL 和 account/user/agent header 需要落到 Codex config 里。
+
+原生 `/mcp` 暴露的工具包括 `search`、`read`、`list`、`store`、`add_resource`、`grep`、`glob`、`forget`、`health`（具体以 server 版本为准）。
 
 ## OpenCode 插件
 

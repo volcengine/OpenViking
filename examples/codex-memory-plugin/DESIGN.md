@@ -118,8 +118,8 @@ arbitrarily-orphaned state files accumulate.
 
 **Known limitation**: if the user never starts another codex on this
 machine, no sweep ever runs and the OV session stays open server-side
-forever. Accepted. Future work could add an MCP tool
-`openviking_commit_pending` so the model can commit explicitly.
+forever. Accepted. Future work could add a native server MCP tool to commit
+pending Codex sessions explicitly.
 
 ## Stop hook — append only, no commit
 
@@ -223,8 +223,8 @@ proven first.
 ## Open questions / future work
 
 - **Phase 2 resume context inject** (above).
-- **MCP tool `openviking_commit_pending`**: explicit commit for the model
-  to call, useful when user knows they're about to exit.
+- **Native MCP commit-pending tool**: explicit commit for the model to call,
+  useful when user knows they're about to exit.
 - **Subagent hook events**: kimicode has them, codex doesn't yet.
   When codex adds them, we should hook to keep subagent memory threads
   separate from main session.
