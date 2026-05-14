@@ -239,6 +239,11 @@ class VikingFS:
         bound = self._bound_ctx.get()
         return bound or self._default_ctx()
 
+    @staticmethod
+    async def _run_in_threadpool(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        """Run blocking AGFS operations in the default thread pool."""
+        return await asyncio.to_thread(func, *args, **kwargs)
+
     async def _encrypt_content(self, content: bytes, ctx: Optional[RequestContext] = None) -> bytes:
         """Encrypt content if encryption is enabled."""
         if not self._encryptor:
@@ -355,7 +360,7 @@ class VikingFS:
 
         if self._encryptor:
             # When encryption is enabled: must read entire file for decryption
-            result = self.agfs.read(path, 0, -1)
+            result = await self._run_in_threadpool(self.agfs.read, path, 0, -1)
             if isinstance(result, bytes):
                 raw = result
             elif result is not None and hasattr(result, "content"):
@@ -373,7 +378,7 @@ class VikingFS:
                     raw = raw[offset:]
         else:
             # When not encrypted: normal read
-            result = self.agfs.read(path, offset, size)
+            result = await self._run_in_threadpool(self.agfs.read, path, offset, size)
             if isinstance(result, bytes):
                 raw = result
             elif result is not None and hasattr(result, "content"):
@@ -396,7 +401,7 @@ class VikingFS:
             data = data.encode("utf-8")
 
         data = await self._encrypt_content(data, ctx=ctx)
-        return self.agfs.write(path, data)
+        return await self._run_in_threadpool(self.agfs.write, path, data)
 
     async def mkdir(
         self,
@@ -411,7 +416,7 @@ class VikingFS:
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)
         try:
-            self.agfs.mkdir(path)
+            await self._run_in_threadpool(self.agfs.mkdir, path)
         except Exception as exc:
             message = str(exc).lower()
             already_exists = "exist" in message or "already" in message
@@ -464,7 +469,7 @@ class VikingFS:
 
         # Check existence and determine lock strategy
         try:
-            stat = self.agfs.stat(path)
+            stat = await self._run_in_threadpool(self.agfs.stat, path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
         except Exception as exc:
             if not is_not_found_error(exc):
@@ -507,7 +512,9 @@ class VikingFS:
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
                 try:
-                    result = self.agfs.rm(path, recursive=recursive)
+                    result = await self._run_in_threadpool(
+                        self.agfs.rm, path, recursive=recursive
+                    )
                 except AGFSDirectoryNotEmptyError:
                     raise FailedPreconditionError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -551,7 +558,7 @@ class VikingFS:
 
         # Verify source exists and determine type before locking
         try:
-            stat = self.agfs.stat(old_path)
+            stat = await self._run_in_threadpool(self.agfs.stat, old_path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
         except Exception:
             raise FileNotFoundError(f"mv source not found: {old_uri}")
@@ -575,7 +582,9 @@ class VikingFS:
             # Copy source to destination (source still intact)
             try:
                 if is_temp or not self._encryptor:
-                    agfs_cp(self.agfs, old_path, new_path, recursive=is_dir)
+                    await self._run_in_threadpool(
+                        agfs_cp, self.agfs, old_path, new_path, recursive=is_dir
+                    )
                 else:
                     if is_dir:
                         await self._recursive_copy_dir_with_encryption(old_uri, new_uri, ctx=ctx)
@@ -591,7 +600,7 @@ class VikingFS:
             if is_dir and (is_temp or not self._encryptor):
                 carried_lock = new_path.rstrip("/") + "/.path.ovlock"
                 try:
-                    self.agfs.rm(carried_lock)
+                    await self._run_in_threadpool(self.agfs.rm, carried_lock)
                 except Exception:
                     pass
 
@@ -601,15 +610,15 @@ class VikingFS:
             except Exception:
                 try:
                     if is_dir:
-                        self.agfs.rm(new_path, recursive=True)
+                        await self._run_in_threadpool(self.agfs.rm, new_path, recursive=True)
                     else:
-                        self.agfs.rm(new_path)
+                        await self._run_in_threadpool(self.agfs.rm, new_path)
                 except Exception:
                     pass
                 raise
 
             # Delete source
-            self.agfs.rm(old_path, recursive=is_dir)
+            await self._run_in_threadpool(self.agfs.rm, old_path, recursive=is_dir)
             return {}
 
     async def _recursive_copy_dir_with_encryption(
@@ -912,7 +921,7 @@ class VikingFS:
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                asyncio.to_thread(self._grep_single_file, entry_uri, compiled_pattern, ctx)
+                self._grep_single_file(entry_uri, compiled_pattern, ctx)
                 for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
@@ -925,7 +934,7 @@ class VikingFS:
 
         return results, files_scanned
 
-    def _grep_single_file(
+    async def _grep_single_file(
         self,
         entry_uri: str,
         compiled_pattern: re.Pattern,
@@ -934,7 +943,7 @@ class VikingFS:
         try:
             self._ensure_access(entry_uri, ctx)
             path = self._uri_to_path(entry_uri, ctx=ctx)
-            result = self.agfs.read(path, 0, -1)
+            result = await self._run_in_threadpool(self.agfs.read, path, 0, -1)
             if isinstance(result, bytes):
                 content = result
             elif result is not None and hasattr(result, "content"):
@@ -989,7 +998,7 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        result = self.agfs.stat(path)
+        result = await self._run_in_threadpool(self.agfs.stat, path)
         if isinstance(result, dict):
             result["isLocked"] = self._is_path_locked(path)
             # Add count for directories if vector store available
@@ -1138,7 +1147,7 @@ class VikingFS:
                 return
             if level_limit is not None and current_depth >= level_limit:
                 return
-            for entry in self._ls_entries(current_path):
+            for entry in await self._ls_entries(current_path):
                 if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
@@ -1181,7 +1190,7 @@ class VikingFS:
                 return
             if level_limit is not None and current_depth >= level_limit:
                 return
-            for entry in self._ls_entries(current_path):
+            for entry in await self._ls_entries(current_path):
                 if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
@@ -1223,7 +1232,7 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
-            info = self.agfs.stat(path)
+            info = await self._run_in_threadpool(self.agfs.stat, path)
         except Exception as exc:
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
@@ -1236,7 +1245,9 @@ class VikingFS:
             )
         file_path = f"{path}/.abstract.md"
         try:
-            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+            content_bytes = self._handle_agfs_read(
+                await self._run_in_threadpool(self.agfs.read, file_path)
+            )
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
@@ -1261,7 +1272,7 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
-            info = self.agfs.stat(path)
+            info = await self._run_in_threadpool(self.agfs.stat, path)
         except Exception as exc:
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
@@ -1274,7 +1285,9 @@ class VikingFS:
             )
         file_path = f"{path}/.overview.md"
         try:
-            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+            content_bytes = self._handle_agfs_read(
+                await self._run_in_threadpool(self.agfs.read, file_path)
+            )
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
@@ -1679,13 +1692,13 @@ class VikingFS:
     _INTERNAL_NAMES = {"_system", "tasks", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
-    def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
+    async def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
         At other levels, uses _INTERNAL_NAMES blacklist.
         """
-        entries = self.agfs.ls(path)
+        entries = await self._run_in_threadpool(self.agfs.ls, path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
@@ -1848,7 +1861,7 @@ class VikingFS:
 
         async def _collect(p: str):
             try:
-                for entry in self._ls_entries(p):
+                for entry in await self._ls_entries(p):
                     name = entry.get("name", "")
                     if name in [".", ".."]:
                         continue
@@ -1997,7 +2010,7 @@ class VikingFS:
         for i in range(1, len(parts)):
             parent = "/" + "/".join(parts[:i])
             try:
-                self.agfs.mkdir(parent)
+                await self._run_in_threadpool(self.agfs.mkdir, parent)
             except Exception as e:
                 # Log the error but continue, as parent might already exist
                 # or we might be creating it in the next iteration
@@ -2012,7 +2025,9 @@ class VikingFS:
         """Read .relations.json."""
         table_path = f"{dir_path}/.relations.json"
         try:
-            content = self._handle_agfs_read(self.agfs.read(table_path))
+            content = self._handle_agfs_read(
+                await self._run_in_threadpool(self.agfs.read, table_path)
+            )
             content = await self._decrypt_content(content, ctx=ctx)
             data = json.loads(content.decode("utf-8"))
         except FileNotFoundError:
@@ -2048,7 +2063,7 @@ class VikingFS:
             content = content.encode("utf-8")
 
         content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(table_path, content)
+        await self._run_in_threadpool(self.agfs.write, table_path, content)
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -2086,7 +2101,7 @@ class VikingFS:
             content = content.encode("utf-8")
 
         content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(path, content)
+        await self._run_in_threadpool(self.agfs.write, path, content)
 
     async def read_file(
         self,
@@ -2110,7 +2125,7 @@ class VikingFS:
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
         try:
-            stat = self.agfs.stat(path)
+            stat = await self._run_in_threadpool(self.agfs.stat, path)
         except Exception:
             raise NotFoundError(uri, "file")
         if isinstance(stat, dict) and stat.get("isDir", False):
@@ -2119,7 +2134,7 @@ class VikingFS:
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
         try:
-            content = self.agfs.read(path)
+            content = await self._run_in_threadpool(self.agfs.read, path)
             if isinstance(content, bytes):
                 raw = content
             elif content is not None and hasattr(content, "content"):
@@ -2150,7 +2165,7 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
-            stat = self.agfs.stat(path)
+            stat = await self._run_in_threadpool(self.agfs.stat, path)
         except Exception:
             raise NotFoundError(uri, "file")
         if isinstance(stat, dict) and stat.get("isDir", False):
@@ -2159,7 +2174,7 @@ class VikingFS:
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
         try:
-            raw = self._handle_agfs_read(self.agfs.read(path))
+            raw = self._handle_agfs_read(await self._run_in_threadpool(self.agfs.read, path))
             raw = await self._decrypt_content(raw, ctx=ctx)
             return raw
         except Exception:
@@ -2177,7 +2192,7 @@ class VikingFS:
         await self._ensure_parent_dirs(path)
 
         content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(path, content)
+        await self._run_in_threadpool(self.agfs.write, path, content)
 
     async def append_file(
         self,
@@ -2192,7 +2207,9 @@ class VikingFS:
         try:
             existing = ""
             try:
-                existing_bytes = self._handle_agfs_read(self.agfs.read(path))
+                existing_bytes = self._handle_agfs_read(
+                    await self._run_in_threadpool(self.agfs.read, path)
+                )
                 existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
                 existing = self._decode_bytes(existing_bytes)
             except FileNotFoundError:
@@ -2206,7 +2223,7 @@ class VikingFS:
             await self._ensure_parent_dirs(path)
             final_content = (existing + content).encode("utf-8")
             final_content = await self._encrypt_content(final_content, ctx=ctx)
-            self.agfs.write(path, final_content)
+            await self._run_in_threadpool(self.agfs.write, path, final_content)
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -2257,7 +2274,7 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
         try:
-            entries = self._ls_entries(path)
+            entries = await self._ls_entries(path)
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
@@ -2308,7 +2325,7 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
         try:
-            entries = self._ls_entries(path)
+            entries = await self._ls_entries(path)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry in entries:
@@ -2342,7 +2359,7 @@ class VikingFS:
 
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
         await self.write_file(to_uri, content_bytes, ctx=ctx)
-        self.agfs.rm(from_path)
+        await self._run_in_threadpool(self.agfs.rm, from_path)
 
     # ========== Temp File Operations (backward compatible) ==========
 
@@ -2362,7 +2379,7 @@ class VikingFS:
         self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
-            for entry in self._ls_entries(path):
+            for entry in await self._ls_entries(path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -2370,8 +2387,8 @@ class VikingFS:
                 if entry.get("isDir"):
                     await self.delete_temp(f"{temp_uri}/{name}", ctx=ctx)
                 else:
-                    self.agfs.rm(entry_path)
-            self.agfs.rm(path)
+                    await self._run_in_threadpool(self.agfs.rm, entry_path)
+            await self._run_in_threadpool(self.agfs.rm, path)
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
@@ -2433,7 +2450,7 @@ class VikingFS:
         try:
             await self._ensure_parent_dirs(path)
             try:
-                self.agfs.mkdir(path)
+                await self._run_in_threadpool(self.agfs.mkdir, path)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
