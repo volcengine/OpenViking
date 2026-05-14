@@ -182,8 +182,9 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     rp.tree_builder.finalize_from_temp = AsyncMock(return_value=context_tree)
     rp._summarizer = SimpleNamespace(
         summarize=AsyncMock(
-            side_effect=lambda *args, **kwargs: summarize_calls.append(kwargs)
-            or {"status": "success"}
+            side_effect=lambda *args, **kwargs: (
+                summarize_calls.append(kwargs) or {"status": "success"}
+            )
         )
     )
 

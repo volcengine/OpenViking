@@ -509,9 +509,7 @@ class VikingFS:
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
                 try:
-                    result = await self._run_in_threadpool(
-                        self.agfs.rm, path, recursive=recursive
-                    )
+                    result = await self._run_in_threadpool(self.agfs.rm, path, recursive=recursive)
                 except AGFSDirectoryNotEmptyError:
                     raise FailedPreconditionError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -927,8 +925,7 @@ class VikingFS:
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                self._grep_single_file(entry_uri, compiled_pattern, ctx)
-                for entry_uri in batch_uris
+                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
             for matches, scanned_count in batch_results:
