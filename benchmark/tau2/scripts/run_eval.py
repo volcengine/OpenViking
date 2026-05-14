@@ -834,7 +834,9 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _execute_cell(cell: dict[str, Any], repo: Path, out: Path, cell_timeout: int | None) -> dict[str, Any]:
+def _execute_cell(
+    cell: dict[str, Any], repo: Path, out: Path, cell_timeout: int | None
+) -> dict[str, Any]:
     cell_result_path = out / "cell_results" / f"{cell['run_label']}.json"
     if cell_result_path.is_file():
         existing_row = json.loads(cell_result_path.read_text(encoding="utf-8"))
@@ -919,8 +921,7 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
     rows: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
-            executor.submit(_execute_cell, cell, repo, out, cell_timeout): cell
-            for cell in cells
+            executor.submit(_execute_cell, cell, repo, out, cell_timeout): cell for cell in cells
         }
         for future in as_completed(futures):
             rows.append(future.result())
