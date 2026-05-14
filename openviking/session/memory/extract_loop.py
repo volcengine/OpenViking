@@ -385,6 +385,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
             isolation_handler=self._isolation_handler,
         )
 
+        # Debug: log upsert page_ids before registration
+        for op in upsert_operations:
+            tracer.info(f"upsert_op: page_id={op.page_id}, uris={op.uris}, memory_type={op.memory_type}")
+
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
