@@ -191,6 +191,8 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
         {
             "decision_node": "before_write_tool_call",
             "retrieval_action_taken": "retrieve_and_inject",
+            "injected": True,
+            "injected_count": 1,
             "tool_calls": [{"name": "exchange_delivered_order_items"}],
             "category_rerank": {
                 "enabled": True,
@@ -203,15 +205,16 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
             },
             "matches": [
                 {
-                    "uri": "viking://agent/example/memories/trajectories/.overview.md",
+                    "uri": "viking://agent/example/memories/trajectories/delivered_exchange.md",
                     "selected_for_injection": True,
+                    "injected": True,
                     "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
                     "memory_category1_prompt": ["retail_order_post_shipment_service_request"],
                     "memory_category2_prompt": ["delivered_order_exchange"],
                     "category2_match": True,
                 },
                 {
-                    "uri": "viking://agent/example/memories/trajectories/concrete.md",
+                    "uri": "viking://agent/example/memories/trajectories/.overview.md",
                     "selected_for_injection": False,
                     "category_rerank_reasons": ["missing_memory_category"],
                 },
@@ -245,10 +248,17 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["rates"]["selected_memory_category_match_coverage"] == 1.0
     assert summary["counts"]["aggregate_memory_candidate_count"] == 1
     assert summary["counts"]["concrete_memory_candidate_count"] == 2
+    assert summary["counts"]["memory_injection_event_count"] == 1
+    assert summary["counts"]["memory_injected_count"] == 1
+    assert summary["counts"]["injected_match_count"] == 1
+    assert summary["counts"]["injected_concrete_memory_count"] == 1
+    assert summary["counts"]["injected_positive_category_match_count"] == 1
     assert summary["counts"]["memory_category_present_count"] == 2
     assert summary["counts"]["memory_category_matched_count"] == 1
     assert summary["rates"]["concrete_memory_candidate_rate"] == 2 / 3
-    assert summary["rates"]["selected_concrete_memory_rate"] == 0.0
+    assert summary["rates"]["selected_concrete_memory_rate"] == 1.0
+    assert summary["rates"]["injected_positive_category_match_rate"] == 1.0
+    assert summary["rates"]["injected_concrete_memory_rate"] == 1.0
 
 
 def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
@@ -279,6 +289,7 @@ def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
     assert "no_concrete_corpus_probe_matches" in evidence["reasons"]
     assert "no_concrete_memory_candidates" in evidence["reasons"]
     assert "no_matched_memory_categories" in evidence["reasons"]
+    assert "no_memory_injection" in evidence["reasons"]
     assert "no_selected_positive_category_match" in evidence["reasons"]
 
 
@@ -352,6 +363,39 @@ def test_runtime_evidence_accepts_valid_category_runtime_coverage() -> None:
                 "query_category_matched_event_count": 1,
                 "memory_category_present_count": 2,
                 "memory_category_matched_count": 1,
+                "memory_injection_event_count": 1,
+                "injected_concrete_memory_count": 1,
+                "injected_positive_category_match_count": 1,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 1.0,
+                "selected_positive_category_match_rate": 1.0,
+                "injected_concrete_memory_rate": 1.0,
+                "injected_positive_category_match_rate": 1.0,
+            },
+        },
+    )
+
+    assert evidence == {"status": "valid", "reasons": []}
+
+
+def test_runtime_evidence_requires_actual_memory_injection() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 1,
+            "aggregate_match_count": 0,
+            "concrete_match_count": 1,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 1,
+                "memory_category_present_count": 1,
+                "memory_category_matched_count": 1,
+                "memory_injection_event_count": 0,
             },
             "rates": {
                 "concrete_memory_candidate_rate": 1.0,
@@ -360,7 +404,41 @@ def test_runtime_evidence_accepts_valid_category_runtime_coverage() -> None:
         },
     )
 
-    assert evidence == {"status": "valid", "reasons": []}
+    assert evidence["status"] == "diagnostic"
+    assert "no_memory_injection" in evidence["reasons"]
+
+
+def test_runtime_evidence_requires_injected_concrete_memory() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 2,
+            "aggregate_match_count": 1,
+            "concrete_match_count": 1,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 1,
+                "memory_category_present_count": 1,
+                "memory_category_matched_count": 1,
+                "memory_injection_event_count": 1,
+                "injected_concrete_memory_count": 0,
+                "injected_positive_category_match_count": 1,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 0.5,
+                "selected_positive_category_match_rate": 1.0,
+                "injected_concrete_memory_rate": 0.0,
+                "injected_positive_category_match_rate": 1.0,
+            },
+        },
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "no_injected_concrete_memory" in evidence["reasons"]
 
 
 def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:

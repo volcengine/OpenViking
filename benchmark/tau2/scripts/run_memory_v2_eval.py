@@ -233,6 +233,12 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             continue
 
         decision_nodes[str(row.get("decision_node") or "unknown")] += 1
+        injected_count = int(row.get("injected_count") or 0)
+        if str(row.get("retrieval_action_taken") or "") == "retrieve_and_inject" and (
+            row.get("injected") or injected_count > 0
+        ):
+            counters["memory_injection_event_count"] += 1
+            counters["memory_injected_count"] += injected_count
         for call in row.get("tool_calls") or []:
             if isinstance(call, dict) and call.get("name"):
                 tool_calls[str(call["name"])] += 1
@@ -261,8 +267,11 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 continue
             counters["raw_match_count"] += 1
             selected = bool(match.get("selected_for_injection") or match.get("injected"))
+            injected = bool(match.get("injected"))
             if selected:
                 counters["selected_match_count"] += 1
+            if injected:
+                counters["injected_match_count"] += 1
             if _is_aggregate_memory_uri(match.get("uri")):
                 counters["aggregate_memory_candidate_count"] += 1
                 if selected:
@@ -271,6 +280,8 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 counters["concrete_memory_candidate_count"] += 1
                 if selected:
                     counters["selected_concrete_memory_count"] += 1
+                if injected:
+                    counters["injected_concrete_memory_count"] += 1
             memory_source = match.get("memory_category_source_prompt")
             positive_category_match = bool(
                 match.get("category1_match") or match.get("category2_match")
@@ -291,16 +302,24 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 counters["positive_category_match_count"] += 1
                 if selected:
                     counters["selected_positive_category_match_count"] += 1
+                if injected:
+                    counters["injected_positive_category_match_count"] += 1
 
     raw_count = counters["raw_match_count"]
     selected_count = counters["selected_match_count"]
+    injected_count = counters["injected_match_count"]
     for key in [
         "aggregate_memory_candidate_count",
         "concrete_memory_candidate_count",
+        "memory_injection_event_count",
+        "memory_injected_count",
+        "injected_match_count",
         "selected_aggregate_memory_count",
         "selected_concrete_memory_count",
+        "injected_concrete_memory_count",
         "memory_category_matched_count",
         "selected_memory_category_matched_count",
+        "injected_positive_category_match_count",
     ]:
         counters[key] += 0
     return {
@@ -336,12 +355,22 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 if selected_count
                 else None
             ),
+            "injected_positive_category_match_rate": (
+                counters["injected_positive_category_match_count"] / injected_count
+                if injected_count
+                else None
+            ),
             "concrete_memory_candidate_rate": (
                 counters["concrete_memory_candidate_count"] / raw_count if raw_count else None
             ),
             "selected_concrete_memory_rate": (
                 counters["selected_concrete_memory_count"] / selected_count
                 if selected_count
+                else None
+            ),
+            "injected_concrete_memory_rate": (
+                counters["injected_concrete_memory_count"] / injected_count
+                if injected_count
                 else None
             ),
         },
@@ -397,12 +426,26 @@ def _runtime_evidence_status(
                 reasons.append("no_memory_category_coverage")
             if int(counts.get("memory_category_matched_count") or 0) <= 0:
                 reasons.append("no_matched_memory_categories")
+            if int(counts.get("memory_injection_event_count") or 0) <= 0:
+                reasons.append("no_memory_injection")
+            if (
+                int(counts.get("memory_injection_event_count") or 0) > 0
+                and float(rates.get("injected_concrete_memory_rate") or 0.0) <= 0.0
+            ):
+                reasons.append("no_injected_concrete_memory")
             if (
                 int(counts.get("query_category_matched_event_count") or 0) > 0
                 and float(rates.get("selected_positive_category_match_rate") or 0.0)
                 <= 0.0
             ):
                 reasons.append("no_selected_positive_category_match")
+            if (
+                int(counts.get("query_category_matched_event_count") or 0) > 0
+                and int(counts.get("memory_injection_event_count") or 0) > 0
+                and float(rates.get("injected_positive_category_match_rate") or 0.0)
+                <= 0.0
+            ):
+                reasons.append("no_injected_positive_category_match")
 
     return {
         "status": "diagnostic" if reasons else "valid",
