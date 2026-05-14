@@ -24,6 +24,11 @@ eval:
   # memory benchmark config opts into a confirmation-aware TAU-2 user simulator
   # prompt; run_eval.py applies that small prompt patch idempotently when needed.
   user_simulator_policy: confirmation_aware
+  # Optional fixed-first-user fixtures keep the first simulated user turn stable
+  # while leaving later turns live. Set these env vars to fixture JSON files.
+  fixed_first_user_fixtures:
+    retail: ${TAU2_RETAIL_FIXED_FIRST_USER_FILE:-}
+    airline: ${TAU2_AIRLINE_FIXED_FIRST_USER_FILE:-}
 
 model:
   agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
@@ -35,6 +40,8 @@ openviking:
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
   retrieval_top_k: 4
+  prewrite_retrieval_top_k: 6
+  prewrite_inject_top_k: 2
   replay_write_policy: read_only
 
 strategies:

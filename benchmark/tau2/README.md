@@ -128,7 +128,9 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
 - train by writing TAU-2 training conversations into OpenViking sessions;
 - evaluate by retrieving OpenViking memory at the first user turn;
 - for pre-write recall, retrieve again before write-like tool calls and
-  regenerate that step with the matched memories;
+  regenerate that step with the matched memories. The default benchmark
+  retrieves 6 pre-write candidates and injects 2, which keeps extra candidates
+  visible in traces without expanding the prompt budget;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
 
@@ -152,6 +154,14 @@ TAU-2 checkout before planning or running. The patch appends only the behavioral
 confirmation boundary to the TAU-2 user simulator guidelines; metadata such as
 the upstream PR link is kept in run artifacts, not in the simulator prompt.
 Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297).
+
+Optional fixed-first-user fixtures keep the first simulated user turn stable
+while preserving live simulator behavior after that turn:
+
+```bash
+export TAU2_RETAIL_FIXED_FIRST_USER_FILE=/path/to/retail_fixture.json
+export TAU2_AIRLINE_FIXED_FIRST_USER_FILE=/path/to/airline_fixture.json
+```
 
 Use `config/official.yaml` with a clean TAU-2 checkout when you need an
 official-user-simulator parity run. If the checkout was already patched, the

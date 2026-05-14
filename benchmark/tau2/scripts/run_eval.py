@@ -18,6 +18,7 @@ from tau2_common import (
     normalize_litellm_env,
     output_dir,
     run_id,
+    resolve_path,
     simulator_policy_report,
     split_file,
     strategy_ids,
@@ -47,6 +48,66 @@ def _db_match(sim: dict[str, Any]) -> bool | None:
         if "db_match" in db:
             return bool(db["db_match"])
     return sim.get("db_match")
+
+
+def _strategy_int(
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    key: str,
+    *,
+    fallback_key: str | None = None,
+    default: int = 4,
+) -> int:
+    openviking = config.get("openviking", {})
+    value = strategy.get(key)
+    if value is None:
+        value = openviking.get(key)
+    if value is None and fallback_key:
+        value = strategy.get(fallback_key)
+    if value is None and fallback_key:
+        value = openviking.get(fallback_key)
+    if value is None:
+        value = default
+    return int(value)
+
+
+def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[str, int]:
+    retrieval_top_k = _strategy_int(config, strategy, "retrieval_top_k", default=4)
+    first_user_retrieval_top_k = _strategy_int(
+        config,
+        strategy,
+        "first_user_retrieval_top_k",
+        fallback_key="retrieval_top_k",
+        default=retrieval_top_k,
+    )
+    first_user_inject_top_k = _strategy_int(
+        config,
+        strategy,
+        "first_user_inject_top_k",
+        fallback_key="first_user_retrieval_top_k",
+        default=first_user_retrieval_top_k,
+    )
+    prewrite_retrieval_top_k = _strategy_int(
+        config,
+        strategy,
+        "prewrite_retrieval_top_k",
+        fallback_key="retrieval_top_k",
+        default=retrieval_top_k,
+    )
+    prewrite_inject_top_k = _strategy_int(
+        config,
+        strategy,
+        "prewrite_inject_top_k",
+        fallback_key="prewrite_retrieval_top_k",
+        default=prewrite_retrieval_top_k,
+    )
+    return {
+        "retrieval_top_k": retrieval_top_k,
+        "first_user_retrieval_top_k": first_user_retrieval_top_k,
+        "first_user_inject_top_k": first_user_inject_top_k,
+        "prewrite_retrieval_top_k": prewrite_retrieval_top_k,
+        "prewrite_inject_top_k": prewrite_inject_top_k,
+    }
 
 
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
@@ -86,6 +147,7 @@ def _tau2_command(
     if reasoning_effort:
         agent_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
         user_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
+    fixed_first_user_file = _fixed_first_user_file(config, domain)
 
     if (
         strategy.get("memory_backend") == "openviking"
@@ -102,6 +164,7 @@ def _tau2_command(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
         search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+        budget = _retrieval_budget(config, strategy)
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -144,12 +207,22 @@ def _tau2_command(
             "--search-uri",
             search_uri,
             "--retrieval-top-k",
-            str(openviking.get("retrieval_top_k", 4)),
+            str(budget["retrieval_top_k"]),
+            "--first-user-retrieval-top-k",
+            str(budget["first_user_retrieval_top_k"]),
+            "--first-user-inject-top-k",
+            str(budget["first_user_inject_top_k"]),
+            "--prewrite-retrieval-top-k",
+            str(budget["prewrite_retrieval_top_k"]),
+            "--prewrite-inject-top-k",
+            str(budget["prewrite_inject_top_k"]),
             "--retrieval-mode",
             str(strategy.get("retrieval_mode", "first_user")),
             "--seed",
             str(seed),
         ]
+        if fixed_first_user_file is not None:
+            command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
         if task_ids:
             for task_id in task_ids:
                 command.extend(["--task-id", task_id])
@@ -200,6 +273,8 @@ def _tau2_command(
         str(seed),
         "--no-memory",
     ]
+    if fixed_first_user_file is not None:
+        command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
 
     if task_ids:
         for task_id in task_ids:
@@ -208,6 +283,17 @@ def _tau2_command(
         command.extend(["--num-tasks", str(num_tasks)])
 
     return command
+
+
+def _fixed_first_user_file(config: dict[str, Any], domain: str) -> Path | None:
+    raw = config.get("eval", {}).get("fixed_first_user_fixture")
+    if raw is None:
+        raw = config.get("eval", {}).get("fixed_first_user_fixtures")
+    if isinstance(raw, dict):
+        raw = raw.get(domain) or raw.get("default")
+    if raw is None or str(raw).strip() == "":
+        return None
+    return resolve_path(str(raw))
 
 
 def _build_plan(
@@ -256,6 +342,7 @@ def _build_plan(
                     train_num_tasks=train_num_tasks,
                     seed=seed,
                 )
+                fixed_first_user_file = _fixed_first_user_file(config, domain)
                 non_executable_reason = None
                 if command is None:
                     non_executable_reason = (
@@ -274,11 +361,15 @@ def _build_plan(
                         "memory_backend": strategy.get("memory_backend"),
                         "corpus_id": strategy.get("corpus_id", strategy["id"]),
                         "retrieval_mode": strategy.get("retrieval_mode"),
+                        "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),
                         "user_simulator_policy_supported": policy_report["supported"],
+                        "fixed_first_user_file": str(fixed_first_user_file)
+                        if fixed_first_user_file
+                        else None,
                         "split_file": str(split_path),
                         "command": command,
                         "non_executable_reason": non_executable_reason,
