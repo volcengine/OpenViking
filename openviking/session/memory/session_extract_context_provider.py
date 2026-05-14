@@ -8,7 +8,7 @@ Session Extract Context Provider - 会话提取 Provider 实现
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
@@ -350,6 +350,42 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         )
         return tool_ctx
 
+    async def read_file(self, uri: str) -> Optional[Dict]:
+        """Read a file via MemoryReadTool (auto-registers page_id, fills read_file_contents)."""
+        read_tool = get_tool("read")
+        if not read_tool:
+            return None
+        try:
+            result = await read_tool.execute(self.create_tool_context(), uri=uri)
+            if isinstance(result, dict) and "error" in result:
+                tracer.error(f"Failed to read {uri}: {result['error']}")
+                return None
+            return result
+        except Exception as e:
+            tracer.error(f"Failed to read {uri}: {e}")
+            return None
+
+    async def search_files(self, query: str, search_uris: List[str] = None, limit: int = 5) -> List[str]:
+        """Search via MemorySearchTool, returns list of URIs."""
+        search_tool = get_tool("search")
+        if not search_tool:
+            return []
+        try:
+            result = await search_tool.execute(
+                viking_fs=self._viking_fs,
+                ctx=self.create_tool_context(search_uris or []),
+                query=query,
+                limit=limit,
+            )
+            if isinstance(result, list):
+                return [m.get("uri", "") for m in result if m.get("uri")]
+            elif isinstance(result, dict) and "memories" in result:
+                return [m.get("uri", "") for m in result.get("memories", []) if m.get("uri")]
+            return []
+        except Exception as e:
+            tracer.error(f"Failed to search: {e}")
+            return []
+
     async def prefetch(self) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
@@ -409,7 +445,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         call_id_seq = 0
         # Step 2: Execute search for each ls directory (instead of ls)
         read_tool = get_tool("read")
-        search_tool = get_tool("search")
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx
@@ -419,43 +454,31 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 批量 search：所有目录一次搜索
         if ls_dirs:
-            try:
-                # 将所有目录作为 target_uri 传入（支持 List[str]）
-                dir_list = list(ls_dirs)
-                search_query = self._build_prefetch_search_query()
-                if not search_query:
-                    search_query = "conversation"
-                search_result = await search_tool.execute(
-                    viking_fs=self._viking_fs,
-                    ctx=self.create_tool_context(dir_list),
-                    query=search_query,
-                )
-                # 处理搜索结果
-                if isinstance(search_result, list):
-                    result_value = [m.get("uri", "") for m in search_result]
-                    if self._eager_prefetch:
-                        files_to_read_from_search.extend(result_value)
-                elif isinstance(search_result, dict):
-                    if "error" in search_result:
-                        result_value = f"Error: {search_result.get('error')}"
-                else:
-                    result_value = []
+            dir_list = list(ls_dirs)
+            search_query = self._build_prefetch_search_query()
+            if not search_query:
+                search_query = "conversation"
+            search_uris = await self.search_files(
+                query=search_query,
+                search_uris=dir_list,
+            )
+            result_value = search_uris
+            if self._eager_prefetch:
+                files_to_read_from_search.extend(search_uris)
 
-                add_tool_call_pair_to_messages(
-                    messages=pre_fetch_messages,
-                    call_id=call_id_seq,
-                    tool_name="search",
-                    params={"query": "[Keywords]", "search_uri": dir_list},
-                    result=result_value,
-                )
-                call_id_seq += 1
-            except Exception as e:
-                tracer.error(f"Failed to search in {ls_dirs}: {e}")
+            add_tool_call_pair_to_messages(
+                messages=pre_fetch_messages,
+                call_id=call_id_seq,
+                tool_name="search",
+                params={"query": "[Keywords]", "search_uri": dir_list},
+                result=result_value,
+            )
+            call_id_seq += 1
 
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
-            try:
-                result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+            result = await self.read_file(file_uri)
+            if result is not None:
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
@@ -463,20 +486,16 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     params={"uri": file_uri},
                     result=result,
                 )
-                # read_file_contents
                 call_id_seq += 1
-            except Exception as e:
-                tracer.error(f"Failed to read {file_uri}: {e}")
 
         # eager_prefetch 模式：读取搜索结果 top-N
-        if self._eager_prefetch and read_tool:
-            # 只读取 top-N 个文件
+        if self._eager_prefetch:
             topn_files = files_to_read_from_search[: self._prefetch_search_topn]
             for file_uri in topn_files:
                 if not file_uri:
                     continue
-                try:
-                    result = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                result = await self.read_file(file_uri)
+                if result is not None:
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
@@ -485,8 +504,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                         result=result,
                     )
                     call_id_seq += 1
-                except Exception as e:
-                    tracer.error(f"Failed to read {file_uri}: {e}")
 
         return pre_fetch_messages
 

@@ -14,12 +14,11 @@ import jinja2
 from typing import Any, Dict, List
 
 from openviking.core.namespace import to_user_space, to_agent_space
-from openviking.server.identity import RequestContext, ToolContext
+from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.tools import get_tool
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
@@ -145,37 +144,16 @@ All memory content must be written in {output_language}.
 
         ctx = self._ctx
         viking_fs = self._viking_fs
-        transaction_handle = self._transaction_handle
 
         experience_dir = self._render_experience_dir(ctx)
-        search_tool = get_tool("search")
 
         candidate_uris: List[str] = []
         if experience_dir and viking_fs:
-            if search_tool:
-                tool_ctx_search = ToolContext(
-                    viking_fs=viking_fs,
-                    request_ctx=ctx,
-                    transaction_handle=transaction_handle,
-                    default_search_uris=[experience_dir],
-                )
-                try:
-                    search_result = await search_tool.execute(
-                        viking_fs=viking_fs,
-                        ctx=tool_ctx_search,
-                        query=self.trajectory_summary[:500] or "experience",
-                        limit=SEARCH_TOP_K,
-                    )
-                    if isinstance(search_result, list):
-                        candidate_uris = [m.get("uri", "") for m in search_result if m.get("uri")]
-                    elif isinstance(search_result, dict) and "memories" in search_result:
-                        candidate_uris = [
-                            m.get("uri", "")
-                            for m in search_result.get("memories", [])
-                            if m.get("uri")
-                        ]
-                except Exception as e:
-                    tracer.error(f"Failed to search experiences in {experience_dir}: {e}")
+            candidate_uris = await self.search_files(
+                query=self.trajectory_summary[:500] or "experience",
+                search_uris=[experience_dir],
+                limit=SEARCH_TOP_K,
+            )
 
             if not candidate_uris:
                 try:
@@ -198,22 +176,19 @@ All memory content must be written in {output_language}.
         # Build candidate experiences section
         exp_sections: List[str] = []
         for idx, exp_uri in enumerate(candidate_uris):
-            try:
-                exp_raw = await viking_fs.read_file(exp_uri, ctx=ctx)
-            except Exception as e:
-                tracer.error(f"Failed to read experience {exp_uri}: {e}")
+            result = await self.read_file(exp_uri)
+            if result is None:
                 continue
 
             self.prefetched_uris.append(exp_uri)
-            # Populate read_file_contents so that:
-            # 1. Update path: _check_unread_existing_files skips refetch (saves 1 LLM call)
-            # 2. Replace path: resolve_operations can build delete_file_contents, enabling
-            #    old file deletion and source_trajectories inheritance.
-            mf = MemoryFileUtils.read(exp_raw, uri=exp_uri)
-            self._read_file_contents[exp_uri] = mf
+            mf = self._read_file_contents.get(exp_uri)
+            if not mf:
+                continue
             exp_name = mf.extra_fields.get("experience_name", "")
 
-            section = f"### Experience {idx + 1}: `{exp_name}`\nURI: `{exp_uri}`\n\n{mf.content}"
+            page_id = result.get("page_id")
+            page_id_label = f" [page_id: {page_id}]" if page_id is not None else ""
+            section = f"### Experience {idx + 1}: `{exp_name}`{page_id_label}\nURI: `{exp_uri}`\n\n{mf.content}"
 
             # Attach source trajectories for top-3 only
             if idx < SOURCE_TRAJ_TOP_K and viking_fs:

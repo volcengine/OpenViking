@@ -208,8 +208,9 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
@@ -221,7 +222,7 @@ class OpenAIVLM(VLMBase):
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
-        self._apply_provider_specific_extra_body(kwargs, thinking)
+        self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         max_tokens = self.max_tokens or 32768
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
@@ -236,8 +237,9 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -258,7 +260,7 @@ class OpenAIVLM(VLMBase):
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
-        self._apply_provider_specific_extra_body(kwargs, thinking)
+        self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         max_tokens = self.max_tokens or 32768
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
@@ -279,14 +281,15 @@ class OpenAIVLM(VLMBase):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, thinking)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -308,14 +311,15 @@ class OpenAIVLM(VLMBase):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, thinking)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -391,13 +395,14 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, effective_thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -419,13 +424,14 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, effective_thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

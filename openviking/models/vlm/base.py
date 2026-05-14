@@ -67,6 +67,7 @@ class VLMBase(ABC):
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
+        self.thinking = config.get("thinking", False)
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
@@ -75,7 +76,7 @@ class VLMBase(ABC):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -92,13 +93,14 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -115,6 +117,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -122,7 +125,7 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -140,6 +143,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -147,7 +151,7 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -165,6 +169,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     def _clean_response(self, content: str) -> str:

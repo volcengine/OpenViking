@@ -103,18 +103,19 @@ class VolcEngineVLM(OpenAIVLM):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
@@ -136,18 +137,19 @@ class VolcEngineVLM(OpenAIVLM):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
@@ -306,11 +308,12 @@ class VolcEngineVLM(OpenAIVLM):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -325,7 +328,7 @@ class VolcEngineVLM(OpenAIVLM):
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
@@ -347,11 +350,12 @@ class VolcEngineVLM(OpenAIVLM):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -366,7 +370,7 @@ class VolcEngineVLM(OpenAIVLM):
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
