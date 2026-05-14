@@ -43,7 +43,7 @@ async def _make_client(
     mock_cli_config.tenant_id = None
 
     with patch("openviking_cli.client.http.load_ovcli_config", return_value=mock_cli_config):
-        client = AsyncHTTPClient(base_url="http://localhost:7779")
+        client = AsyncHTTPClient(url="http://localhost:7779")
 
     # Replace the internal httpx.AsyncClient transport with our mock.
     transport = _make_mock_transport(captured_requests)
@@ -60,26 +60,26 @@ class TestAddResourceTokenInjection:
     async def test_github_url_gets_token_injected_from_credentials_dict(self, tmp_path):
         captured: list[httpx.Request] = []
         client = await _make_client(captured, git_credentials={"github.com": "myghtoken"})
-
         await client.add_resource("https://github.com/org/private-repo")
-
         assert len(captured) == 1
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert "myghtoken" in path_sent
-        assert path_sent.startswith("https://myghtoken@github.com")
+        parsed = urlparse(path_sent)
+        assert parsed.hostname == "github.com"
+        assert parsed.username == "myghtoken"
 
     async def test_gitlab_url_gets_token_injected_from_credentials_dict(self, tmp_path):
         captured: list[httpx.Request] = []
         client = await _make_client(captured, git_credentials={"gitlab.com": "gltoken"})
-
         await client.add_resource("https://gitlab.com/group/private-project")
-
         assert len(captured) == 1
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert "gltoken" in path_sent
-        assert path_sent.startswith("https://gltoken@gitlab.com")
+        parsed = urlparse(path_sent)
+        assert parsed.hostname == "gitlab.com"
+        assert parsed.username == "gltoken"
 
     async def test_public_url_with_no_credentials_passes_unchanged(self):
         captured: list[httpx.Request] = []
@@ -90,7 +90,6 @@ class TestAddResourceTokenInjection:
             ):
                 client = await _make_client(captured, git_credentials=None)
                 await client.add_resource("https://github.com/org/public-repo")
-
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert path_sent == "https://github.com/org/public-repo"
@@ -106,7 +105,6 @@ class TestAddResourceTokenInjection:
             ):
                 client = await _make_client(captured, git_credentials=None)
                 await client.add_resource("https://github.com/org/private-repo")
-
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert "env_gh_token" in path_sent
@@ -122,7 +120,6 @@ class TestAddResourceTokenInjection:
             ):
                 client = await _make_client(captured, git_credentials=None)
                 await client.add_resource("https://gitlab.com/group/private-project")
-
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert "env_gl_token" in path_sent
@@ -141,7 +138,6 @@ class TestTokenResolutionPriority:
         with patch.dict(os.environ, env, clear=True):
             client = await _make_client(captured, git_credentials={"github.com": "dict_wins"})
             await client.add_resource("https://github.com/org/repo")
-
         body = json.loads(captured[0].content)
         path_sent = body.get("path", "")
         assert "dict_wins" in path_sent
@@ -159,7 +155,9 @@ class TestTokenMasking:
         with_token = inject_token(url, "top_secret_token")
         masked = mask_token_in_url(with_token)
         assert "top_secret_token" not in masked
-        assert "***@github.com" in masked
+        parsed = urlparse(masked)
+        assert parsed.hostname == "github.com"
+        assert parsed.username == "***"
 
     def test_mask_is_idempotent(self):
         url = "https://token@github.com/org/repo"
