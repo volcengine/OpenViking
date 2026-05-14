@@ -372,6 +372,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._link_enabled:
             return
 
+        tracer.info(f"finalize_operations: page_id_map={self._page_id_map._id_to_uri}, "
+                    f"read_file_contents_keys={list(self.context_provider.read_file_contents.keys())[:10]}")
+
         upsert_operations = operations.upsert_operations
 
         # Fill uris before registering page_ids — resolve_operations leaves uris empty,
