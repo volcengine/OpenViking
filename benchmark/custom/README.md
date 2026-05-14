@@ -2,14 +2,11 @@
 
 本目录包含面向 OpenViking 本地 Server 的自定义压测脚本。当前主要脚本是：
 
-- `openviking_server_load_benchmark.py`：通用 Server 压测框架，覆盖 SDK、CLI HTTP 封装和真实 `ov` 子进程三种调用路径。
-- `session_contention_benchmark.py`：历史专项脚本，主要用于复现 session add message / extract / commit 与 find 并发时的竞争问题。
-
-建议新压测优先使用 `openviking_server_load_benchmark.py`。
+- `session_contention_benchmark.py`：通用 Server 压测框架，覆盖 SDK、CLI HTTP 封装和真实 `ov` 子进程三种调用路径。
 
 ## 压测目标
 
-`openviking_server_load_benchmark.py` 用来请求已经启动的 OpenViking Server，验证多类接口在并发和混合负载下的吞吐、延迟、失败率和后台任务积压情况。
+`session_contention_benchmark.py` 用来请求已经启动的 OpenViking Server，验证多类接口在并发和混合负载下的吞吐、延迟、失败率和后台任务积压情况。
 
 脚本不会启动或停止 Server，只负责：
 
@@ -44,7 +41,7 @@ ov health
 在仓库根目录运行 smoke 压测：
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --server-url http://127.0.0.1:1935 \
   --profile smoke
 ```
@@ -52,7 +49,7 @@ ov health
 只测试 Python SDK 路径：
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --server-url http://127.0.0.1:1935 \
   --profile smoke \
   --adapters sdk
@@ -61,7 +58,7 @@ ov health
 同时测试 SDK、CLI HTTP 封装和真实 `ov` 子进程：
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --server-url http://127.0.0.1:1935 \
   --profile standard \
   --adapters sdk,cli-http,cli-subprocess
@@ -184,7 +181,7 @@ benchmark/results/openviking_server_load/20260511T120000Z/
 ## 示例：指定认证信息
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --server-url http://127.0.0.1:1935 \
   --api-key your-root-api-key \
   --account default \
@@ -200,7 +197,7 @@ export OPENVIKING_API_KEY=your-root-api-key
 export OPENVIKING_ACCOUNT=default
 export OPENVIKING_USER=default
 
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py --profile smoke
+.venv/bin/python benchmark/custom/session_contention_benchmark.py --profile smoke
 ```
 
 ## 示例：降低真实 CLI 子进程开销
@@ -208,7 +205,7 @@ export OPENVIKING_USER=default
 真实 `cli-subprocess` 会为每个请求启动一次 `ov` 进程，开销明显高于 SDK 路径。若只想压 Server 本身，可以先排除它：
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --profile standard \
   --adapters sdk,cli-http
 ```
@@ -216,7 +213,7 @@ export OPENVIKING_USER=default
 若必须测试真实 CLI，但本地 `ov` 不在 PATH 中，可以指定可执行文件：
 
 ```bash
-.venv/bin/python benchmark/custom/openviking_server_load_benchmark.py \
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
   --profile smoke \
   --adapters cli-subprocess \
   --ov-bin .venv/bin/ov
