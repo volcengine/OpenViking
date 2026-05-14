@@ -78,11 +78,13 @@ def _setup_logging():
 
     try:
         # Configure logger to patch records with trace_id
-        logger.configure(
-            patcher=lambda record: record.__setitem__(
-                "extra", {**record["extra"], "trace_id": get_trace_id()}
-            )
-        )
+        def _patch_trace_id(record):
+            trace_id = get_trace_id()
+            record["extra"]["trace_id"] = trace_id
+            if trace_id:
+                record["message"] = f"[{trace_id}] {record['message']}"
+
+        logger.configure(patcher=_patch_trace_id)
         _trace_id_filter_added = True
     except Exception:
         _log_trace_internal_failure("[TRACER] failed to configure loguru trace_id patcher")
