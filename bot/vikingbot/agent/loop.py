@@ -939,17 +939,9 @@ class AgentLoop:
 
             prompt = f"""You are a memory consolidation agent. Process this conversation and return a JSON object with exactly two keys:
 
-1. "history_entry": A paragraph (2-5 sentences) summarizing the key events, decisions, constraints, and outcomes. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include concrete nouns, document names, project names, roles, dates, decisions, unresolved items, and user wording that would make the entry easy to find with semantic search or grep later.
+1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include enough detail to be useful when found by grep search later.
 
-2. "memory_update": The updated long-term memory content. Add durable facts, user preferences, project context, technical decisions, tools/services used, and reusable working rules. If nothing new is worth remembering, return the existing content unchanged.
-
-When updating memory, prefer reusable, evidence-backed rules over vague summaries:
-- Preserve the scope of each rule: mark whether it is general, project-specific, document-specific, role/audience-specific, time-bounded, or only true for the current turn.
-- Record both positive and negative constraints when stated or strongly implied, such as what the user wants, what they reject, what must stay separate, what must stay consistent, what can remain pending, and what must not be inferred.
-- Turn repeated corrections into concise preference rules, but do not overgeneralize one-off instructions into permanent habits.
-- Keep important anchors searchable: names of files, artifacts, workstreams, roles, audiences, fields, dates, and user phrases.
-- For incomplete or ambiguous inputs, record the handling rule instead of inventing missing facts.
-- Do not store these consolidation instructions as memory.
+2. "memory_update": The updated long-term memory content. Add any new facts: user location, preferences, personal info, habits, project context, technical decisions, tools/services used. If nothing new, return the existing content unchanged.
 
 ## Current Long-term Memory
 {current_memory or "(empty)"}
