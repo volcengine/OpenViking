@@ -377,6 +377,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         upsert_operations = operations.upsert_operations
 
+        # Debug: log upsert page_ids
+        for op in upsert_operations:
+            print(f"[DEBUG finalize_operations] page_id={op.page_id}, uris={op.uris}, memory_type={op.memory_type}")
+
         # Fill uris before registering page_ids — resolve_operations leaves uris empty,
         # supplement_operation_uris is normally called later in memory_updater,
         # but we need uris now to build the page_id → URI mapping.
