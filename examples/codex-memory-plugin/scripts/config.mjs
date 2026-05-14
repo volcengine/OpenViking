@@ -210,7 +210,7 @@ export function loadConfig() {
     ))),
     scoreThreshold: Math.min(1, Math.max(0, num(
       process.env.OPENVIKING_SCORE_THRESHOLD,
-      num(cx.scoreThreshold, 0.01),
+      num(cx.scoreThreshold, 0.35),
     ))),
     minQueryLength: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
