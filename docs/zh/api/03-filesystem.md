@@ -472,7 +472,7 @@ openviking stat viking://resources/my-project/docs/api.md
 }
 ```
 
-`isLocked` 字段反映路径当前是否被 path lock 持有：路径自身存在有效的 `.path.ovlock`，或者任一祖先目录持有 SUBTREE 锁。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
+`isLocked` 字段反映路径当前是否被路径锁持有：路径自身存在有效锁，或者任一祖先目录持有 TreeLock。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
 
 ---
 

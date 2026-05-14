@@ -464,11 +464,10 @@ class VikingFS:
                     details={"resource": uri, "expected_flag": "recursive"},
                 )
             lock_paths = [path]
-            lock_mode = "subtree"
+            lock_mode = "tree"
         else:
-            parent = path.rsplit("/", 1)[0] if "/" in path else path
-            lock_paths = [parent]
-            lock_mode = "point"
+            lock_paths = [path]
+            lock_mode = "exact"
 
         try:
             async with LockContext(
@@ -495,7 +494,7 @@ class VikingFS:
                     raise
                 return result
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {uri}")
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
     async def mv(
         self,
@@ -525,16 +524,25 @@ class VikingFS:
         except Exception:
             raise FileNotFoundError(f"mv source not found: {old_uri}")
 
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+        lock_context = (
+            LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_path=new_path,
+                src_is_dir=True,
+                handle=lock_handle,
+            )
+            if is_dir
+            else LockContext(
+                get_lock_manager(),
+                [old_path, new_path],
+                lock_mode="exact",
+                handle=lock_handle,
+            )
+        )
 
-        async with LockContext(
-            get_lock_manager(),
-            [old_path],
-            lock_mode="mv",
-            mv_dst_parent_path=dst_parent,
-            src_is_dir=is_dir,
-            handle=lock_handle,
-        ):
+        async with lock_context:
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
 
@@ -1909,14 +1917,13 @@ class VikingFS:
 
         old_path = self._uri_to_path(old_dir, ctx=real_ctx)
         new_path = self._uri_to_path(new_dir, ctx=real_ctx)
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
 
         try:
             async with LockContext(
                 get_lock_manager(),
                 [old_path],
                 lock_mode="mv",
-                mv_dst_parent_path=dst_parent,
+                mv_dst_path=new_path,
                 src_is_dir=True,
                 handle=lock_handle,
             ):
@@ -1929,7 +1936,7 @@ class VikingFS:
                 )
 
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {old_dir}")
+            raise ResourceBusyError(f"Resource is being processed: {old_dir}", uri=old_dir)
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

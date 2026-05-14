@@ -39,6 +39,49 @@ class _CtxMgr:
         return False
 
 
+class _FakeLockManager:
+    def __init__(self):
+        from openviking.storage.transaction.lock_handle import LockHandle
+
+        self._lock_handle_cls = LockHandle
+        self._handles = {}
+        self.acquired_exact_paths = []
+        self.acquired_tree_paths = []
+
+    def create_handle(self):
+        handle = self._lock_handle_cls()
+        self._handles[handle.id] = handle
+        return handle
+
+    async def acquire_exact_path_batch(self, handle, paths, timeout=None):
+        for path in paths:
+            lock_path = f"exact:{path}"
+            handle.add_lock(lock_path)
+            self.acquired_exact_paths.append(path)
+        return True
+
+    async def acquire_tree(self, handle, path, timeout=None):
+        lock_path = f"tree:{path}"
+        handle.add_lock(lock_path)
+        self.acquired_tree_paths.append(path)
+        return True
+
+    async def release_selected(self, handle, lock_paths):
+        for path in lock_paths:
+            handle.remove_lock(path)
+
+    async def release(self, handle):
+        for path in list(handle.locks):
+            handle.remove_lock(path)
+        self._handles.pop(handle.id, None)
+
+    def get_handle(self, handle_id):
+        handle = self._handles.get(handle_id)
+        if handle and handle.locks:
+            return handle
+        return None
+
+
 class _FakeVikingFS:
     def __init__(self, *, exists_result=False):
         self.agfs = SimpleNamespace(mv=MagicMock(return_value={"status": "ok"}))
@@ -65,12 +108,17 @@ async def test_resource_processor_first_add_persist_does_not_await_agfs_mv(monke
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
+    fake_lock_manager = _FakeLockManager()
 
     monkeypatch.setattr(
         "openviking.utils.resource_processor.get_current_telemetry",
         lambda: _DummyTelemetry(),
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: fake_lock_manager,
+    )
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
     rp._get_media_processor = MagicMock()
@@ -94,6 +142,8 @@ async def test_resource_processor_first_add_persist_does_not_await_agfs_mv(monke
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
     fake_fs.agfs.mv.assert_called_once()
+    assert fake_lock_manager.acquired_exact_paths == ["/mock/resources/root"]
+    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]
 
 
 @pytest.mark.asyncio
@@ -101,6 +151,7 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS(exists_result=True)
+    fake_lock_manager = _FakeLockManager()
     summarize_calls = []
 
     monkeypatch.setattr(
@@ -108,6 +159,10 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
         lambda: _DummyTelemetry(),
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: fake_lock_manager,
+    )
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
     rp._get_media_processor = MagicMock()
@@ -138,3 +193,5 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
     fake_fs.agfs.mv.assert_not_called()
+    assert fake_lock_manager.acquired_exact_paths == ["/mock/resources/root"]
+    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]

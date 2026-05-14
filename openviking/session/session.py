@@ -558,9 +558,9 @@ class Session:
     async def commit_async(self, keep_recent_count: int = 0) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
-        Phase 1 (Archive prep, PathLock-protected): Split messages into
+        Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, write the retained tail back to messages.jsonl,
-        then persist the archive. Uses a distributed filesystem lock (PathLock)
+        then persist the archive. Uses a distributed filesystem lock
         so this works across workers and processes.
         Phase 2 (Memory extraction): Always runs in background via
         asyncio.create_task().
@@ -585,7 +585,7 @@ class Session:
             f"keep_recent_count={keep_recent_count}"
         )
 
-        # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
+        # ===== Phase 1: Snapshot + clear (path-lock protected) =====
         # Fast pre-check: skip lock entirely if no messages (common case avoids
         # unnecessary filesystem lock acquisition).
         if not self._messages:
@@ -612,7 +612,7 @@ class Session:
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(get_lock_manager(), [session_path], lock_mode="point"):
+        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
             # Authoritative check under lock: handles the race where two concurrent
             # callers both passed the pre-check but only the first should archive.
             if not self._messages:
