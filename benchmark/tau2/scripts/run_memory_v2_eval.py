@@ -272,7 +272,8 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 counters["selected_match_count"] += 1
             if injected:
                 counters["injected_match_count"] += 1
-            if _is_aggregate_memory_uri(match.get("uri")):
+            is_aggregate = _is_aggregate_memory_uri(match.get("uri"))
+            if is_aggregate:
                 counters["aggregate_memory_candidate_count"] += 1
                 if selected:
                     counters["selected_aggregate_memory_count"] += 1
@@ -304,6 +305,8 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                     counters["selected_positive_category_match_count"] += 1
                 if injected:
                     counters["injected_positive_category_match_count"] += 1
+                    if not is_aggregate:
+                        counters["injected_concrete_positive_category_match_count"] += 1
 
     raw_count = counters["raw_match_count"]
     selected_count = counters["selected_match_count"]
@@ -320,6 +323,7 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
         "memory_category_matched_count",
         "selected_memory_category_matched_count",
         "injected_positive_category_match_count",
+        "injected_concrete_positive_category_match_count",
     ]:
         counters[key] += 0
     return {
@@ -357,6 +361,11 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             ),
             "injected_positive_category_match_rate": (
                 counters["injected_positive_category_match_count"] / injected_count
+                if injected_count
+                else None
+            ),
+            "injected_concrete_positive_category_match_rate": (
+                counters["injected_concrete_positive_category_match_count"] / injected_count
                 if injected_count
                 else None
             ),
@@ -442,10 +451,10 @@ def _runtime_evidence_status(
             if (
                 int(counts.get("query_category_matched_event_count") or 0) > 0
                 and int(counts.get("memory_injection_event_count") or 0) > 0
-                and float(rates.get("injected_positive_category_match_rate") or 0.0)
-                <= 0.0
+                and int(counts.get("injected_concrete_positive_category_match_count") or 0)
+                <= 0
             ):
-                reasons.append("no_injected_positive_category_match")
+                reasons.append("no_injected_concrete_positive_category_match")
 
     return {
         "status": "diagnostic" if reasons else "valid",

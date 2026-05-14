@@ -253,11 +253,13 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["counts"]["injected_match_count"] == 1
     assert summary["counts"]["injected_concrete_memory_count"] == 1
     assert summary["counts"]["injected_positive_category_match_count"] == 1
+    assert summary["counts"]["injected_concrete_positive_category_match_count"] == 1
     assert summary["counts"]["memory_category_present_count"] == 2
     assert summary["counts"]["memory_category_matched_count"] == 1
     assert summary["rates"]["concrete_memory_candidate_rate"] == 2 / 3
     assert summary["rates"]["selected_concrete_memory_rate"] == 1.0
     assert summary["rates"]["injected_positive_category_match_rate"] == 1.0
+    assert summary["rates"]["injected_concrete_positive_category_match_rate"] == 1.0
     assert summary["rates"]["injected_concrete_memory_rate"] == 1.0
 
 
@@ -366,6 +368,7 @@ def test_runtime_evidence_accepts_valid_category_runtime_coverage() -> None:
                 "memory_injection_event_count": 1,
                 "injected_concrete_memory_count": 1,
                 "injected_positive_category_match_count": 1,
+                "injected_concrete_positive_category_match_count": 1,
             },
             "rates": {
                 "concrete_memory_candidate_rate": 1.0,
@@ -439,6 +442,41 @@ def test_runtime_evidence_requires_injected_concrete_memory() -> None:
 
     assert evidence["status"] == "diagnostic"
     assert "no_injected_concrete_memory" in evidence["reasons"]
+
+
+def test_runtime_evidence_requires_injected_concrete_positive_category_match() -> None:
+    evidence = _runtime_evidence_status(
+        category_rerank={"enabled": True},
+        corpus_probe={
+            "match_count": 2,
+            "aggregate_match_count": 1,
+            "concrete_match_count": 1,
+        },
+        retrieval_trace_summary={
+            "trace_present": True,
+            "category_event_count": 1,
+            "counts": {
+                "category_applied_event_count": 1,
+                "query_category_matched_event_count": 1,
+                "memory_category_present_count": 1,
+                "memory_category_matched_count": 1,
+                "memory_injection_event_count": 2,
+                "injected_concrete_memory_count": 1,
+                "injected_positive_category_match_count": 1,
+                "injected_concrete_positive_category_match_count": 0,
+            },
+            "rates": {
+                "concrete_memory_candidate_rate": 0.5,
+                "selected_positive_category_match_rate": 1.0,
+                "injected_concrete_memory_rate": 0.5,
+                "injected_positive_category_match_rate": 0.5,
+                "injected_concrete_positive_category_match_rate": 0.0,
+            },
+        },
+    )
+
+    assert evidence["status"] == "diagnostic"
+    assert "no_injected_concrete_positive_category_match" in evidence["reasons"]
 
 
 def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:

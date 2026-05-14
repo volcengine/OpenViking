@@ -182,10 +182,10 @@ signal before opening the JSONL trace. Category runs whose runtime trace has
 only aggregate `.overview.md` / `.abstract.md` candidates, no applied
 category-rerank event, no query or memory category coverage, no positive
 query-to-memory category match, no actual memory injection, no injected
-concrete memory, or no selected positive category match are marked
-`runtime_evidence.status=diagnostic`; `scoreboard.json` excludes those
-diagnostic cells from the main reward/DB aggregates while preserving their
-metrics, artifacts, and
+concrete memory, no injected concrete positive category match, or no selected
+positive category match are marked `runtime_evidence.status=diagnostic`;
+`scoreboard.json` excludes those diagnostic cells from the main reward/DB
+aggregates while preserving their metrics, artifacts, and
 `diagnostic_reason_counts` for debugging. Corpus
 manifests also include
 `corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
