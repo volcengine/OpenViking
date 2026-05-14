@@ -163,7 +163,7 @@ openviking/
 ├── crates/               # Rustコンポーネント
 │   └── ov_cli/           # Rust CLIクライアント
 │       ├── src/          # CLIソースコード
-│       └── install.sh    # クイックインストールスクリプト
+│       └── install.sh    # 非推奨スタブ（npm パッケージを使用、Install を参照）
 │
 ├── src/                  # C++拡張ソース（Python abi3）
 │
