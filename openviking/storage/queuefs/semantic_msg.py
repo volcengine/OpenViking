@@ -9,6 +9,17 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 
+def build_semantic_coalesce_key(
+    *,
+    context_type: str,
+    uri: str,
+    account_id: str = "default",
+    user_id: str = "default",
+    agent_id: str = "default",
+) -> str:
+    return "|".join([context_type, account_id, user_id, agent_id, uri.rstrip("/")])
+
+
 @dataclass
 class SemanticMsg:
     """Semantic extraction queue message.

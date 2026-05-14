@@ -144,6 +144,15 @@ class _FakeVikingFS:
         self.writes.append((uri, content))
 
 
+class _FakeMemoryDirFS:
+    async def ls(self, uri, ctx=None):
+        del uri, ctx
+        return [
+            {"name": "first.md", "isDir": False},
+            {"name": "second.md", "isDir": False},
+        ]
+
+
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
     lock_manager = _FakeLockManager()
@@ -197,3 +206,47 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
         ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    summaries = []
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del llm_sem, ctx
+        name = file_path.rsplit("/", 1)[-1]
+        return {"name": name, "summary": f"summary:{name}"}
+
+    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        del dir_uri, children_abstracts, llm_sem
+        summaries.extend(file_summaries)
+        return "overview"
+
+    async def write_semantics(**kwargs):
+        del kwargs
+        return True
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryDirFS(),
+    )
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(processor, "_extract_abstract_from_overview", lambda overview: "abstract")
+    monkeypatch.setattr(
+        processor,
+        "_enforce_size_limits",
+        lambda overview, abstract: (overview, abstract),
+    )
+    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri="viking://user/default/memories/preferences",
+            context_type="memory",
+            skip_vectorization=True,
+        )
+    )
+
+    assert [item["name"] for item in summaries] == ["first.md", "second.md"]

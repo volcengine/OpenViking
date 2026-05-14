@@ -29,8 +29,9 @@ from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
+from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -228,18 +229,6 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
-    @staticmethod
-    def _semantic_coalesce_key(msg: SemanticMsg, uri: str) -> str:
-        return "|".join(
-            [
-                msg.context_type,
-                msg.account_id,
-                msg.user_id,
-                msg.agent_id,
-                uri.rstrip("/"),
-            ]
-        )
-
     async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
         if msg.context_type not in {"resource", "skill"}:
             return
@@ -270,7 +259,13 @@ class SemanticProcessor(DequeueHandlerBase):
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
-            coalesce_key=self._semantic_coalesce_key(msg, parent_uri),
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=msg.context_type,
+                uri=parent_uri,
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+                agent_id=msg.agent_id,
+            ),
         )
         await semantic_queue.enqueue(parent_msg)
         logger.info("Enqueued parent semantic refresh: %s", parent_uri)
@@ -569,8 +564,8 @@ class SemanticProcessor(DequeueHandlerBase):
             if file_path not in changed_files and file_name in existing_summaries:
                 file_summaries[idx] = {"name": file_name, "summary": existing_summaries[file_name]}
                 logger.debug(f"Reused existing summary for {file_name}")
-        else:
-            pending_indices.append((idx, file_path))
+            else:
+                pending_indices.append((idx, file_path))
 
         if file_paths and not pending_indices:
             try:
@@ -686,34 +681,16 @@ class SemanticProcessor(DequeueHandlerBase):
         abstract: str,
         ctx: Optional[RequestContext],
     ) -> bool:
-        if is_semantic_msg_stale(msg):
-            logger.info(f"Skipping stale memory semantic write for {dir_uri}")
-            return False
-
-        try:
-            from openviking.storage.transaction import LockContext, get_lock_manager
-
-            lock_manager = get_lock_manager()
-        except Exception:
-            await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
-            await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
-            return True
-
-        handle = None
-        if msg.lifecycle_lock_handle_id:
-            handle = lock_manager.get_handle(msg.lifecycle_lock_handle_id)
-
-        lock_paths = [
-            viking_fs._uri_to_path(f"{dir_uri}/.overview.md", ctx=ctx),
-            viking_fs._uri_to_path(f"{dir_uri}/.abstract.md", ctx=ctx),
-        ]
-        async with LockContext(lock_manager, lock_paths, lock_mode="exact", handle=handle):
-            if is_semantic_msg_stale(msg):
-                logger.info(f"Skipping stale memory semantic write for {dir_uri}")
-                return False
-            await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
-            await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
-            return True
+        return await write_semantic_sidecars(
+            viking_fs=viking_fs,
+            dir_uri=dir_uri,
+            overview=overview,
+            abstract=abstract,
+            ctx=ctx,
+            is_stale=lambda: is_semantic_msg_stale(msg),
+            lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
+            log_prefix="[MemorySemantic]",
+        )
 
     async def _release_memory_lifecycle_lock(self, handle_id: str) -> None:
         """Release a lifecycle lock held by in-place memory refresh."""

@@ -18,6 +18,7 @@ EXACT_LOCK_FILE_PREFIX = ".exact.ovlock."
 # Lock type constants
 LOCK_TYPE_EXACT = "E"
 LOCK_TYPE_TREE = "T"
+# Upgrade compatibility: old POINT/SUBTREE tokens are still treated as tree locks.
 _READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
 # Default poll interval when waiting for a lock (seconds)

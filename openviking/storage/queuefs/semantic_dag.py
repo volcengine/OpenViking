@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
@@ -603,44 +604,19 @@ class SemanticDagExecutor:
         overview: str,
         abstract: str,
     ) -> bool:
-        if self._is_stale():
+        wrote = await write_semantic_sidecars(
+            viking_fs=self._viking_fs,
+            dir_uri=dir_uri,
+            overview=overview,
+            abstract=abstract,
+            ctx=self._ctx,
+            is_stale=self._is_stale,
+            lifecycle_lock_handle_id=self._lifecycle_lock_handle_id,
+            log_prefix="[SemanticDag]",
+        )
+        if not wrote:
             self._stale = True
-            logger.info("[SemanticDag] Skipping stale semantic write for %s", dir_uri)
-            return False
-
-        try:
-            from openviking.storage.transaction import LockContext, get_lock_manager
-
-            lock_manager = get_lock_manager()
-        except Exception:
-            await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
-            await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-            return True
-
-        handle = None
-        owns_handle = False
-        if self._lifecycle_lock_handle_id:
-            handle = lock_manager.get_handle(self._lifecycle_lock_handle_id)
-        if handle is None:
-            handle = lock_manager.create_handle()
-            owns_handle = True
-
-        lock_paths = [
-            self._viking_fs._uri_to_path(f"{dir_uri}/.overview.md", ctx=self._ctx),
-            self._viking_fs._uri_to_path(f"{dir_uri}/.abstract.md", ctx=self._ctx),
-        ]
-        try:
-            async with LockContext(lock_manager, lock_paths, lock_mode="exact", handle=handle):
-                if self._is_stale():
-                    self._stale = True
-                    logger.info("[SemanticDag] Skipping stale semantic write for %s", dir_uri)
-                    return False
-                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
-                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-                return True
-        finally:
-            if owns_handle:
-                await lock_manager.release(handle)
+        return wrote
 
     async def _overview_task(self, dir_uri: str) -> None:
         node = self._nodes.get(dir_uri)

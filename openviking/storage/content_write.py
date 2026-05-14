@@ -12,6 +12,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
@@ -49,18 +50,6 @@ class ContentWriteCoordinator:
         except Exception:
             return raw, {}
         return parsed.plain_content, parsed.memory_fields or {}
-
-    @staticmethod
-    def _semantic_coalesce_key(context_type: str, uri: str, ctx: RequestContext) -> str:
-        return "|".join(
-            [
-                context_type,
-                ctx.account_id,
-                ctx.user.user_id,
-                ctx.user.agent_id,
-                uri.rstrip("/"),
-            ]
-        )
 
     async def write(
         self,
@@ -413,7 +402,13 @@ class ContentWriteCoordinator:
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             coalesce_key=(
-                self._semantic_coalesce_key(context_type, root_uri, ctx)
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    agent_id=ctx.user.agent_id,
+                )
                 if context_type in {"resource", "skill"}
                 else ""
             ),
@@ -449,7 +444,13 @@ class ContentWriteCoordinator:
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
-            coalesce_key=self._semantic_coalesce_key("memory", root_uri, ctx),
+            coalesce_key=build_semantic_coalesce_key(
+                context_type="memory",
+                uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                agent_id=ctx.user.agent_id,
+            ),
             changes={"modified": [modified_uri]},
         )
         if msg.telemetry_id:
