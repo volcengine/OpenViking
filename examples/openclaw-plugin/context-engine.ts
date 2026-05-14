@@ -153,10 +153,6 @@ function allocateContextBudget(totalBudget: number, instructionTokens = 0): Cont
   return { archiveMemory, sessionContext, reserved };
 }
 
-function estimateTokens(messages: AgentMessage[]): number {
-  return Math.max(1, messages.length * 80);
-}
-
 function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
 }
@@ -1387,15 +1383,13 @@ export function createMemoryOpenVikingContextEngine(params: {
             `openviking: Phase2 memory extraction runs asynchronously on the server (task_id=${commitResult.task_id}). ` +
               "memories_extracted appears only after that task completes — not in this immediate response.",
           );
-          if (cfg.logFindRequests) {
-            void pollPhase2ExtractionOutcome(
-              getClient,
-              commitResult.task_id,
-              agentId,
-              logger,
-              OVSessionId,
-            );
-          }
+          void pollPhase2ExtractionOutcome(
+            getClient,
+            commitResult.task_id,
+            agentId,
+            logger,
+            OVSessionId,
+          );
         }
       } catch (err) {
         logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
