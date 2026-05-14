@@ -886,7 +886,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     query=query, target_uri=args.search_uri, limit=effective_search_limit
                 )
                 memories = list(getattr(result, "memories", []) or [])
-                for index, match in enumerate(memories[:effective_search_limit], 1):
+                for _index, match in enumerate(memories[:effective_search_limit], 1):
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     row = {
