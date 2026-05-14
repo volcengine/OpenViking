@@ -285,7 +285,7 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkeypatch):
+async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -317,7 +317,7 @@ async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkey
             wait=True,
         )
 
-    assert lock_manager.release_calls == []
+    assert lock_manager.release_calls == ["lock-1"]
     assert viking_fs.delete_temp_calls == []
     assert viking_fs.content[file_uri] == "updated"
 
@@ -358,7 +358,7 @@ async def test_resource_write_updates_target_and_queues_refresh_before_return(mo
     assert captured_enqueue["changed_uri"] == file_uri
     assert captured_enqueue["change_type"] == "modified"
     assert viking_fs.delete_temp_calls == []
-    assert lock_manager.release_calls == []
+    assert lock_manager.release_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio
