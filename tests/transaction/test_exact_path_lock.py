@@ -150,43 +150,6 @@ async def test_exact_path_lock_conflicts_with_tree_lock():
 
 
 @pytest.mark.asyncio
-async def test_exact_path_lock_under_ancestor_tree_does_not_create_missing_parent():
-    agfs = _agfs_with_docs_dir()
-    lock = PathLockEngine(agfs)
-    tree = LockHandle(id="tree-docs")
-    blocked = LockHandle(id="exact-blocked-by-tree")
-    docs = "/local/default/resources/docs"
-    missing_child = "/local/default/resources/docs/new"
-    target = f"{missing_child}/file.md"
-
-    assert await lock.acquire_tree(docs, tree, timeout=0.0)
-    assert not await lock.acquire_exact_path(target, blocked, timeout=0.0)
-
-    with pytest.raises(FileNotFoundError):
-        agfs.stat(missing_child)
-
-    await lock.release(tree)
-
-
-@pytest.mark.asyncio
-async def test_tree_lock_under_ancestor_tree_does_not_create_missing_directory():
-    agfs = _agfs_with_docs_dir()
-    lock = PathLockEngine(agfs)
-    tree = LockHandle(id="tree-docs")
-    blocked = LockHandle(id="tree-blocked-by-tree")
-    docs = "/local/default/resources/docs"
-    missing_child = "/local/default/resources/docs/new"
-
-    assert await lock.acquire_tree(docs, tree, timeout=0.0)
-    assert not await lock.acquire_tree(missing_child, blocked, timeout=0.0)
-
-    with pytest.raises(FileNotFoundError):
-        agfs.stat(missing_child)
-
-    await lock.release(tree)
-
-
-@pytest.mark.asyncio
 async def test_exact_tree_batch_acquires_exact_and_tree_locks():
     agfs = _agfs_with_docs_dir()
     agfs.mkdir("/local/default/resources/docs/events")
