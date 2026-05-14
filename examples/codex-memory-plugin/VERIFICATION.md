@@ -90,7 +90,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: `pre-compact commit: <UUID> → N memory item(s) extracted (archived)`.
+Expect: `OpenViking session <UUID> is committed`.
 
 State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
@@ -142,7 +142,7 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `SessionStart(startup): committed 1 OpenViking session(s) (heuristic=1, idle=0), N memory item(s) extracted`.
+Expect: `OpenViking session <UUID> is committed`.
 After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op
