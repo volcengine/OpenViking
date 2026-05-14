@@ -20,6 +20,7 @@ try:
         normalize_litellm_env,
         output_dir,
         run_id,
+        resolve_path,
         simulator_policy_report,
         split_file,
         strategy_ids,
@@ -37,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path
         normalize_litellm_env,
         output_dir,
         run_id,
+        resolve_path,
         simulator_policy_report,
         split_file,
         strategy_ids,
@@ -69,6 +71,109 @@ def _db_match(sim: dict[str, Any]) -> bool | None:
         if "db_match" in db:
             return bool(db["db_match"])
     return sim.get("db_match")
+
+
+def _strategy_int(
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    key: str,
+    *,
+    fallback_key: str | None = None,
+    default: int = 4,
+) -> int:
+    openviking = config.get("openviking", {})
+    value = strategy.get(key)
+    if value is None:
+        value = openviking.get(key)
+    if value is None and fallback_key:
+        value = strategy.get(fallback_key)
+    if value is None and fallback_key:
+        value = openviking.get(fallback_key)
+    if value is None:
+        value = default
+    return int(value)
+
+
+def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[str, int]:
+    retrieval_top_k = _strategy_int(config, strategy, "retrieval_top_k", default=4)
+    first_user_retrieval_top_k = _strategy_int(
+        config,
+        strategy,
+        "first_user_retrieval_top_k",
+        fallback_key="retrieval_top_k",
+        default=retrieval_top_k,
+    )
+    first_user_inject_top_k = _strategy_int(
+        config,
+        strategy,
+        "first_user_inject_top_k",
+        fallback_key="first_user_retrieval_top_k",
+        default=first_user_retrieval_top_k,
+    )
+    prewrite_retrieval_top_k = _strategy_int(
+        config,
+        strategy,
+        "prewrite_retrieval_top_k",
+        fallback_key="retrieval_top_k",
+        default=retrieval_top_k,
+    )
+    prewrite_inject_top_k = _strategy_int(
+        config,
+        strategy,
+        "prewrite_inject_top_k",
+        fallback_key="prewrite_retrieval_top_k",
+        default=prewrite_retrieval_top_k,
+    )
+    return {
+        "retrieval_top_k": retrieval_top_k,
+        "first_user_retrieval_top_k": first_user_retrieval_top_k,
+        "first_user_inject_top_k": first_user_inject_top_k,
+        "prewrite_retrieval_top_k": prewrite_retrieval_top_k,
+        "prewrite_inject_top_k": prewrite_inject_top_k,
+    }
+
+
+def _memory_corpus_key_for(
+    *,
+    domain: str,
+    strategy: dict[str, Any],
+    train_num_tasks: int | None,
+) -> str:
+    corpus_id = str(strategy.get("corpus_id") or strategy["id"])
+    raw_key = strategy.get("corpus_cache_key")
+    if raw_key:
+        key = str(raw_key).format(
+            domain=domain,
+            strategy_id=strategy["id"],
+            corpus_id=corpus_id,
+        )
+    else:
+        key = f"{domain}_{corpus_id}"
+    if train_num_tasks is not None:
+        key = f"{key}_train{train_num_tasks}"
+    return key
+
+
+def _memory_corpus_dir(config: dict[str, Any], configured_run_id: str, corpus_key: str) -> Path:
+    raw = config.get("paths", {}).get("corpus_cache_dir")
+    if raw:
+        return resolve_path(str(raw)) / corpus_key
+    return output_dir(config, configured_run_id) / "memory_corpora" / corpus_key
+
+
+def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
+    manifest_path = corpus_dir / "corpus_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    openviking = manifest.get("openviking") or {}
+    required = ("account", "user", "agent_id", "search_uri")
+    if not all(openviking.get(key) for key in required):
+        return None
+    return {key: str(openviking[key]) for key in required}
 
 
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
@@ -108,6 +213,7 @@ def _tau2_command(
     if reasoning_effort:
         agent_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
         user_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
+    fixed_first_user_file = _fixed_first_user_file(config, domain)
 
     if (
         strategy.get("memory_backend") == "openviking"
@@ -115,15 +221,39 @@ def _tau2_command(
     ):
         openviking = config["openviking"]
         corpus_id = str(strategy.get("corpus_id") or strategy["id"])
-        account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
-        agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
-        user = f"tau2-{domain}-{corpus_id}"
+        resolved_train_num_tasks = (
+            train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
+        )
+        corpus_key = _memory_corpus_key_for(
+            domain=domain,
+            strategy=strategy,
+            train_num_tasks=resolved_train_num_tasks,
+        )
+        corpus_dir = _memory_corpus_dir(config, configured_run_id, corpus_key)
+        reuse_identity = _manifest_openviking_identity(corpus_dir)
+        if reuse_identity is not None:
+            account = reuse_identity["account"]
+            agent_id = reuse_identity["agent_id"]
+            user = reuse_identity["user"]
+            search_uri = reuse_identity["search_uri"]
+        elif openviking.get("reuse_corpus_across_runs", False):
+            account = f"{openviking['account']}-{corpus_key}"
+            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+            user = f"tau2-{domain}-{corpus_id}"
+            search_uri = ""
+        else:
+            account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
+            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+            user = f"tau2-{domain}-{corpus_id}"
+            search_uri = ""
         search_memory_type = str(strategy.get("search_memory_type", "experiences"))
         if search_memory_type not in {"experiences", "trajectories"}:
             raise ValueError(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
-        search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+        if not search_uri:
+            search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+        budget = _retrieval_budget(config, strategy)
         category_rerank = strategy.get("category_rerank")
         category_rerank = category_rerank if isinstance(category_rerank, dict) else {}
         scope_prompt = strategy.get("scope_prompt")
@@ -136,7 +266,7 @@ def _tau2_command(
             "--run-dir",
             str(output_dir(config, configured_run_id) / "memory_cells" / run_label),
             "--corpus-dir",
-            str(output_dir(config, configured_run_id) / "memory_corpora" / f"{domain}_{corpus_id}"),
+            str(corpus_dir),
             "--run-label",
             run_label,
             "--strategy-id",
@@ -170,12 +300,22 @@ def _tau2_command(
             "--search-uri",
             search_uri,
             "--retrieval-top-k",
-            str(openviking.get("retrieval_top_k", 4)),
+            str(budget["retrieval_top_k"]),
+            "--first-user-retrieval-top-k",
+            str(budget["first_user_retrieval_top_k"]),
+            "--first-user-inject-top-k",
+            str(budget["first_user_inject_top_k"]),
+            "--prewrite-retrieval-top-k",
+            str(budget["prewrite_retrieval_top_k"]),
+            "--prewrite-inject-top-k",
+            str(budget["prewrite_inject_top_k"]),
             "--retrieval-mode",
             str(strategy.get("retrieval_mode", "first_user")),
             "--seed",
             str(seed),
         ]
+        if fixed_first_user_file is not None:
+            command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
         if category_rerank.get("enabled"):
             command.extend(
                 [
@@ -195,11 +335,8 @@ def _tau2_command(
                 command.extend(["--task-id", task_id])
         elif num_tasks is not None:
             command.extend(["--num-tasks", str(num_tasks)])
-        train_num_tasks = (
-            train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
-        )
-        if train_num_tasks is not None:
-            command.extend(["--train-num-tasks", str(train_num_tasks)])
+        if resolved_train_num_tasks is not None:
+            command.extend(["--train-num-tasks", str(resolved_train_num_tasks)])
         return command
 
     if strategy.get("memory_backend") != "none":
@@ -240,6 +377,8 @@ def _tau2_command(
         str(seed),
         "--no-memory",
     ]
+    if fixed_first_user_file is not None:
+        command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
 
     if task_ids:
         for task_id in task_ids:
@@ -248,6 +387,17 @@ def _tau2_command(
         command.extend(["--num-tasks", str(num_tasks)])
 
     return command
+
+
+def _fixed_first_user_file(config: dict[str, Any], domain: str) -> Path | None:
+    raw = config.get("eval", {}).get("fixed_first_user_fixture")
+    if raw is None:
+        raw = config.get("eval", {}).get("fixed_first_user_fixtures")
+    if isinstance(raw, dict):
+        raw = raw.get(domain) or raw.get("default")
+    if raw is None or str(raw).strip() == "":
+        return None
+    return resolve_path(str(raw))
 
 
 def _build_plan(
@@ -296,6 +446,7 @@ def _build_plan(
                     train_num_tasks=train_num_tasks,
                     seed=seed,
                 )
+                fixed_first_user_file = _fixed_first_user_file(config, domain)
                 non_executable_reason = None
                 if command is None:
                     non_executable_reason = (
@@ -313,7 +464,32 @@ def _build_plan(
                         "train_required": bool(strategy.get("train_required")),
                         "memory_backend": strategy.get("memory_backend"),
                         "corpus_id": strategy.get("corpus_id", strategy["id"]),
+                        "corpus_key": _memory_corpus_key_for(
+                            domain=domain,
+                            strategy=strategy,
+                            train_num_tasks=(
+                                train_num_tasks
+                                if train_num_tasks is not None
+                                else strategy.get("train_num_tasks")
+                            ),
+                        ),
+                        "corpus_dir": str(
+                            _memory_corpus_dir(
+                                config,
+                                configured_run_id,
+                                _memory_corpus_key_for(
+                                    domain=domain,
+                                    strategy=strategy,
+                                    train_num_tasks=(
+                                        train_num_tasks
+                                        if train_num_tasks is not None
+                                        else strategy.get("train_num_tasks")
+                                    ),
+                                ),
+                            )
+                        ),
                         "retrieval_mode": strategy.get("retrieval_mode"),
+                        "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "category_rerank": strategy.get("category_rerank") or {"enabled": False},
                         "scope_prompt": strategy.get("scope_prompt") or {"enabled": False},
@@ -321,6 +497,9 @@ def _build_plan(
                         "executable": command is not None,
                         "user_simulator_policy": user_simulator_policy(config),
                         "user_simulator_policy_supported": policy_report["supported"],
+                        "fixed_first_user_file": str(fixed_first_user_file)
+                        if fixed_first_user_file
+                        else None,
                         "split_file": str(split_path),
                         "command": command,
                         "non_executable_reason": non_executable_reason,
@@ -352,8 +531,7 @@ def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, st
         }
         if cell.get("memory_backend") == "none":
             return artifacts
-        corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
-        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{corpus_id}"
+        corpus_dir = Path(cell["corpus_dir"])
         artifacts["retrieval_trace"] = str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl")
         artifacts["corpus_manifest"] = str(corpus_dir / "corpus_manifest.json")
         return artifacts
@@ -395,8 +573,7 @@ def _row_is_valid_evidence(row: dict[str, Any]) -> bool:
 
 
 def _memory_corpus_key(cell: dict[str, Any]) -> str:
-    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
-    return f"{cell['domain']}_{corpus_id}"
+    return str(cell.get("corpus_key") or f"{cell['domain']}_{cell['corpus_id']}")
 
 
 def _tau2_subprocess_env(repo: Path) -> dict[str, str]:
@@ -412,6 +589,20 @@ def _tau2_subprocess_env(repo: Path) -> dict[str, str]:
 
 def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, Any]:
     key = _memory_corpus_key(cell)
+    manifest_path = Path(cell["corpus_dir"]) / "corpus_manifest.json"
+    if manifest_path.is_file():
+        row = {
+            "domain": cell["domain"],
+            "strategy_id": cell["strategy_id"],
+            "corpus_id": str(cell.get("corpus_id") or cell["strategy_id"]),
+            "corpus_key": key,
+            "returncode": 0,
+            "reused": True,
+            "artifacts": {"corpus_manifest": str(manifest_path)},
+        }
+        write_json(out / "corpus_prepare_results" / f"{key}.json", row)
+        print(f"[tau2] reusing corpus {key}", flush=True)
+        return row
     command = list(cell["command"]) + ["--prepare-corpus-only"]
     print(f"[tau2] preparing corpus {key}", flush=True)
     completed = subprocess.run(
@@ -423,18 +614,16 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
         stderr=subprocess.PIPE,
         check=False,
     )
-    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
     row = {
         "domain": cell["domain"],
         "strategy_id": cell["strategy_id"],
-        "corpus_id": corpus_id,
+        "corpus_id": str(cell.get("corpus_id") or cell["strategy_id"]),
+        "corpus_key": key,
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-4000:],
         "stderr_tail": completed.stderr[-4000:],
         "artifacts": {
-            "corpus_manifest": str(
-                out / "memory_corpora" / f"{cell['domain']}_{corpus_id}" / "corpus_manifest.json"
-            )
+            "corpus_manifest": str(Path(cell["corpus_dir"]) / "corpus_manifest.json")
         },
     }
     write_json(out / "corpus_prepare_results" / f"{key}.json", row)

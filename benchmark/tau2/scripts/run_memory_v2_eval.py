@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import shutil
@@ -39,6 +40,7 @@ WRITE_TOOL_PREFIXES = (
     "grant_",
     "reboot_",
 )
+FIXED_FIRST_USER_NAME = "openviking_fixed_first_user_simulator"
 
 
 def _json(text: str) -> dict[str, Any]:
@@ -525,6 +527,68 @@ def _message_text(message: dict[str, Any]) -> tuple[str, str]:
     return "assistant", str(message.get("content") or "")
 
 
+def _scenario_sha256(instructions: str) -> str:
+    return hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+
+
+def _load_fixed_first_user_fixture(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"fixed-first-user fixture not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mapping = data.get("by_scenario_sha256") if isinstance(data, dict) else None
+    if not isinstance(mapping, dict) or not mapping:
+        raise ValueError(f"fixed-first-user fixture has no by_scenario_sha256 map: {path}")
+    return {str(key): str(value) for key, value in mapping.items()}
+
+
+def _has_user_message(state: Any) -> bool:
+    for message in getattr(state, "messages", []) or []:
+        role = getattr(message, "role", None)
+        if str(getattr(role, "value", role)) == "user":
+            return True
+    return False
+
+
+def _append_incoming_user_context(message: Any, state: Any) -> None:
+    from tau2.data_model.message import AssistantMessage, MultiToolMessage, ToolMessage
+
+    if isinstance(message, MultiToolMessage):
+        state.messages.extend(message.tool_messages)
+    elif isinstance(message, ToolMessage):
+        state.messages.append(message)
+    elif isinstance(message, AssistantMessage) and (message.has_content() or message.is_tool_call()):
+        state.messages.append(message)
+
+
+def _register_fixed_first_user(args: argparse.Namespace) -> str:
+    if not args.fixed_first_user_file:
+        return args.user
+    _add_tau2_to_path(args.tau2_repo)
+    mapping = _load_fixed_first_user_fixture(args.fixed_first_user_file)
+
+    from tau2.data_model.message import UserMessage
+    from tau2.registry import registry
+    from tau2.user.user_simulator import UserSimulator
+
+    class FixedFirstUserSimulator(UserSimulator):  # type: ignore[misc]
+        def _generate_next_message(self, message: Any, state: Any) -> UserMessage:  # type: ignore[override]
+            if not _has_user_message(state):
+                key = _scenario_sha256(str(self.instructions or ""))
+                fixed = mapping.get(key)
+                if fixed is None:
+                    raise RuntimeError(
+                        "fixed-first-user fixture does not cover this TAU-2 scenario: "
+                        f"sha256={key}"
+                    )
+                _append_incoming_user_context(message, state)
+                return UserMessage(role="user", content=fixed)
+            return super()._generate_next_message(message, state)
+
+    if FIXED_FIRST_USER_NAME not in registry.get_users():
+        registry.register_user(FixedFirstUserSimulator, FIXED_FIRST_USER_NAME)
+    return FIXED_FIRST_USER_NAME
+
+
 def _run_tau2(
     *,
     tau2_repo: Path,
@@ -784,19 +848,21 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             query: str,
             *,
             decision_node: str,
+            search_limit: int,
+            inject_limit: int,
         ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
             client = _client(args)
             rows: list[dict[str, Any]] = []
             try:
-                search_limit = args.category_reranker.search_limit(
-                    args.retrieval_top_k,
+                effective_search_limit = args.category_reranker.search_limit(
+                    search_limit,
                     decision_node=decision_node,
                 )
                 result = client.search(
-                    query=query, target_uri=args.search_uri, limit=search_limit
+                    query=query, target_uri=args.search_uri, limit=effective_search_limit
                 )
                 memories = list(getattr(result, "memories", []) or [])
-                for index, match in enumerate(memories[:search_limit], 1):
+                for index, match in enumerate(memories[:effective_search_limit], 1):
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     row = {
@@ -814,7 +880,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     query=query,
                     rows=rows,
                     decision_node=decision_node,
-                    base_limit=args.retrieval_top_k,
+                    base_limit=inject_limit,
                 )
                 blocks = []
                 for index, row in enumerate(selected_rows, 1):
@@ -926,7 +992,12 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             role_value = getattr(role, "value", role)
             if marker_index is not None and str(role_value) == "user":
                 query = str(getattr(message, "content", "") or "")
-                block, matches, category_rerank = self._retrieve(query, decision_node="first_user")
+                block, matches, category_rerank = self._retrieve(
+                    query,
+                    decision_node="first_user",
+                    search_limit=args.first_user_retrieval_top_k,
+                    inject_limit=args.first_user_inject_top_k,
+                )
                 prompt = (
                     "No OpenViking memory matched this user request."
                     if not block
@@ -938,6 +1009,8 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     {
                         "decision_node": "first_user",
                         "query": query,
+                        "search_limit": args.first_user_retrieval_top_k,
+                        "inject_limit": args.first_user_inject_top_k,
                         "match_count": len(matches),
                         "matches": matches,
                         "category_rerank": category_rerank,
@@ -954,11 +1027,15 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     block, matches, category_rerank = self._retrieve(
                         query,
                         decision_node="before_write_tool_call",
+                        search_limit=args.prewrite_retrieval_top_k,
+                        inject_limit=args.prewrite_inject_top_k,
                     )
                     self._trace(
                         {
                             "decision_node": "before_write_tool_call",
                             "query": query,
+                            "search_limit": args.prewrite_retrieval_top_k,
+                            "inject_limit": args.prewrite_inject_top_k,
                             "match_count": len(matches),
                             "matches": matches,
                             "category_rerank": category_rerank,
@@ -1032,6 +1109,11 @@ def main() -> int:
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
     parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
+    parser.add_argument("--first-user-retrieval-top-k", type=int)
+    parser.add_argument("--first-user-inject-top-k", type=int)
+    parser.add_argument("--prewrite-retrieval-top-k", type=int)
+    parser.add_argument("--prewrite-inject-top-k", type=int)
+    parser.add_argument("--fixed-first-user-file", type=Path)
     parser.add_argument(
         "--retrieval-mode",
         choices=["first_user", "prewrite", "first_user_prewrite"],
@@ -1082,6 +1164,12 @@ def main() -> int:
     args.run_dir.mkdir(parents=True, exist_ok=True)
     corpus_dir = args.corpus_dir or args.run_dir
     corpus_dir.mkdir(parents=True, exist_ok=True)
+    args.first_user_retrieval_top_k = args.first_user_retrieval_top_k or args.retrieval_top_k
+    args.first_user_inject_top_k = args.first_user_inject_top_k or args.first_user_retrieval_top_k
+    args.prewrite_retrieval_top_k = args.prewrite_retrieval_top_k or args.retrieval_top_k
+    args.prewrite_inject_top_k = args.prewrite_inject_top_k or args.prewrite_retrieval_top_k
+    if args.fixed_first_user_file is not None:
+        args.fixed_first_user_file = args.fixed_first_user_file.expanduser().resolve()
     train_results = corpus_dir / "train_results.json"
     corpus_manifest = corpus_dir / "corpus_manifest.json"
     eval_results = args.run_dir / f"{args.run_label}.json"
@@ -1089,6 +1177,7 @@ def main() -> int:
     summary_path = args.run_dir / f"{args.run_label}.summary.json"
 
     if args.no_memory:
+        user_name = _register_fixed_first_user(args)
         _run_tau2(
             tau2_repo=args.tau2_repo,
             domain=args.domain,
@@ -1099,7 +1188,7 @@ def main() -> int:
             max_steps=args.max_steps,
             max_concurrency=args.max_concurrency,
             agent=args.base_agent,
-            user=args.user,
+            user=user_name,
             agent_llm=args.agent_llm,
             user_llm=args.user_llm,
             agent_llm_args=args.agent_llm_args,
@@ -1115,6 +1204,9 @@ def main() -> int:
             "domain": args.domain,
             "strategy_id": args.strategy_id,
             "seed": args.seed,
+            "fixed_first_user_file": str(args.fixed_first_user_file)
+            if args.fixed_first_user_file
+            else None,
             "eval_results": str(eval_results),
             "metrics": _metrics(eval_results),
         }
@@ -1141,6 +1233,7 @@ def main() -> int:
 
     trace_path.touch()
     _register_memory_agent(args, trace_path)
+    user_name = _register_fixed_first_user(args)
     _run_tau2(
         tau2_repo=args.tau2_repo,
         domain=args.domain,
@@ -1151,7 +1244,7 @@ def main() -> int:
         max_steps=args.max_steps,
         max_concurrency=args.max_concurrency,
         agent=AGENT_NAME,
-        user=args.user,
+        user=user_name,
         agent_llm=args.agent_llm,
         user_llm=args.user_llm,
         agent_llm_args=args.agent_llm_args,
@@ -1169,7 +1262,16 @@ def main() -> int:
         "domain": args.domain,
         "strategy_id": args.strategy_id,
         "retrieval_mode": args.retrieval_mode,
+        "retrieval": {
+            "first_user_retrieval_top_k": args.first_user_retrieval_top_k,
+            "first_user_inject_top_k": args.first_user_inject_top_k,
+            "prewrite_retrieval_top_k": args.prewrite_retrieval_top_k,
+            "prewrite_inject_top_k": args.prewrite_inject_top_k,
+        },
         "seed": args.seed,
+        "fixed_first_user_file": str(args.fixed_first_user_file)
+        if args.fixed_first_user_file
+        else None,
         "corpus": corpus,
         "category_rerank": category_summary,
         "scope_prompt": args.scope_prompt_summary,
