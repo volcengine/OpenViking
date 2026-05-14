@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """
 Memory graph generator — builds a self-contained D3.js force-directed HTML graph
-from all links stored in MEMORY_FIELDS across a memory space.
+from all links stored in MEMORY_FIELDS across one or more memory spaces.
 
 Usage:
     graph = MemoryGraph(viking_fs)
     path = await graph.gen_graph("viking://user/{space}/memories", ctx=ctx)
+    path = await graph.build_graph(["viking://user/a/memories", "viking://user/b/memories"], "viking://user/default/memories/.graph.html", ctx=ctx)
 """
 
 import json
@@ -55,84 +56,73 @@ class MemoryGraph:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
 
-    async def gen_graph(
+    async def _collect_graph_data(
         self,
-        space_uri: str,
+        space_uris: List[str],
         ctx: RequestContext,
-    ) -> str:
-        """Scan all memory files, extract links, build graph HTML, write to space.
-
-        Args:
-            space_uri: Root URI (e.g. viking://user/{space}/memories)
-            ctx: Request context
-
-        Returns:
-            URI of the generated .graph.html file
-        """
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             raise ValueError("VikingFS not available")
 
-        # 1. Glob all .md files recursively
-        glob_result = await viking_fs.glob(
-            "**/*.md",
-            uri=space_uri,
-            node_limit=None,
-            ctx=ctx,
-        )
-        all_uris = glob_result.get("matches", [])
-        md_uris = [
-            u
-            for u in all_uris
-            if not u.endswith("/.overview.md") and not u.endswith("/.abstract.md")
-        ]
-
-        logger.info(f"[gen_graph] Found {len(md_uris)} memory files under {space_uri}")
-
-        # 2. Parse each file, collect nodes + edges
         nodes: Dict[str, Dict[str, Any]] = {}
         edges: List[Dict[str, Any]] = []
 
-        for uri in md_uris:
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if not content:
+        for space_uri in space_uris:
+            glob_result = await viking_fs.glob(
+                "**/*.md",
+                uri=space_uri,
+                node_limit=None,
+                ctx=ctx,
+            )
+            all_uris = glob_result.get("matches", [])
+            md_uris = [
+                u
+                for u in all_uris
+                if not u.endswith("/.overview.md") and not u.endswith("/.abstract.md")
+            ]
+
+            logger.info(f"[build_graph] Found {len(md_uris)} memory files under {space_uri}")
+
+            for uri in md_uris:
+                try:
+                    content = await viking_fs.read_file(uri, ctx=ctx)
+                    if not content:
+                        continue
+                    mf = MemoryFileUtils.read(content, uri=uri)
+                except Exception as e:
+                    logger.warning(f"Failed to read/parse {uri}: {e}")
                     continue
-                mf = MemoryFileUtils.read(content, uri=uri)
-            except Exception as e:
-                logger.warning(f"Failed to read/parse {uri}: {e}")
-                continue
 
-            memory_type = mf.memory_type or ""
-            category = mf.extra_fields.get("category", "")
-            name = mf.extra_fields.get("name", "")
-            label = name if name else uri.split("/")[-1].replace(".md", "")
+                memory_type = mf.memory_type or ""
+                category = mf.extra_fields.get("category", "")
+                name = mf.extra_fields.get("name", "")
+                label = name if name else uri.split("/")[-1].replace(".md", "")
 
-            nodes[uri] = {
-                "id": uri,
-                "uri": uri,
-                "label": label,
-                "memory_type": memory_type,
-                "category": category,
-            }
+                nodes[uri] = {
+                    "id": uri,
+                    "uri": uri,
+                    "label": label,
+                    "memory_type": memory_type,
+                    "category": category,
+                }
 
-            for link_data in mf.links:
-                if not isinstance(link_data, dict):
-                    continue
-                to_uri = link_data.get("to_uri", "")
-                if not to_uri:
-                    continue
-                edges.append(
-                    {
-                        "source": link_data.get("from_uri", uri),
-                        "target": to_uri,
-                        "link_type": link_data.get("link_type", "related_to"),
-                        "weight": float(link_data.get("weight", 1.0)),
-                        "description": link_data.get("description", ""),
-                    }
-                )
+                for link_data in mf.links:
+                    if not isinstance(link_data, dict):
+                        continue
+                    to_uri = link_data.get("to_uri", "")
+                    if not to_uri:
+                        continue
+                    edges.append(
+                        {
+                            "source": link_data.get("from_uri", uri),
+                            "target": to_uri,
+                            "link_type": link_data.get("link_type", "related_to"),
+                            "weight": float(link_data.get("weight", 1.0)),
+                            "description": link_data.get("description", ""),
+                        }
+                    )
 
-        # 3. Ensure link endpoints exist as nodes
         for edge in edges:
             for key in ("source", "target"):
                 uri = edge[key]
@@ -145,7 +135,6 @@ class MemoryGraph:
                         "category": "",
                     }
 
-        # 4. Deduplicate and filter edges
         seen = set()
         unique_edges = []
         for e in edges:
@@ -156,19 +145,44 @@ class MemoryGraph:
                 seen.add(key)
                 unique_edges.append(e)
 
-        logger.info(f"[gen_graph] Built graph: {len(nodes)} nodes, {len(unique_edges)} edges")
+        logger.info(f"[build_graph] Built graph: {len(nodes)} nodes, {len(unique_edges)} edges")
+        return list(nodes.values()), unique_edges
 
-        # 5. Render & write
-        html = _render_graph_html(list(nodes.values()), unique_edges)
+    async def gen_graph(
+        self,
+        space_uri: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Scan a memory space, extract links, build graph HTML, write to that space."""
         graph_path = f"{space_uri.rstrip('/')}/.graph.html"
+        return await self.build_graph([space_uri], graph_path, ctx)
+
+    async def build_graph(
+        self,
+        space_uris: List[str],
+        output_uri: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Scan multiple memory roots, extract links, build graph HTML, and write to output URI."""
+        if not space_uris:
+            raise ValueError("space_uris must not be empty")
+        if not output_uri:
+            raise ValueError("output_uri must not be empty")
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            raise ValueError("VikingFS not available")
+
+        nodes, edges = await self._collect_graph_data(space_uris, ctx)
+        html = _render_graph_html(nodes, edges)
         try:
-            await viking_fs.write_file(graph_path, html, ctx=ctx)
-            tracer.info(f"[gen_graph] Generated graph: {graph_path}")
+            await viking_fs.write_file(output_uri, html, ctx=ctx)
+            tracer.info(f"[build_graph] Generated graph: {output_uri}")
         except Exception as e:
-            logger.error(f"Failed to write graph {graph_path}: {e}")
+            logger.error(f"Failed to write graph {output_uri}: {e}")
             raise
 
-        return graph_path
+        return output_uri
 
 
 # ---------------------------------------------------------------------------

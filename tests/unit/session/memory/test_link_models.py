@@ -25,11 +25,12 @@ class TestLinkType:
 
 class TestWikiLink:
     def test_minimal_fields(self):
-        link = WikiLink(f=1, t=2)
+        link = WikiLink(f=1, t=2, match_text=None)
         assert link.f == 1
         assert link.t == 2
         assert link.link_type == LinkType.RELATED_TO
         assert link.weight == 1.0
+        assert link.match_text is None
 
     def test_full_fields(self):
         link = WikiLink(
@@ -42,6 +43,13 @@ class TestWikiLink:
         )
         assert link.match_text == "Caroline"
         assert link.weight == 0.9
+
+    def test_json_schema_requires_match_text_field(self):
+        schema = WikiLink.model_json_schema()
+
+        assert "match_text" in schema["required"]
+        assert any(option.get("type") == "string" for option in schema["properties"]["match_text"]["anyOf"])
+        assert any(option.get("type") == "null" for option in schema["properties"]["match_text"]["anyOf"])
 
 
 class TestStoredLink:

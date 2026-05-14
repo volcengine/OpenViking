@@ -71,10 +71,16 @@ class WikiLink(BaseModel):
         "evolved_from (A is an evolution/update of B)"
     ))
     weight: float = Field(1.0, description="Association weight 0~1")
-    match_text: Optional[str] = Field(
-        None,
+    match_text: Annotated[
+        Optional[str],
+        WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    ] = Field(
+        ...,
         description=(
             "A single WORD from the original conversation to be linkified. "
+            "This field must always be included in link output. "
+            "Use a single exact word from the original conversation whenever possible; "
+            "only use null when no valid single-word anchor exists. "
             "Rules: (1) must be a single word only (NOT a phrase or multi-word text); "
             "(2) must exist verbatim in the original conversation messages; "
             "(3) pick the most specific/identifying word"
