@@ -270,7 +270,9 @@ class CategoryReranker:
             has_positive_match = positive_level in {"category1", "category2"}
             if has_positive_match:
                 before_count = len(sorted_scored)
-                guarded = [item for item in sorted_scored if not item[3].get("category_explicit_mismatch")]
+                guarded = [
+                    item for item in sorted_scored if not item[3].get("category_explicit_mismatch")
+                ]
                 if guarded:
                     filtered = guarded
                     decision = "soft_reranked_with_mismatch_guard"
@@ -328,7 +330,9 @@ def _loaded_files(load_report: dict[str, Any]) -> list[str]:
     return []
 
 
-def _load_catalog(raw_path: Any, *, repo_root: Path) -> tuple[dict[str, list[CategoryEntry]], dict[str, Any]]:
+def _load_catalog(
+    raw_path: Any, *, repo_root: Path
+) -> tuple[dict[str, list[CategoryEntry]], dict[str, Any]]:
     report = {
         "path": None,
         "loaded": False,
@@ -463,14 +467,18 @@ def _candidate_score(
     if (query_c1 or query_c2) and not (memory_c1 or memory_c2):
         score -= 2.0
         reasons.append("missing_memory_category")
-    return score, reasons, {
-        "category1_match": category1_match,
-        "category2_match": category2_match,
-        "category_explicit_mismatch": bool(
-            (query_c1 and memory_c1 and not category1_match)
-            or (query_c2 and memory_c2 and not category2_match)
-        ),
-    }
+    return (
+        score,
+        reasons,
+        {
+            "category1_match": category1_match,
+            "category2_match": category2_match,
+            "category_explicit_mismatch": bool(
+                (query_c1 and memory_c1 and not category1_match)
+                or (query_c2 and memory_c2 and not category2_match)
+            ),
+        },
+    )
 
 
 def _row_key(row: dict[str, Any]) -> str:
@@ -494,7 +502,9 @@ def _mark_selected(
         traced = _public_row(row)
         traced["raw_rank"] = index
         traced["selected_for_injection"] = key in selected_keys
-        traced["injected"] = bool(traced["selected_for_injection"] and int(row.get("text_chars") or 0) > 0)
+        traced["injected"] = bool(
+            traced["selected_for_injection"] and int(row.get("text_chars") or 0) > 0
+        )
         if not traced["selected_for_injection"]:
             traced["skipped_reason"] = (
                 "category_rerank_inject_limit" if key in kept_keys else "category_rerank"

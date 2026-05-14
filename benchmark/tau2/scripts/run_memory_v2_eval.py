@@ -245,7 +245,9 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
             if isinstance(call, dict) and call.get("name"):
                 tool_calls[str(call["name"])] += 1
 
-        category = row.get("category_rerank") if isinstance(row.get("category_rerank"), dict) else {}
+        category = (
+            row.get("category_rerank") if isinstance(row.get("category_rerank"), dict) else {}
+        )
         if category:
             category_event_count += 1
             if category.get("enabled"):
@@ -404,9 +406,8 @@ def _runtime_evidence_status(
         if int(corpus_probe.get("match_count") or 0) > 0:
             if int(corpus_probe.get("concrete_match_count") or 0) <= 0:
                 reasons.append("no_concrete_corpus_probe_matches")
-            if (
-                int(corpus_probe.get("aggregate_match_count") or 0)
-                == int(corpus_probe.get("match_count") or 0)
+            if int(corpus_probe.get("aggregate_match_count") or 0) == int(
+                corpus_probe.get("match_count") or 0
             ):
                 reasons.append("aggregate_only_corpus_probe")
 
@@ -446,15 +447,13 @@ def _runtime_evidence_status(
                 reasons.append("no_injected_concrete_memory")
             if (
                 int(counts.get("query_category_matched_event_count") or 0) > 0
-                and float(rates.get("selected_positive_category_match_rate") or 0.0)
-                <= 0.0
+                and float(rates.get("selected_positive_category_match_rate") or 0.0) <= 0.0
             ):
                 reasons.append("no_selected_positive_category_match")
             if (
                 int(counts.get("query_category_matched_event_count") or 0) > 0
                 and int(counts.get("memory_injection_event_count") or 0) > 0
-                and int(counts.get("injected_concrete_positive_category_match_count") or 0)
-                <= 0
+                and int(counts.get("injected_concrete_positive_category_match_count") or 0) <= 0
             ):
                 reasons.append("no_injected_concrete_positive_category_match")
 
@@ -926,10 +925,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 1
                 for row in matches
                 if row.get("injected")
-                or (
-                    row.get("selected_for_injection", True)
-                    and int(row.get("text_chars") or 0) > 0
-                )
+                or (row.get("selected_for_injection", True) and int(row.get("text_chars") or 0) > 0)
             )
             return {
                 "injected": bool(block.strip()),
@@ -1197,7 +1193,9 @@ def main() -> int:
         if not args.scope_prompt_file.is_file():
             parser.error(f"--scope-prompt-file does not exist: {args.scope_prompt_file}")
         if isinstance(args.scope_prompt_config, dict) and args.scope_prompt_config.get("enabled"):
-            parser.error("--scope-prompt-file and enabled --scope-prompt-config are mutually exclusive")
+            parser.error(
+                "--scope-prompt-file and enabled --scope-prompt-config are mutually exclusive"
+            )
         args.scope_prompt_config = {
             "enabled": True,
             "domain_files": {args.domain: str(args.scope_prompt_file)},

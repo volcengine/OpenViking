@@ -761,9 +761,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     def weighted(rows_for_group: list[dict[str, Any]]) -> dict[str, Any]:
         metric_rows = [row for row in rows_for_group if row.get("metrics")]
         valid_metric_rows = [row for row in metric_rows if _row_is_valid_evidence(row)]
-        diagnostic_rows = [
-            row for row in metric_rows if not _row_is_valid_evidence(row)
-        ]
+        diagnostic_rows = [row for row in metric_rows if not _row_is_valid_evidence(row)]
         diagnostic_reason_counts: Counter[str] = Counter()
         for row in diagnostic_rows:
             evidence = row.get("runtime_evidence")
