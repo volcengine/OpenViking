@@ -264,6 +264,24 @@ class PathLockEngine:
             parent = self._get_parent_path(parent)
         return None
 
+    async def _wait_for_no_ancestor_tree(
+        self, path: str, owner_id: str, deadline: float, label: str
+    ) -> bool:
+        while True:
+            ancestor_conflict = await self._check_ancestors_for_tree(path, owner_id)
+            if not ancestor_conflict:
+                return True
+            if self.is_lock_stale(ancestor_conflict, self._lock_expire):
+                logger.warning(f"[{label}] Removing stale ancestor TREE lock: {ancestor_conflict}")
+                await self._remove_lock_file(ancestor_conflict)
+                continue
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(
+                    f"[{label}] Timeout waiting for ancestor TREE lock: {ancestor_conflict}"
+                )
+                return False
+            await asyncio.sleep(_POLL_INTERVAL)
+
     async def _check_path_lock(self, path: str, exclude_owner_id: str) -> Optional[str]:
         lock_path = self._get_lock_path(path)
         token = self._read_token(lock_path)
@@ -344,6 +362,9 @@ class PathLockEngine:
             deadline = float("inf")
         else:
             deadline = asyncio.get_running_loop().time() + timeout
+
+        if not await self._wait_for_no_ancestor_tree(path, owner_id, deadline, "EXACT"):
+            return False
 
         parent = self._get_parent_path(path)
         if (
@@ -466,6 +487,9 @@ class PathLockEngine:
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
+
+        if not await self._wait_for_no_ancestor_tree(path, owner_id, deadline, "TREE"):
+            return False
 
         # 确保目录存在
         if not self._ensure_directory_exists(path):

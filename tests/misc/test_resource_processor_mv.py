@@ -40,34 +40,47 @@ class _CtxMgr:
 
 
 class _FakeLockManager:
-    def __init__(self):
+    def __init__(self, *, existing_dirs=None):
         from openviking.storage.transaction.lock_handle import LockHandle
 
         self._lock_handle_cls = LockHandle
         self._handles = {}
         self.acquired_exact_paths = []
         self.acquired_tree_paths = []
+        self.existing_dirs = set(existing_dirs or [])
+        self.released_lock_paths = []
+
+    def _exact_lock_path(self, path):
+        if path in self.existing_dirs:
+            return f"{path}/.path.ovlock"
+        return f"{path}/.exact.ovlock"
+
+    def _tree_lock_path(self, path):
+        return f"{path}/.path.ovlock"
 
     def create_handle(self):
         handle = self._lock_handle_cls()
         self._handles[handle.id] = handle
         return handle
 
+    async def acquire_exact_path(self, handle, path, timeout=None):
+        handle.add_lock(self._exact_lock_path(path))
+        self.acquired_exact_paths.append(path)
+        return True
+
     async def acquire_exact_path_batch(self, handle, paths, timeout=None):
         for path in paths:
-            lock_path = f"exact:{path}"
-            handle.add_lock(lock_path)
-            self.acquired_exact_paths.append(path)
+            await self.acquire_exact_path(handle, path, timeout=timeout)
         return True
 
     async def acquire_tree(self, handle, path, timeout=None):
-        lock_path = f"tree:{path}"
-        handle.add_lock(lock_path)
+        handle.add_lock(self._tree_lock_path(path))
         self.acquired_tree_paths.append(path)
         return True
 
     async def release_selected(self, handle, lock_paths):
         for path in lock_paths:
+            self.released_lock_paths.append(path)
             handle.remove_lock(path)
 
     async def release(self, handle):
@@ -151,7 +164,8 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS(exists_result=True)
-    fake_lock_manager = _FakeLockManager()
+    root_path = "/mock/resources/root"
+    fake_lock_manager = _FakeLockManager(existing_dirs={root_path})
     summarize_calls = []
 
     monkeypatch.setattr(
@@ -194,5 +208,7 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
     fake_fs.agfs.mv.assert_not_called()
-    assert fake_lock_manager.acquired_exact_paths == ["/mock/resources/root"]
-    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]
+    assert fake_lock_manager.acquired_exact_paths == [root_path]
+    assert fake_lock_manager.acquired_tree_paths == [root_path]
+    assert fake_lock_manager.released_lock_paths == []
+    assert fake_lock_manager.get_handle(summarize_calls[0]["lifecycle_lock_handle_id"])

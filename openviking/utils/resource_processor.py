@@ -256,7 +256,8 @@ class ResourceProcessor:
             target_exists = False
 
             if root_uri and temp_uri:
-                from openviking.storage.transaction import LockContext, get_lock_manager
+                from openviking.storage.errors import LockAcquisitionError
+                from openviking.storage.transaction import get_lock_manager
 
                 stage_start = time.perf_counter()
                 stage_status = "ok"
@@ -280,33 +281,41 @@ class ResourceProcessor:
 
                         handle = lock_manager.create_handle()
                         lifecycle_lock_acquired = False
+                        exact_lock_paths: list[str] = []
                         try:
-                            async with LockContext(
-                                lock_manager,
-                                [dst_path],
-                                lock_mode="exact",
-                                handle=handle,
-                            ):
-                                target_exists = await viking_fs.exists(root_uri, ctx=ctx)
-
-                                if not target_exists:
-                                    src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                                    await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
-
-                                lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
-                                    lock_manager, dst_path, uri=root_uri, handle=handle
+                            if not await lock_manager.acquire_exact_path(handle, dst_path):
+                                raise LockAcquisitionError(
+                                    f"Failed to acquire exact path lock for {root_uri}"
                                 )
-                                lifecycle_lock_acquired = True
+                            exact_lock_paths = list(handle.locks)
+                            target_exists = await viking_fs.exists(root_uri, ctx=ctx)
 
-                                if not target_exists:
-                                    try:
-                                        await viking_fs.delete_temp(
-                                            parse_result.temp_dir_path,
-                                            ctx=ctx,
-                                        )
-                                    except Exception:
-                                        pass
-                                    result["temp_uri"] = root_uri
+                            if not target_exists:
+                                src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                                await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
+
+                            lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
+                                lock_manager, dst_path, uri=root_uri, handle=handle
+                            )
+                            lifecycle_lock_acquired = True
+
+                            lifecycle_lock_paths = [
+                                lock_path
+                                for lock_path in handle.locks
+                                if lock_path not in exact_lock_paths
+                            ]
+                            if lifecycle_lock_paths and exact_lock_paths:
+                                await lock_manager.release_selected(handle, exact_lock_paths)
+
+                            if not target_exists:
+                                try:
+                                    await viking_fs.delete_temp(
+                                        parse_result.temp_dir_path,
+                                        ctx=ctx,
+                                    )
+                                except Exception:
+                                    pass
+                                result["temp_uri"] = root_uri
                         except Exception:
                             if not lifecycle_lock_acquired:
                                 await lock_manager.release(handle)
