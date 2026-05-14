@@ -1,0 +1,35 @@
+services:
+  prometheus:
+    image: prom/prometheus
+    container_name: openviking-prometheus-localhost
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:30909
+    volumes:
+      - ./prometheus.localhost.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_localhost_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana
+    container_name: openviking-grafana-localhost
+    network_mode: host
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SERVER_HTTP_PORT: 13000
+    volumes:
+      - grafana_localhost_data:/var/lib/grafana
+      - ./grafana/provisioning-localhost:/etc/grafana/provisioning:ro
+      - ./openviking_demo_dashboard.json:/var/lib/grafana/dashboards/openviking_demo_dashboard.json:ro
+      - ./openviking_feedback_baseline_dashboard.json:/var/lib/grafana/dashboards/openviking_feedback_baseline_dashboard.json:ro
+      - ./openviking_token_demo_dashboard.json:/var/lib/grafana/dashboards/openviking_token_demo_dashboard.json:ro
+    restart: unless-stopped
+
+volumes:
+  prometheus_localhost_data:
+  grafana_localhost_data:

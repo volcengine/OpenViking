@@ -430,6 +430,8 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 ## 相关文档
 
+- [使用 Prometheus 和 Grafana 查看 OpenViking 指标](11-grafana-prometheus.md) - 从 `/metrics` 到 Prometheus、Grafana dashboard 的完整操作流程
+- [使用真实问答验证 Vikingbot 指标](12-vikingbot-metrics-validation.md) - 用 `/bot/v1/chat`、`/bot/v1/feedback` 和真实 follow-up 场景校验反馈与 outcome 指标
 - [部署](03-deployment.md) - 服务器设置
 - [认证](04-authentication.md) - API Key 设置
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪

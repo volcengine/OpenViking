@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -665,6 +665,18 @@ class AgentLoop:
                 tools_used_names = [tool["tool_name"] for tool in tools_used]
             else:
                 tools_used_names = []
+            response_completed = self._build_response_completed_payload(
+                msg=msg,
+                response_id=response_id,
+                final_content=final_content,
+                token_usage=token_usage,
+                time_cost=time_cost,
+                iteration=iteration,
+                tools_used_names=tools_used_names,
+            )
+            LangfuseClient.get_instance().update_generation_metadata(
+                response_id, response_completed
+            )
             response_metadata = dict(msg.metadata or {})
             if relevant_memories is not None:
                 response_metadata["relevant_memories"] = relevant_memories
@@ -674,18 +686,7 @@ class AgentLoop:
                     content="",
                     event_type=OutboundEventType.RESPONSE_COMPLETED,
                     response_id=response_id,
-                    metadata={
-                        "response_completed": {
-                            "response_id": response_id,
-                            "session_id": session_key.safe_name(),
-                            "sender_id": msg.sender_id,
-                            "content": final_content,
-                            "token_usage": token_usage,
-                            "time_cost": time_cost,
-                            "iteration": iteration,
-                            "tools_used_names": tools_used_names,
-                        }
-                    },
+                    metadata={"response_completed": response_completed},
                 )
             )
             return OutboundMessage(
@@ -705,6 +706,32 @@ class AgentLoop:
                 await monitor_task
             except asyncio.CancelledError:
                 pass
+
+    @staticmethod
+    def _build_response_completed_payload(
+        msg: InboundMessage,
+        response_id: str,
+        final_content: str,
+        token_usage: dict[str, Any],
+        time_cost: float,
+        iteration: int,
+        tools_used_names: list[str],
+    ) -> dict[str, Any]:
+        """Build a stable response fact shared by analytics sinks."""
+        return {
+            "response_id": response_id,
+            "session_id": msg.session_key.safe_name(),
+            "channel": msg.session_key.channel_key(),
+            "session_type": msg.session_key.type,
+            "sender_id": msg.sender_id,
+            "content": final_content,
+            "token_usage": token_usage,
+            "time_cost": time_cost,
+            "iteration": iteration,
+            "tool_count": len(tools_used_names),
+            "tools_used_names": tools_used_names,
+            "has_tools": bool(tools_used_names),
+        }
 
     async def _evaluate_previous_response_outcome(
         self, session: Session, msg: InboundMessage

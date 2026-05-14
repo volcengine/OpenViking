@@ -26,6 +26,7 @@ def test_create_default_collector_manager_registers_expected_collectors_in_order
     assert names == [
         "QueueCollector",
         "TaskTrackerCollector",
+        "FeedbackCollector",
         "ObserverHealthCollector",
         "ObserverStateCollector",
         "LockCollector",

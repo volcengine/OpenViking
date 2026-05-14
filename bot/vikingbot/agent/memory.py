@@ -45,15 +45,15 @@ class MemoryStore:
 
         # Filter by min_score and sort by score descending
         def get_score(m):
-            return m.get('score', 0) if isinstance(m, dict) else getattr(m, 'score', 0.0)
-        def get_uri(m):
-            return m.get('uri', '') if isinstance(m, dict) else getattr(m, 'uri', '')
-        def get_abstract(m):
-            return m.get('abstract', '') if isinstance(m, dict) else getattr(m, 'abstract', '')
+            return m.get("score", 0) if isinstance(m, dict) else getattr(m, "score", 0.0)
 
-        filtered_memories = [
-            memory for memory in result if get_score(memory) >= min_score
-        ]
+        def get_uri(m):
+            return m.get("uri", "") if isinstance(m, dict) else getattr(m, "uri", "")
+
+        def get_abstract(m):
+            return m.get("abstract", "") if isinstance(m, dict) else getattr(m, "abstract", "")
+
+        filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
 
         user_memories = []
@@ -132,19 +132,26 @@ class MemoryStore:
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
     async def get_viking_memory_context(
-        self, current_message: str, workspace_id: str, sender_id: str, user_ids: list[str] | None = None
+        self,
+        current_message: str,
+        workspace_id: str,
+        sender_id: str,
+        user_ids: list[str] | None = None,
     ) -> str:
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
             # Use provided user_ids or fall back to sender_id
             search_user_ids = user_ids if user_ids else [sender_id]
-            logger.info(f'workspace_id={workspace_id}')
-            logger.info(f'user_ids={search_user_ids}')
-            logger.info(f'admin_user_id={admin_user_id}')
+            logger.info(f"workspace_id={workspace_id}")
+            logger.info(f"user_ids={search_user_ids}")
+            logger.info(f"admin_user_id={admin_user_id}")
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(
-                query=current_message, user_ids=search_user_ids, agent_user_id=admin_user_id, limit=30
+                query=current_message,
+                user_ids=search_user_ids,
+                agent_user_id=admin_user_id,
+                limit=30,
             )
             if not result:
                 return ""
@@ -153,14 +160,14 @@ class MemoryStore:
             memory_list = []
             memory_list.append(f"user_memory[{len(result['user_memory'])}]:")
 
-            for i, mem in enumerate(result['user_memory']):
-                uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
-                score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
+            for i, mem in enumerate(result["user_memory"]):
+                uri = mem.get("uri", "") if isinstance(mem, dict) else getattr(mem, "uri", "")
+                score = mem.get("score", 0) if isinstance(mem, dict) else getattr(mem, "score", 0)
                 memory_list.append(f"{i},{uri},{score}")
-            memory_list.append(f'agent_memory[{len(result['agent_memory'])}]:')
-            for i, mem in enumerate(result['agent_memory']):
-                uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')
-                score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
+            memory_list.append(f"agent_memory[{len(result['agent_memory'])}]:")
+            for i, mem in enumerate(result["agent_memory"]):
+                uri = mem.get("uri", "") if isinstance(mem, dict) else getattr(mem, "uri", "")
+                score = mem.get("score", 0) if isinstance(mem, dict) else getattr(mem, "score", 0)
                 memory_list.append(f"{i},{uri},{score}")
             raw_memories_log = "\n".join(memory_list)
             logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
@@ -176,8 +183,12 @@ class MemoryStore:
             return ""
 
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
-        client = await VikingClient.create(agent_id=workspace_id)
-        result = await client.read_user_profile(user_id)
+        try:
+            client = await VikingClient.create(agent_id=workspace_id)
+            result = await client.read_user_profile(user_id)
+        except Exception as e:
+            logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
+            return ""
         if not result:
             return ""
         return result
@@ -195,7 +206,11 @@ class MemoryStore:
         if not user_ids:
             return ""
 
-        client = await VikingClient.create(agent_id=workspace_id)
+        try:
+            client = await VikingClient.create(agent_id=workspace_id)
+        except Exception as e:
+            logger.error(f"[READ_USER_PROFILE]: users={user_ids}, error. {e}")
+            return ""
 
         async def fetch_profile(user_id: str) -> tuple[str, str]:
             """Fetch a single user profile."""

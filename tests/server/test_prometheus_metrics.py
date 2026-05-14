@@ -3,6 +3,9 @@
 
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
+import json
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -188,6 +191,58 @@ class TestMetricsEndpoint:
             assert config.observability.metrics.account_dimension.metric_allowlist == [
                 "openviking_http_requests_total"
             ]
+        finally:
+            shutdown_metrics(app=app)
+
+    async def test_metrics_endpoint_exports_feedback_metrics(self, monkeypatch, tmp_path):
+        sessions_dir = tmp_path / "bot" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "cli__default__session-1.jsonl").write_text(
+            json.dumps(
+                {
+                    "_type": "metadata",
+                    "session_key": "cli__default__session-1",
+                    "updated_at": "2026-05-01T10:00:00",
+                    "metadata": {
+                        "feedback_events": [{"response_id": "resp-1", "feedback_type": "thumb_up"}],
+                        "response_outcomes": {
+                            "resp-1": {"outcome_label": "positive_feedback"},
+                            "resp-2": {"outcome_label": "resolved"},
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            "openviking.metrics.collectors.feedback.load_config",
+            lambda: SimpleNamespace(bot_data_path=tmp_path / "bot"),
+        )
+
+        config = ServerConfig(
+            observability=ObservabilityConfig(
+                metrics=MetricsConfig(
+                    enabled=True,
+                    exporters=MetricsExportersConfig(
+                        prometheus=PrometheusExporterConfig(enabled=True)
+                    ),
+                )
+            )
+        )
+        app = create_app(config=config, service=None)
+        init_metrics_from_server_config(config, app=app)
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/metrics")
+                assert resp.status_code == 200
+                assert 'openviking_feedback_events_total{valid="1"} 1.0' in resp.text
+                assert (
+                    'openviking_feedback_channel_events_total{channel="cli__default",valid="1"} 1.0'
+                    in resp.text
+                )
         finally:
             shutdown_metrics(app=app)
 

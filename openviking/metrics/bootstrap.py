@@ -30,6 +30,7 @@ from openviking.metrics.collectors import (
     AsyncSystemProbeCollector,
     CollectorManager,
     EncryptionProbeCollector,
+    FeedbackCollector,
     LockCollector,
     ModelProviderProbeCollector,
     ModelUsageCollector,
@@ -80,6 +81,7 @@ def create_default_collector_manager(*, app=None, service=None) -> CollectorMana
     manager = CollectorManager()
     manager.register(QueueCollector(data_source=QueuePipelineStateDataSource()))
     manager.register(TaskTrackerCollector(data_source=TaskStateDataSource()))
+    manager.register(FeedbackCollector())
     manager.register(ObserverHealthCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(ObserverStateCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(LockCollector(data_source=LockStateDataSource()))

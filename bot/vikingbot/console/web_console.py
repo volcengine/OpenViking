@@ -7,6 +7,10 @@ import gradio as gr
 
 from vikingbot.config.loader import get_config_path, load_config, save_config
 from vikingbot.config.schema import Config
+from vikingbot.observability.feedback_stats import (
+    FEEDBACK_STATS_SORT_FIELDS,
+    build_feedback_stats_display,
+)
 
 
 def resolve_schema_ref(
@@ -40,6 +44,97 @@ def create_dashboard_tab():
         | 📁 Config Path | {str(get_config_path())} |
         | 🖥️ Workspace Path | {str(config.workspace_path)} |
         """)
+
+
+def create_feedback_tab():
+    with gr.Tab("Feedback"):
+        gr.Markdown("## Feedback Observability")
+
+        with gr.Row():
+            channel_input = gr.Textbox(label="Channel", placeholder="cli__default")
+            session_input = gr.Textbox(label="Session", placeholder="cli__default__session-1")
+
+        with gr.Row():
+            updated_since_input = gr.Textbox(
+                label="Updated Since", placeholder="2026-05-01T00:00:00"
+            )
+            updated_until_input = gr.Textbox(
+                label="Updated Until", placeholder="2026-05-31T23:59:59"
+            )
+
+        with gr.Row():
+            sort_by_input = gr.Dropdown(
+                choices=list(FEEDBACK_STATS_SORT_FIELDS),
+                value="responses_total",
+                label="Sort Channels By",
+            )
+            top_n_input = gr.Number(value=5, precision=0, label="Top Channels")
+            session_limit_input = gr.Number(value=10, precision=0, label="Recent Sessions")
+
+        with gr.Row():
+            refresh_btn = gr.Button("Refresh Feedback Stats", variant="primary")
+            status_msg = gr.Markdown("")
+
+        summary_md = gr.Markdown("Click refresh to load feedback stats.")
+        channels_md = gr.Markdown("")
+        sessions_md = gr.Markdown("")
+
+        def refresh_feedback_stats(
+            channel,
+            session_key,
+            updated_since,
+            updated_until,
+            sort_by,
+            top_n,
+            session_limit,
+        ):
+            try:
+                config = load_config()
+                stats_markdown = build_feedback_stats_display(
+                    config.bot_data_path,
+                    channel=channel or None,
+                    session_key=session_key or None,
+                    updated_since=updated_since or None,
+                    updated_until=updated_until or None,
+                    sort_by=sort_by,
+                    top_n=_normalize_optional_int(top_n),
+                    include_sessions=True,
+                    session_limit=_normalize_optional_int(session_limit),
+                )
+                return (
+                    stats_markdown["summary_markdown"],
+                    stats_markdown["channels_markdown"],
+                    stats_markdown["sessions_markdown"],
+                    "✓ Feedback stats loaded.",
+                )
+            except Exception as exc:
+                return (
+                    "Failed to load feedback stats.",
+                    "",
+                    "",
+                    f"✗ Error: {exc}",
+                )
+
+        refresh_btn.click(
+            fn=refresh_feedback_stats,
+            inputs=[
+                channel_input,
+                session_input,
+                updated_since_input,
+                updated_until_input,
+                sort_by_input,
+                top_n_input,
+                session_limit_input,
+            ],
+            outputs=[summary_md, channels_md, sessions_md, status_msg],
+        )
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    normalized = int(value)
+    return normalized if normalized > 0 else None
 
 
 def create_field_group(
@@ -407,6 +502,7 @@ def create_workspace_tab():
 with gr.Blocks(title="Vikingbot Console") as demo:
     with gr.Tabs():
         create_dashboard_tab()
+        create_feedback_tab()
         with gr.Tab("Config"):
             create_config_tabs()
         create_sessions_tab()
