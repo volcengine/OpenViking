@@ -161,6 +161,22 @@ def _memory_corpus_dir(config: dict[str, Any], configured_run_id: str, corpus_ke
     return output_dir(config, configured_run_id) / "memory_corpora" / corpus_key
 
 
+def _domain_value(value: Any, domain: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(domain) or value.get(str(domain).lower()) or value.get("default")
+    return value
+
+
+def _search_uri_suffix(search_memory_type: str, domain: str) -> str:
+    if search_memory_type in {"experiences", "trajectories"}:
+        return search_memory_type
+    if search_memory_type == "procedures":
+        return f"procedures/{domain}"
+    if search_memory_type.startswith("procedures/"):
+        return search_memory_type.format(domain=domain)
+    raise ValueError(f"Unsupported search_memory_type: {search_memory_type}")
+
+
 def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
     manifest_path = corpus_dir / "corpus_manifest.json"
     if not manifest_path.is_file():
@@ -174,6 +190,40 @@ def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
     if not all(openviking.get(key) for key in required):
         return None
     return {key: str(openviking[key]) for key in required}
+
+
+def _external_openviking_identity(
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    domain: str,
+) -> dict[str, str]:
+    openviking = config.get("openviking", {})
+    raw_identity = strategy.get("external_openviking") or strategy.get("openviking_identity") or {}
+    identity = _domain_value(raw_identity, domain)
+    identity = identity if isinstance(identity, dict) else {}
+    values = {
+        "url": identity.get("url")
+        or _domain_value(strategy.get("openviking_url"), domain)
+        or openviking.get("url"),
+        "account": identity.get("account")
+        or _domain_value(strategy.get("openviking_account"), domain)
+        or _domain_value(openviking.get("account"), domain),
+        "user": identity.get("user")
+        or _domain_value(strategy.get("openviking_user"), domain)
+        or _domain_value(openviking.get("user"), domain),
+        "agent_id": identity.get("agent_id")
+        or _domain_value(strategy.get("openviking_agent_id"), domain)
+        or _domain_value(openviking.get("agent_id"), domain),
+        "search_uri": identity.get("search_uri")
+        or _domain_value(strategy.get("search_uri"), domain)
+        or "",
+    }
+    missing = [key for key in ("url", "account", "user", "agent_id") if not values.get(key)]
+    if missing:
+        raise ValueError(
+            f"external OpenViking identity for {strategy['id']} {domain} missing: {missing}"
+        )
+    return {key: str(value) for key, value in values.items()}
 
 
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
@@ -214,11 +264,9 @@ def _tau2_command(
         agent_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
         user_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
     fixed_first_user_file = _fixed_first_user_file(config, domain)
+    scope_prompt_file = _scope_prompt_file(config, strategy, domain)
 
-    if (
-        strategy.get("memory_backend") == "openviking"
-        and strategy.get("train_memory_mode") == "experience_only"
-    ):
+    if strategy.get("memory_backend") == "openviking":
         openviking = config["openviking"]
         corpus_id = str(strategy.get("corpus_id") or strategy["id"])
         resolved_train_num_tasks = (
@@ -230,29 +278,40 @@ def _tau2_command(
             train_num_tasks=resolved_train_num_tasks,
         )
         corpus_dir = _memory_corpus_dir(config, configured_run_id, corpus_key)
-        reuse_identity = _manifest_openviking_identity(corpus_dir)
-        if reuse_identity is not None:
-            account = reuse_identity["account"]
-            agent_id = reuse_identity["agent_id"]
-            user = reuse_identity["user"]
-            search_uri = reuse_identity["search_uri"]
-        elif openviking.get("reuse_corpus_across_runs", False):
-            account = f"{openviking['account']}-{corpus_key}"
-            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
-            user = f"tau2-{domain}-{corpus_id}"
-            search_uri = ""
+        train_memory_mode = str(strategy.get("train_memory_mode") or "")
+        skip_train = False
+        openviking_url = str(openviking["url"])
+        if train_memory_mode == "experience_only":
+            reuse_identity = _manifest_openviking_identity(corpus_dir)
+            if reuse_identity is not None:
+                account = reuse_identity["account"]
+                agent_id = reuse_identity["agent_id"]
+                user = reuse_identity["user"]
+                search_uri = reuse_identity["search_uri"]
+            elif openviking.get("reuse_corpus_across_runs", False):
+                account = f"{openviking['account']}-{corpus_key}"
+                agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+                user = f"tau2-{domain}-{corpus_id}"
+                search_uri = ""
+            else:
+                account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
+                agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+                user = f"tau2-{domain}-{corpus_id}"
+                search_uri = ""
+        elif train_memory_mode in {"external", "external_procedure_l2", "custom_procedure_l2"}:
+            identity = _external_openviking_identity(config, strategy, domain)
+            openviking_url = identity["url"]
+            account = identity["account"]
+            agent_id = identity["agent_id"]
+            user = identity["user"]
+            search_uri = identity.get("search_uri", "")
+            skip_train = True
         else:
-            account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
-            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
-            user = f"tau2-{domain}-{corpus_id}"
-            search_uri = ""
+            return None
         search_memory_type = str(strategy.get("search_memory_type", "experiences"))
-        if search_memory_type not in {"experiences", "trajectories"}:
-            raise ValueError(
-                f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
-            )
+        search_uri_suffix = _search_uri_suffix(search_memory_type, domain)
         if not search_uri:
-            search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+            search_uri = f"viking://agent/{agent_id}/memories/{search_uri_suffix}"
         budget = _retrieval_budget(config, strategy)
         category_rerank = strategy.get("category_rerank")
         category_rerank = category_rerank if isinstance(category_rerank, dict) else {}
@@ -290,7 +349,7 @@ def _tau2_command(
             "--user-llm-args",
             user_llm_args,
             "--openviking-url",
-            str(openviking["url"]),
+            openviking_url,
             "--openviking-account",
             account,
             "--openviking-user",
@@ -314,6 +373,8 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
+        if skip_train:
+            command.append("--skip-train")
         if fixed_first_user_file is not None:
             command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
         if category_rerank.get("enabled"):
@@ -323,6 +384,8 @@ def _tau2_command(
                     json.dumps(category_rerank, ensure_ascii=False, sort_keys=True),
                 ]
             )
+        if scope_prompt_file is not None:
+            command.extend(["--scope-prompt-file", str(scope_prompt_file)])
         if scope_prompt.get("enabled"):
             command.extend(
                 [
@@ -400,6 +463,23 @@ def _fixed_first_user_file(config: dict[str, Any], domain: str) -> Path | None:
     return resolve_path(str(raw))
 
 
+def _scope_prompt_file(
+    config: dict[str, Any], strategy: dict[str, Any], domain: str
+) -> Path | None:
+    raw = strategy.get("scope_prompt_file")
+    if raw is None:
+        raw = strategy.get("scope_prompt_files")
+    if raw is None:
+        raw = config.get("openviking", {}).get("scope_prompt_file")
+    if raw is None:
+        raw = config.get("openviking", {}).get("scope_prompt_files")
+    if isinstance(raw, dict):
+        raw = raw.get(domain) or raw.get("default")
+    if raw is None or str(raw).strip() == "":
+        return None
+    return resolve_path(str(raw))
+
+
 def _build_plan(
     config: dict[str, Any],
     configured_run_id: str,
@@ -413,6 +493,7 @@ def _build_plan(
 ) -> dict[str, Any]:
     repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 8))
     base_seed = int(config["benchmark"].get("seed", 300))
+    cell_timeout_seconds = int(config["benchmark"].get("cell_timeout_seconds", 0) or 0)
     policy_report = simulator_policy_report(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
@@ -447,6 +528,7 @@ def _build_plan(
                     seed=seed,
                 )
                 fixed_first_user_file = _fixed_first_user_file(config, domain)
+                scope_prompt_file = _scope_prompt_file(config, strategy, domain)
                 non_executable_reason = None
                 if command is None:
                     non_executable_reason = (
@@ -500,6 +582,7 @@ def _build_plan(
                         "fixed_first_user_file": str(fixed_first_user_file)
                         if fixed_first_user_file
                         else None,
+                        "scope_prompt_file": str(scope_prompt_file) if scope_prompt_file else None,
                         "split_file": str(split_path),
                         "command": command,
                         "non_executable_reason": non_executable_reason,
@@ -518,6 +601,7 @@ def _build_plan(
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
         "corpus_prepare_concurrency": int(config["benchmark"].get("corpus_prepare_concurrency", 1)),
+        "cell_timeout_seconds": cell_timeout_seconds or None,
         "cells": cells,
     }
 
@@ -742,22 +826,55 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
         )
     _prepare_memory_corpora(plan, repo, out)
     rows = []
+    cell_timeout = int(plan.get("cell_timeout_seconds") or 0) or None
     for cell in plan["cells"]:
         if not cell.get("executable"):
             raise RuntimeError(
                 f"cell is not executable yet: {cell['run_label']} "
                 f"(strategy_id={cell['strategy_id']}, adapter_status={cell.get('adapter_status')})"
             )
+        cell_result_path = out / "cell_results" / f"{cell['run_label']}.json"
+        if cell_result_path.is_file():
+            existing_row = json.loads(cell_result_path.read_text(encoding="utf-8"))
+            if existing_row.get("returncode") == 0 and existing_row.get("metrics"):
+                print(f"[tau2] skipping completed {cell['run_label']}")
+                rows.append(existing_row)
+                continue
         print(f"[tau2] running {cell['run_label']}")
-        completed = subprocess.run(
-            cell["command"],
-            cwd=repo,
-            env=_tau2_subprocess_env(repo),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                cell["command"],
+                cwd=repo,
+                env=_tau2_subprocess_env(repo),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=cell_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            row = {
+                "run_label": cell["run_label"],
+                "domain": cell["domain"],
+                "strategy_id": cell["strategy_id"],
+                "returncode": 124,
+                "timed_out": True,
+                "timeout_seconds": cell_timeout,
+                "stdout_tail": stdout[-4000:],
+                "stderr_tail": stderr[-4000:],
+                "artifacts": _cell_artifacts(cell, repo, out),
+                "metrics": None,
+            }
+            write_json(cell_result_path, row)
+            raise RuntimeError(
+                f"cell timed out after {cell_timeout}s: {cell['run_label']}"
+            ) from exc
         row = {
             "run_label": cell["run_label"],
             "domain": cell["domain"],
@@ -770,7 +887,7 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
         row["metrics"] = _cell_metrics(cell, row["artifacts"])
         row["runtime_evidence"] = _cell_runtime_evidence(cell, row["artifacts"])
         rows.append(row)
-        write_json(out / "cell_results" / f"{cell['run_label']}.json", row)
+        write_json(cell_result_path, row)
         if completed.returncode != 0:
             raise RuntimeError(
                 f"cell failed: {cell['run_label']} returncode={completed.returncode}"
@@ -841,14 +958,24 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     scope_prompt_rows = []
     for strategy in config.get("strategies") or []:
         scope_prompt = strategy.get("scope_prompt")
-        if not isinstance(scope_prompt, dict) or not scope_prompt.get("enabled"):
+        direct_scope_prompt = (
+            strategy.get("scope_prompt_file")
+            or strategy.get("scope_prompt_files")
+            or config.get("openviking", {}).get("scope_prompt_file")
+            or config.get("openviking", {}).get("scope_prompt_files")
+        )
+        has_scope_prompt_config = isinstance(scope_prompt, dict) and scope_prompt.get("enabled")
+        if not has_scope_prompt_config and not direct_scope_prompt:
             continue
+        scope_prompt = scope_prompt if isinstance(scope_prompt, dict) else {}
         domain_files = scope_prompt.get("domain_files")
         domain_files = domain_files if isinstance(domain_files, dict) else {}
         domain_texts = scope_prompt.get("domain_texts")
         domain_texts = domain_texts if isinstance(domain_texts, dict) else {}
         for domain in domains(config):
             raw_prompt_path = domain_files.get(domain)
+            if raw_prompt_path is None:
+                raw_prompt_path = _domain_value(direct_scope_prompt, domain)
             prompt_path = None
             exists = False
             if raw_prompt_path:

@@ -736,6 +736,30 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     if corpus_manifest.is_file() and not args.force_train:
         return json.loads(corpus_manifest.read_text())
 
+    if args.skip_train:
+        client = _client(args)
+        try:
+            corpus_probe = _probe_corpus(args, client)
+        finally:
+            client.close()
+        manifest = {
+            "domain": args.domain,
+            "train_results": None,
+            "external_corpus": True,
+            "openviking": {
+                "url": args.openviking_url,
+                "account": args.openviking_account,
+                "user": args.openviking_user,
+                "agent_id": args.openviking_agent_id,
+                "search_uri": args.search_uri,
+            },
+            "committed_sessions": [],
+            "committed_session_count": 0,
+            "corpus_probe": corpus_probe,
+        }
+        _write_json(corpus_manifest, manifest)
+        return manifest
+
     _run_tau2(
         tau2_repo=args.tau2_repo,
         domain=args.domain,
@@ -1114,6 +1138,7 @@ def main() -> int:
     parser.add_argument("--prewrite-retrieval-top-k", type=int)
     parser.add_argument("--prewrite-inject-top-k", type=int)
     parser.add_argument("--fixed-first-user-file", type=Path)
+    parser.add_argument("--scope-prompt-file", type=Path)
     parser.add_argument(
         "--retrieval-mode",
         choices=["first_user", "prewrite", "first_user_prewrite"],
@@ -1121,6 +1146,7 @@ def main() -> int:
     )
     parser.add_argument("--category-rerank-config", type=_json, default={})
     parser.add_argument("--scope-prompt-config", type=_json, default={})
+    parser.add_argument("--skip-train", action="store_true")
     parser.add_argument("--force-train", action="store_true")
     parser.add_argument("--prepare-corpus-only", action="store_true")
     parser.add_argument(
@@ -1170,6 +1196,16 @@ def main() -> int:
     args.prewrite_inject_top_k = args.prewrite_inject_top_k or args.prewrite_retrieval_top_k
     if args.fixed_first_user_file is not None:
         args.fixed_first_user_file = args.fixed_first_user_file.expanduser().resolve()
+    if args.scope_prompt_file is not None:
+        args.scope_prompt_file = args.scope_prompt_file.expanduser().resolve()
+        if not args.scope_prompt_file.is_file():
+            parser.error(f"--scope-prompt-file does not exist: {args.scope_prompt_file}")
+        if isinstance(args.scope_prompt_config, dict) and args.scope_prompt_config.get("enabled"):
+            parser.error("--scope-prompt-file and enabled --scope-prompt-config are mutually exclusive")
+        args.scope_prompt_config = {
+            "enabled": True,
+            "domain_files": {args.domain: str(args.scope_prompt_file)},
+        }
     train_results = corpus_dir / "train_results.json"
     corpus_manifest = corpus_dir / "corpus_manifest.json"
     eval_results = args.run_dir / f"{args.run_label}.json"
@@ -1272,6 +1308,7 @@ def main() -> int:
         "fixed_first_user_file": str(args.fixed_first_user_file)
         if args.fixed_first_user_file
         else None,
+        "scope_prompt_file": str(args.scope_prompt_file) if args.scope_prompt_file else None,
         "corpus": corpus,
         "category_rerank": category_summary,
         "scope_prompt": args.scope_prompt_summary,

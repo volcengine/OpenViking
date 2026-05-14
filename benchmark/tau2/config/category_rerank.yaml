@@ -35,4 +35,5 @@ strategies:
       enabled: true
       injection_point: system_prompt
       domain_files:
-        retail: benchmark/tau2/config/scope_prompts/retail_same_order_variant_guard.md
+        retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+        airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md

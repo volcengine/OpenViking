@@ -74,12 +74,59 @@ def test_category_rerank_config_matches_s89_alignment_shape() -> None:
     assert scope_prompt["enabled"] is True
     assert scope_prompt["injection_point"] == "system_prompt"
     assert scope_prompt["domain_files"] == {
-        "retail": "benchmark/tau2/config/scope_prompts/retail_same_order_variant_guard.md"
+        "retail": "benchmark/tau2/config/scope_prompts/retail_memory_scope.md",
+        "airline": "benchmark/tau2/config/scope_prompts/airline_memory_scope.md",
     }
 
     assert "memory_v2_trajectory_prewrite" in strategies
     assert not _has_key_fragment(category_strategy, "annotation")
     assert not _has_key_fragment(category_strategy, "sidecar")
+
+
+def test_custom_s84_config_uses_external_procedure_corpus() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = load_config(repo_root / "benchmark/tau2/config/custom_s84_category.yaml")
+    strategy = config["strategies"][0]
+
+    assert strategy["id"] == "custom_s84_scope_category_positive_match"
+    assert strategy["train_required"] is False
+    assert strategy["train_memory_mode"] == "external_procedure_l2"
+    assert strategy["search_memory_type"] == "procedures"
+    assert strategy["retrieval_mode"] == "first_user_prewrite"
+    assert strategy["scope_prompt_files"] == {
+        "retail": "benchmark/tau2/config/scope_prompts/retail_memory_scope.md",
+        "airline": "benchmark/tau2/config/scope_prompts/airline_memory_scope.md",
+    }
+    assert strategy["external_openviking"]["retail"]["search_uri"].endswith(
+        "/memories/procedures/retail"
+    )
+    assert strategy["external_openviking"]["airline"]["search_uri"].endswith(
+        "/memories/procedures/airline"
+    )
+
+
+def test_tau2_command_supports_custom_s84_external_procedure_strategy() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = load_config(repo_root / "benchmark/tau2/config/custom_s84_category.yaml")
+    strategy = config["strategies"][0]
+    command = _tau2_command(
+        config,
+        domain="retail",
+        strategy=strategy,
+        configured_run_id="unit",
+        run_label="unit_retail_s84_r1",
+        task_ids=["5"],
+        num_tasks=None,
+        train_num_tasks=None,
+        seed=303,
+    )
+
+    assert command is not None
+    assert "--skip-train" in command
+    assert "--scope-prompt-file" in command
+    assert command[command.index("--search-uri") + 1].endswith("/memories/procedures/retail")
+    assert command[command.index("--prewrite-retrieval-top-k") + 1] == "6"
+    assert command[command.index("--prewrite-inject-top-k") + 1] == "2"
 
 
 def test_category_rerank_keeps_positive_category_match() -> None:
