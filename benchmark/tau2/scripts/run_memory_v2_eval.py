@@ -556,7 +556,9 @@ def _append_incoming_user_context(message: Any, state: Any) -> None:
         state.messages.extend(message.tool_messages)
     elif isinstance(message, ToolMessage):
         state.messages.append(message)
-    elif isinstance(message, AssistantMessage) and (message.has_content() or message.is_tool_call()):
+    elif isinstance(message, AssistantMessage) and (
+        message.has_content() or message.is_tool_call()
+    ):
         state.messages.append(message)
 
 
@@ -577,8 +579,7 @@ def _register_fixed_first_user(args: argparse.Namespace) -> str:
                 fixed = mapping.get(key)
                 if fixed is None:
                     raise RuntimeError(
-                        "fixed-first-user fixture does not cover this TAU-2 scenario: "
-                        f"sha256={key}"
+                        f"fixed-first-user fixture does not cover this TAU-2 scenario: sha256={key}"
                     )
                 _append_incoming_user_context(message, state)
                 return UserMessage(role="user", content=fixed)
@@ -1177,11 +1178,6 @@ def main() -> int:
         args.category_rerank_config,
         repo_root=REPO_ROOT,
     )
-    args.scope_prompt_text, args.scope_prompt_summary = _load_scope_prompt(
-        args.scope_prompt_config,
-        domain=args.domain,
-        repo_root=REPO_ROOT,
-    )
 
     args.tau2_repo = args.tau2_repo.expanduser().resolve()
     args.run_dir = args.run_dir.expanduser().resolve()
@@ -1206,6 +1202,11 @@ def main() -> int:
             "enabled": True,
             "domain_files": {args.domain: str(args.scope_prompt_file)},
         }
+    args.scope_prompt_text, args.scope_prompt_summary = _load_scope_prompt(
+        args.scope_prompt_config,
+        domain=args.domain,
+        repo_root=REPO_ROOT,
+    )
     train_results = corpus_dir / "train_results.json"
     corpus_manifest = corpus_dir / "corpus_manifest.json"
     eval_results = args.run_dir / f"{args.run_label}.json"

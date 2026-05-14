@@ -153,6 +153,9 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
   regenerate that step with the matched memories. The default benchmark
   retrieves 6 pre-write candidates and injects 2, which keeps extra candidates
   visible in traces without expanding the prompt budget;
+- optionally run an explicit scope-prompt treatment that keeps retrieved
+  memories advisory and asks the agent to preserve the current task scope before
+  write-like tool calls;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
 
@@ -164,6 +167,11 @@ is retrieved during eval (`experiences` by default, `trajectories` for
 `corpus_manifest.json` is present. Different corpora may be prepared in
 parallel with `benchmark.corpus_prepare_concurrency`; session commits inside one
 corpus remain serial to preserve OpenViking write semantics.
+
+Eval cells run in parallel with `benchmark.strategy_concurrency` by default and
+can be overridden with `--strategy-concurrency`. This only parallelizes read-only
+TAU-2 eval cells; corpus writes inside one corpus are still serialized by the
+prepare step.
 
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
 an adapter-local FGMemory-style probe: pre-write recall, self-generated runtime
