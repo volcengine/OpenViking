@@ -183,7 +183,8 @@ candidates, no applied category-rerank event, no query or memory category
 coverage, or no selected positive category match are marked
 `runtime_evidence.status=diagnostic`; `scoreboard.json` excludes those
 diagnostic cells from the main reward/DB aggregates while preserving their
-metrics and artifacts for debugging. Corpus manifests also include
+metrics, artifacts, and `diagnostic_reason_counts` for debugging. Corpus
+manifests also include
 `corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
 aggregate-only corpora can be spotted before reading the eval trace; category
 runs whose corpus probe is empty, or has matches but no concrete matches, are

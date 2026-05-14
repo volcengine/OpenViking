@@ -364,7 +364,10 @@ def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
                 },
                 "runtime_evidence": {
                     "status": "diagnostic",
-                    "reasons": ["no_concrete_memory_candidates"],
+                    "reasons": [
+                        "no_concrete_memory_candidates",
+                        "no_query_category_coverage",
+                    ],
                 },
             },
             {
@@ -386,6 +389,10 @@ def test_scoreboard_excludes_diagnostic_runtime_evidence() -> None:
     assert domain["completed_cell_count"] == 2
     assert domain["valid_completed_cell_count"] == 1
     assert domain["diagnostic_cell_count"] == 1
+    assert domain["diagnostic_reason_counts"] == {
+        "no_concrete_memory_candidates": 1,
+        "no_query_category_coverage": 1,
+    }
     assert domain["diagnostic_simulation_count"] == 1
     assert domain["simulation_count"] == 1
     assert domain["avg_reward"] == 0.5

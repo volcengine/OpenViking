@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -473,6 +474,15 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         diagnostic_rows = [
             row for row in metric_rows if not _row_is_valid_evidence(row)
         ]
+        diagnostic_reason_counts: Counter[str] = Counter()
+        for row in diagnostic_rows:
+            evidence = row.get("runtime_evidence")
+            evidence = evidence if isinstance(evidence, dict) else {}
+            reasons = list(evidence.get("reasons") or [])
+            if not reasons:
+                reasons = [str(evidence.get("status") or "diagnostic")]
+            for reason in reasons:
+                diagnostic_reason_counts[str(reason)] += 1
         sim_count = sum(int(row["metrics"].get("simulation_count") or 0) for row in metric_rows)
         valid_sim_count = sum(
             int(row["metrics"].get("simulation_count") or 0) for row in valid_metric_rows
@@ -501,6 +511,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "completed_cell_count": len(metric_rows),
             "valid_completed_cell_count": len(valid_metric_rows),
             "diagnostic_cell_count": len(diagnostic_rows),
+            "diagnostic_reason_counts": dict(sorted(diagnostic_reason_counts.items())),
             "diagnostic_simulation_count": sim_count - valid_sim_count,
             "simulation_count": valid_sim_count,
             "avg_reward": reward_sum / valid_sim_count if valid_sim_count else None,
