@@ -450,6 +450,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                              f"op_page_map_keys={list(op_page_map.keys())}")
                 continue
 
+            if from_uri == to_uri:
+                continue
+
             stored_link = StoredLink(
                 from_uri=from_uri,
                 to_uri=to_uri,
