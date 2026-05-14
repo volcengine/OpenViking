@@ -191,6 +191,7 @@ def _tau2_command(
         agent_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
         user_llm_args = f'{{"temperature":0.0,"reasoning_effort":"{reasoning_effort}"}}'
     fixed_first_user_file = _fixed_first_user_file(config, domain)
+    scope_prompt_file = _scope_prompt_file(config, strategy, domain)
 
     if (
         strategy.get("memory_backend") == "openviking"
@@ -289,6 +290,8 @@ def _tau2_command(
         ]
         if fixed_first_user_file is not None:
             command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
+        if scope_prompt_file is not None:
+            command.extend(["--scope-prompt-file", str(scope_prompt_file)])
         if task_ids:
             for task_id in task_ids:
                 command.extend(["--task-id", task_id])
@@ -359,6 +362,23 @@ def _fixed_first_user_file(config: dict[str, Any], domain: str) -> Path | None:
     return resolve_path(str(raw))
 
 
+def _scope_prompt_file(
+    config: dict[str, Any], strategy: dict[str, Any], domain: str
+) -> Path | None:
+    raw = strategy.get("scope_prompt_file")
+    if raw is None:
+        raw = strategy.get("scope_prompt_files")
+    if raw is None:
+        raw = config.get("openviking", {}).get("scope_prompt_file")
+    if raw is None:
+        raw = config.get("openviking", {}).get("scope_prompt_files")
+    if isinstance(raw, dict):
+        raw = raw.get(domain) or raw.get("default")
+    if raw is None or str(raw).strip() == "":
+        return None
+    return resolve_path(str(raw))
+
+
 def _build_plan(
     config: dict[str, Any],
     configured_run_id: str,
@@ -369,9 +389,20 @@ def _build_plan(
     num_tasks: int | None,
     train_num_tasks: int | None,
     repeat_count_override: int | None,
+    cell_concurrency_override: int | None,
+    strategy_concurrency_override: int | None,
 ) -> dict[str, Any]:
     repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 8))
     base_seed = int(config["benchmark"].get("seed", 300))
+    cell_timeout_seconds = int(config["benchmark"].get("cell_timeout_seconds", 0) or 0)
+    strategy_concurrency = strategy_concurrency_override
+    if strategy_concurrency is None:
+        strategy_concurrency = cell_concurrency_override
+    if strategy_concurrency is None:
+        strategy_concurrency = config["benchmark"].get("strategy_concurrency")
+    if strategy_concurrency is None:
+        strategy_concurrency = config["benchmark"].get("cell_concurrency", 1)
+    strategy_concurrency = max(1, int(strategy_concurrency or 1))
     policy_report = simulator_policy_report(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
@@ -406,6 +437,7 @@ def _build_plan(
                     seed=seed,
                 )
                 fixed_first_user_file = _fixed_first_user_file(config, domain)
+                scope_prompt_file = _scope_prompt_file(config, strategy, domain)
                 non_executable_reason = None
                 if command is None:
                     non_executable_reason = (
@@ -457,6 +489,7 @@ def _build_plan(
                         "fixed_first_user_file": str(fixed_first_user_file)
                         if fixed_first_user_file
                         else None,
+                        "scope_prompt_file": str(scope_prompt_file) if scope_prompt_file else None,
                         "split_file": str(split_path),
                         "command": command,
                         "non_executable_reason": non_executable_reason,
@@ -475,6 +508,9 @@ def _build_plan(
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
         "corpus_prepare_concurrency": int(config["benchmark"].get("corpus_prepare_concurrency", 1)),
+        "strategy_concurrency": strategy_concurrency,
+        "cell_concurrency": strategy_concurrency,
+        "cell_timeout_seconds": cell_timeout_seconds or None,
         "cells": cells,
     }
 
@@ -557,9 +593,7 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-4000:],
         "stderr_tail": completed.stderr[-4000:],
-        "artifacts": {
-            "corpus_manifest": str(Path(cell["corpus_dir"]) / "corpus_manifest.json")
-        },
+        "artifacts": {"corpus_manifest": str(Path(cell["corpus_dir"]) / "corpus_manifest.json")},
     }
     write_json(out / "corpus_prepare_results" / f"{key}.json", row)
     if completed.returncode != 0:
@@ -648,22 +682,16 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
-    policy_report = plan.get("simulator_policy") or {}
-    if not policy_report.get("supported", False):
-        raise RuntimeError(
-            "configured user simulator policy is not supported by this TAU-2 checkout: "
-            f"{policy_report}"
-        )
-    _prepare_memory_corpora(plan, repo, out)
-    rows = []
-    for cell in plan["cells"]:
-        if not cell.get("executable"):
-            raise RuntimeError(
-                f"cell is not executable yet: {cell['run_label']} "
-                f"(strategy_id={cell['strategy_id']}, adapter_status={cell.get('adapter_status')})"
-            )
-        print(f"[tau2] running {cell['run_label']}")
+def _execute_cell(cell: dict[str, Any], repo: Path, out: Path, cell_timeout: int | None) -> dict[str, Any]:
+    cell_result_path = out / "cell_results" / f"{cell['run_label']}.json"
+    if cell_result_path.is_file():
+        existing_row = json.loads(cell_result_path.read_text(encoding="utf-8"))
+        if existing_row.get("returncode") == 0 and existing_row.get("metrics"):
+            print(f"[tau2] skipping completed {cell['run_label']}", flush=True)
+            return existing_row
+
+    print(f"[tau2] running {cell['run_label']}", flush=True)
+    try:
         completed = subprocess.run(
             cell["command"],
             cwd=repo,
@@ -672,24 +700,86 @@ def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=cell_timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
         row = {
             "run_label": cell["run_label"],
             "domain": cell["domain"],
             "strategy_id": cell["strategy_id"],
-            "returncode": completed.returncode,
-            "stdout_tail": completed.stdout[-4000:],
-            "stderr_tail": completed.stderr[-4000:],
+            "returncode": 124,
+            "timed_out": True,
+            "timeout_seconds": cell_timeout,
+            "stdout_tail": stdout[-4000:],
+            "stderr_tail": stderr[-4000:],
+            "artifacts": _cell_artifacts(cell, repo, out),
+            "metrics": None,
         }
-        row["artifacts"] = _cell_artifacts(cell, repo, out)
-        row["metrics"] = _cell_metrics(cell, row["artifacts"])
-        rows.append(row)
-        write_json(out / "cell_results" / f"{cell['run_label']}.json", row)
-        if completed.returncode != 0:
+        write_json(cell_result_path, row)
+        return row
+
+    row = {
+        "run_label": cell["run_label"],
+        "domain": cell["domain"],
+        "strategy_id": cell["strategy_id"],
+        "returncode": completed.returncode,
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+    }
+    row["artifacts"] = _cell_artifacts(cell, repo, out)
+    row["metrics"] = _cell_metrics(cell, row["artifacts"])
+    write_json(cell_result_path, row)
+    return row
+
+
+def _execute_cells(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
+    policy_report = plan.get("simulator_policy") or {}
+    if not policy_report.get("supported", False):
+        raise RuntimeError(
+            "configured user simulator policy is not supported by this TAU-2 checkout: "
+            f"{policy_report}"
+        )
+    _prepare_memory_corpora(plan, repo, out)
+    cells = []
+    for cell in plan["cells"]:
+        if not cell.get("executable"):
             raise RuntimeError(
-                f"cell failed: {cell['run_label']} returncode={completed.returncode}"
+                f"cell is not executable yet: {cell['run_label']} "
+                f"(strategy_id={cell['strategy_id']}, adapter_status={cell.get('adapter_status')})"
             )
+        cells.append(cell)
+
+    cell_timeout = int(plan.get("cell_timeout_seconds") or 0) or None
+    worker_count = max(
+        1, int(plan.get("strategy_concurrency") or plan.get("cell_concurrency") or 1)
+    )
+    if worker_count == 1 or len(cells) == 1:
+        return [_execute_cell(cell, repo, out, cell_timeout) for cell in cells]
+
+    print(f"[tau2] running eval cells with concurrency={worker_count}", flush=True)
+    rows: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(_execute_cell, cell, repo, out, cell_timeout): cell
+            for cell in cells
+        }
+        for future in as_completed(futures):
+            rows.append(future.result())
     return rows
+
+
+def _execution_failures(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row.get("returncode") != 0 or row.get("timed_out") or not row.get("metrics")
+    ]
 
 
 def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
@@ -761,6 +851,16 @@ def main() -> int:
         "--repeat-count", type=int, help="Override benchmark.repeat_count for smoke runs."
     )
     parser.add_argument(
+        "--cell-concurrency",
+        type=int,
+        help="Deprecated alias for --strategy-concurrency.",
+    )
+    parser.add_argument(
+        "--strategy-concurrency",
+        type=int,
+        help="Override benchmark.strategy_concurrency for parallel matrix cells.",
+    )
+    parser.add_argument(
         "--strategy-id", action="append", help="Run only this strategy id; may be repeated."
     )
     parser.add_argument(
@@ -789,6 +889,10 @@ def main() -> int:
 
     if args.plan_only and args.execute:
         raise SystemExit("--plan-only and --execute are mutually exclusive")
+    if args.cell_concurrency is not None and args.cell_concurrency < 1:
+        raise SystemExit("--cell-concurrency must be >= 1")
+    if args.strategy_concurrency is not None and args.strategy_concurrency < 1:
+        raise SystemExit("--strategy-concurrency must be >= 1")
 
     config = load_config(args.config)
     out = output_dir(config, args.run_id)
@@ -807,6 +911,8 @@ def main() -> int:
         num_tasks=args.num_tasks,
         train_num_tasks=args.train_num_tasks,
         repeat_count_override=args.repeat_count,
+        cell_concurrency_override=args.cell_concurrency,
+        strategy_concurrency_override=args.strategy_concurrency,
     )
     write_json(out / "run_plan.json", plan)
     write_json(out / "resolved_config.json", config)
@@ -815,10 +921,15 @@ def main() -> int:
     if args.execute:
         try:
             rows = _execute_cells(plan, tau2_repo(config), out)
-            plan["status"] = "succeeded"
+            failures = _execution_failures(rows)
+            plan["status"] = "failed" if failures else "succeeded"
             plan["executed_cell_count"] = len(rows)
+            plan["failed_cell_count"] = len(failures)
             write_json(out / "run_plan.json", plan)
             write_json(out / "scoreboard.json", _summarize(rows))
+            if failures:
+                labels = ", ".join(str(row.get("run_label")) for row in failures[:5])
+                raise RuntimeError(f"{len(failures)} cell(s) failed or incomplete: {labels}")
         except Exception as exc:
             plan["status"] = "failed"
             plan["error"] = str(exc)

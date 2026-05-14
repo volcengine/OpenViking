@@ -208,7 +208,9 @@ def _append_incoming_user_context(message: Any, state: Any) -> None:
         state.messages.extend(message.tool_messages)
     elif isinstance(message, ToolMessage):
         state.messages.append(message)
-    elif isinstance(message, AssistantMessage) and (message.has_content() or message.is_tool_call()):
+    elif isinstance(message, AssistantMessage) and (
+        message.has_content() or message.is_tool_call()
+    ):
         state.messages.append(message)
 
 
@@ -229,8 +231,7 @@ def _register_fixed_first_user(args: argparse.Namespace) -> str:
                 fixed = mapping.get(key)
                 if fixed is None:
                     raise RuntimeError(
-                        "fixed-first-user fixture does not cover this TAU-2 scenario: "
-                        f"sha256={key}"
+                        f"fixed-first-user fixture does not cover this TAU-2 scenario: sha256={key}"
                     )
                 _append_incoming_user_context(message, state)
                 return UserMessage(role="user", content=fixed)
@@ -454,9 +455,15 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     from tau2.registry import registry
     from tau2.utils.llm_utils import generate
 
+    scope_prompt = ""
+    if args.scope_prompt_file is not None:
+        scope_prompt = args.scope_prompt_file.read_text(encoding="utf-8").strip()
+
     class OpenVikingMemoryAgent(LLMAgent):
         def get_init_state(self, message_history=None):
             state = super().get_init_state(message_history)
+            if scope_prompt:
+                state.system_messages.append(SystemMessage(role="system", content=scope_prompt))
             if args.retrieval_mode in {"first_user", "first_user_prewrite"}:
                 state.system_messages.append(
                     SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
@@ -469,9 +476,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             client = _client(args)
             rows: list[dict[str, Any]] = []
             try:
-                result = client.search(
-                    query=query, target_uri=args.search_uri, limit=search_limit
-                )
+                result = client.search(query=query, target_uri=args.search_uri, limit=search_limit)
                 memories = list(getattr(result, "memories", []) or [])
                 blocks = []
                 for index, match in enumerate(memories[:search_limit], 1):
@@ -705,6 +710,7 @@ def main() -> int:
     parser.add_argument("--prewrite-retrieval-top-k", type=int)
     parser.add_argument("--prewrite-inject-top-k", type=int)
     parser.add_argument("--fixed-first-user-file", type=Path)
+    parser.add_argument("--scope-prompt-file", type=Path)
     parser.add_argument(
         "--retrieval-mode",
         choices=["first_user", "prewrite", "first_user_prewrite"],
@@ -750,6 +756,10 @@ def main() -> int:
     args.prewrite_inject_top_k = args.prewrite_inject_top_k or args.prewrite_retrieval_top_k
     if args.fixed_first_user_file is not None:
         args.fixed_first_user_file = args.fixed_first_user_file.expanduser().resolve()
+    if args.scope_prompt_file is not None:
+        args.scope_prompt_file = args.scope_prompt_file.expanduser().resolve()
+        if not args.scope_prompt_file.is_file():
+            parser.error(f"--scope-prompt-file does not exist: {args.scope_prompt_file}")
     train_results = corpus_dir / "train_results.json"
     corpus_manifest = corpus_dir / "corpus_manifest.json"
     eval_results = args.run_dir / f"{args.run_label}.json"
@@ -850,6 +860,7 @@ def main() -> int:
         "fixed_first_user_file": str(args.fixed_first_user_file)
         if args.fixed_first_user_file
         else None,
+        "scope_prompt_file": str(args.scope_prompt_file) if args.scope_prompt_file else None,
         "corpus": corpus,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
