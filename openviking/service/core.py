@@ -361,6 +361,7 @@ class OpenVikingService:
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
+            agfs_client=self._agfs_client,
         )
 
         self._initialized = True

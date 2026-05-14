@@ -11,6 +11,8 @@ pub mod errors;
 pub mod filesystem;
 pub mod mountable;
 pub mod plugin;
+pub mod stats;
+pub mod stats_wrapper;
 pub mod types;
 
 // Re-export commonly used types
@@ -18,4 +20,6 @@ pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
+pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, StatsCollector};
+pub use stats_wrapper::StatsWrappedFS;
 pub use types::{ConfigParameter, ConfigValue, FileInfo, GrepResult, PluginConfig, WriteFlag};

@@ -278,6 +278,9 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
         ObserverCommands::Retrieval => {
             commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
+        ObserverCommands::Filesystem => {
+            commands::observer::filesystem(&client, ctx.output_format, ctx.compact).await
+        }
         ObserverCommands::System => {
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
         }

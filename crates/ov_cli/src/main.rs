@@ -681,6 +681,8 @@ enum ObserverCommands {
     Transaction,
     /// Get retrieval quality metrics
     Retrieval,
+    /// Get filesystem operation metrics
+    Filesystem,
     /// Get overall system status
     System,
 }

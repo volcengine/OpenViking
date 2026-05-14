@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 
-use super::errors::Result;
+use super::errors::{Error, Result};
 use super::types::{FileInfo, GrepResult, WriteFlag};
 
 /// Normalize a path for prefix comparisons.
@@ -391,6 +391,44 @@ pub trait FileSystem: Send + Sync {
 
             if re.is_match(line) {
                 result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Ensure all parent directories exist for the given path
+    ///
+    /// # Arguments
+    /// * `path` - The path for which to ensure parent directories exist
+    /// * `mode` - Unix-style permissions for created directories (default: 0o755)
+    ///
+    /// # Returns
+    /// Ok(()) if successful
+    async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
+        // Skip if path is root or has no parent
+        if path == "/" || !path.contains('/') {
+            return Ok(());
+        }
+
+        // Get parent path by removing the last component
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if parts.len() <= 1 {
+            return Ok(());
+        }
+
+        let parent_parts = &parts[..parts.len() - 1];
+        let mut current = String::new();
+
+        for part in parent_parts {
+            current.push('/');
+            current.push_str(part);
+
+            // Try to create directory, ignore if already exists
+            match self.mkdir(&current, mode).await {
+                Ok(_) => {}
+                Err(Error::AlreadyExists(_)) => {}
+                Err(e) => return Err(e),
             }
         }
 

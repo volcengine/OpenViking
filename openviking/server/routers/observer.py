@@ -92,6 +92,16 @@ async def observer_retrieval(
     return Response(status="ok", result=_component_to_dict(component))
 
 
+@router.get("/filesystem")
+async def observer_filesystem(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get filesystem operation metrics."""
+    service = get_service()
+    component = service.debug.observer.filesystem
+    return Response(status="ok", result=_component_to_dict(component))
+
+
 @router.get("/system")
 async def observer_system(
     ctx: RequestContext = Depends(get_request_context),
