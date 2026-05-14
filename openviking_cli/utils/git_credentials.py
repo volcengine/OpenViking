@@ -89,7 +89,7 @@ def get_token_for_url(url: str, credentials: Optional[dict] = None) -> Optional[
     """Return an authentication token for a git URL.
 
     Resolution order:
-    1. ``credentials`` dict (host → token), if provided explicitly.
+    1. ``credentials`` dict (host -> token), if provided explicitly.
     2. ``GITHUB_TOKEN`` / ``GITLAB_TOKEN`` environment variables.
     3. ``git_credentials`` map from ``~/.openviking/ovcli.conf``.
 
@@ -103,7 +103,6 @@ def get_token_for_url(url: str, credentials: Optional[dict] = None) -> Optional[
     host = _extract_url_host(url)
     if not host:
         return None
-
     bare_host = host.split(":")[0]  # strip port if present
 
     # 1. Explicit credentials dict (highest priority)
@@ -143,7 +142,6 @@ def _load_ovcli_git_credentials() -> Optional[dict]:
     if config_path_env:
         candidates.append(Path(config_path_env).expanduser())
     candidates.append(DEFAULT_CONFIG_DIR / DEFAULT_OVCLI_CONF)
-
     for candidate in candidates:
         if candidate.exists():
             try:
@@ -165,8 +163,7 @@ def save_git_credentials(host: str, token: str, config_path: Optional[str] = Non
     Args:
         host: Hostname to associate the token with (e.g. ``"github.com"``).
         token: Authentication token to store.
-        config_path: Explicit path to ovcli.conf; defaults to
-            ``~/.openviking/ovcli.conf``.
+        config_path: Explicit path to ovcli.conf; defaults to ``~/.openviking/ovcli.conf``.
 
     Returns:
         Path to the config file that was written.
@@ -182,7 +179,7 @@ def save_git_credentials(host: str, token: str, config_path: Optional[str] = Non
         try:
             with open(path, "r", encoding="utf-8-sig") as f:
                 data = json.loads(f.read())
-        except Exception:
+        except (OSError, json.JSONDecodeError):  # corrupted or unreadable conf is silently ignored
             data = {}
 
     # Merge into existing credentials (don't overwrite unrelated keys).
@@ -196,5 +193,6 @@ def save_git_credentials(host: str, token: str, config_path: Optional[str] = Non
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
-
+    # Restrict file permissions so only the owner can read/write the credentials file.
+    os.chmod(path, 0o600)
     return path
