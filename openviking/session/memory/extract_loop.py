@@ -111,6 +111,7 @@ class ExtractLoop:
         iteration = 0
         max_iterations = self.max_iterations
         final_operations = None
+        raw_links = []
         tools_used: List[Dict[str, Any]] = []
         # Reset format retry counter for each run
         self._format_retry_count = 0
@@ -241,8 +242,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
-                # Refetch not needed — register page_ids and resolve links
-                await self.finalize_operations(final_operations, raw_links)
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             tracer.error(
@@ -272,6 +271,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
         tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
+
+        # Resolve links after the loop completes — uris are filled by memory_updater,
+        # but we need them now to build page_id → URI mapping for link resolution.
+        await self.finalize_operations(final_operations, raw_links)
 
         return final_operations, tools_used
 
@@ -696,5 +699,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     async def _mark_cache_breakpoint(self, messages):
         # 支持 dict 消息和 object 消息
-        last_msg = messages[-1]
-        last_msg["cache_control"] = {"type": "ephemeral"}
+        # last_msg = messages[-1]
+        # last_msg["cache_control"] = {"type": "ephemeral"}
+
+        # 暂时注释掉，不确定对所有模型的影响
+        pass
