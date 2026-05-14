@@ -11,9 +11,11 @@ events imply "context for a particular codex `session_id` is gone".
 - **codex `session_id`** — the codex thread/session id. Stable across
   process restarts when zouk-daemon resumes the same thread; replaced when
   `/clear`, `/new`, fresh codex startup, or zouk reset occurs.
-- **OV session** — `viking://session/<uuid>`. We open one per codex
-  `session_id`, append messages on every `Stop`, and commit it (which
-  triggers OV's memory extractor) at session-end-equivalent moments.
+- **OV session** — `viking://session/cx-<codex-session-id>`. New captures
+  derive the OV session id from the codex `session_id` with a `cx-` prefix,
+  append messages on every `Stop`, and commit it (which triggers OV's
+  memory extractor) at session-end-equivalent moments. `/messages`
+  auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
   shape `{ codexSessionId, ovSessionId, capturedTurnCount, createdAt, lastUpdatedAt }`.
 - **Active window** — state files whose `lastUpdatedAt` is within
@@ -47,10 +49,10 @@ or append-only.
 
 Codex fires `PreCompact` before summarizing. We catch up with any
 unappended turns from the transcript, commit the OV session for this codex
-`session_id`, and clear `ovSessionId` so the next `Stop` opens a fresh OV
-session for the post-compact half. `capturedTurnCount` is preserved unless
-the transcript was truncated by compaction (see "Post-compact transcript
-shrink" below).
+`session_id`, and clear `ovSessionId` so the next `Stop` re-derives the
+same `cx-<codex-session-id>` OV session id for the post-compact half.
+`capturedTurnCount` is preserved unless the transcript was truncated by
+compaction (see "Post-compact transcript shrink" below).
 
 ### 2. `SessionStart` source=`clear` — heuristic, same shape as `startup`
 
@@ -98,9 +100,9 @@ Short reconnects and `/resume` re-fire `SessionStart` for the same
 
 State files whose `lastUpdatedAt` is older than `IDLE_TTL_MS` (default 30
 min) get committed and cleared. Mental model: a session not touched for
-30 min is "temporarily concluded"; if the user resumes later, they get a
-fresh OV session for the new turns (memory will be split, but each chunk
-gets extracted).
+30 min is "temporarily concluded"; if the user resumes later, subsequent
+turns append under the same deterministic OV session id, and the next
+commit creates another archive there.
 
 This covers:
 - SIGTERM / Ctrl+C / `/exit` (no hook fires; state file rots)
@@ -125,7 +127,8 @@ forever. Accepted. Future work could add an MCP tool
 
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
 and appends each new user/assistant turn to the OV session for this codex
-`session_id` (creating one on first append). State is updated:
+`session_id` (the `/messages` endpoint auto-creates it on first append).
+State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
 
 ## Edge cases handled
@@ -155,23 +158,27 @@ we can't commit it deterministically — idle TTL will catch it later.
 
 ### Commit-then-resume
 
-After PreCompact (or idle sweep, or rule-3 commit) we set `ovSessionId =
-null` but keep `capturedTurnCount`. The next `Stop` for the same codex
-`session_id` opens a fresh OV session and starts appending from
-`capturedTurnCount`. Memory ends up split across two OV sessions; each
-gets extracted independently. Acceptable.
+After PreCompact we set `ovSessionId = null` but keep
+`capturedTurnCount`. The next `Stop` for the same codex `session_id`
+re-derives the same `cx-<codex-session-id>` OV session id and starts
+appending from `capturedTurnCount`. Memory remains grouped under the same
+OV session id, while commits create additional archives under that session.
 
 ## State file schema
 
 ```json
 {
   "codexSessionId": "0193af...",   // codex thread id
-  "ovSessionId": "uuid-or-null",    // null means "committed, awaiting next Stop"
+  "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
   "capturedTurnCount": 7,            // turns from transcript already appended
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
 ```
+
+Legacy state files from earlier plugin versions may still contain a UUID
+`ovSessionId`; the hook preserves that value until the next commit so
+already-captured turns are not orphaned.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 
@@ -196,7 +203,7 @@ continuity unless the most recent committed memories are surfaced.
 Proposed flow:
 1. Load state for the resumed `session_id`. If `ovSessionId` is non-null,
    no action — the session is still appendable.
-2. Otherwise list `viking://session/<codex-session-id>/history/archive_*/`
+2. Otherwise list `viking://session/cx-<codex-session-id>/history/archive_*/`
    on the OV server, take the most recent.
 3. Read its abstract (L0) / overview (L1).
 4. Emit via `hookSpecificOutput.additionalContext` so codex injects the

@@ -13,8 +13,9 @@
  *
  * After commit, we clear ovSessionId from state but keep
  * capturedTurnCount so post-compact Stop hooks don't re-capture pre-
- * compact turns. The next Stop will create a fresh OV session for the
- * post-compact half of the conversation.
+ * compact turns. The next Stop will append to the same deterministic
+ * `cx-<codex-session-id>` OV session id; `/messages` auto-creates it if
+ * needed.
  *
  * PreCompact output schema accepts {} as a no-op.
  */
@@ -22,7 +23,7 @@
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { loadState, saveState } from "./session-state.mjs";
+import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
@@ -128,17 +129,6 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-async function ensureOvSession(state) {
-  if (state.ovSessionId) return state.ovSessionId;
-  const created = await fetchJSON("/api/v1/sessions", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-  if (!created?.session_id) return null;
-  state.ovSessionId = created.session_id;
-  return state.ovSessionId;
-}
-
 async function appendTurns(ovSessionId, turns) {
   let appended = 0;
   for (const turn of turns) {
@@ -206,9 +196,9 @@ async function main() {
   }
 
   if (newTurns.length > 0) {
-    const ovSessionId = await ensureOvSession(state);
+    const ovSessionId = resolveOvSessionId(state);
     if (!ovSessionId) {
-      logError("ensure_ov_session", "failed to create OV session for catch-up");
+      logError("resolve_ov_session", "failed to derive OV session id for catch-up");
       noop();
       return;
     }

@@ -34,17 +34,17 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
   | node $PLUGIN/scripts/auto-capture.mjs
 ```
 
-Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session <UUID>"}`.
+Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session cx-verify-sess"}`.
 
 State file:
 ```bash
 cat $STATE_DIR/state/verify-sess.json
-# {"codexSessionId":"verify-sess","ovSessionId":"<UUID>","capturedTurnCount":2,...}
+# {"codexSessionId":"verify-sess","ovSessionId":"cx-verify-sess","capturedTurnCount":2,...}
 ```
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/messages.jsonl
 # 2 JSONL records: user "fuchsia", assistant "noted"
 ```
 
@@ -78,7 +78,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 ```
 
 Expect: `appended 2 turn(s)` (only the new ones). Re-read
-`viking://session/<UUID>/messages.jsonl` — 4 records now.
+`viking://session/cx-verify-sess/messages.jsonl` — 4 records now.
 
 ## 4. PreCompact — commit + reset
 
@@ -90,21 +90,21 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: `OpenViking session <UUID> is committed`.
+Expect: `OpenViking session cx-verify-sess is committed`.
 
 State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://session/<UUID>
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://session/cx-verify-sess
 # messages.jsonl is now size 0 (archived)
 # history/archive_001/ exists with the committed messages
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/<UUID>/history/archive_001/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/history/archive_001/messages.jsonl
 ```
 
-## 5. Post-compact Stop — fresh OV session
+## 5. Post-compact Stop — same deterministic OV session id
 
-Append more turns and run Stop. A new OV session UUID should appear:
+Append more turns and run Stop. The same OV session id should appear:
 
 ```bash
 cat >> "$STATE_DIR/transcript.jsonl" <<'EOF'
@@ -119,8 +119,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/auto-capture.mjs
 ```
 
-Expect: `appended 2 turn(s) to OpenViking session <NEW_UUID>` — different
-from step 4's UUID.
+Expect: `appended 2 turn(s) to OpenViking session cx-verify-sess`.
 
 ## 6. SessionStart — active-window heuristic + idle-TTL sweep
 
@@ -142,7 +141,7 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `OpenViking session <UUID> is committed`.
+Expect: `OpenViking session cx-verify-sess is committed`.
 After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op
