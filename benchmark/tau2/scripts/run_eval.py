@@ -110,6 +110,49 @@ def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[
     }
 
 
+def _memory_corpus_key_for(
+    *,
+    domain: str,
+    strategy: dict[str, Any],
+    train_num_tasks: int | None,
+) -> str:
+    corpus_id = str(strategy.get("corpus_id") or strategy["id"])
+    raw_key = strategy.get("corpus_cache_key")
+    if raw_key:
+        key = str(raw_key).format(
+            domain=domain,
+            strategy_id=strategy["id"],
+            corpus_id=corpus_id,
+        )
+    else:
+        key = f"{domain}_{corpus_id}"
+    if train_num_tasks is not None:
+        key = f"{key}_train{train_num_tasks}"
+    return key
+
+
+def _memory_corpus_dir(config: dict[str, Any], configured_run_id: str, corpus_key: str) -> Path:
+    raw = config.get("paths", {}).get("corpus_cache_dir")
+    if raw:
+        return resolve_path(str(raw)) / corpus_key
+    return output_dir(config, configured_run_id) / "memory_corpora" / corpus_key
+
+
+def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
+    manifest_path = corpus_dir / "corpus_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    openviking = manifest.get("openviking") or {}
+    required = ("account", "user", "agent_id", "search_uri")
+    if not all(openviking.get(key) for key in required):
+        return None
+    return {key: str(openviking[key]) for key in required}
+
+
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
     data = json.loads(results_path.read_text(encoding="utf-8"))
     assert_tau2_results_complete(data, context=str(results_path))
@@ -155,15 +198,38 @@ def _tau2_command(
     ):
         openviking = config["openviking"]
         corpus_id = str(strategy.get("corpus_id") or strategy["id"])
-        account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
-        agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
-        user = f"tau2-{domain}-{corpus_id}"
+        resolved_train_num_tasks = (
+            train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
+        )
+        corpus_key = _memory_corpus_key_for(
+            domain=domain,
+            strategy=strategy,
+            train_num_tasks=resolved_train_num_tasks,
+        )
+        corpus_dir = _memory_corpus_dir(config, configured_run_id, corpus_key)
+        reuse_identity = _manifest_openviking_identity(corpus_dir)
+        if reuse_identity is not None:
+            account = reuse_identity["account"]
+            agent_id = reuse_identity["agent_id"]
+            user = reuse_identity["user"]
+            search_uri = reuse_identity["search_uri"]
+        elif openviking.get("reuse_corpus_across_runs", False):
+            account = f"{openviking['account']}-{corpus_key}"
+            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+            user = f"tau2-{domain}-{corpus_id}"
+            search_uri = ""
+        else:
+            account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
+            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
+            user = f"tau2-{domain}-{corpus_id}"
+            search_uri = ""
         search_memory_type = str(strategy.get("search_memory_type", "experiences"))
         if search_memory_type not in {"experiences", "trajectories"}:
             raise ValueError(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
-        search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+        if not search_uri:
+            search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
         budget = _retrieval_budget(config, strategy)
         command = [
             sys.executable,
@@ -173,7 +239,7 @@ def _tau2_command(
             "--run-dir",
             str(output_dir(config, configured_run_id) / "memory_cells" / run_label),
             "--corpus-dir",
-            str(output_dir(config, configured_run_id) / "memory_corpora" / f"{domain}_{corpus_id}"),
+            str(corpus_dir),
             "--run-label",
             run_label,
             "--strategy-id",
@@ -228,11 +294,8 @@ def _tau2_command(
                 command.extend(["--task-id", task_id])
         elif num_tasks is not None:
             command.extend(["--num-tasks", str(num_tasks)])
-        train_num_tasks = (
-            train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
-        )
-        if train_num_tasks is not None:
-            command.extend(["--train-num-tasks", str(train_num_tasks)])
+        if resolved_train_num_tasks is not None:
+            command.extend(["--train-num-tasks", str(resolved_train_num_tasks)])
         return command
 
     if strategy.get("memory_backend") != "none":
@@ -360,6 +423,30 @@ def _build_plan(
                         "train_required": bool(strategy.get("train_required")),
                         "memory_backend": strategy.get("memory_backend"),
                         "corpus_id": strategy.get("corpus_id", strategy["id"]),
+                        "corpus_key": _memory_corpus_key_for(
+                            domain=domain,
+                            strategy=strategy,
+                            train_num_tasks=(
+                                train_num_tasks
+                                if train_num_tasks is not None
+                                else strategy.get("train_num_tasks")
+                            ),
+                        ),
+                        "corpus_dir": str(
+                            _memory_corpus_dir(
+                                config,
+                                configured_run_id,
+                                _memory_corpus_key_for(
+                                    domain=domain,
+                                    strategy=strategy,
+                                    train_num_tasks=(
+                                        train_num_tasks
+                                        if train_num_tasks is not None
+                                        else strategy.get("train_num_tasks")
+                                    ),
+                                ),
+                            )
+                        ),
                         "retrieval_mode": strategy.get("retrieval_mode"),
                         "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
@@ -401,8 +488,7 @@ def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, st
         }
         if cell.get("memory_backend") == "none":
             return artifacts
-        corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
-        corpus_dir = out / "memory_corpora" / f"{cell['domain']}_{corpus_id}"
+        corpus_dir = Path(cell["corpus_dir"])
         artifacts["retrieval_trace"] = str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl")
         artifacts["corpus_manifest"] = str(corpus_dir / "corpus_manifest.json")
         return artifacts
@@ -422,8 +508,7 @@ def _cell_metrics(cell: dict[str, Any], artifacts: dict[str, str]) -> dict[str, 
 
 
 def _memory_corpus_key(cell: dict[str, Any]) -> str:
-    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
-    return f"{cell['domain']}_{corpus_id}"
+    return str(cell.get("corpus_key") or f"{cell['domain']}_{cell['corpus_id']}")
 
 
 def _tau2_subprocess_env(repo: Path) -> dict[str, str]:
@@ -439,6 +524,20 @@ def _tau2_subprocess_env(repo: Path) -> dict[str, str]:
 
 def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, Any]:
     key = _memory_corpus_key(cell)
+    manifest_path = Path(cell["corpus_dir"]) / "corpus_manifest.json"
+    if manifest_path.is_file():
+        row = {
+            "domain": cell["domain"],
+            "strategy_id": cell["strategy_id"],
+            "corpus_id": str(cell.get("corpus_id") or cell["strategy_id"]),
+            "corpus_key": key,
+            "returncode": 0,
+            "reused": True,
+            "artifacts": {"corpus_manifest": str(manifest_path)},
+        }
+        write_json(out / "corpus_prepare_results" / f"{key}.json", row)
+        print(f"[tau2] reusing corpus {key}", flush=True)
+        return row
     command = list(cell["command"]) + ["--prepare-corpus-only"]
     print(f"[tau2] preparing corpus {key}", flush=True)
     completed = subprocess.run(
@@ -450,18 +549,16 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
         stderr=subprocess.PIPE,
         check=False,
     )
-    corpus_id = str(cell.get("corpus_id") or cell["strategy_id"])
     row = {
         "domain": cell["domain"],
         "strategy_id": cell["strategy_id"],
-        "corpus_id": corpus_id,
+        "corpus_id": str(cell.get("corpus_id") or cell["strategy_id"]),
+        "corpus_key": key,
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-4000:],
         "stderr_tail": completed.stderr[-4000:],
         "artifacts": {
-            "corpus_manifest": str(
-                out / "memory_corpora" / f"{cell['domain']}_{corpus_id}" / "corpus_manifest.json"
-            )
+            "corpus_manifest": str(Path(cell["corpus_dir"]) / "corpus_manifest.json")
         },
     }
     write_json(out / "corpus_prepare_results" / f"{key}.json", row)

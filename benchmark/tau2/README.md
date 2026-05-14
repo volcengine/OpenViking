@@ -25,7 +25,9 @@ benchmark/tau2/
 └── run_full_eval.sh
 ```
 
-Generated artifacts are written to `benchmark/tau2/result/<run_id>/`.
+Generated eval artifacts are written to `benchmark/tau2/result/<run_id>/`.
+Memory corpus artifacts are cached outside the run id at
+`benchmark/tau2/result/memory_corpora/` by default.
 
 ## Quick Start
 
@@ -138,9 +140,10 @@ The existing `train_memory_mode: experience_only` value selects the Memory V2
 session-commit path. `search_memory_type` selects which generated memory bucket
 is retrieved during eval (`experiences` by default, `trajectories` for
 `config/trajectory.yaml`). The runner prepares each distinct
-`domain + corpus_id` once before executing eval cells. Different corpora may be
-prepared in parallel with `benchmark.corpus_prepare_concurrency`; session
-commits inside one corpus remain serial to preserve OpenViking write semantics.
+`domain + corpus_id` once and reuses it across eval run ids when the cached
+`corpus_manifest.json` is present. Different corpora may be prepared in
+parallel with `benchmark.corpus_prepare_concurrency`; session commits inside one
+corpus remain serial to preserve OpenViking write semantics.
 
 ## User Simulator Policy
 

@@ -18,6 +18,9 @@ paths:
   tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
   tau2_cli: ${TAU2_CLI:-tau2}
   output_dir: benchmark/tau2/result
+  # Corpus writes are expensive and should be reused across eval run ids when
+  # the train split and memory prompt/config did not change.
+  corpus_cache_dir: benchmark/tau2/result/memory_corpora
 
 eval:
   # The runner default is official if this field is omitted. The OpenViking
@@ -39,6 +42,7 @@ openviking:
   url: ${OPENVIKING_URL:-http://localhost:1933}
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  reuse_corpus_across_runs: true
   retrieval_top_k: 4
   prewrite_retrieval_top_k: 6
   prewrite_inject_top_k: 2
