@@ -358,7 +358,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         try:
             result = await read_tool.execute(self.create_tool_context(), uri=uri)
             if isinstance(result, dict) and "error" in result:
-                tracer.error(f"Failed to read {uri}: {result['error']}")
+                tracer.info(f"Failed to read {uri}: {result['error']}")
                 return None
             return result
         except Exception as e:

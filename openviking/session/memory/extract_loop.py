@@ -427,6 +427,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         tracer.info(f"_resolve_links: page_id_map={self._page_id_map._id_to_uri}, "
                     f"op_page_map={op_page_map}, raw_links_count={len(raw_links)}")
+        print(f"[DEBUG _resolve_links] page_id_map={self._page_id_map._id_to_uri}, "
+              f"op_page_map={op_page_map}, raw_links={[(l.f, l.t) for l in raw_links]}")
 
         resolved_links = []
         now = datetime.now(timezone.utc).isoformat()
