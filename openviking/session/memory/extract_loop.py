@@ -161,12 +161,19 @@ class ExtractLoop:
         schema_str = json.dumps(json_schema, ensure_ascii=False)
 
         messages = []
+        link_rules = ""
+        if self._link_enabled:
+            link_rules = """
+## Link Rules
+- Every item you create or edit MUST have a "page_id" field so other items can link to it.
+- Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
+"""
         messages.append(
             {
                 "role": "system",
                 "content": f"""
 {self.context_provider.instruction()}
-
+{link_rules}
 ## Output Format
 The final output of the model must strictly follow the JSON Schema format shown below:
 ```json
@@ -372,14 +379,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._link_enabled:
             return
 
-        tracer.info(f"finalize_operations: page_id_map={self._page_id_map._id_to_uri}, "
-                    f"read_file_contents_keys={list(self.context_provider.read_file_contents.keys())[:10]}")
-
         upsert_operations = operations.upsert_operations
-
-        # Debug: log upsert page_ids
-        for op in upsert_operations:
-            print(f"[DEBUG finalize_operations] page_id={op.page_id}, uris={op.uris}, memory_type={op.memory_type}")
 
         # Fill uris before registering page_ids — resolve_operations leaves uris empty,
         # supplement_operation_uris is normally called later in memory_updater,
@@ -392,18 +392,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
             isolation_handler=self._isolation_handler,
         )
 
-        # Debug: log upsert page_ids before registration
-        for op in upsert_operations:
-            tracer.info(f"upsert_op: page_id={op.page_id}, uris={op.uris}, memory_type={op.memory_type}")
-
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
                 for uri in op.uris:
                     self._page_id_map.register_new_page_id(uri, op.page_id)
-
-        # Debug: log page_id map state before resolving links
-        tracer.info(f"PageIdMap state: {self._page_id_map._id_to_uri}")
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
         resolved_links = self._resolve_links(raw_links, upsert_operations)
@@ -429,10 +422,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if op.page_id is not None and op.uris:
                     op_page_map[op.page_id] = op.uris[0]
 
-        tracer.info(f"_resolve_links: page_id_map={self._page_id_map._id_to_uri}, "
-                    f"op_page_map={op_page_map}, raw_links_count={len(raw_links)}")
-        print(f"[DEBUG _resolve_links] page_id_map={self._page_id_map._id_to_uri}, "
-              f"op_page_map={op_page_map}, raw_links={[(l.f, l.t) for l in raw_links]}")
+        # No page_id context available — links cannot be resolved
+        if not self._page_id_map._id_to_uri and not op_page_map:
+            return []
 
         resolved_links = []
         now = datetime.now(timezone.utc).isoformat()

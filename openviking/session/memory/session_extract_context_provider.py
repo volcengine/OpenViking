@@ -137,36 +137,6 @@ All memory content MUST be written in {output_language}.
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
 """
 
-        if self._link_enabled:
-            goal += f"""
-## Page ID (IMPORTANT)
-Every item you create or edit MUST have a "page_id" field:
-- For existing items (from read results): use the page_id shown (e.g., [page_id: 1])
-- For NEW items you create: assign a unique page_id >= 100
-Page IDs are used to link memory items together. Even if you don't create links for an item, it MUST still have a page_id so other items can link to it.
-
-## Link Extraction
-When you identify semantic relationships between memory items, express them as links in the "links" field.
-Each link connects two pages (from → to) with a relationship type.
-
-Available link types:
-- related_to: general association (e.g., event related_to entity)
-- belongs_to: A is part of / owned by B (e.g., preference belongs_to profile/entity)
-- caused_by: A was caused by B (e.g., event caused_by another event)
-- derived_from: A was derived from B (e.g., experience derived_from skills)
-- contradicts: A contradicts B (e.g., new preference contradicts old one)
-- evolved_from: A is an evolution/update of B (e.g., updated preference evolved_from old version)
-
-For each link:
-- "f": from page_id (the page containing the match_text). Use the page_id from the item's "page_id" field.
-- "t": to page_id (the target page being linked to). Use the page_id from the item's "page_id" field.
-- "match_text": a single WORD from the original conversation that should become a link. Rules: (1) must be a single word only (NOT a phrase, sentence, or multi-word text); (2) must exist verbatim in the original conversation messages; (3) pick the most specific/identifying word
-- "description": brief explanation of the relationship
-- "weight": 0.0-1.0, how strong the relationship is (default 1.0)
-
-Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
-"""
-
         return goal
 
     def _build_conversation_message(self) -> Dict[str, Any]:

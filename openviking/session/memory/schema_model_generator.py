@@ -8,9 +8,9 @@ definitions, with discriminator support for polymorphic fields.
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
@@ -121,10 +121,14 @@ class SchemaModelGenerator:
         link_enabled = config.memory.link_enabled if config.memory else False
         if link_enabled:
             field_definitions["page_id"] = (
-                Optional[int],
+                Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
                 Field(
                     None,
-                    description="Page ID for link reference. Use the page_id shown in read results for existing items. For new items, assign a unique ID >= 100.",
+                    description=(
+                        "Page ID for link reference. REQUIRED for every item. "
+                        "For existing items: use the page_id shown in read results (e.g., [page_id: 1]). "
+                        "For NEW items: assign a unique page_id >= 100."
+                    ),
                 ),
             )
         # Create the model
@@ -262,7 +266,10 @@ class SchemaModelGenerator:
                 List[WikiLink],
                 Field(
                     default_factory=list,
-                    description="Links between memory pages. Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to).",
+                    description=(
+                        "Links between memory pages. Only create links when the relationship is meaningful and clear. "
+                        "Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to)."
+                    ),
                 ),
             )
 

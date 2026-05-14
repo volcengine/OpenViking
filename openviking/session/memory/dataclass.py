@@ -56,18 +56,31 @@ class WikiLink(BaseModel):
     """
 
     f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
-        ..., description="From page_id (temporary)"
+        ..., description="From page_id. Use the page_id from the item's 'page_id' field."
     )
     t: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
-        ..., description="To page_id (temporary)"
+        ..., description="To page_id. Use the page_id from the item's 'page_id' field."
     )
-    link_type: LinkType = Field(LinkType.RELATED_TO, description="Relationship type")
+    link_type: LinkType = Field(LinkType.RELATED_TO, description=(
+        "Relationship type. Available: "
+        "related_to (general association), "
+        "belongs_to (A is part of/owned by B), "
+        "caused_by (A was caused by B), "
+        "derived_from (A was derived from B), "
+        "contradicts (A contradicts B), "
+        "evolved_from (A is an evolution/update of B)"
+    ))
     weight: float = Field(1.0, description="Association weight 0~1")
     match_text: Optional[str] = Field(
         None,
-        description="A single word from the conversation to be linkified (must exist verbatim in conversation)",
+        description=(
+            "A single WORD from the original conversation to be linkified. "
+            "Rules: (1) must be a single word only (NOT a phrase or multi-word text); "
+            "(2) must exist verbatim in the original conversation messages; "
+            "(3) pick the most specific/identifying word"
+        ),
     )
-    description: str = Field("", description="Why this link exists")
+    description: str = Field("", description="Brief explanation of the relationship")
 
 
 class StoredLink(BaseModel):
