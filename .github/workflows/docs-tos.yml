@@ -106,6 +106,20 @@ jobs:
             --cache-control "${HTML_CACHE_CONTROL}" \
             --only-show-errors
 
+          while IFS= read -r -d '' html_file; do
+            rel_path="${html_file#${DIST_DIR}/}"
+            case "${rel_path}" in
+              index.html|404.html) continue ;;
+            esac
+
+            clean_path="${rel_path%.html}"
+            aws s3 cp "${html_file}" "s3://${TOS_BUCKET}/${clean_path}" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "text/html; charset=utf-8" \
+              --cache-control "${HTML_CACHE_CONTROL}" \
+              --only-show-errors
+          done < <(find "${DIST_DIR}" -type f -name "*.html" -print0)
+
           aws s3 cp "${DIST_DIR}/assets" "s3://${TOS_BUCKET}/assets/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
             --recursive \
