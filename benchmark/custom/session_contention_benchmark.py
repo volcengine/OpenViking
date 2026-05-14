@@ -926,7 +926,7 @@ class BenchmarkRunner:
 
 def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
     server_host = os.getenv("SERVER_HOST", "127.0.0.1")
-    server_port = int(os.getenv("SERVER_PORT", "1933"))
+    server_port = int(os.getenv("SERVER_PORT", "1935"))
     default_server_url = f"http://{server_host}:{server_port}"
     default_output_dir = (
         Path(__file__).resolve().parents[1]
