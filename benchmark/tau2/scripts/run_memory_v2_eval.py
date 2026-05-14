@@ -272,19 +272,22 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 if selected:
                     counters["selected_concrete_memory_count"] += 1
             memory_source = match.get("memory_category_source_prompt")
+            positive_category_match = bool(
+                match.get("category1_match") or match.get("category2_match")
+            )
             if memory_source:
                 counters["memory_category_present_count"] += 1
                 memory_category_sources[str(memory_source)] += 1
                 if selected:
                     counters["selected_memory_category_present_count"] += 1
                     selected_memory_category_sources[str(memory_source)] += 1
-                if match.get("memory_category1_prompt") or match.get("memory_category2_prompt"):
+                if positive_category_match:
                     counters["memory_category_matched_count"] += 1
                     if selected:
                         counters["selected_memory_category_matched_count"] += 1
             elif match.get("category_rerank_reasons") is not None:
                 counters["memory_category_missing_count"] += 1
-            if match.get("category1_match") or match.get("category2_match"):
+            if positive_category_match:
                 counters["positive_category_match_count"] += 1
                 if selected:
                     counters["selected_positive_category_match_count"] += 1

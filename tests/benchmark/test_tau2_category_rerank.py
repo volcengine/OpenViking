@@ -215,6 +215,15 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
                     "selected_for_injection": False,
                     "category_rerank_reasons": ["missing_memory_category"],
                 },
+                {
+                    "uri": "viking://agent/example/memories/trajectories/pending_cancel.md",
+                    "selected_for_injection": False,
+                    "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
+                    "memory_category1_prompt": ["retail_order_cancellation"],
+                    "memory_category2_prompt": ["pending_order_cancel"],
+                    "category1_match": False,
+                    "category2_match": False,
+                },
             ],
         },
     ]
@@ -230,12 +239,15 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["query_category_sources"]["tau2_category_catalog_keyword_match"] == 1
     assert summary["selected_memory_category_sources"]["tau2_category_catalog_keyword_match"] == 1
     assert summary["tool_calls"]["exchange_delivered_order_items"] == 1
+    assert summary["rates"]["memory_category_candidate_coverage"] == 2 / 3
     assert summary["rates"]["selected_memory_category_coverage"] == 1.0
-    assert summary["rates"]["memory_category_match_coverage"] == 0.5
+    assert summary["rates"]["memory_category_match_coverage"] == 1 / 3
     assert summary["rates"]["selected_memory_category_match_coverage"] == 1.0
     assert summary["counts"]["aggregate_memory_candidate_count"] == 1
-    assert summary["counts"]["concrete_memory_candidate_count"] == 1
-    assert summary["rates"]["concrete_memory_candidate_rate"] == 0.5
+    assert summary["counts"]["concrete_memory_candidate_count"] == 2
+    assert summary["counts"]["memory_category_present_count"] == 2
+    assert summary["counts"]["memory_category_matched_count"] == 1
+    assert summary["rates"]["concrete_memory_candidate_rate"] == 2 / 3
     assert summary["rates"]["selected_concrete_memory_rate"] == 0.0
 
 

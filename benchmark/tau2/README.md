@@ -175,12 +175,13 @@ categories, rerank reasons, selected rows, skipped rows, scope prompt metadata,
 and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
 Each run summary also includes `retrieval_trace_summary`, a compact rollup of
 decision nodes, category decisions, query/memory category sources, selected
-category coverage, aggregate-vs-concrete memory candidate coverage, and write
-tool calls. Use it as the first check that a run is using this branch's
-self-generated category signal before opening the JSONL trace. Category runs
-whose runtime trace has only aggregate `.overview.md` / `.abstract.md`
-candidates, no applied category-rerank event, no query or memory category
-coverage, or no selected positive category match are marked
+category coverage, positive query-to-memory category-match coverage,
+aggregate-vs-concrete memory candidate coverage, and write tool calls. Use it
+as the first check that a run is using this branch's self-generated category
+signal before opening the JSONL trace. Category runs whose runtime trace has
+only aggregate `.overview.md` / `.abstract.md` candidates, no applied
+category-rerank event, no query or memory category coverage, no positive
+query-to-memory category match, or no selected positive category match are marked
 `runtime_evidence.status=diagnostic`; `scoreboard.json` excludes those
 diagnostic cells from the main reward/DB aggregates while preserving their
 metrics, artifacts, and `diagnostic_reason_counts` for debugging. Corpus
