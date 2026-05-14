@@ -214,7 +214,9 @@ def create_app(
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
         )
+        from openviking.utils.request_io import configure_request_io_executor
 
+        configure_request_io_executor(config.request_io_threads)
         init_metrics_from_server_config(config, app=app, service=service)
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")

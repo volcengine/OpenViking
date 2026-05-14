@@ -109,6 +109,14 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    request_io_threads: int = Field(
+        default=64,
+        ge=1,
+        description=(
+            "Max workers for the asyncio default executor used by request-path "
+            "asyncio.to_thread/run_in_executor calls."
+        ),
+    )
     auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
