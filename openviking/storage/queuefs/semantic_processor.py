@@ -1179,14 +1179,21 @@ class SemanticProcessor(DequeueHandlerBase):
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
         file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
-        output_language = resolve_output_language(file_summaries_str, config=config)
-
         # Build subdirectory summary string
         children_abstracts_str = (
             "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
             if children_abstracts
             else "None"
         )
+
+        language_source_parts = []
+        if file_summaries:
+            language_source_parts.append(file_summaries_str)
+        if children_abstracts:
+            language_source_parts.append(children_abstracts_str)
+        if not language_source_parts:
+            language_source_parts.append(dir_uri.split("/")[-1])
+        output_language = resolve_output_language("\n".join(language_source_parts), config=config)
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
