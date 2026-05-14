@@ -152,18 +152,6 @@ async function appendTurns(ovSessionId, turns) {
   return appended;
 }
 
-function countExtracted(commit) {
-  if (!commit?.memories_extracted) return 0;
-  if (typeof commit.memories_extracted === "number") return commit.memories_extracted;
-  if (typeof commit.memories_extracted === "object") {
-    return Object.values(commit.memories_extracted).reduce(
-      (a, b) => a + (typeof b === "number" ? b : 0),
-      0,
-    );
-  }
-  return 0;
-}
-
 async function main() {
   if (!cfg.autoCommitOnCompact) {
     log("skip", { stage: "init", reason: "autoCommitOnCompact disabled" });
@@ -259,10 +247,8 @@ async function main() {
     return;
   }
 
-  const extracted = countExtracted(commit);
   log("commit", {
     ovSessionId,
-    extracted,
     archived: commit.archived ?? false,
     taskId: commit.task_id,
     status: commit.status,
@@ -273,9 +259,7 @@ async function main() {
   state.ovSessionId = null;
   await saveState(state);
 
-  noop(
-    `pre-compact commit: ${ovSessionId} → ${extracted} memory item(s) extracted${commit.archived ? " (archived)" : ""}`,
-  );
+  noop(`OpenViking session ${ovSessionId} is committed`);
 }
 
 function hasCaptureKeyword(turns) {

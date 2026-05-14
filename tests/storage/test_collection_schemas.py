@@ -17,6 +17,7 @@ from openviking.storage.collection_schemas import (
     _build_embedding_metadata,
     init_context_collection,
 )
+from openviking.storage.expr import Eq
 from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
@@ -670,3 +671,92 @@ async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_writ
         "active_count": 2,
         "account_id": "acc1",
     }
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_collection_exists_runs_in_threadpool(monkeypatch):
+    called = {}
+
+    class _Adapter:
+        mode = "local"
+
+        def collection_exists(self):
+            return True
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        called["func"] = func
+        called["args"] = args
+        called["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread)
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    assert await backend.collection_exists() is True
+    assert called["func"].__self__ is backend._adapter
+    assert called["func"].__name__ == "collection_exists"
+    assert called["args"] == ()
+    assert called["kwargs"] == {}
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypatch):
+    called = {}
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def query(self, **kwargs):
+            called["query_kwargs"] = kwargs
+            return [{"id": "rec-1", "uri": "viking://resources/sample", "account_id": "acc1"}]
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        called["func"] = func
+        called["args"] = args
+        called["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread)
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.query(
+        query_vector=[0.1, 0.2],
+        limit=5,
+        output_fields=["uri"],
+    )
+
+    assert result == [{"id": "rec-1", "uri": "viking://resources/sample", "account_id": "acc1"}]
+    assert called["func"].__self__ is backend._adapter
+    assert called["func"].__name__ == "query"
+    assert called["args"] == ()
+    assert called["kwargs"]["query_vector"] == [0.1, 0.2]
+    assert called["kwargs"]["limit"] == 5
+    assert called["kwargs"]["output_fields"] == ["uri"]
+    query_filter = called["kwargs"]["filter"]
+    assert isinstance(query_filter, Eq)
+    assert query_filter.field == "account_id"
+    assert query_filter.value == "acc1"

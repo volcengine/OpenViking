@@ -165,26 +165,6 @@ async function appendTurns(ovSessionId, turns) {
   return appended;
 }
 
-async function commitOvSession(ovSessionId) {
-  if (!ovSessionId) return null;
-  return fetchJSON(
-    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
-}
-
-function countExtracted(commit) {
-  if (!commit?.memories_extracted) return 0;
-  if (typeof commit.memories_extracted === "number") return commit.memories_extracted;
-  if (typeof commit.memories_extracted === "object") {
-    return Object.values(commit.memories_extracted).reduce(
-      (a, b) => a + (typeof b === "number" ? b : 0),
-      0,
-    );
-  }
-  return 0;
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
