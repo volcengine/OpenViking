@@ -345,8 +345,14 @@ class SkillProcessor:
         context.set_vectorize(Vectorize(text=context.abstract))
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if embedding_msg:
-            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
-            if enqueued and embedding_msg.telemetry_id:
+            if embedding_msg.telemetry_id:
                 get_request_wait_tracker().register_embedding_root(
                     embedding_msg.telemetry_id, embedding_msg.id
+                )
+            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+            if not enqueued and embedding_msg.telemetry_id:
+                get_request_wait_tracker().mark_embedding_failed(
+                    embedding_msg.telemetry_id,
+                    embedding_msg.id,
+                    "embedding enqueue returned false",
                 )

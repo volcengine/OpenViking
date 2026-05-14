@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601
+from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -64,6 +65,7 @@ class VLMBase(ABC):
         self.timeout = config.get("timeout", 60.0)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
+        self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
 
         # Token usage tracking

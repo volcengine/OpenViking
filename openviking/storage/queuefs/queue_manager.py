@@ -104,7 +104,7 @@ class QueueManager:
         for queue in list(self._queues.values()):
             self._start_queue_worker(queue)
 
-        logger.info("[QueueManager] Started")
+        logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
 
     def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """

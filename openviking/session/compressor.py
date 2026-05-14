@@ -137,9 +137,14 @@ class SessionCompressor:
                     changes=changes_dict,
                     telemetry_id=telemetry.telemetry_id,
                 )
-                await semantic_queue.enqueue(msg)
                 if msg.telemetry_id:
                     request_wait_tracker.register_semantic_root(msg.telemetry_id, msg.id)
+                try:
+                    await semantic_queue.enqueue(msg)
+                except Exception as e:
+                    if msg.telemetry_id:
+                        request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+                    raise
                 logger.info(
                     f"Enqueued semantic generation for {parent_uri} with changes: "
                     f"added={len(changes['added'])}, modified={len(changes['modified'])}, "
@@ -191,18 +196,26 @@ class SessionCompressor:
                 chunk_memory.set_vectorize(Vectorize(text=chunk))
                 chunk_msg = EmbeddingMsgConverter.from_context(chunk_memory)
                 if chunk_msg:
-                    enqueued = await self.vikingdb.enqueue_embedding_msg(chunk_msg)
-                    if enqueued and chunk_msg.telemetry_id:
+                    if chunk_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             chunk_msg.telemetry_id, chunk_msg.id
+                        )
+                    enqueued = await self.vikingdb.enqueue_embedding_msg(chunk_msg)
+                    if not enqueued and chunk_msg.telemetry_id:
+                        request_wait_tracker.mark_embedding_failed(
+                            chunk_msg.telemetry_id, chunk_msg.id, "embedding enqueue returned false"
                         )
 
         # Always enqueue the base record (uses abstract as vector text)
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
-        enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
-        if enqueued and embedding_msg.telemetry_id:
+        if embedding_msg and embedding_msg.telemetry_id:
             request_wait_tracker.register_embedding_root(
                 embedding_msg.telemetry_id, embedding_msg.id
+            )
+        enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+        if embedding_msg and not enqueued and embedding_msg.telemetry_id:
+            request_wait_tracker.mark_embedding_failed(
+                embedding_msg.telemetry_id, embedding_msg.id, "embedding enqueue returned false"
             )
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
 

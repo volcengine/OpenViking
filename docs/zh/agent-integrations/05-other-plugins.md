@@ -1,21 +1,6 @@
 # 其他插件
 
-仓库里还附带了几个未在 Claude Code 和 OpenClaw 主集成中介绍的社区/实验性插件。它们在目标 runtime、集成深度和维护状态上各有差异，使用前请先阅读各自的 README。
-
-## Codex 记忆 MCP Server
-
-源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
-
-面向 [Codex](https://github.com/openai/codex) 的最小化 MCP-only 服务，刻意保持窄边界：
-
-- 不挂生命周期 hook
-- 不跑后台捕获 worker
-- 不写 `~/.codex`
-- 不留 build 产物
-
-Codex 拿到的只是几个显式记忆工具：`find`、`remember`，外加几个辅助。
-
-如果你只需要 Codex 显式调用记忆（不需要自动召回/捕获），这是最简方案。
+仓库里还附带了几个未在 Claude Code、Codex 和 OpenClaw 主集成中介绍的社区/实验性插件。它们在目标 runtime、集成深度和维护状态上各有差异，使用前请先阅读各自的 README。
 
 ## OpenCode 插件
 

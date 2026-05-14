@@ -28,7 +28,8 @@ int parse_and_precheck_op_parts(JsonDoc& json_doc, bool& has_filter,
   }
 
   if (!has_any) {
-    // Backward compatibility: default to filter when no top-level keyword exists
+    // Backward compatibility: default to filter when no top-level keyword
+    // exists
     has_filter = true;
   }
   return 0;

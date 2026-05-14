@@ -62,9 +62,7 @@ def merge_level_filter(
     return {"op": "and", "conds": [existing_filter, level_filter]}
 
 
-def _resolve_levels(
-    level: Optional[Union[int, str, List[int], List[str]]]
-) -> List[int]:
+def _resolve_levels(level: Optional[Union[int, str, List[int], List[str]]]) -> List[int]:
     """Resolve level parameter into a list of integers."""
     if level is None:
         return []

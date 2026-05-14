@@ -9,7 +9,6 @@ Provides rerank functionality for hierarchical retrieval.
 import json
 
 # For logging, use Python's built-in logging
-import logging
 import time
 from typing import List, Optional
 
@@ -19,8 +18,9 @@ from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
 
 from openviking.models.rerank.base import RerankBase
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RerankClient(RerankBase):

@@ -664,6 +664,35 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
             return logging.FileHandler(log_output, encoding="utf-8")
 
 
+def _configure_logger_instance(
+    logger: logging.Logger,
+    *,
+    level: int,
+    formatter: logging.Formatter,
+    handler: logging.Handler,
+) -> None:
+    """Apply a fully configured handler to a logger."""
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.propagate = False
+    logger.setLevel(level)
+
+
+def _build_standard_handler(
+    log_output: str,
+    config: Optional[Any],
+    format_string: str,
+) -> logging.Handler:
+    handler = _create_log_handler(log_output, config)
+    handler.setFormatter(logging.Formatter(format_string))
+
+    # Add trace id filter
+    from openviking.telemetry.tracer import TraceIdLoggingFilter
+
+    handler.addFilter(TraceIdLoggingFilter())
+    return handler
+
+
 def get_logger(
     name: str = "openviking",
     format_string: Optional[str] = None,
@@ -684,20 +713,12 @@ def get_logger(
     if not logger.handlers:
         log_level_str, log_format, log_output, config = _load_log_config()
         level = getattr(logging, log_level_str, logging.INFO)
-        handler = _create_log_handler(log_output, config)
-
         if format_string is None:
             format_string = log_format
-        formatter = logging.Formatter(format_string)
-        handler.setFormatter(formatter)
-
-        # Add trace id filter
-        from openviking.telemetry.tracer import TraceIdLoggingFilter
-        handler.addFilter(TraceIdLoggingFilter())
-
-        logger.addHandler(handler)
-        logger.propagate = False
-        logger.setLevel(level)
+        handler = _build_standard_handler(log_output, config, format_string)
+        _configure_logger_instance(
+            logger, level=level, formatter=logging.Formatter(format_string), handler=handler
+        )
 
     # If OTel log export is globally initialized, attach the handler automatically.
     if add_otel_handler or _otel_log_handler_initialized:
@@ -706,8 +727,49 @@ def get_logger(
     return logger
 
 
-# Default logger instance
-default_logger = get_logger()
+class _LazyDefaultLogger:
+    """Compatibility proxy that defers logger creation until first use."""
+
+    def _logger(self) -> logging.Logger:
+        return get_logger()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._logger(), name)
+
+
+default_logger = _LazyDefaultLogger()
+
+
+def reconfigure_logging() -> None:
+    """Re-apply logging configuration to already-created OpenViking loggers."""
+    log_level_str, log_format, log_output, config = _load_log_config()
+    level = getattr(logging, log_level_str, logging.INFO)
+
+    logger_dict = logging.Logger.manager.loggerDict
+    target_names = [
+        name
+        for name, candidate in logger_dict.items()
+        if isinstance(candidate, logging.Logger)
+        and (name == "openviking" or name.startswith("openviking.") or name.startswith("uvicorn"))
+    ]
+    if "openviking" not in target_names:
+        target_names.append("openviking")
+
+    for logger_name in sorted(set(target_names)):
+        logger = logging.getLogger(logger_name)
+        format_string = log_format
+        if logger_name.startswith("uvicorn"):
+            handler = _create_log_handler(log_output, config)
+            handler.setFormatter(logging.Formatter(log_format))
+            handler.addFilter(TraceContextFilter())
+        else:
+            handler = _build_standard_handler(log_output, config, format_string)
+        _configure_logger_instance(
+            logger,
+            level=level,
+            formatter=logging.Formatter(format_string),
+            handler=handler,
+        )
 
 
 def configure_uvicorn_logging() -> None:
@@ -718,18 +780,17 @@ def configure_uvicorn_logging() -> None:
     """
     log_level_str, log_format, log_output, config = _load_log_config()
     level = getattr(logging, log_level_str, logging.INFO)
-    handler = _create_log_handler(log_output, config)
-    formatter = logging.Formatter(log_format)
-    handler.setFormatter(formatter)
-
-    # Add unified trace context filter
-    handler.addFilter(TraceContextFilter())
 
     # Configure all Uvicorn loggers
     uvicorn_logger_names = ["uvicorn", "uvicorn.error", "uvicorn.access"]
     for logger_name in uvicorn_logger_names:
         logger = logging.getLogger(logger_name)
-        logger.handlers.clear()
-        logger.addHandler(handler)
-        logger.setLevel(level)
-        logger.propagate = False
+        handler = _create_log_handler(log_output, config)
+        handler.setFormatter(logging.Formatter(log_format))
+        handler.addFilter(TraceContextFilter())
+        _configure_logger_instance(
+            logger,
+            level=level,
+            formatter=logging.Formatter(log_format),
+            handler=handler,
+        )

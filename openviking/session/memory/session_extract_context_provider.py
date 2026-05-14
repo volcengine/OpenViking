@@ -10,14 +10,11 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
-from openviking.core.namespace import to_user_space, to_agent_space
+from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
 from openviking.server.identity import RequestContext, ToolContext
-from openviking.session.memory.dataclass import MemoryFileContent
-from openviking.session.memory.utils.uri import render_template
-from openviking.telemetry import tracer
-from openviking.utils.time_utils import parse_iso_datetime
 from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
@@ -27,7 +24,10 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import tracer
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -35,6 +35,11 @@ if TYPE_CHECKING:
     from openviking.session.memory.memory_updater import ExtractContext
 
 logger = get_logger(__name__)
+
+_PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
+_PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
+_PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
+_PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -189,7 +194,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     }
                     if part.skill_uri:
                         tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    formatted_parts.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+                    formatted_parts.append(
+                        f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}"
+                    )
             return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
@@ -202,6 +209,89 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         )
 
         return "\n\n".join(section for section in conversation_sections if section)
+
+    def _truncate_prefetch_query_text(self, text: Any, max_chars: int) -> str:
+        normalized = " ".join(str(text or "").split())
+        if len(normalized) <= max_chars:
+            return normalized
+        return normalized[: max_chars - 3].rstrip() + "..."
+
+    def _format_tool_part_for_search(self, part: ToolPart) -> str:
+        fields = []
+        if part.tool_name:
+            fields.append(f"tool_name={part.tool_name}")
+        if part.skill_uri:
+            skill_name = part.skill_uri.rstrip("/").split("/")[-1]
+            fields.append(f"skill_name={skill_name}")
+        if part.tool_status:
+            fields.append(f"status={part.tool_status}")
+        if part.tool_input:
+            fields.append(
+                "input="
+                + self._truncate_prefetch_query_text(
+                    json.dumps(part.tool_input, ensure_ascii=False),
+                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
+                )
+            )
+        if part.tool_output and part.tool_status == "error":
+            fields.append(
+                "error="
+                + self._truncate_prefetch_query_text(
+                    part.tool_output,
+                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
+                )
+            )
+        return "ToolCall: " + "; ".join(fields)
+
+    def _build_prefetch_search_query(self) -> str:
+        """Build a compact semantic query from raw conversation messages.
+
+        The LLM already receives the full conversation via pre_fetch_messages.
+        Search only needs topical recall signals, so use the raw message content
+        instead of the prompt-wrapped conversation.
+        """
+        if not isinstance(self.messages, list):
+            return ""
+
+        primary_sections: List[str] = []
+        supporting_sections: List[str] = []
+
+        for msg in self.messages:
+            role = getattr(msg, "role", "")
+            role_id = getattr(msg, "role_id", "") or role
+            parts = getattr(msg, "parts", [])
+
+            text_parts: List[str] = []
+            tool_parts: List[str] = []
+
+            for part in parts:
+                if hasattr(part, "text") and part.text:
+                    limit = (
+                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
+                        if role == "user"
+                        else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
+                    )
+                    text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
+                elif isinstance(part, ToolPart):
+                    tool_part = self._format_tool_part_for_search(part)
+                    if tool_part != "ToolCall: ":
+                        tool_parts.append(tool_part)
+
+            if text_parts:
+                section = f"{role_id}: " + "\n".join(text_parts)
+                if role == "user":
+                    primary_sections.append(section)
+                else:
+                    supporting_sections.append(section)
+
+            if tool_parts:
+                supporting_sections.append(f"{role_id}: " + "\n".join(tool_parts))
+
+        query = "\n\n".join(primary_sections + supporting_sections)
+        if not query.strip():
+            query = self._assemble_conversation(self.messages)
+
+        return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
     def create_tool_context(self, default_search_uris=[]):
         tool_ctx = ToolContext(
@@ -232,11 +322,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
         schemas = [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
-
-        from openviking.server.identity import ToolContext
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
@@ -286,10 +375,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             try:
                 # 将所有目录作为 target_uri 传入（支持 List[str]）
                 dir_list = list(ls_dirs)
+                search_query = self._build_prefetch_search_query()
+                if not search_query:
+                    search_query = "conversation"
                 search_result = await search_tool.execute(
                     viking_fs=self._viking_fs,
                     ctx=self.create_tool_context(dir_list),
-                    query="[Keywords]",
+                    query=search_query,
                 )
                 # 处理搜索结果
                 if isinstance(search_result, list):
@@ -373,7 +465,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
         return [
-            s for s in self._get_registry().list_all(include_disabled=False)
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
 

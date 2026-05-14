@@ -17,15 +17,15 @@ Key design goals:
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from typing import Any, Iterable, Optional, Tuple
 
 import requests
 
 from openviking.metrics.core.base import MetricExporter
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 try:
     import grpc
