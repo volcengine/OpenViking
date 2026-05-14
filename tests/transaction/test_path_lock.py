@@ -233,6 +233,41 @@ class TestPathLockBehavior:
 
         await lock.release(tx)
 
+    async def test_acquire_tree_creates_missing_directory_after_conflict_check(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-missing")
+        target = f"{test_dir}/new-resource"
+
+        ok = await lock.acquire_tree(target, tx, timeout=3.0)
+        assert ok is True
+        assert _single_lock_path(tx) == f"{target}/{LOCK_FILE_NAME}"
+        assert agfs_client.stat(target).get("isDir") is True
+
+        await lock.release(tx)
+
+    async def test_tree_blocked_by_ancestor_tree_does_not_create_missing_directory(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-tree")
+        target = f"{test_dir}/blocked-resource"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+        assert await lock.acquire_tree(target, child, timeout=0.0) is False
+
+        try:
+            agfs_client.stat(target)
+            raise AssertionError("missing TreeLock target should not be created on conflict")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(parent)
+
     async def test_acquire_exact_path_allows_missing_target(self, agfs_client):
         lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-no-dir")
@@ -243,6 +278,28 @@ class TestPathLockBehavior:
         assert tx.locks[0].rsplit("/", 1)[-1].startswith(EXACT_LOCK_FILE_PREFIX)
 
         await lock.release(tx)
+
+    async def test_exact_blocked_by_ancestor_tree_does_not_create_missing_parent(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-exact")
+        missing_parent = f"{test_dir}/blocked-dir"
+        target = f"{missing_parent}/file.md"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+        assert await lock.acquire_exact_path(target, child, timeout=0.0) is False
+
+        try:
+            agfs_client.stat(missing_parent)
+            raise AssertionError("missing exact-lock parent should not be created on conflict")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(parent)
 
     async def test_release_removes_lock_file(self, agfs_client, test_dir):
         lock = PathLockEngine(agfs_client)

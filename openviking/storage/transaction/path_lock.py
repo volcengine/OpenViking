@@ -286,6 +286,10 @@ class PathLockEngine:
 
     async def _scan_descendants_for_locks(self, path: str, exclude_owner_id: str) -> Optional[str]:
         try:
+            try:
+                self._agfs.stat(path)
+            except Exception:
+                return None
             entries = self._agfs.ls(path)
             if not isinstance(entries, list):
                 return None
@@ -345,15 +349,6 @@ class PathLockEngine:
         else:
             deadline = asyncio.get_running_loop().time() + timeout
 
-        parent = self._get_parent_path(path)
-        if (
-            lock_path != self._get_lock_path(path)
-            and parent
-            and not self._ensure_directory_exists(parent)
-        ):
-            logger.warning(f"[EXACT] Failed to ensure parent directory exists: {parent}")
-            return False
-
         while True:
             existing_exact_lock = await self._check_exact_path_lock(path, owner_id)
             if existing_exact_lock:
@@ -398,6 +393,15 @@ class PathLockEngine:
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
+
+            parent = self._get_parent_path(path)
+            if (
+                lock_path != self._get_lock_path(path)
+                and parent
+                and not self._ensure_directory_exists(parent)
+            ):
+                logger.warning(f"[EXACT] Failed to ensure parent directory exists: {parent}")
+                return False
 
             try:
                 await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_EXACT)
@@ -467,11 +471,6 @@ class PathLockEngine:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
 
-        # 确保目录存在
-        if not self._ensure_directory_exists(path):
-            logger.warning(f"[TREE] Failed to ensure directory exists: {path}")
-            return False
-
         while True:
             if await self._is_locked_by_other(lock_path, owner_id):
                 if self.is_lock_stale(lock_path, self._lock_expire):
@@ -522,6 +521,10 @@ class PathLockEngine:
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
+
+            if not self._ensure_directory_exists(path):
+                logger.warning(f"[TREE] Failed to ensure directory exists: {path}")
+                return False
 
             try:
                 await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_TREE)

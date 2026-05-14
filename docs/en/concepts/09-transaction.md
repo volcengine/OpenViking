@@ -137,15 +137,22 @@ Operation flow:
 **First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
 
 ```
-1. Acquire EXACT lock on final_uri itself
-2. agfs.mv temp directory -> final location
-3. Acquire TreeLock on final_uri (inside EXACT lock, eliminating race window)
-4. Release EXACT lock
-5. Clean up temp directory
-6. Enqueue SemanticMsg(lifecycle_lock_handle_id=...) -> DAG runs on final
-7. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
-8. DAG complete + all embeddings done -> release TreeLock
+1. Acquire TreeLock on final_uri
+   - If final_uri does not exist, check ancestor/descendant/same-path conflicts first
+   - If there is no conflict, create final_uri and write final_uri/.path.ovlock as a T lock
+2. Keep temp as the source directory and enqueue SemanticMsg(uri=temp, target_uri=final_uri, lifecycle_lock_handle_id=...)
+3. DAG runs on temp and syncs temp content into final_uri after completion
+   - Do not use raw agfs.mv(temp -> final_uri), because final_uri already exists for the lock file
+4. Clean up temp directory
+5. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
+6. DAG complete + all embeddings done -> release TreeLock
 ```
+
+If summarization and indexing are both disabled, no downstream DAG takes over.
+In that case `ResourceProcessor` copies temp directory content into `final_uri`
+under the same TreeLock, deletes temp, then releases the lock. It does not call
+`VikingFS.mv(temp, final_uri, lock_handle=handle)`, because move cleanup can
+remove the directory lock file.
 
 During this period, `rm` attempting to acquire a TreeLock on the same path will fail with `ResourceBusyError`.
 
@@ -160,6 +167,16 @@ During this period, `rm` attempting to acquire a TreeLock on the same path will 
 ```
 
 Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
+
+Both first-time add and incremental update hold only `TreeLock(resource_dir)`.
+There is no `ExactPathLock(resource_dir) -> TreeLock(resource_dir)` handoff, so
+the two modes cannot accidentally release the same `.path.ovlock` file in the
+wrong scope.
+
+Automatic naming is handled by the resource layer, not the lock service:
+`ResourceProcessor` checks `exists(candidate_uri)` first; occupied candidates
+try `_1`, `_2`, and so on. Only a non-existing candidate attempts `TreeLock`,
+without waiting. If that candidate is busy, the next suffix is tried.
 
 **Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a TreeLock.
 
@@ -261,7 +278,7 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 | **TREE** | Conflict | Conflict | Conflict | Conflict |
 
 - **EXACT (E)**: Locks one concrete path. It can protect files, directory names, and not-yet-created target paths. Blocks if any ancestor holds a TreeLock.
-- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks.
+- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks. If the target directory is missing, conflicts are checked first; only then is the directory created and locked. If a later double-check finds a new conflict, the acquire fails or retries without rolling back the empty directory.
 
 ## Lock Mechanism
 
@@ -286,15 +303,15 @@ Where `lock_type` is `E` (EXACT) or `T` (TREE).
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check parent directory exists
-    2. Check if target path is locked by another operation
+    1. Check if target path is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    3. Check all ancestor directories for TREE locks
+    2. Check all ancestor directories for TREE locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
+    3. Ensure the lock file's parent directory exists; create it if missing
     4. Write EXACT (E) lock file
-    5. TOCTOU double-check: re-scan ancestors for TREE locks
+    5. TOCTOU double-check: re-scan target path and ancestors for TREE locks
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
        - Wait and retry
@@ -308,16 +325,17 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check target directory exists
-    2. Check if target directory is locked by another operation
+    1. Check if target directory is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    3. Check all ancestor directories for TREE locks
+    2. Check all ancestor directories for TREE locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Scan all descendant directories for any locks by other operations
+    3. Scan all descendant directories for any locks by other operations
+       - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
+    4. Ensure the target directory exists; create it if missing
     5. Write TREE (T) lock file (only one file, at the root path)
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
@@ -327,6 +345,18 @@ loop until timeout (poll interval: 200ms):
     8. Success
 
 Timeout (default 0 = no-wait) raises LockAcquisitionError
+```
+
+### Missing Directory Creation
+
+The lock system may create directories so it can place lock files, but it checks
+for conflicts first:
+
+```
+1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create the directory
+2. No current conflict -> create the directory and write the lock
+3. A post-write double-check finds a new conflict -> remove our own lock and fail or retry
+4. Step 3 does not roll back the empty directory
 ```
 
 ### Lock Expiry Cleanup
