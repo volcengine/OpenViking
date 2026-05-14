@@ -197,11 +197,16 @@ class AgentLoop:
             progress to users during long-running operations.
 
         Example:
-            >>> await self._publish_thinking_event(
-            ...     session_key=SessionKey(channel="telegram", chat_id="123"),
-            ...     event_type=OutboundEventType.TOOL_START,
-            ...     content="Executing web search..."
-            ... )
+            async def notify_tool_call() -> None:
+                await self._publish_thinking_event(
+                    session_key=SessionKey(
+                        type="telegram",
+                        channel_id="default",
+                        chat_id="123",
+                    ),
+                    event_type=OutboundEventType.TOOL_CALL,
+                    content="Executing web search...",
+                )
         """
         await self.bus.publish_outbound(
             OutboundMessage(
@@ -267,6 +272,7 @@ class AgentLoop:
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
         memory_user_ids: list[str] | None = None,
+        disabled_tools: list[str] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -277,6 +283,7 @@ class AgentLoop:
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_user_ids: List of user IDs for memory retrieval
+            disabled_tools: Tool names to hide from the model for this request
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -306,7 +313,10 @@ class AgentLoop:
 
             response = await self.provider.chat(
                 messages=messages,
-                tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
+                tools=self.tools.get_definitions(
+                    ov_tools_enable=ov_tools_enable,
+                    disabled_tools=disabled_tools,
+                ),
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
@@ -516,6 +526,9 @@ class AgentLoop:
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
             ov_tools_enable = self._get_ov_tools_enable(session_key)
+            disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
+            if not isinstance(disabled_tools, list):
+                disabled_tools = []
             # Get profile_user_list from channel config
             profile_user_list = []
             # Try to get memory_users from message metadata first (CLI mode), then from channel config
@@ -668,6 +681,7 @@ class AgentLoop:
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
                     memory_user_ids=memory_user,
+                    disabled_tools=disabled_tools,
                 )
 
             # Log response preview

@@ -79,18 +79,6 @@ async function fetchJSON(path, init = {}) {
   }
 }
 
-function countExtracted(commit) {
-  if (!commit?.memories_extracted) return 0;
-  if (typeof commit.memories_extracted === "number") return commit.memories_extracted;
-  if (typeof commit.memories_extracted === "object") {
-    return Object.values(commit.memories_extracted).reduce(
-      (a, b) => a + (typeof b === "number" ? b : 0),
-      0,
-    );
-  }
-  return 0;
-}
-
 async function commitOvSession(ovSessionId) {
   if (!ovSessionId) return null;
   return fetchJSON(
@@ -103,10 +91,11 @@ async function commitOvSession(ovSessionId) {
  * Commit and clear a single state file. On commit failure, preserve state
  * (don't call clearState) so the next sweep retries.
  *
- * Returns { committed: bool, extracted: number }.
+ * Returns { committed: bool, ovSessionId: string|null }.
  */
 async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
+    const ovSessionId = state.ovSessionId;
     const commit = await commitOvSession(state.ovSessionId);
     if (!commit) {
       logError("commit_failed_keep_state", {
@@ -114,26 +103,32 @@ async function commitAndClear(state, reason) {
         codexSessionId: state.codexSessionId,
         ovSessionId: state.ovSessionId,
       });
-      return { committed: false, extracted: 0 };
+      return { committed: false, ovSessionId: null };
     }
-    const extracted = countExtracted(commit);
     log("commit", {
       reason,
       codexSessionId: state.codexSessionId,
-      ovSessionId: state.ovSessionId,
-      extracted,
+      ovSessionId,
       archived: commit.archived ?? false,
       taskId: commit.task_id,
       status: commit.status,
     });
     await clearState(state.codexSessionId);
-    return { committed: true, extracted };
+    return { committed: true, ovSessionId };
   }
   // No OV session attached — nothing to commit on the server, but the local
   // state file is still stale and should be removed.
   log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
   await clearState(state.codexSessionId);
-  return { committed: true, extracted: 0 };
+  return { committed: true, ovSessionId: null };
+}
+
+function describeCommittedSessions(ovSessionIds) {
+  if (ovSessionIds.length === 1) return `OpenViking session ${ovSessionIds[0]} is committed`;
+  if (ovSessionIds.length > 1) {
+    return `OpenViking sessions ${ovSessionIds.join(", ")} are committed`;
+  }
+  return "OpenViking session state is cleared";
 }
 
 async function main() {
@@ -183,7 +178,7 @@ async function main() {
   );
 
   let heuristicCommitted = 0;
-  let heuristicExtracted = 0;
+  const heuristicSessionIds = [];
   const skippedSessionIds = new Set();
 
   if (recentlyActive.length === 0) {
@@ -199,7 +194,7 @@ async function main() {
     const r = await commitAndClear(target, "heuristic_1_active");
     if (r.committed) {
       heuristicCommitted += 1;
-      heuristicExtracted += r.extracted;
+      if (r.ovSessionId) heuristicSessionIds.push(r.ovSessionId);
     }
   } else {
     log("heuristic", {
@@ -218,7 +213,7 @@ async function main() {
   // -------------------------------------------------------------------------
   const postHeuristic = await listStates();
   let idleCommitted = 0;
-  let idleExtracted = 0;
+  const idleSessionIds = [];
 
   for (const s of postHeuristic) {
     if (!s?.codexSessionId) continue;
@@ -232,28 +227,24 @@ async function main() {
     const r = await commitAndClear(s, "idle_ttl");
     if (r.committed) {
       idleCommitted += 1;
-      idleExtracted += r.extracted;
+      if (r.ovSessionId) idleSessionIds.push(r.ovSessionId);
     }
   }
 
   const totalCommitted = heuristicCommitted + idleCommitted;
-  const totalExtracted = heuristicExtracted + idleExtracted;
+  const ovSessionIds = [...heuristicSessionIds, ...idleSessionIds];
 
   log("done", {
     source,
     heuristicCommitted,
     idleCommitted,
     totalCommitted,
-    totalExtracted,
+    ovSessionIds,
     skipped: [...skippedSessionIds],
   });
 
   if (totalCommitted > 0) {
-    noop(
-      `SessionStart(${source}): committed ${totalCommitted} OpenViking session(s) (` +
-        `heuristic=${heuristicCommitted}, idle=${idleCommitted}), ` +
-        `${totalExtracted} memory item(s) extracted`,
-    );
+    noop(describeCommittedSessions(ovSessionIds));
   } else {
     noop();
   }

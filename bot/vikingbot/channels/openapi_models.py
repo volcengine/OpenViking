@@ -60,6 +60,10 @@ class ChatRequest(BaseModel):
     channel_id: Optional[str] = Field(
         default=None, description="Channel ID for multi-channel routing (optional)"
     )
+    disabled_tools: List[str] = Field(
+        default_factory=list,
+        description="Tool names to hide for this request",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -74,6 +78,10 @@ class ChatResponse(BaseModel):
     relevant_memories: Optional[str] = Field(
         default=None,
         description="OpenViking memories assembled during _process_message",
+    )
+    token_usage: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Token usage statistics (prompt_tokens, completion_tokens, total_tokens)",
     )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 

@@ -100,7 +100,11 @@ class ToolRegistry:
         """
         return name in self._tools
 
-    def get_definitions(self, ov_tools_enable: bool = True) -> list[dict[str, Any]]:
+    def get_definitions(
+        self,
+        ov_tools_enable: bool = True,
+        disabled_tools: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Get all tool definitions in OpenAI format.
 
@@ -110,6 +114,7 @@ class ToolRegistry:
         Args:
             ov_tools_enable: Whether to include OpenViking tools. If False,
                 tools with names starting with "openviking_" will be excluded.
+            disabled_tools: Tool names to hide from the model for this request.
 
         Returns:
             List of tool schemas in OpenAI format, where each schema contains
@@ -123,6 +128,9 @@ class ToolRegistry:
         tools = self._tools.values()
         if not ov_tools_enable:
             tools = [tool for tool in tools if not tool.name.startswith("openviking_")]
+        if disabled_tools:
+            disabled = set(disabled_tools)
+            tools = [tool for tool in tools if tool.name not in disabled]
         return [tool.to_schema() for tool in tools]
 
     async def execute(

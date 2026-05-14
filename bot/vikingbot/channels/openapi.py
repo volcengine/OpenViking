@@ -48,6 +48,7 @@ class PendingResponse:
         self.final_content: Optional[str] = None
         self.response_id: Optional[str] = None
         self.relevant_memories: Optional[str] = None
+        self.token_usage: Dict[str, int] = {}
         self.event = asyncio.Event()
         self.stream_queue: asyncio.Queue[Optional[ChatStreamEvent]] = asyncio.Queue()
 
@@ -202,6 +203,7 @@ class OpenAPIChannel(BaseChannel):
             ):
                 pending.set_response_id(msg.response_id)
                 pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
+                pending.token_usage = msg.token_usage
                 await pending.add_event(
                     "response",
                     {"content": msg.content or "", "response_id": msg.response_id},
@@ -227,6 +229,7 @@ class OpenAPIChannel(BaseChannel):
         if msg.event_type == OutboundEventType.RESPONSE:
             # Final response - add to stream first
             pending.set_response_id(msg.response_id)
+            pending.token_usage = msg.token_usage
             pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
             await pending.add_event(
                 "response",
@@ -479,6 +482,7 @@ class OpenAPIChannel(BaseChannel):
                 session_key=session_key,
                 sender_id=user_id,
                 content=content,
+                metadata={"disabled_tools": request.disabled_tools},
             )
 
             await self.bus.publish_inbound(msg)
@@ -498,6 +502,7 @@ class OpenAPIChannel(BaseChannel):
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
+                token_usage=pending.token_usage,
             )
 
         except HTTPException:
@@ -543,6 +548,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata={"disabled_tools": request.disabled_tools},
                 )
 
                 await self.bus.publish_inbound(msg)
@@ -622,6 +628,7 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 content=content,
                 need_reply=request.need_reply,
+                metadata={"disabled_tools": request.disabled_tools},
             )
 
             await self.bus.publish_inbound(msg)
@@ -641,6 +648,7 @@ class OpenAPIChannel(BaseChannel):
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
+                token_usage=pending.token_usage,
             )
 
         except HTTPException:
@@ -693,6 +701,7 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
+                    metadata={"disabled_tools": request.disabled_tools},
                 )
 
                 await self.bus.publish_inbound(msg)

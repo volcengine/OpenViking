@@ -161,7 +161,7 @@ openviking/
 ├── crates/               # Rust 组件
 │   └── ov_cli/           # Rust CLI 客户端
 │       ├── src/          # CLI 源码
-│       └── install.sh    # 一键安装脚本
+│       └── install.sh    # 已废弃 stub (改用 npm 包, 见 Install)
 │
 ├── src/                  # C++ 扩展源码（Python abi3）
 │
