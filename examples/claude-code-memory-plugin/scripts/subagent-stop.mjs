@@ -68,26 +68,27 @@ function parseTranscript(content) {
   return out;
 }
 
-// Per-block cap for tool input / tool result snippets. Sized to keep most invocations
-// verbatim while bounding worst-case blowup. Mirrors auto-capture.mjs.
-const TOOL_BLOCK_MAX_CHARS = 4096;
+// Tool result (output) retention. 0 = drop tool_result entirely; >0 = keep, truncated.
+// Default 0 — see auto-capture.mjs for rationale. Mirrors auto-capture.mjs.
+const TOOL_RESULT_MAX_CHARS = 0;
 
-function truncateForLog(value) {
-  let s;
-  if (typeof value === "string") {
-    s = value;
-  } else {
-    try {
-      s = JSON.stringify(value, null, 2);
-    } catch {
-      s = String(value);
-    }
+function formatToolInput(value) {
+  // Tool inputs are agent-authored; we keep them verbatim.
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-  if (typeof s !== "string") s = "";
-  if (s.length <= TOOL_BLOCK_MAX_CHARS) return s;
+}
+
+function truncateToolResult(s) {
+  if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_RESULT_MAX_CHARS) return s;
   return (
-    s.slice(0, TOOL_BLOCK_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_BLOCK_MAX_CHARS} more chars]`
+    s.slice(0, TOOL_RESULT_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_RESULT_MAX_CHARS} more chars]`
   );
 }
 
@@ -103,8 +104,8 @@ function extractToolResultText(content) {
 /**
  * Tier-1 parts extraction — shared shape with auto-capture.mjs.
  * Kept inline here so SubagentStop does not import auto-capture's globals.
- * Inlines tool_use input + tool_result content (truncated) so the memory extractor
- * sees what the subagent actually fetched/read/searched, not just tool names.
+ * Inlines tool_use input verbatim; tool_result content is dropped by default
+ * (TOOL_RESULT_MAX_CHARS = 0) and retained only if explicitly enabled.
  */
 function extractTurns(messages) {
   const turns = [];
@@ -125,11 +126,12 @@ function extractTurns(messages) {
             parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${truncateForLog(block.input)}`);
+            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
-            if (resultText) {
-              parts.push(`[tool result]\n${truncateForLog(resultText)}`);
+            const truncated = resultText ? truncateToolResult(resultText) : null;
+            if (truncated) {
+              parts.push(`[tool result]\n${truncated}`);
             }
           }
         }

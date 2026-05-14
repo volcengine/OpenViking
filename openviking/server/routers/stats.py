@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Memory health statistics endpoints for OpenViking HTTP Server."""
 
-import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -12,9 +11,10 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.storage.stats_aggregator import MEMORY_CATEGORIES, StatsAggregator
+from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_aggregator() -> StatsAggregator:

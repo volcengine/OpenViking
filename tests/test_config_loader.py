@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for config_loader utilities."""
 
+import logging
+
 import pytest
 
 from openviking_cli.utils.config import (
@@ -198,6 +200,24 @@ def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch)
 
     assert config.retrieval.hotness_alpha == 0.0
     assert config.retrieval.score_propagation_alpha == 0.5
+    assert config.storage.transaction.redo_recovery_enabled is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {"storage": {"transaction": {"redo_recovery_enabled": False}}}
+    )
+
+    assert config.storage.transaction.redo_recovery_enabled is False
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -231,6 +251,34 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     with pytest.raises(ValueError, match="server"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_loads_utf8_bom_config(tmp_path, monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import open_viking_config as config_module
+
+    class _ConfigStub:
+        default_account = "default"
+
+    loaded = {}
+
+    def _from_dict(data):
+        loaded.update(data)
+        return _ConfigStub()
+
+    monkeypatch.setattr(config_module.OpenVikingConfig, "from_dict", _from_dict)
+
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text("\ufeff{}", encoding="utf-8")
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
+    config = config_module.OpenVikingConfigSingleton.initialize(config_path=str(config_path))
+
+    assert config.default_account == "default"
+    assert loaded == {}
+
+    config_module.OpenVikingConfigSingleton.reset_instance()
 
 
 def test_require_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
@@ -286,4 +334,42 @@ def test_openviking_config_singleton_initialize_missing_message_uses_openviking_
         with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
             OpenVikingConfigSingleton.initialize()
     finally:
+        OpenVikingConfigSingleton.reset_instance()
+
+
+def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, monkeypatch):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+    from openviking_cli.utils.logger import get_logger
+
+    logger_name = "openviking.test.early_init"
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+
+    OpenVikingConfigSingleton.reset_instance()
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    early_logger = get_logger(logger_name)
+    assert any(isinstance(h, logging.StreamHandler) for h in early_logger.handlers)
+
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        (
+            "{"
+            '"storage": {"workspace": "%s"}, '
+            '"log": {"output": "file", "level": "INFO", '
+            '"format": "%%(message)s", "rotation": false, "rotation_days": 7, '
+            '"rotation_interval": "midnight"}'
+            "}"
+        )
+        % str(tmp_path).replace("\\", "\\\\"),
+        encoding="utf-8",
+    )
+
+    try:
+        OpenVikingConfigSingleton.initialize(config_path=str(config_path))
+        refreshed_logger = get_logger(logger_name)
+        assert any(isinstance(h, logging.FileHandler) for h in refreshed_logger.handlers)
+        assert not any(type(h) is logging.StreamHandler for h in refreshed_logger.handlers)
+    finally:
+        refreshed_logger.handlers.clear()
         OpenVikingConfigSingleton.reset_instance()

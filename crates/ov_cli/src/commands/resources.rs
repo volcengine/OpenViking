@@ -7,6 +7,7 @@ pub async fn add_resource(
     path: &str,
     to: Option<String>,
     parent: Option<String>,
+    parent_auto_create: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -19,12 +20,15 @@ pub async fn add_resource(
     watch_interval: f64,
     format: OutputFormat,
     compact: bool,
+    show_progress: bool,
+    verbose: bool,
 ) -> Result<()> {
     let result = client
         .add_resource(
             path,
             to,
             parent,
+            parent_auto_create,
             &reason,
             &instruction,
             wait,
@@ -35,13 +39,14 @@ pub async fn add_resource(
             exclude,
             directly_upload_media,
             watch_interval,
+            show_progress,
+            verbose,
         )
         .await?;
 
-    // Print helpful message for async processing
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Resource is being processed in the background.");
-        eprintln!("Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.");
+        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
     }
 
     output_success(&result, format, compact);
@@ -58,10 +63,9 @@ pub async fn add_skill(
 ) -> Result<()> {
     let result = client.add_skill(data, wait, timeout).await?;
 
-    // Print helpful message for async processing
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Skill is being processed in the background.");
-        eprintln!("Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.");
+        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
     }
 
     output_success(&result, format, compact);

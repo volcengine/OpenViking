@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VolcEngineVLM cache logic."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+import pytest
+
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM as VLMClass
 
 
@@ -38,7 +38,10 @@ class TestGetOrCreateFromSegments:
 
         # 只有一个 segment [msg0, msg1(cache_control)]
         segments = [
-            [make_message("system", "You are a helpful assistant"), make_message("user", "Hello", cache_control=True)]
+            [
+                make_message("system", "You are a helpful assistant"),
+                make_message("user", "Hello", cache_control=True),
+            ]
         ]
 
         # Mock cache hit
@@ -56,7 +59,10 @@ class TestGetOrCreateFromSegments:
         vlm = self._create_vlm_with_mock_cache()
 
         segments = [
-            [make_message("system", "You are a helpful assistant"), make_message("user", "Hello", cache_control=True)]
+            [
+                make_message("system", "You are a helpful assistant"),
+                make_message("user", "Hello", cache_control=True),
+            ]
         ]
 
         # Mock cache miss
@@ -82,7 +88,10 @@ class TestGetOrCreateFromSegments:
 
         # segments = [[msg0, msg1(cc)], [msg2, msg3(cc)]]
         segments = [
-            [make_message("system", "You are a helpful assistant"), make_message("user", "Hello", cache_control=True)],
+            [
+                make_message("system", "You are a helpful assistant"),
+                make_message("user", "Hello", cache_control=True),
+            ],
             [make_message("user", "How are you?", cache_control=True)],
         ]
 

@@ -48,4 +48,4 @@ void ZipSortBranchOptimized(Comparator comp, T begin, T end, U begin1, U end1) {
   rearrange(begin1);
 }
 
-}
+}  // namespace vectordb

@@ -76,12 +76,11 @@ def serialize_with_metadata(
 
             jinja_template = env.from_string(content_template)
             content = jinja_template.render(**template_vars).strip()
-        except Exception:
-            # If template rendering fails, use content as-is
-            pass
+        except Exception as e:
+            from openviking.telemetry import tracer
 
-    # Restore metadata (we popped content earlier)
-    # Note: metadata dict is modified in place, caller should be aware
+            tracer.error(f"Template rendering failed, skipping write: {e}")
+            raise
 
     # Clean metadata - remove None values and memory_type
     clean_metadata = {k: v for k, v in metadata.items() if v is not None and k != "memory_type"}

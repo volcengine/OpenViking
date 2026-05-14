@@ -28,6 +28,7 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.telemetry.span_models import RootSpanAttributes, create_root_span_attributes
+from openviking_cli.utils import get_logger
 
 # Try to import opentelemetry - will be None if not installed
 try:
@@ -40,7 +41,7 @@ except ImportError:
     Status = None
     StatusCode = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _HTTP_IGNORE_ROUTES = frozenset(
     {

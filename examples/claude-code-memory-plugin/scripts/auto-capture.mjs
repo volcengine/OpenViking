@@ -33,6 +33,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { readJsonState, writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -175,27 +176,32 @@ function parseTranscript(content) {
   return messages;
 }
 
-// Per-block cap for tool input / tool result snippets. Sized to keep most invocations
-// (URLs, file paths, search queries, short results) verbatim while bounding worst-case
-// blowup when an agent reads a large file or fetches a long page.
-const TOOL_BLOCK_MAX_CHARS = 4096;
+// Tool result (output) retention. 0 = drop tool_result blocks entirely; >0 = keep,
+// truncated to that many chars. Default 0 — memory extraction signal lives in the
+// agent's prose summary of what happened, not in the raw bytes the tool returned
+// (file contents, web pages, command stdout). Operators who want replay-style
+// archives can set this >0 to retain truncated results.
+const TOOL_RESULT_MAX_CHARS = 0;
 
-function truncateForLog(value) {
-  let s;
-  if (typeof value === "string") {
-    s = value;
-  } else {
-    try {
-      s = JSON.stringify(value, null, 2);
-    } catch {
-      s = String(value);
-    }
+function formatToolInput(value) {
+  // Tool inputs are agent-authored. We keep them verbatim — they're usually short
+  // (URLs, file paths, queries) and a pathologically long input is itself signal
+  // worth surfacing to the memory extractor.
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-  if (typeof s !== "string") s = "";
-  if (s.length <= TOOL_BLOCK_MAX_CHARS) return s;
+}
+
+function truncateToolResult(s) {
+  if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_RESULT_MAX_CHARS) return s;
   return (
-    s.slice(0, TOOL_BLOCK_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_BLOCK_MAX_CHARS} more chars]`
+    s.slice(0, TOOL_RESULT_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_RESULT_MAX_CHARS} more chars]`
   );
 }
 
@@ -209,10 +215,10 @@ function extractToolResultText(content) {
 }
 
 /**
- * Extract user/assistant turns. Captures plain text, tool_use input (server-side args),
- * and tool_result content (tool output). Tool blocks are inlined into the per-turn text
- * so the OV memory extractor sees "what happened" with substance, not just tool names.
- * Each tool block is truncated to TOOL_BLOCK_MAX_CHARS to bound size.
+ * Extract user/assistant turns. Captures plain text + tool_use input (verbatim) and,
+ * if TOOL_RESULT_MAX_CHARS > 0, tool_result output (truncated). Tool blocks are inlined
+ * into the per-turn text so the OV memory extractor sees what the agent did with
+ * substance, not just tool names.
  */
 function extractAllTurns(messages) {
   const turns = [];
@@ -234,11 +240,12 @@ function extractAllTurns(messages) {
             parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${truncateForLog(block.input)}`);
+            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
-            if (resultText) {
-              parts.push(`[tool result]\n${truncateForLog(resultText)}`);
+            const truncated = resultText ? truncateToolResult(resultText) : null;
+            if (truncated) {
+              parts.push(`[tool result]\n${truncated}`);
             }
           }
         }
@@ -443,15 +450,47 @@ async function main() {
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let pendingTokens = 0;
+  let commitCount = 0;
+  let totalMessageCount = 0;
   if (result.ok > 0) {
     const meta = await getSession(fetchJSON, ovSessionId);
-    const pending = Number(meta?.pending_tokens || 0);
-    log("pending_tokens", { ovSessionId, pending, threshold: cfg.commitTokenThreshold });
-    if (pending >= cfg.commitTokenThreshold) {
+    pendingTokens = Number(meta?.pending_tokens || 0);
+    commitCount = Number(meta?.commit_count || 0);
+    totalMessageCount = Number(meta?.total_message_count || 0);
+    log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
+    if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId);
       committed = commitRes.ok;
-      log("commit", { ovSessionId, ok: commitRes.ok, pending });
+      if (committed) commitCount += 1;
+      log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
     }
+  }
+
+  // Snapshot for the statusline. Lives across sessions; statusline reads it
+  // alongside last-recall.json to show pending/committed counts. commit_count
+  // is the running total of archives this session has produced — distinct
+  // from `committed` (which is just whether THIS turn triggered a commit).
+  writeJsonState("last-capture.json", {
+    turns_captured: result.ok,
+    turns_failed: result.failed,
+    pending_tokens: pendingTokens,
+    commit_threshold: cfg.commitTokenThreshold,
+    committed,
+    commit_count: commitCount,
+    total_message_count: totalMessageCount,
+    ov_session_id: ovSessionId,
+    cc_session_id: sessionId,
+  });
+
+  // Cross-session daily counter — number of archives produced today across
+  // all CC sessions. Cheap proxy for "how much OV digested today" without
+  // hitting the server again. Resets on date rollover.
+  if (committed) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
+    const prior = readJsonState("daily-stats.json") || {};
+    const archives = prior.date === today ? Number(prior.archives || 0) + 1 : 1;
+    writeJsonState("daily-stats.json", { date: today, archives });
   }
 
   if (result.ok > 0) {

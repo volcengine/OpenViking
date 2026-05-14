@@ -1,6 +1,6 @@
 [package]
 name = "ov_cli"
-version = "0.2.6"
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.91.1"
 authors = ["OpenViking Contributors"]
@@ -36,3 +36,7 @@ machine-uid = "0.5"
 termimad = "0.34"
 hex = "0.4"
 getrandom = "0.2"
+indicatif = "0.18"
+bytes = "1.0"
+viuer = "0.8"
+image = "0.25"

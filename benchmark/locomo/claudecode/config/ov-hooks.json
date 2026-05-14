@@ -1,0 +1,63 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/session-start.mjs",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/auto-recall.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${LOCOMO_BENCHMARK_DIR}/scripts/auto-capture.mjs",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/pre-compact.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/session-end.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -65,7 +65,11 @@ class _FakeProcessor:
 
 
 class _DummyTracker:
+    def __init__(self):
+        self.register_calls = []
+
     async def register(self, **_kwargs):
+        self.register_calls.append(_kwargs)
         return None
 
 
@@ -125,6 +129,63 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert sorted(processor.vectorized_files) == sorted(
         [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
     )
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {
+        root_uri: [
+            {"name": "a.txt", "isDir": False},
+            {"name": "child", "isDir": True},
+        ],
+        f"{root_uri}/child": [
+            {"name": "b.txt", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    tracker = _DummyTracker()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    mock_handle = MagicMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: MagicMock(),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        skip_vectorization=True,
+    )
+    await executor.run(root_uri)
+    await asyncio.sleep(0)
+
+    assert fake_fs.writes == [
+        (f"{root_uri}/child/.overview.md", "overview"),
+        (f"{root_uri}/child/.abstract.md", "abstract"),
+        (f"{root_uri}/.overview.md", "overview"),
+        (f"{root_uri}/.abstract.md", "abstract"),
+    ]
+    assert processor.vectorized_dirs == []
+    assert processor.vectorized_files == []
+    assert tracker.register_calls == []
 
 
 if __name__ == "__main__":

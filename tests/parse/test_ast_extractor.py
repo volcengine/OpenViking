@@ -1434,5 +1434,3 @@ class TestASTExtractorDispatch:
         verbose = self.extractor.extract_skeleton("m.py", code, verbose=True)
         assert "Detail here." not in compact
         assert "Detail here." in verbose
-
-

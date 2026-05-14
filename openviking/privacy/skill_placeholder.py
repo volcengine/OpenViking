@@ -71,7 +71,5 @@ def placeholderize_skill_content_with_blocks(
     )
 
 
-def placeholderize_skill_content(
-    content: str, skill_name: str, values: dict[str, str]
-) -> str:
+def placeholderize_skill_content(content: str, skill_name: str, values: dict[str, str]) -> str:
     return placeholderize_skill_content_with_blocks(content, skill_name, values).sanitized_content

@@ -395,13 +395,16 @@ async def process_single_session(
     ingest_record = ingest_record or {}
     csv_id = display_id or str(sample_id)
     try:
+        user_id = str(sample_id) if args.separate_user_by_sample else ""
+        agent_id = str(sample_id) if args.separate_user_by_sample else ""
+        account = args.account
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
-            user_id=csv_id,
-            agent_id=f"agent_{csv_id}",
-            account=args.account,
+            user_id=user_id,
+            agent_id=agent_id,
+            account=account,
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
@@ -655,9 +658,19 @@ async def run_import(args: argparse.Namespace) -> None:
                 elif res.get("status") == "error":
                     error_count += 1
 
-        # 不同 sample 之间并行执行
-        tasks = [asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if args.parallel_samples:
+            semaphore = asyncio.Semaphore(args.parallel_samples)
+
+            async def process_sample_with_limit(item, sample_index):
+                async with semaphore:
+                    await process_sample(item, sample_index)
+
+            tasks = [
+                asyncio.create_task(process_sample_with_limit(item, idx))
+                for idx, item in enumerate(samples)
+            ]
+        else:
+            tasks = [asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)]
 
     else:
         # Plain text format
@@ -797,6 +810,18 @@ def main():
         type=int,
         default=None,
         help="LoCoMo JSON: question index (0-based). When specified, auto-detect required sessions from question's evidence.",
+    )
+    parser.add_argument(
+        "--separate-user-by-sample",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to isolate OpenViking user/agent IDs by sample (default: true). Use --no-separate-user-by-sample to use empty user/agent while keeping --account unchanged.",
+    )
+    parser.add_argument(
+        "--parallel-samples",
+        type=int,
+        default=None,
+        help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
     )
     parser.add_argument(
         "--force-ingest",

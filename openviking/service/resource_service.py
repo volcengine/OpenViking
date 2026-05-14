@@ -6,10 +6,12 @@ Resource Service for OpenViking.
 Provides resource management operations: add_resource, add_skill, wait_processed.
 """
 
+import asyncio
 import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -160,7 +162,8 @@ class ResourceService:
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
         request_wait_tracker = get_request_wait_tracker()
-        if wait and telemetry_id:
+        monitor_started = False
+        if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
         watch_enabled = bool(
@@ -173,6 +176,12 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
+            # Resolve path variables before validation
+            if to:
+                to = resolve_path_variables(to)
+            if parent:
+                parent = resolve_path_variables(parent)
+
             to = validate_optional_viking_uri(
                 to,
                 field_name="to",
@@ -205,7 +214,9 @@ class ResourceService:
                 **kwargs,
             )
 
-            if wait:
+            if result.get("status") == "error":
+                return result
+            elif wait:
                 wait_start = time.perf_counter()
                 try:
                     with telemetry.measure("resource.wait"):
@@ -276,6 +287,38 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                             )
+            if not wait:
+                from openviking.service.task_tracker import get_task_tracker
+
+                task_tracker = get_task_tracker()
+                root_uri = result.get("root_uri", "")
+                task = task_tracker.create(
+                    "add_resource",
+                    resource_id=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["task_id"] = task.task_id
+                if telemetry_id:
+                    monitor_started = True
+                    asyncio.create_task(
+                        self._monitor_queue_processing(
+                            task.task_id,
+                            telemetry_id,
+                            ctx.account_id,
+                            ctx.user.user_id,
+                        )
+                    )
+                else:
+                    task_tracker.start(
+                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
+                    task_tracker.complete(
+                        task.task_id,
+                        {"root_uri": root_uri},
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -289,7 +332,44 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            get_request_wait_tracker().cleanup(telemetry_id)
+            if wait or not telemetry_id or not monitor_started:
+                get_request_wait_tracker().cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
+
+    async def _monitor_queue_processing(
+        self,
+        task_id: str,
+        telemetry_id: str,
+        account_id: str,
+        user_id: str,
+    ) -> None:
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        task_tracker.start(task_id, account_id=account_id, user_id=user_id)
+        try:
+            await request_wait_tracker.wait_for_request(telemetry_id)
+            status = request_wait_tracker.build_queue_status(telemetry_id)
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+            else:
+                task_tracker.complete(
+                    task_id,
+                    {"queue_status": status},
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+        except Exception as exc:
+            task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
+        finally:
+            request_wait_tracker.cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
 
     async def _handle_watch_task_creation(
@@ -427,7 +507,8 @@ class ResourceService:
         self._ensure_initialized()
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()
-        if wait and telemetry_id:
+        monitor_started = False
+        if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
@@ -461,10 +542,42 @@ class ResourceService:
                     round((time.perf_counter() - wait_start) * 1000, 3),
                 )
                 result["queue_status"] = status
+            else:
+                from openviking.service.task_tracker import get_task_tracker
+
+                task_tracker = get_task_tracker()
+                task = task_tracker.create(
+                    "add_skill",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["task_id"] = task.task_id
+                if telemetry_id:
+                    monitor_started = True
+                    asyncio.create_task(
+                        self._monitor_queue_processing(
+                            task.task_id,
+                            telemetry_id,
+                            ctx.account_id,
+                            ctx.user.user_id,
+                        )
+                    )
+                else:
+                    task_tracker.start(
+                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
+                    task_tracker.complete(
+                        task.task_id,
+                        {},
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
 
             return result
         finally:
-            request_wait_tracker.cleanup(telemetry_id)
+            if wait or not telemetry_id or not monitor_started:
+                request_wait_tracker.cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

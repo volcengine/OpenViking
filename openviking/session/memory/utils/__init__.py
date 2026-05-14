@@ -12,6 +12,7 @@ from openviking.session.memory.utils.content import (
     truncate_content,
 )
 from openviking.session.memory.utils.json_parser import (
+    JsonUtils,
     _any_to_str,
     _get_arg_type,
     _get_origin_type,
@@ -68,6 +69,7 @@ __all__ = [
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
+    "JsonUtils",
     "_get_origin_type",
     "_get_arg_type",
     "_any_to_str",

@@ -7,6 +7,10 @@
 - 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall`）
 - 模型配置已就绪（参见 [快速开始](02-quickstart.md) 了解配置方法）
 
+> Python 3.14 说明（适用于火山方舟 / Volcengine Ark）：
+> 如果你的 `ov.conf` 中使用了 `provider = "volcengine"` / Ark runtime，当前建议优先使用 Python 3.13 及以下版本运行 `openviking-server`。
+> 这是因为 `volcengine-python-sdk[ark]` 仍会在 Python 3.14 下输出 Pydantic V1 兼容性警告，服务通常仍可运行，但启动命令和 `--version` 等输出会带有噪声，直到上游 SDK 去掉这层兼容逻辑。
+
 ## 启动服务
 
 确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：

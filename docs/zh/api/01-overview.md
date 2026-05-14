@@ -132,7 +132,9 @@ client.initialize()
 #### HTTP 调用示例
 
 - CLI、`SyncHTTPClient`、`AsyncHTTPClient` 遇到本地文件或目录时，会先自动上传，再调用服务端 API。
+- Python HTTP client 和 CLI 也可以通过客户端配置启用 shared 临时上传（`ovcli.conf` 中设置 `upload.mode = "shared"`）。
 - 裸 HTTP 调用没有这层封装。使用 `curl` 或其他 HTTP 客户端时，需要先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API。
+- `temp_upload` 默认使用 `upload_mode=local`。只有在你显式需要分布式共享临时上传时，才应传 `upload_mode=shared`。
 - 裸 HTTP 如果导入本地目录，需要先自行打成 `.zip` 再通过上述方法上传；服务端不接受直接传宿主机目录路径。
 - `POST /api/v1/resources` 可以直接接收远端 URL，但不接受 `./doc.md`、`/tmp/doc.md` 这类宿主机本地路径。
 
@@ -346,6 +348,7 @@ JSON 输出 - 错误：
 | GET | `/metrics` | Prometheus 指标导出 | 可选 |
 | GET | `/api/v1/system/status` | 系统状态 | 需要 |
 | POST | `/api/v1/system/wait` | 等待处理完成 | 需要 |
+| POST | `/api/v1/system/consistency` | 文件系统和向量索引一致性检查 | 需要 |
 
 ### 资源端点
 
@@ -361,6 +364,8 @@ JSON 输出 - 错误：
 |------|------|------|------|
 | POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN |
 | POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN |
+| POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
+| POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
 
 ### 文件系统端点
 
@@ -382,7 +387,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节流 |
 | POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
-| POST | `/api/v1/content/reindex` | 重新构建语义/向量索引（已废弃，请使用 maintenance） |
+| POST | `/api/v1/content/reindex` | 重新构建已有内容的语义/向量索引 |
 
 ### 搜索端点
 
@@ -453,12 +458,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/debug/health` | 快速健康检查 |
 | GET | `/api/v1/debug/vector/scroll` | 分页查看向量记录 |
 | GET | `/api/v1/debug/vector/count` | 统计向量记录数量 |
-
-### 维护端点
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|------|
-| POST | `/api/v1/maintenance/reindex` | 重新索引内容（可选择重新生成摘要） | ROOT/ADMIN |
 
 ### 统计端点
 

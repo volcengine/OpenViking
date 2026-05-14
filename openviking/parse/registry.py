@@ -6,7 +6,6 @@ Parser registry for OpenViking.
 Provides automatic parser selection based on file type.
 """
 
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
@@ -28,12 +27,13 @@ from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import ParserConfig
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ParserRegistry:

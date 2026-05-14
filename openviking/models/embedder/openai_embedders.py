@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI Embedder Implementation"""
 
-import logging
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -15,8 +14,9 @@ from openviking.models.embedder.base import (
 )
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):

@@ -40,6 +40,15 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
+    agent_memory_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable agent-scope trajectory/experience memory extraction. When true, "
+            "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
+            "execution trajectories from the conversation; Phase 2 consolidates them "
+            "into higher-level experience memories."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(

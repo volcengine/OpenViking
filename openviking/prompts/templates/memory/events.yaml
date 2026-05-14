@@ -32,14 +32,15 @@ fields:
   - name: event_name
     type: string
     description: |
-      Output a real-world event name only.
+      Output a concrete noun phrase representing a real-world activity or occurrence.
       Rules:
       1. Can be Chinese or English;
       2. If English: all lowercase, use underscore instead of space, maximum 3 words;
       3. Never include any date, time, year or number;
-      4. Must be the actual real-life event being discussed, NOT the chat/conversation itself;
-      5. Forbidden format: person name + chat, chat about xxx, daily talk;
-      6. Output only the event name, no extra explanation.
+      4. Must name the real-world activity/occurrence, NOT the conversation about it;
+      5. Names ending with _chat, _talk, _conversation, _catchup, _discussion are forbidden;
+      6. Patterns like "person_chat", "chat_about_xxx", "daily_talk" are forbidden;
+      7. Output only the event name, no extra explanation.
     merge_op: immutable
 
   - name: goal

@@ -15,6 +15,7 @@ from .consts import DEFAULT_OVCLI_CONF, OPENVIKING_CLI_CONFIG_ENV
 class OVCLIUploadConfig(BaseModel):
     """Upload-related defaults in ovcli.conf."""
 
+    mode: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
     exclude: Optional[str] = None

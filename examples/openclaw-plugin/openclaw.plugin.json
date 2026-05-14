@@ -3,6 +3,72 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "add_resource",
+      "add_skill",
+      "memory_search",
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "setup",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    },
+    {
+      "name": "status",
+      "kind": "runtime-slash",
+      "cliCommand": "openviking"
+    }
+  ],
+  "providerAuthEnvVars": {
+    "openviking": [
+      "OPENVIKING_API_KEY",
+      "OPENVIKING_BASE_URL"
+    ]
+  },
+  "skills": [
+    "./skills/install-openviking-memory"
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "openviking",
+        "authMethods": [
+          "api_key",
+          "trusted"
+        ],
+        "envVars": [
+          "OPENVIKING_API_KEY",
+          "OPENVIKING_BASE_URL"
+        ],
+        "cliFlags": {
+          "api_key": [
+            "--base-url",
+            "--api-key"
+          ],
+          "trusted": [
+            "--base-url"
+          ]
+        }
+      }
+    ],
+    "requiresRuntime": true,
+    "cliCommand": "openclaw openviking setup"
+  },
   "uiHints": {
     "baseUrl": {
       "label": "OpenViking Base URL",
@@ -151,6 +217,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "mode": {
+        "type": "string",
+        "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
+      },
       "baseUrl": {
         "type": "string"
       },

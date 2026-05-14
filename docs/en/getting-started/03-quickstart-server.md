@@ -7,6 +7,10 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 - OpenViking installed (`pip install openviking --upgrade --force-reinstall`)
 - Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
+> Python 3.14 note for Volcengine Ark users:
+> if your `ov.conf` uses `provider = "volcengine"` / Ark runtime, prefer Python 3.13 or lower for `openviking-server` right now.
+> `volcengine-python-sdk[ark]` still emits a Pydantic V1 compatibility warning on Python 3.14, so the server works but startup/version commands may print noisy warnings until the upstream SDK removes that compatibility layer.
+
 ## Start the Server
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).

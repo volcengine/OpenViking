@@ -138,6 +138,7 @@ class MemoryStore:
         sender_id: str,
         user_ids: list[str] | None = None,
     ) -> str:
+        client = None
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
@@ -146,6 +147,7 @@ class MemoryStore:
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"user_ids={search_user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
+
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(
                 query=current_message,
@@ -181,17 +183,56 @@ class MemoryStore:
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")
             return ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")
+
+    async def get_viking_experience_context(self, query: str, workspace_id: str) -> str:
+        """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
+        client = None
+        try:
+            client = await VikingClient.create(agent_id=workspace_id)
+            experiences = await client.search_experiences(query, limit=5)
+            logger.info(
+                f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
+            )
+            for i, exp in enumerate(experiences):
+                uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
+                score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
+                logger.info(f"  {i},{uri},{score}")
+            if not experiences:
+                return ""
+            return await self._parse_viking_memory(
+                experiences, client, min_score=0.3, max_chars=2000
+            )
+        except Exception as e:
+            logger.error(f"[READ_EXPERIENCE_MEMORY]: error. {e}")
+            return ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
 
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
+        client = None
         try:
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.read_user_profile(user_id)
+            return result or ""
         except Exception as e:
             logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
             return ""
-        if not result:
-            return ""
-        return result
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")
 
     async def get_viking_user_profiles(self, workspace_id: str, user_ids: list[str]) -> str:
         """Get multiple user profiles concurrently.
@@ -206,38 +247,45 @@ class MemoryStore:
         if not user_ids:
             return ""
 
+        client = None
         try:
             client = await VikingClient.create(agent_id=workspace_id)
+
+            async def fetch_profile(user_id: str) -> tuple[str, str]:
+                """Fetch a single user profile."""
+                try:
+                    start_time = time.time()
+                    profile = await client.read_user_profile(user_id)
+                    cost = round(time.time() - start_time, 2)
+                    logger.info(
+                        f"[READ_USER_PROFILE]: user_id={user_id}, cost {cost}s, "
+                        f"profile={profile[:50] if profile else 'None'}"
+                    )
+                    return (user_id, profile or "")
+                except Exception as e:
+                    logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
+                    return (user_id, "")
+
+            # Fetch all profiles concurrently
+            tasks = [fetch_profile(user_id) for user_id in user_ids]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Build the result string
+            parts = []
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                user_id, profile = result
+                if profile:
+                    parts.append(f"## User profile for {user_id}: \n{profile}")
+
+            return "\n\n".join(parts) if parts else ""
         except Exception as e:
-            logger.error(f"[READ_USER_PROFILE]: users={user_ids}, error. {e}")
+            logger.error(f"[READ_USER_PROFILES]: error. {e}")
             return ""
-
-        async def fetch_profile(user_id: str) -> tuple[str, str]:
-            """Fetch a single user profile."""
-            try:
-                start_time = time.time()
-                profile = await client.read_user_profile(user_id)
-                cost = round(time.time() - start_time, 2)
-                logger.info(
-                    f"[READ_USER_PROFILE]: user_id={user_id}, cost {cost}s, "
-                    f"profile={profile[:50] if profile else 'None'}"
-                )
-                return (user_id, profile or "")
-            except Exception as e:
-                logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
-                return (user_id, "")
-
-        # Fetch all profiles concurrently
-        tasks = [fetch_profile(user_id) for user_id in user_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Build the result string
-        parts = []
-        for result in results:
-            if isinstance(result, Exception):
-                continue
-            user_id, profile = result
-            if profile:
-                parts.append(f"## User profile for {user_id}: \n{profile}")
-
-        return "\n\n".join(parts) if parts else ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")

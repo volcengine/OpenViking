@@ -5,13 +5,13 @@ LiteLLM Rerank API Client.
 """
 
 # For logging, use Python's built-in logging
-import logging
 import time
 from typing import List, Optional
 
 from openviking.models.rerank.base import RerankBase
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LiteLLMRerankClient(RerankBase):

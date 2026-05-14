@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
@@ -51,7 +52,10 @@ class ContentWriteCoordinator:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        normalized_uri = VikingURI.normalize(uri)
+        try:
+            normalized_uri = canonicalize_uri(uri, ctx)
+        except NamespaceShapeError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
 
@@ -68,7 +72,7 @@ class ContentWriteCoordinator:
         if stat.get("isDir"):
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
 
-        context_type = self._context_type_for_uri(normalized_uri)
+        context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -300,7 +304,7 @@ class ContentWriteCoordinator:
         if not stat.get("not_found"):
             raise AlreadyExistsError(uri, "file")
 
-        context_type = self._context_type_for_uri(uri)
+        context_type = context_type_for_uri(uri)
         root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -339,7 +343,7 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and self._context_type_for_uri(uri) == "memory":
+        if mode == "replace" and context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
             existing = deserialize_full(existing_raw)
             if existing.memory_fields:
@@ -392,9 +396,14 @@ class ContentWriteCoordinator:
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             changes={change_type: [changed_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _enqueue_memory_refresh(
         self,
@@ -419,9 +428,14 @@ class ContentWriteCoordinator:
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             changes={"modified": [modified_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
@@ -575,8 +589,12 @@ class ContentWriteCoordinator:
                 )
             root_uri = VikingURI.build(*parts[: memories_idx + 2])
         elif parts[0] == "agent":
-            if len(parts) >= 3 and parts[1] == "skills":
-                root_uri = VikingURI.build(*parts[:3])
+            try:
+                skills_idx = parts.index("skills")
+            except ValueError:
+                skills_idx = -1
+            if skills_idx >= 0 and len(parts) > skills_idx + 1:
+                root_uri = VikingURI.build(*parts[: skills_idx + 2])
             else:
                 try:
                     memories_idx = parts.index("memories")
@@ -597,10 +615,3 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")
             root_uri = parent.uri
         return root_uri
-
-    def _context_type_for_uri(self, uri: str) -> str:
-        if "/memories/" in uri:
-            return "memory"
-        if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
-            return "skill"
-        return "resource"

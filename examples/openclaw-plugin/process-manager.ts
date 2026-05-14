@@ -1,5 +1,12 @@
 import { Socket } from "node:net";
-import { launchProcess } from "./runtime-utils.js";
+
+type ChildLike = {
+  killed?: boolean;
+  exitCode?: number | null;
+  signalCode?: string | null;
+  off?: (event: string, listener: (...args: any[]) => void) => void;
+  once: (event: string, listener: (...args: any[]) => void) => void;
+};
 
 export function waitForHealth(baseUrl: string, timeoutMs: number, intervalMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -28,7 +35,7 @@ export function waitForHealthOrExit(
   baseUrl: string,
   timeoutMs: number,
   intervalMs: number,
-  child: ReturnType<typeof launchProcess>,
+  child: ChildLike,
 ): Promise<void> {
   const exited =
     child.killed || child.exitCode !== null || child.signalCode !== null;

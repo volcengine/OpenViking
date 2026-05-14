@@ -252,7 +252,8 @@ class SessionService:
         """Query background commit task status by task_id for the calling owner."""
         task = get_task_tracker().get(
             task_id,
-            owner_account_id=ctx.account_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
 

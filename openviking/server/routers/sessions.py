@@ -2,21 +2,24 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
+from openviking.server.telemetry import run_operation
+from openviking.telemetry import TelemetryRequest
+from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TextPartRequest(BaseModel):
@@ -66,6 +69,7 @@ class AddMessageRequest(BaseModel):
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
+    telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
@@ -85,6 +89,7 @@ class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
     session_id: Optional[str] = None
+    telemetry: TelemetryRequest = False
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -106,24 +111,9 @@ def _request_auth_mode(request: Request) -> AuthMode:
     return AuthMode.API_KEY
 
 
-def _resolve_message_role_id(
-    http_request: Request,
-    request: AddMessageRequest,
-    ctx: RequestContext,
-) -> Optional[str]:
-    if request.role not in {"user", "assistant"}:
-        return request.role_id
-
-    role_id = request.role_id
-    if not role_id:
-        role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
-
-    return role_id
-
-
 @router.post("")
 async def create_session(
-    request: Optional[CreateSessionRequest] = None,
+    request: CreateSessionRequest = Body(default_factory=CreateSessionRequest),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new session.
@@ -132,17 +122,22 @@ async def create_session(
     If session_id is None, creates a new session with auto-generated ID.
     """
     service = get_service()
-    await service.initialize_user_directories(_ctx)
-    await service.initialize_agent_directories(_ctx)
-    session_id = request.session_id if request else None
-    session = await service.sessions.create(_ctx, session_id)
-    return Response(
-        status="ok",
-        result={
+
+    async def _create() -> dict[str, Any]:
+        await service.initialize_user_directories(_ctx)
+        await service.initialize_agent_directories(_ctx)
+        session = await service.sessions.create(_ctx, request.session_id)
+        return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
-        },
+        }
+
+    execution = await run_operation(
+        operation="session.create",
+        telemetry=request.telemetry,
+        fn=_create,
     )
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
 
 
 @router.get("")
@@ -251,6 +246,7 @@ class CommitRequest(BaseModel):
             "(default 10); compact path passes 0 to archive everything."
         ),
     )
+    telemetry: TelemetryRequest = False
 
 
 @router.post("/{session_id}/commit")
@@ -266,10 +262,18 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    result = await service.sessions.commit_async(
-        session_id, _ctx, keep_recent_count=body.keep_recent_count
+    execution = await run_operation(
+        operation="session.commit",
+        telemetry=body.telemetry,
+        fn=lambda: service.sessions.commit_async(
+            session_id, _ctx, keep_recent_count=body.keep_recent_count
+        ),
     )
-    return Response(status="ok", result=result).model_dump(exclude_none=True)
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/{session_id}/extract")
@@ -286,7 +290,6 @@ async def extract_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
-    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -306,28 +309,47 @@ async def add_message(
     Missing sessions are auto-created on first add.
     """
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=True)
-    role_id = _resolve_message_role_id(http_request, request, _ctx)
 
-    if request.parts is not None:
-        parts = [part_from_dict(p) for p in request.parts]
-    else:
-        parts = [TextPart(text=request.content or "")]
+    async def _add() -> dict[str, Any]:
+        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        role_id = _ctx.resolve_role_id(request.role, request.role_id)
 
-    # created_at 直接传递给 session (ISO string)
-    session.add_message(
-        request.role,
-        parts,
-        role_id=role_id,
-        created_at=request.created_at,
-    )
-    return Response(
-        status="ok",
-        result={
+        if request.parts is not None:
+            # Resolve path variables in URIs within parts
+            resolved_parts = []
+            for p in request.parts:
+                part_copy = dict(p)
+                # Resolve uri in context parts
+                if part_copy.get("type") == "context" and "uri" in part_copy:
+                    part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+                # Resolve tool_uri and skill_uri in tool parts
+                if part_copy.get("type") == "tool":
+                    if "tool_uri" in part_copy:
+                        part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
+                    if "skill_uri" in part_copy:
+                        part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+                resolved_parts.append(part_copy)
+            parts = [part_from_dict(p) for p in resolved_parts]
+        else:
+            parts = [TextPart(text=request.content or "")]
+
+        session.add_message(
+            request.role,
+            parts,
+            role_id=role_id,
+            created_at=request.created_at,
+        )
+        return {
             "session_id": session_id,
             "message_count": len(session.messages),
-        },
+        }
+
+    execution = await run_operation(
+        operation="session.add_message",
+        telemetry=request.telemetry,
+        fn=_add,
     )
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/{session_id}/used")
@@ -340,7 +362,19 @@ async def record_used(
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
-    session.used(contexts=request.contexts, skill=request.skill)
+
+    # Resolve path variables in contexts
+    resolved_contexts = None
+    if request.contexts is not None:
+        resolved_contexts = [resolve_path_variables(uri) for uri in request.contexts]
+
+    # Resolve path variables in skill URI if present
+    resolved_skill = request.skill
+    if resolved_skill is not None and "uri" in resolved_skill:
+        resolved_skill = dict(resolved_skill)
+        resolved_skill["uri"] = resolve_path_variables(resolved_skill["uri"])
+
+    session.used(contexts=resolved_contexts, skill=resolved_skill)
     return Response(
         status="ok",
         result={
