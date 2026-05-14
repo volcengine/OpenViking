@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-
 WATCH_TASK_STORAGE_URI = "viking://resources/.watch_tasks.json"
 WATCH_TASK_STORAGE_BAK_URI = "viking://resources/.watch_tasks.json.bak"
 WATCH_TASK_STORAGE_TMP_URI = "viking://resources/.watch_tasks.json.tmp"

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Jina AI Embedder Implementation"""
 
-import logging
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -11,8 +10,9 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default dimensions for Jina embedding models
 JINA_MODEL_DIMENSIONS = {

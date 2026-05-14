@@ -159,12 +159,13 @@ class AsyncHTTPClient(BaseClient):
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
+        effective_user = user if user is not None else user_id
         should_load_cli_config = (
             url is None
             or api_key is None
             or agent_id is None
             or account is None
-            or user is None
+            or effective_user is None
             or timeout == 60.0
             or extra_headers is None
         )
@@ -175,7 +176,7 @@ class AsyncHTTPClient(BaseClient):
                 api_key = api_key or cli_config.api_key
                 agent_id = agent_id or cli_config.agent_id
                 account = account or cli_config.account
-                user = user or cli_config.user
+                effective_user = effective_user or cli_config.user
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
                 if extra_headers is None:
@@ -189,7 +190,7 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._agent_id = agent_id
         self._account = account
-        self._user_id = user
+        self._user_id = effective_user
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
@@ -894,7 +895,12 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Pack =============
 
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        include_vectors: bool = False,
+    ) -> str:
         """Export context as .ovpack file and save to local path.
 
         Args:
@@ -922,7 +928,7 @@ class AsyncHTTPClient(BaseClient):
         # Request export and stream response
         response = await self._http.post(
             "/api/v1/pack/export",
-            json={"uri": uri},
+            json={"uri": uri, "include_vectors": include_vectors},
         )
 
         # Check for errors
@@ -935,7 +941,7 @@ class AsyncHTTPClient(BaseClient):
 
         return str(to_path)
 
-    async def backup_ovpack(self, to: str) -> str:
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
         """Back up public scopes as a restore-only .ovpack file."""
         to_path = Path(to)
         if to_path.is_dir():
@@ -945,7 +951,10 @@ class AsyncHTTPClient(BaseClient):
 
         to_path.parent.mkdir(parents=True, exist_ok=True)
 
-        response = await self._http.post("/api/v1/pack/backup", json={})
+        response = await self._http.post(
+            "/api/v1/pack/backup",
+            json={"include_vectors": include_vectors},
+        )
         if not response.is_success:
             self._handle_response(response)
 
@@ -959,6 +968,7 @@ class AsyncHTTPClient(BaseClient):
         file_path: str,
         parent: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         parent = VikingURI.normalize(parent)
@@ -967,6 +977,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if on_conflict is not None:
             request_data["on_conflict"] = on_conflict
+        if vector_mode is not None:
+            request_data["vector_mode"] = vector_mode
 
         file_path_obj = Path(file_path)
         if not file_path_obj.exists():
@@ -988,11 +1000,14 @@ class AsyncHTTPClient(BaseClient):
         self,
         file_path: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Restore backup .ovpack file."""
         request_data = {}
         if on_conflict is not None:
             request_data["on_conflict"] = on_conflict
+        if vector_mode is not None:
+            request_data["vector_mode"] = vector_mode
 
         file_path_obj = Path(file_path)
         if not file_path_obj.exists():
@@ -1011,6 +1026,14 @@ class AsyncHTTPClient(BaseClient):
         return result.get("uri", "")
 
     # ============= Debug =============
+
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        response = await self._http.post(
+            "/api/v1/system/consistency",
+            json={"uri": VikingURI.normalize(uri)},
+        )
+        return self._handle_response(response)
 
     async def health(self) -> bool:
         """Check server health."""

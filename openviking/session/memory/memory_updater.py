@@ -535,10 +535,16 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
-                    if enqueued and embedding_msg.telemetry_id:
+                    if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id
+                        )
+                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    if not enqueued and embedding_msg.telemetry_id:
+                        request_wait_tracker.mark_embedding_failed(
+                            embedding_msg.telemetry_id,
+                            embedding_msg.id,
+                            "embedding enqueue returned false",
                         )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 

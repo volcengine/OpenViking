@@ -116,7 +116,9 @@ class FeishuChannel(BaseChannel):
         self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # LRU缓存用户ID到姓名的映射
         self._bot_name_cache: dict[str, str] = {}  # 缓存机器人open_id到名称的映射
-        self._chat_member_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()  # chat_id -> {members, expires_at, last_error_at}
+        self._chat_member_cache: OrderedDict[str, dict[str, Any]] = (
+            OrderedDict()
+        )  # chat_id -> {members, expires_at, last_error_at}
         self._MAX_USER_CACHE_SIZE = 1000  # 最大缓存1000个用户
         self._CHAT_MEMBER_CACHE_TTL_SEC = 300
         self._CHAT_MEMBER_CACHE_MAX_CHATS = 30
@@ -801,13 +803,19 @@ class FeishuChannel(BaseChannel):
         self._user_name_cache[open_id] = name
         return name
 
-    def _save_chat_member_cache(self, chat_id: str, members: dict[str, str], last_error_at: float = 0) -> None:
+    def _save_chat_member_cache(
+        self, chat_id: str, members: dict[str, str], last_error_at: float = 0
+    ) -> None:
         if chat_id in self._chat_member_cache:
             self._chat_member_cache.pop(chat_id)
         elif len(self._chat_member_cache) >= self._CHAT_MEMBER_CACHE_MAX_CHATS:
             self._chat_member_cache.popitem(last=False)
 
-        ttl = self._CHAT_MEMBER_FETCH_COOLDOWN_SEC if last_error_at else self._CHAT_MEMBER_CACHE_TTL_SEC
+        ttl = (
+            self._CHAT_MEMBER_FETCH_COOLDOWN_SEC
+            if last_error_at
+            else self._CHAT_MEMBER_CACHE_TTL_SEC
+        )
         self._chat_member_cache[chat_id] = {
             "members": members,
             "expires_at": time.time() + ttl,
@@ -862,7 +870,10 @@ class FeishuChannel(BaseChannel):
             members = entry.get("members", {})
             if entry.get("expires_at", 0) > now:
                 return members.get(open_id)
-            if now - float(entry.get("last_error_at", 0) or 0) < self._CHAT_MEMBER_FETCH_COOLDOWN_SEC:
+            if (
+                now - float(entry.get("last_error_at", 0) or 0)
+                < self._CHAT_MEMBER_FETCH_COOLDOWN_SEC
+            ):
                 return members.get(open_id)
 
         try:
@@ -924,7 +935,9 @@ class FeishuChannel(BaseChannel):
         self._bot_name_cache[open_id] = bot_name
         return bot_name
 
-    async def _batch_get_user_names(self, open_ids: list[str], chat_id: str | None = None) -> dict[str, str]:
+    async def _batch_get_user_names(
+        self, open_ids: list[str], chat_id: str | None = None
+    ) -> dict[str, str]:
         """
         Get user names from Feishu API by open_ids (fetches individually with LRU cache).
         Returns a dict mapping open_id to user name.

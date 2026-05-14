@@ -1,2 +1,5 @@
 node_modules/
-servers/
+servers/*.mjs
+servers/*.js
+!servers/memory-server.js
+*.tsbuildinfo

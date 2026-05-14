@@ -26,6 +26,48 @@ pub async fn status(client: &HttpClient, output_format: OutputFormat, compact: b
     Ok(())
 }
 
+pub async fn consistency(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.consistency(uri).await?;
+    if matches!(output_format, OutputFormat::Table) {
+        output_consistency_table(&response, compact);
+    } else {
+        output_success(&response, output_format, compact);
+    }
+    Ok(())
+}
+
+fn output_consistency_table(response: &serde_json::Value, compact: bool) {
+    let summary = json!({
+        "ok": response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+        "expected_count": response.get("expected_count").and_then(|v| v.as_u64()).unwrap_or(0),
+        "missing_record_count": response
+            .get("missing_record_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        "missing_records_truncated": response
+            .get("missing_records_truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    });
+    output_success(&summary, OutputFormat::Table, compact);
+
+    let Some(missing_records) = response.get("missing_records").and_then(|v| v.as_array()) else {
+        return;
+    };
+    if missing_records.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("missing_records");
+    output_success(missing_records, OutputFormat::Table, compact);
+}
+
 pub async fn health(
     client: &HttpClient,
     output_format: OutputFormat,

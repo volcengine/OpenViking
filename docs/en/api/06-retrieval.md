@@ -63,6 +63,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
+| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
@@ -195,6 +196,12 @@ openviking find "invoice" --after 7d
 
 # With limit
 openviking find "how to authenticate users" --limit 20
+
+# Limit to specific level(s) (L0 only)
+openviking find "how to authenticate users" --level 0
+
+# Limit to specific level(s) (L1 and L2) using short option
+openviking find "how to authenticate users" -L 1,2
 ```
 
 **Response Example**
@@ -274,6 +281,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
+| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
@@ -363,6 +371,12 @@ openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
 # Search without session (still performs intent analysis)
 openviking search "how to implement OAuth 2.0 authorization code flow"
+
+# Limit to specific level(s) (L0 only)
+openviking search "best practices" --level 0
+
+# Limit to specific level(s) (L1 and L2) using short option
+openviking search "how to implement OAuth" -L 1,2
 ```
 
 **Response Example**

@@ -19,6 +19,17 @@ def _content_sha256(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _index_records_bytes(records: list[dict[str, object]] | None = None) -> bytes:
+    records = records or []
+    if not records:
+        return b""
+    lines = [
+        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for record in records
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def build_ovpack_bytes(
     root_name: str = "pkg",
     files: dict[str, bytes] | None = None,
@@ -44,19 +55,33 @@ def build_ovpack_bytes(
             }
         )
 
+    index_records = _index_records_bytes()
     manifest = {
         "kind": "openviking.ovpack",
         "format_version": 2,
-        "root": {"name": root_name},
+        "root": {
+            "name": root_name,
+            "uri": f"viking://resources/{root_name}",
+            "scope": "resources",
+        },
         "entries": manifest_entries,
         "content_sha256": _content_sha256(content_entries),
-        "vectors": {},
+        "index": {
+            "records": {
+                "path": "_ovpack/index_records.jsonl",
+                "count": 0,
+                "sha256": hashlib.sha256(index_records).hexdigest(),
+            }
+        },
     }
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as zf:
         zf.writestr(f"{root_name}/", "")
-        zf.writestr(f"{root_name}/_._ovpack_manifest.json", json.dumps(manifest))
+        zf.writestr(f"{root_name}/files/", "")
+        zf.writestr(f"{root_name}/_ovpack/", "")
+        zf.writestr(f"{root_name}/_ovpack/index_records.jsonl", index_records)
+        zf.writestr(f"{root_name}/_ovpack/manifest.json", json.dumps(manifest))
         for rel_path, content in files.items():
-            zf.writestr(f"{root_name}/{rel_path}", content)
+            zf.writestr(f"{root_name}/files/{rel_path}", content)
     return buffer.getvalue()

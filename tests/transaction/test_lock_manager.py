@@ -65,9 +65,10 @@ class TestLockManagerBasic:
 
     async def test_release_removes_from_active(self, lm, test_dir):
         handle = lm.create_handle()
-        assert handle.id in lm.get_active_handles()
 
         await lm.acquire_exact_path(handle, test_dir)
+        assert handle.id in lm.get_active_handles()
+
         await lm.release(handle)
 
         assert handle.id not in lm.get_active_handles()

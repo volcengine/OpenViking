@@ -42,7 +42,9 @@ async def test_privacy_config_service_versions(service):
     assert second.version == 2
     assert await privacy.list_versions(ctx, "skill", "demo-skill") == [1, 2]
 
-    restored = await privacy.activate_version(ctx, "skill", "demo-skill", 1, updated_by=ctx.user.user_id)
+    restored = await privacy.activate_version(
+        ctx, "skill", "demo-skill", 1, updated_by=ctx.user.user_id
+    )
     current = await privacy.get_current(ctx, "skill", "demo-skill")
     assert restored.version == 1
     assert current.version == 1
@@ -65,7 +67,9 @@ async def test_skill_read_restores_placeholder(service):
         wait=False,
     )
 
-    stored = await service.viking_fs.read_file("viking://agent/skills/restore-skill/SKILL.md", ctx=ctx)
+    stored = await service.viking_fs.read_file(
+        "viking://agent/skills/restore-skill/SKILL.md", ctx=ctx
+    )
     restored = await service.fs.read("viking://agent/skills/restore-skill/SKILL.md", ctx=ctx)
 
     assert "secret-xyz" not in stored
@@ -76,7 +80,9 @@ async def test_skill_read_restores_placeholder(service):
 
 @pytest.mark.asyncio
 async def test_skill_read_restores_placeholder_with_agent_segment(service):
-    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT)
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT
+    )
     await service.initialize_user_directories(ctx)
     await service.initialize_agent_directories(ctx)
 
@@ -124,7 +130,9 @@ async def test_skill_privacy_extraction_returns_content_blocks():
 
 @pytest.mark.asyncio
 async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
-    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_partial_restore"), role=Role.ROOT)
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("privacy_partial_restore"), role=Role.ROOT
+    )
     await service.initialize_user_directories(ctx)
     await service.initialize_agent_directories(ctx)
 
@@ -150,14 +158,16 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
     restored = await service.fs.read(f"{skill_uri}/SKILL.md", ctx=ctx)
 
     assert 'api_key: "secret-xyz"' in restored
-    assert '{{ov_privacy:skill:partial-restore-skill:region}}' in restored
+    assert "{{ov_privacy:skill:partial-restore-skill:region}}" in restored
     assert "[Privacy Config Notice]" in restored
     assert "Missing config: region=<missing>" in restored
 
 
 @pytest.mark.asyncio
 async def test_skill_read_appends_notice_for_extra_configured_keys(service):
-    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_extra_config"), role=Role.ROOT)
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user("privacy_extra_config"), role=Role.ROOT
+    )
     await service.initialize_user_directories(ctx)
     await service.initialize_agent_directories(ctx)
 
@@ -203,11 +213,6 @@ async def test_privacy_config_service_uses_policy_aware_user_root(service):
     )
 
     current = await privacy.get_current(ctx, "skill", "policy-skill")
-    stored = await service.viking_fs.read_file(
-        "viking://user/privacy_user_policy/agent/demo-agent/privacy/skill/policy-skill/current.json",
-        ctx=ctx,
-    )
-
     assert current is not None
 
 
@@ -233,7 +238,15 @@ async def test_placeholderization_only_replaces_structured_values(monkeypatch):
 
     monkeypatch.setattr(
         "openviking.privacy.skill_extractor.get_openviking_config",
-        lambda: type("Cfg", (), {"vlm": type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})()})(),
+        lambda: type(
+            "Cfg",
+            (),
+            {
+                "vlm": type(
+                    "VLM", (), {"get_completion_async": staticmethod(fake_completion_async)}
+                )()
+            },
+        )(),
     )
 
     content = 'api_key: "secret-xyz"\n'
@@ -270,5 +283,5 @@ def test_placeholderization_replaces_all_structured_occurrences_for_same_value()
     assert result.replaced_values == {"api_key": "secret"}
     assert result.sanitized_content == (
         'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
-        'backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n'
+        "backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n"
     )

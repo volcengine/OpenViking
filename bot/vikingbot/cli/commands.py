@@ -117,6 +117,7 @@ def _get_gateway_token(config) -> str:
         return ""
     return getattr(gateway, "token", "") or ""
 
+
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
 # ---------------------------------------------------------------------------
@@ -333,7 +334,13 @@ def gateway(
         )
         server = uvicorn.Server(config_uvicorn)
 
-        tasks = [cron.start(), heartbeat.start(), channels.start_all(), agent_loop.run(), server.serve()]
+        tasks = [
+            cron.start(),
+            heartbeat.start(),
+            channels.start_all(),
+            agent_loop.run(),
+            server.serve(),
+        ]
         # if enable_console:
         #     tasks.append(start_console(console_port))
 
@@ -660,7 +667,9 @@ def chat(
     if session_id is None:
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender, memory_user)
+    channels = prepare_agent_channel(
+        config, bus, message, session_id, markdown, logs, eval, sender, memory_user
+    )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
     )

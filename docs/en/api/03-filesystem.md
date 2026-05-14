@@ -421,7 +421,7 @@ openviking tree viking://resources/my-project/
 
 ### stat()
 
-Get file or directory status information.
+Get file or directory status information. For directories, returns the count of items under the directory.
 
 **Parameters**
 
@@ -435,6 +435,11 @@ Get file or directory status information.
 info = client.stat("viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
+
+# For directories, returns item count
+dir_info = client.stat("viking://resources/docs")
+if dir_info.get('isDir'):
+    print(f"Item count: {dir_info.get('count')}")
 ```
 
 **HTTP API**
@@ -452,9 +457,10 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 
 ```bash
 openviking stat viking://resources/my-project/docs/api.md
+openviking stat viking://resources/my-project/docs
 ```
 
-**Response**
+**Response (File)**
 
 ```json
 {
@@ -472,7 +478,28 @@ openviking stat viking://resources/my-project/docs/api.md
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock, or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+**Response (Directory)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "docs",
+    "size": 4096,
+    "mode": 16877,
+    "modTime": "2024-01-01T00:00:00Z",
+    "isDir": true,
+    "isLocked": false,
+    "uri": "viking://resources/docs",
+    "count": 42
+  },
+  "time": 0.1
+}
+```
+
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+
+The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
 ---
 
@@ -533,7 +560,7 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 
 ### rm()
 
-Remove file or directory.
+Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
 Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
@@ -552,7 +579,9 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 client.rm("viking://resources/docs/old.md")
 
 # Remove directory recursively
-client.rm("viking://resources/old-project/", recursive=True)
+result = client.rm("viking://resources/old-project/", recursive=True)
+if 'estimated_deleted_count' in result:
+    print(f"Deleted {result['estimated_deleted_count']} items")
 ```
 
 **HTTP API**
@@ -577,7 +606,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 openviking rm viking://resources/old.md [--recursive]
 ```
 
-**Response**
+**Response (Single file)**
 
 ```json
 {
@@ -588,6 +617,21 @@ openviking rm viking://resources/old.md [--recursive]
   "time": 0.1
 }
 ```
+
+**Response (Recursive delete)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/old-project/",
+    "estimated_deleted_count": 42
+  },
+  "time": 0.1
+}
+```
+
+The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
 ---
 
@@ -994,10 +1038,12 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 5. Return as file stream
 
 **Format Notes**:
-- The exported ZIP contains `<root>/_._ovpack_manifest.json`, the escaped ZIP name for `.ovpack_manifest.json`.
+- The exported ZIP stores user content unchanged under `<root>/files/` and internal metadata under `<root>/_ovpack/`.
+- The manifest is stored at `<root>/_ovpack/manifest.json`.
 - `entries[].path` is relative to the exported root; `""` means the root directory itself.
 - File entries include `size` and `sha256`; `content_sha256` covers the sorted file list of `path`, `size`, and `sha256`.
-- Raw embedding vectors and runtime fields such as `created_at`, `updated_at`, and `active_count` are not exported.
+- `_ovpack/index_records.jsonl` stores portable index scalar fields. With `include_vectors=true`, `_ovpack/dense.f32` stores a pure-dense float32 vector snapshot plus embedding metadata; vector indexes whose `VectorIndex.IndexType` is hybrid do not support vector snapshot export.
+- Runtime fields such as `id`, `uri`, `account_id`, `created_at`, `updated_at`, and `active_count` are regenerated in the target environment and are not restored from the package.
 - OVPack does not add package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 **Code Entry Points**:
@@ -1012,6 +1058,7 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | string | Yes | - | Viking URI to export |
+| include_vectors | boolean | No | false | Include a pure-dense vector snapshot; hybrid index types are rejected |
 
 **Permission Requirements**: ROOT or ADMIN
 
@@ -1029,7 +1076,8 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{
-    "uri": "viking://resources/my-project/"
+    "uri": "viking://resources/my-project/",
+    "include_vectors": false
   }' \
   --output my-project.ovpack
 ```
@@ -1051,6 +1099,9 @@ client.initialize()
 ```bash
 # Export resource
 ov export viking://resources/my-project/ ./exports/my-project.ovpack
+
+# Export with a dense vector snapshot
+ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-vectors
 ```
 
 **Response Example**
@@ -1088,11 +1139,14 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 | temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp_upload)) |
 | parent | string | Yes | - | Target parent URI (import to this location) |
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
+| vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
 
 **Permission Requirements**: ROOT or ADMIN
 
 **Behavior Notes**:
-- Imports always rebuild vectors in the target environment. The API no longer accepts `vectorize` or `force`.
+- The API no longer accepts `vectorize` or `force`.
+- `vector_mode=auto` restores a compatible dense snapshot when present, otherwise recomputes vectors. `recompute` always ignores package vectors. `require` fails unless a compatible dense snapshot is present.
+- Dense snapshot compatibility checks compare embedding provider, model, input mode, query/document parameters, and dimensions.
 - Session imports restore session files and do not trigger vectorization.
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
 - `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents. `skip` is root-level, not file-level.
@@ -1100,7 +1154,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
 - Packages whose manifest `format_version` is not the current supported version are rejected.
 - `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
-- Manifest `context_type` must match the final import path semantics.
+- Manifest `context_type`, when present in index scalar metadata, must match the final import path semantics.
 - Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
 - OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
@@ -1129,7 +1183,8 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\"
+    \"on_conflict\": \"overwrite\",
+    \"vector_mode\": \"auto\"
   }"
 ```
 
@@ -1153,6 +1208,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/
 
 # Explicit conflict policy
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
+
+# Require restoring a compatible dense vector snapshot
+ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode require
 ```
 
 **Response Example**
@@ -1190,7 +1248,8 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict
 
 Back up public scope roots as a restore-only `.ovpack` file. The backup includes
 `resources`, `user`, `agent`, and `session`; it excludes internal runtime data
-such as `temp` and `queue`.
+such as `temp` and `queue`. Set `include_vectors=true` to include compatible
+pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 
 ```
 POST /api/v1/pack/backup
@@ -1198,7 +1257,9 @@ POST /api/v1/pack/backup
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
+  -d '{"include_vectors":false}' \
   --output openviking-backup.ovpack
 ```
 
@@ -1206,6 +1267,7 @@ CLI:
 
 ```bash
 ov backup ./backups/openviking.ovpack
+ov backup ./backups/openviking.ovpack --include-vectors
 ```
 
 ---
@@ -1213,13 +1275,14 @@ ov backup ./backups/openviking.ovpack
 ### restore_ovpack
 
 Restore a backup package created by `backup_ovpack` to the original public scope
-roots. Regular import rejects backup packages. Non-session content is
-re-vectorized after restore; session files are restored without vectorization.
+roots. Regular import rejects backup packages. Vector handling follows
+`vector_mode`; session files are restored without vectorization.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | temp_file_id | string | Yes | - | Temporary upload file ID |
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
+| vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
 
 ```
 POST /api/v1/pack/restore
@@ -1237,13 +1300,14 @@ TEMP_FILE_ID=$(
 curl -X POST http://localhost:1933/api/v1/pack/restore \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
-  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\"}"
+  -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\",\"vector_mode\":\"auto\"}"
 ```
 
 CLI:
 
 ```bash
 ov restore ./backups/openviking.ovpack --on-conflict overwrite
+ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode require
 ```
 
 ---

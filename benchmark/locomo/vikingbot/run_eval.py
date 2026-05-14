@@ -196,6 +196,7 @@ def load_locomo_qa(
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
                     "speakers": speakers,
+                    "original_sample_id": original_id,
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
@@ -217,6 +218,7 @@ def load_locomo_qa(
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
                         "speakers": speakers,
+                        "original_sample_id": original_id,
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
@@ -233,14 +235,16 @@ def run_vikingbot_chat(
     question_time: str | None = None,
     sample_id: str | None = None,
     question_id: str | None = None,
+    config: str | None = None,
     memory_users: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
     if sample_id:
-        new_cmd = [
-            "vikingbot",
-            "chat",
+        new_cmd = ["vikingbot", "chat"]
+        if config:
+            new_cmd.extend(["--config", config])
+        new_cmd.extend([
             "-m",
             "/new",
             "-e",
@@ -248,8 +252,7 @@ def run_vikingbot_chat(
             sample_id,
             "--session",
             question_id,
-        ]
-        # 添加 --memory-user 参数
+        ])
         if memory_users:
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
@@ -266,7 +269,10 @@ def run_vikingbot_chat(
     else:
         input = f"Answer the question directly: {question}"
 
-    cmd = ["vikingbot", "chat", "-m", input, "-e"]
+    cmd = ["vikingbot", "chat"]
+    if config:
+        cmd.extend(["--config", config])
+    cmd.extend(["-m", input, "-e"])
     # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
@@ -277,7 +283,7 @@ def run_vikingbot_chat(
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
         end_time = time.time()
         time_cost = end_time - start_time
 
@@ -330,6 +336,14 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
             if question:
                 processed_questions.add(question)
     return processed_questions
+def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
+    """追加单行结果到 CSV。"""
+    file_exists = os.path.exists(output_path)
+    with open(output_path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def main():
@@ -354,6 +368,11 @@ def main():
         "--errors",
         default=default_errors,
         help="Path to invalid questions JSON file",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to config file to pass through to vikingbot chat",
     )
     parser.add_argument(
         "--sample",
@@ -483,6 +502,9 @@ def main():
     # 创建线程锁，确保多线程写文件安全
     write_lock = threading.Lock()
 
+    if not args.update_mode and not args.skip_done and os.path.exists(args.output):
+        os.remove(args.output)
+
     # 存储处理后的新行
     new_rows = []
     processed_count = 0
@@ -510,8 +532,12 @@ def main():
             print(f"  [memory users: {speakers}]")
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question, question_time, sample_id, question_id,
-            memory_users=None if not args.group_chat else speakers,
+            question,
+            question_time,
+            qa_item.get("original_sample_id"),
+            question_id,
+            args.config,
+            None if not args.group_chat else speakers,
         )
 
         row = {
@@ -535,6 +561,32 @@ def main():
         # 线程安全的结果收集
         with write_lock:
             nonlocal processed_count
+            if args.update_mode:
+                if os.path.exists(args.output):
+                    with open(args.output, "r", encoding="utf-8", newline="") as f:
+                        reader = csv.DictReader(f)
+                        existing_rows = list(reader)
+                        existing_fieldnames = reader.fieldnames or fieldnames
+
+                    q_idx = str(row.get("question_index", ""))
+                    found = False
+                    for existing_row in existing_rows:
+                        if str(existing_row.get("question_index", "")) == q_idx:
+                            existing_row.update(row)
+                            found = True
+                            break
+                    if not found:
+                        existing_rows.append(row)
+
+                    with open(args.output, "w", encoding="utf-8", newline="") as f:
+                        writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+                        writer.writeheader()
+                        writer.writerows(existing_rows)
+                else:
+                    append_row_to_csv(args.output, fieldnames, row)
+            else:
+                append_row_to_csv(args.output, fieldnames, row)
+
             new_rows.append(row)
             processed_questions.add(question)
             processed_count += 1
@@ -555,48 +607,7 @@ def main():
             except Exception as e:
                 print(f"Error processing QA item: {str(e)}")
 
-    # 写文件逻辑
-    if args.update_mode and os.path.exists(args.output):
-        # 更新模式：读取现有文件，更新匹配行
-        print(f"Update mode: updating existing file {args.output}")
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            existing_rows = list(reader)
-            existing_fieldnames = reader.fieldnames or fieldnames
-
-        # 更新匹配的行
-        updated_count = 0
-        for new_row in new_rows:
-            q_idx = str(new_row.get("question_index", ""))
-            found = False
-            for row in existing_rows:
-                if str(row.get("question_index", "")) == q_idx:
-                    row.update(new_row)
-                    found = True
-                    updated_count += 1
-                    break
-            if not found:
-                existing_rows.append(new_row)
-                updated_count += 1
-
-        # 写回文件
-        with open(args.output, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
-            writer.writeheader()
-            writer.writerows(existing_rows)
-
-        print(f"Updated {updated_count} rows in {args.output}")
-    else:
-        # 普通模式：覆盖写入
-        if os.path.exists(args.output):
-            os.remove(args.output)
-
-        with open(args.output, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(new_rows)
-
-        print(f"Evaluation completed, results saved to {args.output}")
+    print(f"Evaluation completed, results saved to {args.output}")
 
 
 if __name__ == "__main__":

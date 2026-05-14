@@ -26,7 +26,15 @@ impl HttpClient {
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         Self {
-            base: BaseClient::new(base_url, api_key, agent_id, account, user, timeout_secs, extra_headers),
+            base: BaseClient::new(
+                base_url,
+                api_key,
+                agent_id,
+                account,
+                user,
+                timeout_secs,
+                extra_headers,
+            ),
         }
     }
 
@@ -108,16 +116,27 @@ impl HttpClient {
         self.create_uploader().zip_directory(dir_path)
     }
 
-    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory_with_progress(dir_path, verbose)
+    fn zip_directory_with_progress(
+        &self,
+        dir_path: &Path,
+        verbose: bool,
+    ) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader()
+            .zip_directory_with_progress(dir_path, verbose)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
         self.create_uploader().upload_temp_file(file_path).await
     }
 
-    async fn upload_temp_file_with_progress(&self, file_path: &Path, verbose: bool) -> Result<String> {
-        self.create_uploader().upload_temp_file_with_progress(file_path, verbose).await
+    async fn upload_temp_file_with_progress(
+        &self,
+        file_path: &Path,
+        verbose: bool,
+    ) -> Result<String> {
+        self.create_uploader()
+            .upload_temp_file_with_progress(file_path, verbose)
+            .await
     }
 
     // ============ Content Methods ============
@@ -165,18 +184,20 @@ impl HttpClient {
         })
     }
 
-    pub async fn reindex(
-        &self,
-        uri: &str,
-        mode: &str,
-        wait: bool,
-    ) -> Result<serde_json::Value> {
+    pub async fn reindex(&self, uri: &str, mode: &str, wait: bool) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
             "mode": mode,
             "wait": wait,
         });
         self.post("/api/v1/content/reindex", &body).await
+    }
+
+    pub async fn consistency(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/consistency", &body).await
     }
 
     /// Download file as raw bytes
@@ -282,13 +303,12 @@ impl HttpClient {
         Ok(())
     }
 
-    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<()> {
+    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
         ];
-        let _: serde_json::Value = self.delete("/api/v1/fs", &params).await?;
-        Ok(())
+        self.delete("/api/v1/fs", &params).await
     }
 
     pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<()> {
@@ -316,6 +336,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
+        level: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -325,6 +346,7 @@ impl HttpClient {
             "since": since,
             "until": until,
             "time_field": time_field,
+            "level": level,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -339,6 +361,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
+        level: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -349,6 +372,7 @@ impl HttpClient {
             "since": since,
             "until": until,
             "time_field": time_field,
+            "level": level,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -443,7 +467,8 @@ impl HttpClient {
                     self.zip_directory(path_obj)?
                 };
                 let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(zip_file.path(), verbose).await?
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
+                        .await?
                 } else {
                     self.upload_temp_file(zip_file.path()).await?
                 };
@@ -465,15 +490,19 @@ impl HttpClient {
                     "watch_interval": watch_interval,
                 }));
 
-                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
-                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
+                let dynamic_timeout =
+                    TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base
+                    .post_with_timeout("/api/v1/resources", &body, dynamic_timeout)
+                    .await
             } else if path_obj.is_file() {
                 let source_name = path_obj
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
                 let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(path_obj, verbose).await?
+                    self.upload_temp_file_with_progress(path_obj, verbose)
+                        .await?
                 } else {
                     self.upload_temp_file(path_obj).await?
                 };
@@ -495,8 +524,11 @@ impl HttpClient {
                     "watch_interval": watch_interval,
                 }));
 
-                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
-                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
+                let dynamic_timeout =
+                    TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base
+                    .post_with_timeout("/api/v1/resources", &body, dynamic_timeout)
+                    .await
             } else {
                 let body = build_body(serde_json::json!({
                     "path": path,
@@ -555,8 +587,11 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
-                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
+                let dynamic_timeout =
+                    TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base
+                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
+                    .await
             } else if path_obj.is_file() {
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
@@ -565,8 +600,11 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
-                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
+                let dynamic_timeout =
+                    TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base
+                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
+                    .await
             } else {
                 let body = serde_json::json!({
                     "data": data,
@@ -707,9 +745,15 @@ impl HttpClient {
         Ok(final_path.to_string_lossy().to_string())
     }
 
-    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<String> {
+    pub async fn export_ovpack(
+        &self,
+        uri: &str,
+        to: &str,
+        include_vectors: bool,
+    ) -> Result<String> {
         let body = serde_json::json!({
             "uri": uri,
+            "include_vectors": include_vectors,
         });
         let base_name = uri
             .trim_end_matches('/')
@@ -720,10 +764,10 @@ impl HttpClient {
             .await
     }
 
-    pub async fn backup_ovpack(&self, to: &str) -> Result<String> {
+    pub async fn backup_ovpack(&self, to: &str, include_vectors: bool) -> Result<String> {
         self.download_pack(
             "/api/v1/pack/backup",
-            serde_json::json!({}),
+            serde_json::json!({"include_vectors": include_vectors}),
             to,
             "openviking-backup",
         )
@@ -735,6 +779,7 @@ impl HttpClient {
         file_path: &str,
         parent: &str,
         on_conflict: Option<&str>,
+        vector_mode: Option<&str>,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -754,6 +799,7 @@ impl HttpClient {
             "temp_file_id": temp_file_id,
             "parent": parent,
             "on_conflict": conflict_policy,
+            "vector_mode": vector_mode.unwrap_or("auto"),
         });
         self.post("/api/v1/pack/import", &body).await
     }
@@ -762,6 +808,7 @@ impl HttpClient {
         &self,
         file_path: &str,
         on_conflict: Option<&str>,
+        vector_mode: Option<&str>,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -780,6 +827,7 @@ impl HttpClient {
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
             "on_conflict": conflict_policy,
+            "vector_mode": vector_mode.unwrap_or("auto"),
         });
         self.post("/api/v1/pack/restore", &body).await
     }
@@ -1035,11 +1083,15 @@ mod tests {
         let headers = client.build_headers();
 
         assert_eq!(
-            headers.get("X-API-Key").and_then(|value| value.to_str().ok()),
+            headers
+                .get("X-API-Key")
+                .and_then(|value| value.to_str().ok()),
             Some("test-key")
         );
         assert_eq!(
-            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
+            headers
+                .get("X-Custom-Header")
+                .and_then(|value| value.to_str().ok()),
             Some("custom-value")
         );
     }

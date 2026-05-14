@@ -987,6 +987,25 @@ class Session:
                 user_id=self.ctx.user.user_id,
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
+        except asyncio.CancelledError as e:
+            if redo_enabled and redo_task_id:
+                redo_log.mark_done(redo_task_id)
+            try:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="memory_extraction",
+                    error=f"cancelled: {e}",
+                )
+            except Exception:
+                logger.debug("Failed to write cancelled marker for session %s", self.session_id)
+            tracker.fail(
+                task_id,
+                f"cancelled: {e}",
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            logger.warning("Memory extraction cancelled for session %s", self.session_id)
+            raise
         except Exception as e:
             if redo_enabled and redo_task_id:
                 redo_log.mark_done(redo_task_id)

@@ -131,35 +131,38 @@ class SparseDataset {
     }
     size_t start = offsets_[i];
     size_t end = offsets_[i + 1];
-    
+
     std::vector<IndexT> indices;
     std::vector<float> values;
-    
+
     if (start < end) {
-      indices.assign(flat_indices_.begin() + start, flat_indices_.begin() + end);
+      indices.assign(flat_indices_.begin() + start,
+                     flat_indices_.begin() + end);
       values.assign(flat_values_.begin() + start, flat_values_.begin() + end);
     }
-    
-    return std::make_shared<SparseDatapoint>(std::move(indices), std::move(values));
+
+    return std::make_shared<SparseDatapoint>(std::move(indices),
+                                             std::move(values));
   }
 
   int pop_back() {
     if (offsets_.size() <= 1) {
-      return 0; // Already empty (just initial offset 0)
+      return 0;  // Already empty (just initial offset 0)
     }
-    
+
     size_t last_start = offsets_[offsets_.size() - 2];
     size_t last_end = offsets_.back();
     size_t count = last_end - last_start;
-    
+
     if (count > 0) {
-      flat_indices_.erase(flat_indices_.begin() + last_start, flat_indices_.end());
+      flat_indices_.erase(flat_indices_.begin() + last_start,
+                          flat_indices_.end());
       flat_values_.erase(flat_values_.begin() + last_start, flat_values_.end());
     }
-    
+
     offsets_.pop_back();
     entries_ -= count;
-    
+
     return 0;
   }
 

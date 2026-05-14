@@ -419,9 +419,14 @@ class ContentWriteCoordinator:
             ),
             changes={change_type: [changed_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _enqueue_memory_refresh(
         self,
@@ -447,9 +452,14 @@ class ContentWriteCoordinator:
             coalesce_key=self._semantic_coalesce_key("memory", root_uri, ctx),
             changes={"modified": [modified_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()

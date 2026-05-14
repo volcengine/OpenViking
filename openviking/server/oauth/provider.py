@@ -12,7 +12,6 @@ strings keyed by their SHA-256 hash, so this module contains no cryptography.
 
 from __future__ import annotations
 
-import logging
 import secrets
 from typing import Callable, Optional
 from urllib.parse import urlencode
@@ -32,12 +31,13 @@ from pydantic import AnyUrl
 from openviking.server.identity import Role
 from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
+from openviking_cli.utils import get_logger
 
 # Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
 # (auth.py already depends on this module via the Provider Protocol).
 _ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Access tokens carry this prefix so the auth.py bearer router can cheaply
 # discriminate them from API keys without an extra DB lookup. The prefix is

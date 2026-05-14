@@ -1,21 +1,6 @@
 # Other Plugins
 
-The repo also ships several community/experimental plugins beyond the headline Claude Code and OpenClaw integrations. They differ in target runtime, integration depth, and maintenance status — read each one's README before adopting.
-
-## Codex Memory MCP Server
-
-Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
-
-A minimal MCP-only server for [Codex](https://github.com/openai/codex). Intentionally narrow scope:
-
-- no lifecycle hooks
-- no background capture worker
-- no writes to `~/.codex`
-- no checked-in build output
-
-Codex gets four explicit memory tools: `find`, `remember`, plus a couple more.
-
-If you only need explicit memory operations from Codex (no auto-recall or auto-capture), this is the simplest option.
+The repo also ships several community/experimental plugins beyond the headline Claude Code, Codex, and OpenClaw integrations. They differ in target runtime, integration depth, and maintenance status — read each one's README before adopting.
 
 ## OpenCode plugins
 

@@ -165,6 +165,85 @@ ov system status
 
 ---
 
+### consistency
+
+#### 1. API Implementation Overview
+
+Check filesystem/vector-index consistency for a URI subtree. This is a general
+data consistency API for debugging missing index records, failed vector snapshot
+exports, and related issues. It is not an OVPack-private API;
+`ov export --include-vectors` and `ov backup --include-vectors` reuse the same
+check.
+
+The response returns only a summary and missing records. It does not return the
+full expected-record list. `missing_records` includes at most the first 20
+records; `missing_records_truncated` is `true` when more missing records exist.
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:check_consistency` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK entry
+- `crates/ov_cli/src/commands/system.rs:consistency` - CLI command
+
+#### 2. Interface and Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | string | Yes | - | Viking URI subtree to check |
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+POST /api/v1/system/consistency
+Content-Type: application/json
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
+
+**Python SDK**
+
+```python
+report = client.check_consistency("viking://resources/my-project")
+print(report["ok"])
+print(report["missing_records"])
+```
+
+**CLI**
+
+```bash
+ov system consistency viking://resources/my-project
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+	    "ok": false,
+	    "expected_count": 3,
+	    "missing_record_count": 1,
+	    "missing_records_truncated": false,
+	    "missing_records": [
+      {
+        "uri": "viking://resources/my-project/README.md",
+        "path": "README.md",
+        "level": 2,
+        "key": "README.md#level=2"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### wait_processed
 
 #### 1. API Implementation Overview

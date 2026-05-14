@@ -159,8 +159,20 @@ else
 fi
 
 # ----- 4. Shell rc wrapper -----
+#
+# Source of truth: setup-helper/wrapper.sh in the plugin checkout. The
+# user's shell rc just sources that file directly — no copy step, so any
+# updates land via the next `git fetch + reset --hard` the installer
+# already runs above. Same pattern pyenv / nvm / fnm use, except we don't
+# even need an intermediate copy in $HOME.
 
 heading '4. Shell rc — claude function wrapper'
+
+WRAPPER_SRC="$REPO_DIR/examples/claude-code-memory-plugin/setup-helper/wrapper.sh"
+if [ ! -f "$WRAPPER_SRC" ]; then
+  err "Wrapper source not found at $WRAPPER_SRC"
+  exit 1
+fi
 
 case "${SHELL:-}" in
   */zsh)  RC="$HOME/.zshrc" ;;
@@ -172,39 +184,35 @@ case "${SHELL:-}" in
     ;;
 esac
 
+# The user's shell rc gets a single one-line source hook pointing at the
+# wrapper source in the cloned plugin checkout. Hook content stays stable
+# across installs (only the absolute path matters), so the marker
+# replacement only triggers a legacy-cleanup pass once when upgrading from
+# a pre-split install that inlined the full wrapper into the rc.
+SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
+SOURCE_BLOCK="$MARKER_BEGIN
+$SOURCE_HOOK
+$MARKER_END"
+
 if [ -z "$RC" ]; then
-  warn 'Could not detect shell rc. Add the function wrapper manually — see:'
-  warn '  https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md'
+  warn 'Could not detect shell rc. Add this snippet to your rc manually:'
+  warn ''
+  while IFS= read -r line; do warn "  $line"; done <<< "$SOURCE_BLOCK"
 else
   touch "$RC"
   if grep -qF "$MARKER_BEGIN" "$RC"; then
-    info "Existing wrapper detected in $RC — replacing in place"
+    info "Replacing openviking source hook in $RC"
+    # Strip existing block (whether it's the new one-liner or an old
+    # inline-wrapper block from a previous version).
     awk -v b="$MARKER_BEGIN" -v e="$MARKER_END" '
       $0 == b {skip=1; next}
       $0 == e {skip=0; next}
       !skip
     ' "$RC" > "$RC.tmp" && mv "$RC.tmp" "$RC"
   else
-    info "Appending wrapper to $RC"
+    info "Appending openviking source hook to $RC"
   fi
-  cat >> "$RC" <<EOF
-
-$MARKER_BEGIN
-claude() {
-  local _ov_conf="\${OPENVIKING_CLI_CONFIG_FILE:-\$HOME/.openviking/ovcli.conf}"
-  if [ -f "\$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
-    local _ov_url _ov_key
-    _ov_url=\$(jq -r '.url // empty'     "\$_ov_conf" 2>/dev/null)
-    _ov_key=\$(jq -r '.api_key // empty' "\$_ov_conf" 2>/dev/null)
-    OPENVIKING_URL="\${OPENVIKING_URL:-\$_ov_url}" \\
-    OPENVIKING_API_KEY="\${OPENVIKING_API_KEY:-\$_ov_key}" \\
-      command claude "\$@"
-  else
-    command claude "\$@"
-  fi
-}
-$MARKER_END
-EOF
+  printf '\n%s\n' "$SOURCE_BLOCK" >> "$RC"
 fi
 
 # ----- 5. Plugin install -----

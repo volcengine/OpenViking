@@ -99,7 +99,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.rule(f"[bold]Phase 1: 写入对话 — {DISPLAY_NAME} ({len(CONVERSATION)} 轮)[/bold]")
 
     session = client.create_session()
-    session_id = session.get('session_id')
+    session_id = session.get("session_id")
     console.print(f"  Session: [bold cyan]{session_id}[/bold cyan]")
     console.print()
 
@@ -110,8 +110,18 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     total = len(CONVERSATION)
     for i, turn in enumerate(CONVERSATION, 1):
         console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
-        client.add_message(session_id, role="user", parts=[{"type": "text", "text": turn["user"]}], created_at=session_time_str)
-        client.add_message(session_id, role="assistant", parts=[{"type": "text", "text": turn["assistant"]}], created_at=session_time_str)
+        client.add_message(
+            session_id,
+            role="user",
+            parts=[{"type": "text", "text": turn["user"]}],
+            created_at=session_time_str,
+        )
+        client.add_message(
+            session_id,
+            role="assistant",
+            parts=[{"type": "text", "text": turn["assistant"]}],
+            created_at=session_time_str,
+        )
 
     console.print()
     console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")
@@ -135,7 +145,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
         console.print(f"  Task 详情: {task}")
 
-    console.print(f"  [yellow]等待向量化完成...[/yellow]")
+    console.print("  [yellow]等待向量化完成...[/yellow]")
     client.wait_processed()
 
     if wait_seconds > 0:
@@ -151,7 +161,9 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
 def run_verify(client: ov.SyncHTTPClient):
     """验证记忆召回"""
     console.print()
-    console.rule(f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} ({len(VERIFY_QUERIES)} 条查询)[/bold]")
+    console.rule(
+        f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} ({len(VERIFY_QUERIES)} 条查询)[/bold]"
+    )
 
     results_table = Table(
         title=f"记忆召回验证 — {DISPLAY_NAME}",
@@ -185,7 +197,11 @@ def run_verify(client: ov.SyncHTTPClient):
                     uri = getattr(m, "uri", "")
                     score = getattr(m, "score", 0)
                     console.print(f"    [green]Memory:[/green] {uri} (score: {score:.4f})")
-                    console.print(f"    [dim]{text[:120]}...[/dim]" if len(text) > 120 else f"    [dim]{text}[/dim]")
+                    console.print(
+                        f"    [dim]{text[:120]}...[/dim]"
+                        if len(text) > 120
+                        else f"    [dim]{text}[/dim]"
+                    )
                 count += len(results.memories)
 
             if hasattr(results, "resources") and results.resources:
@@ -193,9 +209,7 @@ def run_verify(client: ov.SyncHTTPClient):
                     text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
                     print(f"  [DEBUG] resource text: {repr(text)}")
                     recall_texts.append(text)
-                    console.print(
-                        f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})"
-                    )
+                    console.print(f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})")
                 count += len(results.resources)
 
             if hasattr(results, "skills") and results.skills:
@@ -230,15 +244,12 @@ def main():
     parser.add_argument(
         "--session-id", default=DEFAULT_SESSION_ID, help=f"Session ID (默认: {DEFAULT_SESSION_ID})"
     )
-    parser.add_argument(
-        "--wait", type=float, default=2, help="写入后等待秒数 (默认: 2)"
-    )
+    parser.add_argument("--wait", type=float, default=2, help="写入后等待秒数 (默认: 2)")
 
     args = parser.parse_args()
 
     client = ov.SyncHTTPClient(
-        url=args.url, api_key=args.api_key, agent_id=args.agent_id,
-        timeout=180
+        url=args.url, api_key=args.api_key, agent_id=args.agent_id, timeout=180
     )
 
     try:
@@ -260,9 +271,7 @@ def main():
         )
 
     except Exception as e:
-        console.print(
-            Panel(f"[bold red]Error:[/bold red] {e}", style="red", width=PANEL_WIDTH)
-        )
+        console.print(Panel(f"[bold red]Error:[/bold red] {e}", style="red", width=PANEL_WIDTH))
 
 
 if __name__ == "__main__":
