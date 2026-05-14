@@ -66,6 +66,8 @@ Observability Event Bus
         "batch_size": 500,
         "flush_interval_seconds": 1.0,
         "shutdown_flush_timeout_seconds": 3.0,
+        "usage_retention_days": 14,
+        "audit_retention_days": 7,
         "audit_retention_per_account": 1000,
         "timezone": "local",
         "inventory_ttl_seconds": 10.0
@@ -86,7 +88,9 @@ Observability Event Bus
 | `batch_size` | `500` | 单次批量写入的最大事件数 |
 | `flush_interval_seconds` | `1.0` | worker 定时 flush 间隔 |
 | `shutdown_flush_timeout_seconds` | `3.0` | 服务关闭时 flush 等待时间 |
-| `audit_retention_per_account` | `1000` | 每个 account 保留的最新请求审计条数；`0` 表示不主动裁剪 |
+| `usage_retention_days` | `14` | 统计聚合数据保留天数，包含 Token、检索、上下文写入热力图、Agent 活跃；`0` 表示不按天裁剪 |
+| `audit_retention_days` | `7` | 请求审计日志保留天数；`0` 表示不按天裁剪 |
+| `audit_retention_per_account` | `1000` | 每个 account 保留的最新请求审计条数；`0` 表示不按条数裁剪 |
 | `timezone` | `"local"` | 统计日期使用的时区；可填 `"local"`、`"UTC"` 或 IANA 时区名 |
 | `inventory_ttl_seconds` | `10.0` | 上下文当前数据量查询缓存时间 |
 

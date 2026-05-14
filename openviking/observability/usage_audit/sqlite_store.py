@@ -33,10 +33,14 @@ class SQLiteUsageAuditStore:
         self,
         db_path: Path,
         *,
+        usage_retention_days: int = 14,
+        audit_retention_days: int = 7,
         audit_retention_per_account: int = 1000,
         timezone_name: str = "local",
     ) -> None:
         self._db_path = Path(db_path)
+        self._usage_retention_days = int(usage_retention_days)
+        self._audit_retention_days = int(audit_retention_days)
         self._audit_retention_per_account = int(audit_retention_per_account)
         self._tz = resolve_usage_timezone(timezone_name)
         self._conn: sqlite3.Connection | None = None
@@ -85,6 +89,7 @@ class SQLiteUsageAuditStore:
             self._write_context_rows(conn, projection.context_rows, updated_at)
             self._write_agent_rows(conn, projection.agent_rows, updated_at)
             self._write_audit_rows(conn, projection.audit_rows)
+            self._trim_usage_rows(conn, self._usage_max_dates(projection))
             self._trim_audit_rows(conn, projection.touched_audit_accounts)
             conn.execute("COMMIT")
         except Exception:
@@ -125,7 +130,10 @@ class SQLiteUsageAuditStore:
                 result_count = result_count + excluded.result_count,
                 updated_at = excluded.updated_at
             """,
-            [(*key, count, result_count, updated_at) for key, (count, result_count) in rows.items()],
+            [
+                (*key, count, result_count, updated_at)
+                for key, (count, result_count) in rows.items()
+            ],
         )
 
     @staticmethod
@@ -175,6 +183,19 @@ class SQLiteUsageAuditStore:
         )
 
     def _trim_audit_rows(self, conn, accounts: set[str]) -> None:
+        if self._audit_retention_days > 0:
+            max_dates = self._audit_max_dates(conn, accounts)
+            for account_id, cutoff_date in self._cutoff_dates(
+                max_dates,
+                retention_days=self._audit_retention_days,
+            ).items():
+                conn.execute(
+                    """
+                    DELETE FROM request_audit
+                    WHERE account_id = ? AND substr(created_at, 1, 10) < ?
+                    """,
+                    (account_id, cutoff_date),
+                )
         if self._audit_retention_per_account <= 0:
             return
         for account_id in accounts:
@@ -191,6 +212,71 @@ class SQLiteUsageAuditStore:
                 """,
                 (account_id, account_id, self._audit_retention_per_account),
             )
+
+    def _trim_usage_rows(self, conn, max_dates_by_account: dict[str, str]) -> None:
+        cutoff_by_account = self._cutoff_dates(
+            max_dates_by_account,
+            retention_days=self._usage_retention_days,
+        )
+        for account_id, cutoff_date in cutoff_by_account.items():
+            for table in (
+                "usage_token_daily",
+                "usage_retrieval_daily",
+                "usage_context_write_bucket",
+                "usage_agent_activity_daily",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE account_id = ? AND date < ?",
+                    (account_id, cutoff_date),
+                )
+
+    @staticmethod
+    def _usage_max_dates(projection: UsageAuditProjection) -> dict[str, str]:
+        max_dates: dict[str, str] = {}
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.token_rows, date_index=3)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.retrieval_rows, date_index=3)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.context_rows, date_index=3)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.agent_rows, date_index=2)
+        return max_dates
+
+    @staticmethod
+    def _merge_max_dates(
+        target: dict[str, str], rows: dict[tuple, Any], *, date_index: int
+    ) -> None:
+        for key in rows:
+            account_id = str(key[0])
+            event_date = str(key[date_index])
+            if event_date > target.get(account_id, ""):
+                target[account_id] = event_date
+
+    @staticmethod
+    def _cutoff_dates(
+        max_dates_by_account: dict[str, str], *, retention_days: int
+    ) -> dict[str, str]:
+        if retention_days <= 0:
+            return {}
+        return {
+            account_id: (
+                date.fromisoformat(max_date) - timedelta(days=retention_days - 1)
+            ).isoformat()
+            for account_id, max_date in max_dates_by_account.items()
+        }
+
+    @staticmethod
+    def _audit_max_dates(conn, accounts: set[str]) -> dict[str, str]:
+        max_dates: dict[str, str] = {}
+        for account_id in accounts:
+            row = conn.execute(
+                """
+                SELECT MAX(substr(created_at, 1, 10)) AS max_date
+                FROM request_audit
+                WHERE account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            if row and row["max_date"]:
+                max_dates[account_id] = str(row["max_date"])
+        return max_dates
 
     async def get_today_tokens(self, *, account_id: str, date: str) -> dict[str, int]:
         async with self._lock:
@@ -246,7 +332,9 @@ class SQLiteUsageAuditStore:
                 self._get_agent_overview_sync, account_id, date, int(limit)
             )
 
-    def _get_agent_overview_sync(self, account_id: str, event_date: str, limit: int) -> dict[str, Any]:
+    def _get_agent_overview_sync(
+        self, account_id: str, event_date: str, limit: int
+    ) -> dict[str, Any]:
         assert self._conn is not None
         total_cur = self._conn.execute(
             """
