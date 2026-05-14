@@ -2004,7 +2004,7 @@ class VikingFS:
     async def _ensure_parent_dirs(self, path: str) -> None:
         """Recursively create all parent directories."""
         try:
-            self.agfs.ensure_parent_dirs(path)
+            await self._run_in_threadpool(self.agfs.ensure_parent_dirs, path)
         except Exception as e:
             # Log the error but continue
             logger.debug(f"Failed to ensure parent directories for {path}: {e}")
