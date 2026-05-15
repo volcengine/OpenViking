@@ -2,7 +2,7 @@ name: 05. OpenClaw2OpenViking Memory Tests
 
 on:
   release:
-    types: [prereleased, released]
+    types: [prereleased]
   schedule:
     - cron: '0 2,10 * * *'
   workflow_dispatch:
