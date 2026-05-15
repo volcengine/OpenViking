@@ -4,21 +4,27 @@ benchmark:
   name: tau2_openviking_trajectory_category_rerank
   domains:
     - retail
+    - airline
 
-x-retail-trajectory-category-sidecars: &retail_trajectory_category_sidecars
+x-trajectory-category-sidecars: &trajectory_category_sidecars
   retail:
+    - ${TAU2_RETAIL_TRAJECTORY_FIRST_USER_QUERY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_retail_first_user_query_workflow_c1_20260516_merged/annotations.jsonl}
     - ${TAU2_RETAIL_TRAJECTORY_QUERY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_retail_prewrite_query_annotations_workflow_c1_v2_20260515/annotations.jsonl}
     - ${TAU2_RETAIL_TRAJECTORY_MEMORY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_retail_memory_workflow_c1_seed5_warm12_full_20260515_merged_memory_annotations/annotations.jsonl}
+  airline:
+    - ${TAU2_AIRLINE_TRAJECTORY_FIRST_USER_QUERY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_airline_first_user_query_workflow_c1_20260516_merged/annotations.jsonl}
+    - ${TAU2_AIRLINE_TRAJECTORY_MEMORY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_airline_memory_workflow_c1_warm6_full_20260516_merged_memory_annotations/annotations.jsonl}
 
 x-trajectory-scope-prompt: &trajectory_scope_prompt
   enabled: true
   injection_point: system_prompt
   domain_files:
     retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+    airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
 
 x-prewrite-category-base: &prewrite_category_base
   enabled: true
-  annotation_files: *retail_trajectory_category_sidecars
+  annotation_files: *trajectory_category_sidecars
   apply_nodes:
     - before_write_tool_call
   retrieve_limit: 6
@@ -26,6 +32,18 @@ x-prewrite-category-base: &prewrite_category_base
   positive_match_required: true
   no_match_policy: skip_injection
   missing_query_policy: base_rank
+  search_score_weight: 0.0
+
+x-first-user-category-base: &first_user_category_base
+  enabled: true
+  annotation_files: *trajectory_category_sidecars
+  apply_nodes:
+    - first_user
+  retrieve_limit: 6
+  inject_limit: 2
+  positive_match_required: true
+  no_match_policy: skip_injection
+  missing_query_policy: fail_fast
   search_score_weight: 0.0
 
 strategies:
@@ -75,5 +93,44 @@ strategies:
     retrieval_mode: first_user_prewrite
     category_rerank:
       <<: *prewrite_category_base
+      mismatch_policy: strict_pair_match_only
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_first_user_exact
+    label: OpenViking Memory V2 trajectory-view scope + first-user exact-pair category rerank
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      <<: *first_user_category_base
+      mismatch_policy: keep_positive_match_drop_mismatch
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_first_user_priority
+    label: OpenViking Memory V2 trajectory-view scope + first-user category priority fill
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      <<: *first_user_category_base
+      mismatch_policy: positive_priority_fill
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_first_user_strict_pair
+    label: OpenViking Memory V2 trajectory-view scope + first-user strict pair-only category rerank
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      <<: *first_user_category_base
       mismatch_policy: strict_pair_match_only
     scope_prompt: *trajectory_scope_prompt

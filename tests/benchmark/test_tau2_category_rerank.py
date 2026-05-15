@@ -148,7 +148,7 @@ def test_category_rerank_config_matches_s89_alignment_shape() -> None:
     category_strategy = strategies["memory_v2_trajectory_category_prewrite_exact"]
 
     assert config["benchmark"]["reasoning_effort"] == "high"
-    assert config["benchmark"]["domains"] == ["retail"]
+    assert config["benchmark"]["domains"] == ["retail", "airline"]
     assert config["openviking"]["retrieval_top_k"] == 4
     assert category_strategy["memory_backend"] == "openviking"
     assert category_strategy["train_memory_mode"] == "experience_only"
@@ -173,11 +173,20 @@ def test_category_rerank_config_matches_s89_alignment_shape() -> None:
     assert scope_prompt["injection_point"] == "system_prompt"
     assert scope_prompt["domain_files"] == {
         "retail": "benchmark/tau2/config/scope_prompts/retail_memory_scope.md",
+        "airline": "benchmark/tau2/config/scope_prompts/airline_memory_scope.md",
     }
 
     assert "memory_v2_trajectory_prewrite_scope" in strategies
     assert "memory_v2_trajectory_category_prewrite_priority" in strategies
     assert "memory_v2_trajectory_category_prewrite_strict_pair" in strategies
+    first_user_strategy = strategies["memory_v2_trajectory_category_first_user_exact"]
+    first_user_rerank = first_user_strategy["category_rerank"]
+    assert first_user_rerank["apply_nodes"] == ["first_user"]
+    assert first_user_rerank["retrieve_limit"] == 6
+    assert first_user_rerank["inject_limit"] == 2
+    assert first_user_rerank["missing_query_policy"] == "fail_fast"
+    assert "memory_v2_trajectory_category_first_user_priority" in strategies
+    assert "memory_v2_trajectory_category_first_user_strict_pair" in strategies
     assert _has_key_fragment(category_strategy, "annotation")
 
 
