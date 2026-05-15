@@ -50,6 +50,7 @@ class SemanticMsg:
     skip_vectorization: bool = False
     telemetry_id: str = ""
     target_uri: str = ""
+    target_exists_before_enqueue: bool = False
     lifecycle_lock_handle_id: str = ""
     is_code_repo: bool = False
     coalesce_key: str = ""
@@ -70,6 +71,7 @@ class SemanticMsg:
         skip_vectorization: bool = False,
         telemetry_id: str = "",
         target_uri: str = "",
+        target_exists_before_enqueue: bool = False,
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
         coalesce_key: str = "",
@@ -87,6 +89,7 @@ class SemanticMsg:
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
         self.target_uri = target_uri
+        self.target_exists_before_enqueue = target_exists_before_enqueue
         self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self.is_code_repo = is_code_repo
         self.coalesce_key = coalesce_key
@@ -129,6 +132,7 @@ class SemanticMsg:
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
+            target_exists_before_enqueue=data.get("target_exists_before_enqueue", False),
             lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
             is_code_repo=data.get("is_code_repo", False),
             coalesce_key=data.get("coalesce_key", ""),

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.server.error_mapping import is_not_found_error
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -294,11 +295,13 @@ class SemanticDagExecutor:
             elif self._root_done:
                 self._root_done.set()
 
-    async def _list_dir(self, uri: str) -> tuple[list[str], list[str]]:
+    async def _list_dir(self, uri: str, *, missing_ok: bool = False) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
         try:
             entries = await self._viking_fs.ls(uri, ctx=self._ctx)
         except Exception as e:
+            if missing_ok and is_not_found_error(e):
+                return [], []
             logger.warning(f"Failed to list directory {uri}: {e}")
             return [], []
 
@@ -438,7 +441,7 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
-            target_dirs, target_files = await self._list_dir(target_path)
+            target_dirs, target_files = await self._list_dir(target_path, missing_ok=True)
             current_file_names = {f.split("/")[-1] for f in current_files}
             target_file_names = {f.split("/")[-1] for f in target_files}
             if current_file_names != target_file_names:

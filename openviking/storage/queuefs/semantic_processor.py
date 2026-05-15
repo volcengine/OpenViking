@@ -342,7 +342,11 @@ class SemanticProcessor(DequeueHandlerBase):
                                 msg.target_uri, ctx=self._current_ctx
                             )
                             # Check if target URI exists and is not the same as the source URI（避免重复处理）
-                            if target_exists and msg.uri != msg.target_uri:
+                            if (
+                                target_exists
+                                and msg.target_exists_before_enqueue
+                                and msg.uri != msg.target_uri
+                            ):
                                 is_incremental = True
                                 logger.info(
                                     f"Target URI exists, using incremental update: {msg.target_uri}"

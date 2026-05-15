@@ -44,6 +44,9 @@ class _DummyVikingFS:
     async def ls(self, uri, show_all_hidden=False, ctx=None, **kwargs):
         return self.entries_by_uri.get(uri, [])
 
+    async def exists(self, uri, ctx=None, **kwargs):
+        return uri in self.entries_by_uri
+
 
 @pytest.mark.asyncio
 async def test_resources_root_is_split_into_children():
@@ -87,6 +90,7 @@ async def test_resources_root_is_split_into_children():
         "viking://temp/import_root/existing_a",
         "viking://temp/import_root/new_c",
     ]
+    assert [m.target_exists_before_enqueue for m in queue.msgs] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -118,6 +122,7 @@ async def test_resources_root_single_file_child():
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/file.txt"
     assert queue.msgs[0].uri == "viking://temp/import_root/file.txt"
+    assert queue.msgs[0].target_exists_before_enqueue is False
 
 
 @pytest.mark.asyncio
@@ -149,6 +154,39 @@ async def test_explicit_subpath_not_split():
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/foo"
     assert queue.msgs[0].uri == "viking://temp/import_root"
+    assert queue.msgs[0].target_exists_before_enqueue is False
+
+
+@pytest.mark.asyncio
+async def test_explicit_target_exists_map_overrides_runtime_exists_check():
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    vfs = _DummyVikingFS({"viking://resources/tt_a": []})
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
+        patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
+    ):
+        summarizer = Summarizer(vlm_processor=None)
+        res = await summarizer.summarize(
+            resource_uris=["viking://resources/tt_a"],
+            ctx=ctx,
+            temp_uris=["viking://temp/import_root/tt_a"],
+            target_exists_before_enqueue_map={"viking://resources/tt_a": False},
+        )
+
+    assert res["status"] == "success"
+    assert res["enqueued_count"] == 1
+    assert queue.msgs[0].target_uri == "viking://resources/tt_a"
+    assert queue.msgs[0].target_exists_before_enqueue is False
 
 
 @pytest.mark.asyncio

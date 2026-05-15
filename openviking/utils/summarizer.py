@@ -75,6 +75,18 @@ class Summarizer:
                 children.append((name, child_temp_uri))
             return children
 
+        async def target_exists(uri: str, source_uri: str) -> bool:
+            if not uri or uri == source_uri:
+                return False
+            viking_fs = get_viking_fs()
+            try:
+                return await viking_fs.exists(uri, ctx=ctx)
+            except Exception:
+                logger.debug("Failed to preflight target existence for %s", uri, exc_info=True)
+                return False
+
+        target_exists_before_enqueue_map = kwargs.get("target_exists_before_enqueue_map") or {}
+
         for uri, temp_uri in zip(resource_uris, temp_uris, strict=True):
             # Determine context_type based on URI
             context_type = context_type_for_uri(uri)
@@ -94,6 +106,12 @@ class Summarizer:
                 enqueue_units.append((uri, temp_uri))
 
             for target_uri, source_uri in enqueue_units:
+                if target_uri in target_exists_before_enqueue_map:
+                    target_exists_before_enqueue = bool(
+                        target_exists_before_enqueue_map[target_uri]
+                    )
+                else:
+                    target_exists_before_enqueue = await target_exists(target_uri, source_uri)
                 msg = SemanticMsg(
                     uri=source_uri,
                     context_type=context_type,
@@ -104,6 +122,7 @@ class Summarizer:
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
                     target_uri=target_uri if target_uri != source_uri else None,
+                    target_exists_before_enqueue=target_exists_before_enqueue,
                     lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                     is_code_repo=kwargs.get("is_code_repo", False),
                 )
