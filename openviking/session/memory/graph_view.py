@@ -204,41 +204,78 @@ class MemoryGraph:
 
 
 def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
-    elements = [
-        {"data": node}
-        for node in nodes
-    ] + [
-        {
-            "data": {
-                "id": f"edge-{idx}",
-                **edge,
+    vis_nodes = []
+    for node in nodes:
+        color = TYPE_COLORS.get(node.get("memory_type") or "", "#64748b")
+        vis_nodes.append(
+            {
+                "id": node["id"],
+                "label": node.get("label") or node["id"],
+                "shape": "box",
+                "color": {
+                    "background": color,
+                    "border": color,
+                    "highlight": {"background": color, "border": color},
+                    "hover": {"background": color, "border": color},
+                },
+                "font": {"color": "#e2e8f0", "size": 12},
+                "margin": 10,
+                "widthConstraint": {"minimum": 120, "maximum": 180},
+                "memory_type": node.get("memory_type", ""),
+                "category": node.get("category", ""),
+                "uri": node.get("uri", ""),
+                "content_preview": node.get("content_preview", ""),
+                "content_truncated": node.get("content_truncated", False),
             }
-        }
-        for idx, edge in enumerate(edges)
-    ]
-    elements_json = json.dumps(elements, ensure_ascii=False)
-    type_colors_json = json.dumps(TYPE_COLORS)
-    link_styles_json = json.dumps(LINK_STYLES)
+        )
+
+    vis_edges = []
+    for idx, edge in enumerate(edges):
+        style = LINK_STYLES.get(edge.get("link_type") or "", {"color": "#94a3b8", "dash": "none"})
+        vis_edges.append(
+            {
+                "id": f"edge-{idx}",
+                "from": edge["source"],
+                "to": edge["target"],
+                "label": edge.get("link_type", "related_to"),
+                "color": {"color": style["color"], "highlight": style["color"], "hover": style["color"]},
+                "dashes": style["dash"] != "none",
+                "width": max(2, float(edge.get("weight", 1.0)) * 4),
+                "arrows": "to",
+                "smooth": {"type": "dynamic"},
+                "link_type": edge.get("link_type", "related_to"),
+                "weight": float(edge.get("weight", 1.0)),
+                "description": edge.get("description", ""),
+            }
+        )
+
+    nodes_json = json.dumps(vis_nodes, ensure_ascii=False)
+    edges_json = json.dumps(vis_edges, ensure_ascii=False)
+    type_colors_json = json.dumps(TYPE_COLORS, ensure_ascii=False)
+    link_styles_json = json.dumps(LINK_STYLES, ensure_ascii=False)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Memory Graph</title>
+<title>Graph</title>
 <style>
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; }}
   #app {{ display: grid; grid-template-columns: 1fr 320px; height: 100vh; }}
-  #cy {{ width: 100%; height: 100vh; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 60%); }}
+  #graph {{ width: 100%; height: 100vh; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 60%); }}
   #sidebar {{ border-left: 1px solid #334155; background: rgba(15, 23, 42, 0.96); padding: 16px; overflow: auto; }}
   #sidebar h3 {{ margin: 0 0 12px; font-size: 16px; }}
   #sidebar .muted {{ color: #94a3b8; font-size: 12px; }}
   #sidebar .block {{ margin-top: 14px; padding-top: 14px; border-top: 1px solid #1e293b; }}
   #sidebar pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: #cbd5e1; }}
-  #legend {{ position: fixed; left: 16px; top: 16px; z-index: 10; background: rgba(15, 23, 42, 0.92); border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; max-width: 280px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }}
+  #legend {{ position: fixed; left: 16px; top: 16px; z-index: 10; background: rgba(15, 23, 42, 0.92); border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; max-width: 300px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }}
   #legend h4 {{ margin: 0 0 8px; font-size: 13px; }}
   .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; color: #cbd5e1; }}
+  .legend-item button {{ all: unset; display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%; border-radius: 8px; padding: 4px 6px; }}
+  .legend-item button.active {{ background: rgba(51, 65, 85, 0.85); }}
+  .legend-item button.dimmed {{ opacity: 0.55; }}
   .legend-chip {{ width: 12px; height: 12px; border-radius: 4px; flex: 0 0 12px; }}
   .legend-line {{ width: 22px; height: 3px; border-radius: 999px; flex: 0 0 22px; }}
   #tooltip {{ position: fixed; display: none; max-width: 420px; pointer-events: none; z-index: 20; background: rgba(15,23,42,0.96); border: 1px solid #475569; border-radius: 12px; padding: 12px 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.35); }}
@@ -246,16 +283,14 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
   #tooltip .meta {{ font-size: 12px; color: #94a3b8; margin-bottom: 8px; }}
   #tooltip .desc {{ font-size: 12px; line-height: 1.5; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }}
 </style>
-<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
 <div id="legend"></div>
 <div id="tooltip"><div class="title"></div><div class="meta"></div><div class="desc"></div></div>
 <div id="app">
-  <div id="cy"></div>
+  <div id="graph"></div>
   <aside id="sidebar">
-    <h3>Memory Graph</h3>
-    <div class="muted">Hover to preview. Click a node to focus its neighbors.</div>
     <div class="block">
       <div id="detail-title">No selection</div>
       <div id="detail-meta" class="muted"></div>
@@ -264,75 +299,80 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
   </aside>
 </div>
 <script>
-const elements = {elements_json};
+const originalNodes = {nodes_json};
+const originalEdges = {edges_json};
 const typeColors = {type_colors_json};
 const linkStyles = {link_styles_json};
 const tooltip = document.getElementById('tooltip');
 const detailTitle = document.getElementById('detail-title');
 const detailMeta = document.getElementById('detail-meta');
 const detailContent = document.getElementById('detail-content');
+const legend = document.getElementById('legend');
 
-const cy = cytoscape({{
-  container: document.getElementById('cy'),
-  elements,
-  style: [
-    {{
-      selector: 'node',
-      style: {{
-        'shape': 'round-rectangle',
-        'background-color': ele => typeColors[ele.data('memory_type')] || '#64748b',
-        'label': 'data(label)',
-        'color': '#e2e8f0',
-        'font-size': 11,
-        'text-wrap': 'wrap',
-        'text-max-width': 120,
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'width': 120,
-        'height': 42,
-        'padding': '10px',
-        'border-width': 2,
-        'border-color': '#0f172a'
-      }}
-    }},
-    {{
-      selector: 'edge',
-      style: {{
-        'curve-style': 'bezier',
-        'target-arrow-shape': 'triangle',
-        'line-color': ele => (linkStyles[ele.data('link_type')] || {{color:'#94a3b8'}}).color,
-        'target-arrow-color': ele => (linkStyles[ele.data('link_type')] || {{color:'#94a3b8'}}).color,
-        'line-style': ele => (linkStyles[ele.data('link_type')] || {{dash:'none'}}).dash === 'none' ? 'solid' : 'dashed',
-        'width': ele => Math.max(2, Number(ele.data('weight') || 1) * 4),
-        'opacity': 0.85
-      }}
-    }},
-    {{
-      selector: '.faded',
-      style: {{ 'opacity': 0.12 }}
-    }},
-    {{
-      selector: '.highlighted',
-      style: {{ 'opacity': 1, 'z-index': 999 }}
-    }}
-  ],
-  layout: {{ name: 'cose', animate: false, padding: 36 }}
-}});
+const nodes = new vis.DataSet(originalNodes);
+const edges = new vis.DataSet(originalEdges);
+const activeMemoryTypes = new Set();
 
-function renderLegend() {{
-  const legend = document.getElementById('legend');
-  const typeItems = Object.entries(typeColors).map(([k, v]) => `<div class="legend-item"><span class="legend-chip" style="background:${{v}}"></span><span>${{k}}</span></div>`).join('');
-  const edgeItems = Object.entries(linkStyles).map(([k, v]) => `<div class="legend-item"><span class="legend-line" style="background:${{v.color}}"></span><span>${{k}}</span></div>`).join('');
-  legend.innerHTML = `<h4>Memory Types</h4>${{typeItems}}<h4 style="margin-top:12px;">Link Types</h4>${{edgeItems}}`;
+const network = new vis.Network(
+  document.getElementById('graph'),
+  {{ nodes, edges }},
+  {{
+    autoResize: true,
+    interaction: {{ hover: true, tooltipDelay: 100, navigationButtons: true, keyboard: true }},
+    physics: {{
+      stabilization: {{ iterations: 500, updateInterval: 25 }},
+      barnesHut: {{
+        gravitationalConstant: -7000,
+        centralGravity: 0.18,
+        springLength: 170,
+        springConstant: 0.02,
+        damping: 0.16,
+        avoidOverlap: 0.2,
+      }},
+      minVelocity: 0.75,
+    }},
+    nodes: {{
+      shape: 'box',
+      borderWidth: 2,
+      shadow: false,
+      scaling: {{
+        min: 18,
+        max: 42,
+        label: {{ enabled: true, min: 11, max: 20 }},
+      }},
+      chosen: {{
+        node(values) {{
+          values.borderWidth = 4;
+          values.size = Math.max(values.size || 18, 34);
+          values.shadow = true;
+          values.shadowColor = 'rgba(148, 163, 184, 0.55)';
+          values.shadowSize = 28;
+          values.shadowX = 0;
+          values.shadowY = 0;
+        }},
+        label(values) {{
+          values.size = Math.max(values.size || 12, 18);
+          values.bold = true;
+        }},
+      }},
+    }},
+    edges: {{ smooth: true, font: {{ color: '#cbd5e1', size: 10, strokeWidth: 0 }}, arrows: {{ to: {{ enabled: true, scaleFactor: 0.7 }} }} }},
+  }}
+);
+
+function escapedPreviewText(text, truncated) {{
+  let desc = text || '(empty)';
+  if (truncated) desc += '\\n\\n[preview truncated]';
+  return desc;
 }}
 
-function showTooltip(evt, title, meta, desc) {{
+function showTooltip(x, y, title, meta, desc) {{
   tooltip.style.display = 'block';
   tooltip.querySelector('.title').textContent = title || '';
   tooltip.querySelector('.meta').textContent = meta || '';
   tooltip.querySelector('.desc').textContent = desc || '';
-  tooltip.style.left = (evt.originalEvent.clientX + 16) + 'px';
-  tooltip.style.top = (evt.originalEvent.clientY + 16) + 'px';
+  tooltip.style.left = (x + 16) + 'px';
+  tooltip.style.top = (y + 16) + 'px';
 }}
 
 function hideTooltip() {{
@@ -340,56 +380,129 @@ function hideTooltip() {{
 }}
 
 function showNodeDetails(node) {{
-  detailTitle.textContent = node.data('label') || node.id();
-  detailMeta.textContent = `${{node.data('memory_type') || 'unknown'}} · ${{node.data('uri') || ''}}`;
-  detailContent.textContent = node.data('content_preview') || '(empty)';
-  if (node.data('content_truncated')) {{
-    detailContent.textContent += '\\n\\n[preview truncated]';
-  }}
+  detailTitle.textContent = node.label || node.id;
+  detailMeta.textContent = `${{node.memory_type || 'unknown'}} · ${{node.uri || ''}}`;
+  detailContent.textContent = escapedPreviewText(node.content_preview, node.content_truncated);
 }}
 
 function showEdgeDetails(edge) {{
-  detailTitle.textContent = edge.data('link_type') || 'relation';
-  detailMeta.textContent = `weight=${{edge.data('weight')}}`;
-  detailContent.textContent = edge.data('description') || '(no description)';
+  detailTitle.textContent = edge.link_type || 'relation';
+  detailMeta.textContent = `weight=${{edge.weight}}`;
+  detailContent.textContent = edge.description || '(no description)';
 }}
 
-function focusNeighborhood(node) {{
-  cy.elements().addClass('faded').removeClass('highlighted');
-  const neighborhood = node.closedNeighborhood();
-  neighborhood.removeClass('faded').addClass('highlighted');
+function renderLegend() {{
+  const typeItems = Object.entries(typeColors).map(([k, v]) => {{
+    const isActive = activeMemoryTypes.has(k);
+    const activeClass = isActive ? 'active' : (activeMemoryTypes.size > 0 ? 'dimmed' : '');
+    return `<div class="legend-item"><button class="${{activeClass}}" data-memory-type="${{k}}"><span class="legend-chip" style="background:${{v}}"></span><span>${{k}}</span></button></div>`;
+  }}).join('');
+  const edgeItems = Object.entries(linkStyles).map(([k, v]) => `<div class="legend-item"><span class="legend-line" style="background:${{v.color}}"></span><span>${{k}}</span></div>`).join('');
+  legend.innerHTML = `<h4>Memory Types</h4>${{typeItems}}<div class="muted" style="margin:6px 0 10px;">Click types to filter. Click again to clear each selection.</div><h4 style="margin-top:12px;">Link Types</h4>${{edgeItems}}`;
+  legend.querySelectorAll('button[data-memory-type]').forEach((button) => {{
+    button.addEventListener('click', () => {{
+      const memoryType = button.dataset.memoryType;
+      if (activeMemoryTypes.has(memoryType)) {{
+        activeMemoryTypes.delete(memoryType);
+      }} else {{
+        activeMemoryTypes.add(memoryType);
+      }}
+      applyFilter();
+      renderLegend();
+    }});
+  }});
 }}
 
-cy.on('mouseover', 'node', evt => {{
-  const node = evt.target;
-  const meta = `${{node.data('memory_type') || 'unknown'}} · ${{node.data('uri') || ''}}`;
-  let desc = node.data('content_preview') || '(empty)';
-  if (node.data('content_truncated')) desc += '\\n\\n[preview truncated]';
-  showTooltip(evt, node.data('label') || node.id(), meta, desc);
+function restoreVisibleGraph(selectedNodeIds = []) {{
+  const nodeSelection = new Set(selectedNodeIds);
+  nodes.update(originalNodes.map(node => ({{
+    id: node.id,
+    hidden: false,
+  }})));
+  edges.update(originalEdges.map((edge, index) => ({{
+    id: edge.id || `edge-${{index}}`,
+    hidden: false,
+  }})));
+  network.unselectAll();
+  if (selectedNodeIds.length > 0) {{
+    network.selectNodes(selectedNodeIds);
+  }}
+  network.setOptions({{ physics: false }});
+}}
+
+function applyFilter(shouldFit = true) {{
+  if (activeMemoryTypes.size === 0) {{
+    restoreVisibleGraph();
+    if (shouldFit) {{
+      network.fit({{ animation: false }});
+    }}
+    return;
+  }}
+
+  const visibleNodes = originalNodes.filter(node => activeMemoryTypes.has(node.memory_type));
+  const visibleNodeIds = new Set(visibleNodes.map(node => node.id));
+  const visibleEdges = originalEdges.filter(edge => visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to));
+  const visibleEdgeIds = new Set(visibleEdges.map(edge => edge.id));
+
+  nodes.update(originalNodes.map(node => ({{
+    id: node.id,
+    hidden: !visibleNodeIds.has(node.id),
+  }})));
+  edges.update(originalEdges.map((edge, index) => ({{
+    id: edge.id || `edge-${{index}}`,
+    hidden: !visibleEdgeIds.has(edge.id || `edge-${{index}}`),
+  }})));
+
+  if (visibleNodes.length > 0 && shouldFit) {{
+    network.fit({{ animation: false }});
+  }}
+
+  network.unselectAll();
+  network.selectNodes(visibleNodes.map(node => node.id));
+  network.setOptions({{ physics: false }});
+}}
+
+network.once('stabilized', () => {{
+  network.setOptions({{ physics: false }});
+}});
+
+network.on('hoverNode', (params) => {{
+  const node = nodes.get(params.node);
+  const meta = `${{node.memory_type || 'unknown'}} · ${{node.uri || ''}}`;
+  const desc = escapedPreviewText(node.content_preview, node.content_truncated);
+  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, node.label || node.id, meta, desc);
   showNodeDetails(node);
 }});
 
-cy.on('mouseover', 'edge', evt => {{
-  const edge = evt.target;
-  const meta = `${{edge.data('link_type')}} · weight=${{edge.data('weight')}}`;
-  showTooltip(evt, edge.data('description') || edge.data('link_type'), meta, edge.data('description') || '(no description)');
+network.on('hoverEdge', (params) => {{
+  const edge = edges.get(params.edge);
+  const meta = `${{edge.link_type}} · weight=${{edge.weight}}`;
+  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, edge.description || edge.link_type, meta, edge.description || '(no description)');
   showEdgeDetails(edge);
 }});
 
-cy.on('mousemove', 'node, edge', evt => {{
-  tooltip.style.left = (evt.originalEvent.clientX + 16) + 'px';
-  tooltip.style.top = (evt.originalEvent.clientY + 16) + 'px';
-}});
-
-cy.on('mouseout', 'node, edge', () => hideTooltip());
-cy.on('tap', 'node', evt => focusNeighborhood(evt.target));
-cy.on('tap', evt => {{
-  if (evt.target === cy) {{
-    cy.elements().removeClass('faded highlighted');
-    detailTitle.textContent = 'No selection';
-    detailMeta.textContent = '';
-    detailContent.textContent = 'Move the mouse over a node or edge to inspect it.';
+network.on('blurNode', hideTooltip);
+network.on('blurEdge', hideTooltip);
+network.on('click', (params) => {{
+  if (params.nodes.length > 0) {{
+    const focusNodeId = params.nodes[0];
+    const focusNode = nodes.get(focusNodeId);
+    showNodeDetails(focusNode);
+    const connectedNodeIds = network.getConnectedNodes(focusNodeId);
+    network.unselectAll();
+    network.selectNodes([focusNodeId, ...connectedNodeIds]);
+    return;
   }}
+
+  if (params.edges.length > 0) {{
+    showEdgeDetails(edges.get(params.edges[0]));
+    return;
+  }}
+
+  restoreVisibleGraph();
+  detailTitle.textContent = 'No selection';
+  detailMeta.textContent = '';
+  detailContent.textContent = 'Move the mouse over a node or edge to inspect it.';
 }});
 
 renderLegend();

@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.graph_view import MemoryGraph
+from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -28,3 +31,19 @@ async def test_collect_graph_data_includes_content_preview():
     assert "Demo content line 1" in nodes[0]["content_preview"]
     assert nodes[0]["content_truncated"] is False
     assert edges == []
+
+
+def test_memory_file_utils_write_preserves_memory_type_in_comment():
+    memory_file = MemoryFile(
+        uri="viking://user/default/memories/preferences/code_style.md",
+        memory_type="preferences",
+        content="Prefers concise responses.",
+        extra_fields={"topic": "code_style"},
+    )
+
+    written = MemoryFileUtils.write(memory_file)
+    parsed = parse_memory_file_with_fields(written)
+
+    assert parsed["memory_type"] == "preferences"
+    assert parsed["topic"] == "code_style"
+    assert parsed["content"] == "Prefers concise responses."

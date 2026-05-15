@@ -8,6 +8,7 @@ import pytest
 
 from openviking.session.memory.dataclass import (
     MemoryField,
+    MemoryFile,
     MemoryOperations,
     MemoryTypeSchema,
 )
@@ -23,6 +24,7 @@ from openviking.session.memory.utils import (
     resolve_all_operations,
     validate_uri_template,
 )
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 
 class TestUriGeneration:
@@ -521,3 +523,18 @@ Content"""
         assert result["tool_name"] == "test"
         assert result["value"] == 42
         assert result["content"] == "Content"
+
+    def test_write_preserves_memory_type_in_memory_fields_comment(self):
+        memory_file = MemoryFile(
+            uri="viking://user/default/memories/preferences/code_style.md",
+            memory_type="preferences",
+            content="Prefers concise responses.",
+            extra_fields={"topic": "code_style"},
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+        parsed = parse_memory_file_with_fields(written)
+
+        assert parsed["memory_type"] == "preferences"
+        assert parsed["topic"] == "code_style"
+        assert parsed["content"] == "Prefers concise responses."

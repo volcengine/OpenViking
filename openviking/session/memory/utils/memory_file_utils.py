@@ -53,7 +53,7 @@ def _serialize_with_metadata(
         except Exception:
             pass
 
-    clean_metadata = {k: v for k, v in metadata.items() if v is not None and k != "memory_type"}
+    clean_metadata = {k: v for k, v in metadata.items() if v is not None}
 
     if not clean_metadata:
         return content
