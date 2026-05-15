@@ -71,10 +71,13 @@ function clampScore(v) {
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天/i;
-const QUERY_TOKEN_RE = /[a-z0-9一-龥]{2,}/gi;
+const QUERY_TOKEN_RE = /[\p{L}\p{N}]{2,}/gu;
 const STOPWORDS = new Set([
   "what", "when", "where", "which", "who", "whom", "whose", "why", "how", "did", "does",
   "is", "are", "was", "were", "the", "and", "for", "with", "from", "that", "this", "your", "you",
+  "это", "что", "как", "где", "когда", "почему", "зачем", "или", "для", "про", "при", "его",
+  "она", "оно", "они", "мне", "мой", "моя", "мои", "твой", "твоя", "твои", "наш", "ваш",
+  "посмотри", "разберись", "найди", "продумай", "исправить", "сделать", "давай",
 ]);
 
 function buildQueryProfile(query) {
@@ -95,7 +98,7 @@ function lexicalOverlapBoost(tokens, text) {
   for (const token of tokens.slice(0, 8)) {
     if (haystack.includes(token)) matched += 1;
   }
-  return Math.min(0.2, (matched / Math.min(tokens.length, 4)) * 0.2);
+  return Math.min(0.12, (matched / Math.min(tokens.length, 4)) * 0.12);
 }
 
 function getRankingBreakdown(item, profile) {
@@ -103,10 +106,11 @@ function getRankingBreakdown(item, profile) {
   const abstract = (item.abstract || item.overview || "").trim();
   const cat = (item.category || "").toLowerCase();
   const uri = item.uri.toLowerCase();
-  const leafBoost = (item.level === 2 || uri.endsWith(".md")) ? 0.12 : 0;
-  const eventBoost = profile.wantsTemporal && (cat === "events" || uri.includes("/events/")) ? 0.1 : 0;
-  const prefBoost = profile.wantsPreference && (cat === "preferences" || uri.includes("/preferences/")) ? 0.08 : 0;
-  const overlapBoost = lexicalOverlapBoost(profile.tokens, `${item.uri} ${abstract}`);
+  const baseIsUseful = base >= 0.35;
+  const leafBoost = baseIsUseful && (item.level === 2 || uri.endsWith(".md")) ? 0.06 : 0;
+  const eventBoost = baseIsUseful && profile.wantsTemporal && (cat === "events" || uri.includes("/events/")) ? 0.06 : 0;
+  const prefBoost = baseIsUseful && profile.wantsPreference && (cat === "preferences" || uri.includes("/preferences/")) ? 0.05 : 0;
+  const overlapBoost = baseIsUseful ? lexicalOverlapBoost(profile.tokens, `${item.uri} ${abstract}`) : 0;
   return {
     baseScore: base,
     leafBoost,
@@ -131,6 +135,11 @@ function dedupeByAbstract(items) {
   });
 }
 
+function isNoisyRecallCandidate(item) {
+  const text = `${item.uri}\n${item.abstract || ""}\n${item.overview || ""}`;
+  return /You are running as a subagent|Conversation context \(untrusted metadata\)|Inter-session message|OPENCLAW_INTERNAL_CONTEXT|Full hook output saved to/i.test(text);
+}
+
 function pickMemories(items, limit, queryText) {
   if (items.length === 0 || limit <= 0) return [];
   const profile = buildQueryProfile(queryText);
@@ -148,12 +157,32 @@ function pickMemories(items, limit, queryText) {
   return picked;
 }
 
+function truncateMemoryContent(content, maxChars) {
+  const trimmed = String(content || "").trim();
+  if (!trimmed || trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars).trimEnd()}\n...(truncated by Codex OpenViking auto-recall)`;
+}
+
+async function formatMemoryLine(item) {
+  const label = item.category || "memory";
+  const score = clampScore(item.score).toFixed(2);
+  const abstract = (item.abstract || item.overview || item.uri).trim();
+  if (item.level === 2 && clampScore(item.score) >= cfg.fullContentScore) {
+    const content = await readMemoryContent(item.uri);
+    if (content) {
+      return `- [${label} score=${score} uri=${item.uri}] ${truncateMemoryContent(content, cfg.recallMaxMemoryChars)}`;
+    }
+  }
+  return `- [${label} score=${score} uri=${item.uri}] ${truncateMemoryContent(abstract, cfg.recallMaxMemoryChars)}`;
+}
+
 function postProcess(items, limit, threshold) {
   const seen = new Set();
   const sorted = [...items].sort((a, b) => clampScore(b.score) - clampScore(a.score));
   const result = [];
   for (const item of sorted) {
     if (item.level !== 2) continue;
+    if (isNoisyRecallCandidate(item)) continue;
     if (clampScore(item.score) < threshold) continue;
     const cat = (item.category || "").toLowerCase() || "unknown";
     const abs = (item.abstract || item.overview || "").trim().toLowerCase();
@@ -277,7 +306,12 @@ async function main() {
   log("start", {
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
-    config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
+    config: {
+      recallLimit: cfg.recallLimit,
+      scoreThreshold: cfg.scoreThreshold,
+      minInjectScore: cfg.minInjectScore,
+      minBaseInjectScore: cfg.minBaseInjectScore,
+    },
   });
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
@@ -327,16 +361,33 @@ async function main() {
     return;
   }
 
-  log("picked", { pickedCount: memories.length, uris: memories.map((m) => m.uri) });
+  const injectableMemories = memories.filter((m) =>
+    rankForInjection(m, profile) >= cfg.minInjectScore &&
+    clampScore(m.score) >= cfg.minBaseInjectScore
+  );
+  const topMemoryScore = Math.max(...memories.map((m) => rankForInjection(m, profile)));
+  const topBaseScore = Math.max(...memories.map((m) => clampScore(m.score)));
+  if (topMemoryScore < cfg.minInjectScore || topBaseScore < cfg.minBaseInjectScore) {
+    log("skip", {
+      stage: "confidence_gate",
+      reason: "top result below inject confidence",
+      topMemoryScore,
+      topBaseScore,
+      minInjectScore: cfg.minInjectScore,
+      minBaseInjectScore: cfg.minBaseInjectScore,
+    });
+    emit();
+    return;
+  }
+
+  log("picked", {
+    pickedCount: injectableMemories.length,
+    discardedLowConfidenceCount: memories.length - injectableMemories.length,
+    uris: injectableMemories.map((m) => m.uri),
+  });
 
   const lines = await Promise.all(
-    memories.map(async (item) => {
-      if (item.level === 2) {
-        const content = await readMemoryContent(item.uri);
-        if (content) return `- [${item.category || "memory"}] ${content}`;
-      }
-      return `- [${item.category || "memory"}] ${(item.abstract || item.overview || item.uri).trim()}`;
-    }),
+    injectableMemories.map((item) => formatMemoryLine(item)),
   );
 
   const memoryContext =
