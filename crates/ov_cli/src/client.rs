@@ -578,13 +578,24 @@ impl HttpClient {
         data: &str,
         wait: bool,
         timeout: Option<f64>,
+        show_progress: bool,
+        verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
         if path_obj.exists() {
             if path_obj.is_dir() {
-                let zip_file = self.zip_directory(path_obj, None)?;
-                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
+                let zip_file = if show_progress {
+                    self.zip_directory_with_progress(path_obj, verbose, None)?
+                } else {
+                    self.zip_directory(path_obj, None)?
+                };
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(zip_file.path()).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
@@ -597,7 +608,12 @@ impl HttpClient {
                     .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
                     .await
             } else if path_obj.is_file() {
-                let temp_file_id = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(path_obj, verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(path_obj).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,

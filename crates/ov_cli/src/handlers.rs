@@ -134,6 +134,8 @@ pub async fn handle_add_skill(
         &data,
         wait,
         timeout,
+        ctx.should_show_progress(),
+        ctx.is_verbose(),
         ctx.output_format,
         ctx.compact,
     )
