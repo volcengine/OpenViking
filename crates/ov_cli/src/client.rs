@@ -112,11 +112,20 @@ impl HttpClient {
         FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
     }
 
-    fn zip_directory(&self, dir_path: &Path, ignore_dirs: Option<&str>) -> Result<tempfile::NamedTempFile> {
+    fn zip_directory(
+        &self,
+        dir_path: &Path,
+        ignore_dirs: Option<&str>,
+    ) -> Result<tempfile::NamedTempFile> {
         self.create_uploader().zip_directory(dir_path, ignore_dirs)
     }
 
-    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool, ignore_dirs: Option<&str>) -> Result<tempfile::NamedTempFile> {
+    fn zip_directory_with_progress(
+        &self,
+        dir_path: &Path,
+        verbose: bool,
+        ignore_dirs: Option<&str>,
+    ) -> Result<tempfile::NamedTempFile> {
         self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
