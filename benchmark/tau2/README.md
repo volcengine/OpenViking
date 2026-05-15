@@ -5,11 +5,12 @@ evaluation. The scope is intentionally narrow:
 
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
-- trajectory-view retrieval treatment for the refined trajectory prompt.
-- experimental FGMemory-style pre-write recall on top of trajectory-view memory.
+- trajectory-view retrieval treatment for the refined trajectory prompt;
+- experimental category-aware pre-write rerank on top of trajectory-view
+  memory.
 
-The FGMemory-style route is opt-in and experimental; it is meant for PR-C
-review and smoke/targeted probes before any productization decision.
+The category-aware route is opt-in and experimental; it is meant for PR-C review
+and smoke/targeted probes before any productization decision.
 
 ## Layout
 
@@ -100,7 +101,7 @@ benchmark/tau2/run_full_eval.sh \
   --repeat-count 1
 ```
 
-Plan a one-cell trajectory FGMemory-style category-rerank smoke:
+Plan a one-cell trajectory category-rerank smoke:
 
 ```bash
 benchmark/tau2/run_full_eval.sh \
@@ -174,17 +175,17 @@ TAU-2 eval cells; corpus writes inside one corpus are still serialized by the
 prepare step.
 
 `config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
-an adapter-local FGMemory-style probe: pre-write recall, self-generated runtime
-category signals, and the retail scope prompt used by the Harness
-High-TrajView/FGMemory route. The alignment target is the red-box
-S89/FGMemory high result:
-retrieve 6, keep same-category candidates, inject at most 2, skip injection
-when no positive category match exists, and apply the scope/applicability prompt
-at the system prompt injection point. Runtime categories are generated from the
-local TAU-2 category catalog, current pre-write query text, candidate write tool
-names, retrieved trajectory text, and memory URIs; no Harness sidecar artifact
-is required. Retrieval traces include the query category, candidate memory
-categories, rerank reasons, selected rows, skipped rows, scope prompt metadata,
+an adapter-local category-rerank probe: pre-write recall, LLM-generated category
+annotation sidecars, and the same scope prompt shape used by the trajectory-view
+evidence runs. The category treatment retrieves 6 candidates, keeps positive
+category matches, injects at most 2 memories, skips injection when no positive
+category match exists, and applies the scope/applicability prompt at the system
+prompt injection point. Runtime category rerank is sidecar-only:
+the runner looks up query and memory annotations from configured
+`annotation_files`; if either side is missing, the cell fails instead of doing
+live query-to-category mapping. Retrieval traces include
+the query category, candidate memory categories, rerank reasons, selected rows,
+skipped rows, scope prompt metadata,
 and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
 Each run summary also includes `retrieval_trace_summary`, a compact rollup of
 decision nodes, category decisions, query/memory category sources, selected

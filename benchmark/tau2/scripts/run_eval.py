@@ -168,10 +168,6 @@ def _domain_value(value: Any, domain: str) -> Any:
 def _search_uri_suffix(search_memory_type: str, domain: str) -> str:
     if search_memory_type in {"experiences", "trajectories"}:
         return search_memory_type
-    if search_memory_type == "procedures":
-        return f"procedures/{domain}"
-    if search_memory_type.startswith("procedures/"):
-        return search_memory_type.format(domain=domain)
     raise ValueError(f"Unsupported search_memory_type: {search_memory_type}")
 
 
@@ -187,41 +183,10 @@ def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
     required = ("account", "user", "agent_id", "search_uri")
     if not all(openviking.get(key) for key in required):
         return None
-    return {key: str(openviking[key]) for key in required}
-
-
-def _external_openviking_identity(
-    config: dict[str, Any],
-    strategy: dict[str, Any],
-    domain: str,
-) -> dict[str, str]:
-    openviking = config.get("openviking", {})
-    raw_identity = strategy.get("external_openviking") or strategy.get("openviking_identity") or {}
-    identity = _domain_value(raw_identity, domain)
-    identity = identity if isinstance(identity, dict) else {}
-    values = {
-        "url": identity.get("url")
-        or _domain_value(strategy.get("openviking_url"), domain)
-        or openviking.get("url"),
-        "account": identity.get("account")
-        or _domain_value(strategy.get("openviking_account"), domain)
-        or _domain_value(openviking.get("account"), domain),
-        "user": identity.get("user")
-        or _domain_value(strategy.get("openviking_user"), domain)
-        or _domain_value(openviking.get("user"), domain),
-        "agent_id": identity.get("agent_id")
-        or _domain_value(strategy.get("openviking_agent_id"), domain)
-        or _domain_value(openviking.get("agent_id"), domain),
-        "search_uri": identity.get("search_uri")
-        or _domain_value(strategy.get("search_uri"), domain)
-        or "",
-    }
-    missing = [key for key in ("url", "account", "user", "agent_id") if not values.get(key)]
-    if missing:
-        raise ValueError(
-            f"external OpenViking identity for {strategy['id']} {domain} missing: {missing}"
-        )
-    return {key: str(value) for key, value in values.items()}
+    values = {key: str(openviking[key]) for key in required}
+    if openviking.get("url"):
+        values["url"] = str(openviking["url"])
+    return values
 
 
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
@@ -277,11 +242,11 @@ def _tau2_command(
         )
         corpus_dir = _memory_corpus_dir(config, configured_run_id, corpus_key)
         train_memory_mode = str(strategy.get("train_memory_mode") or "")
-        skip_train = False
         openviking_url = str(openviking["url"])
         if train_memory_mode == "experience_only":
             reuse_identity = _manifest_openviking_identity(corpus_dir)
             if reuse_identity is not None:
+                openviking_url = reuse_identity.get("url", openviking_url)
                 account = reuse_identity["account"]
                 agent_id = reuse_identity["agent_id"]
                 user = reuse_identity["user"]
@@ -296,14 +261,6 @@ def _tau2_command(
                 agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
                 user = f"tau2-{domain}-{corpus_id}"
                 search_uri = ""
-        elif train_memory_mode in {"external", "external_procedure_l2", "custom_procedure_l2"}:
-            identity = _external_openviking_identity(config, strategy, domain)
-            openviking_url = identity["url"]
-            account = identity["account"]
-            agent_id = identity["agent_id"]
-            user = identity["user"]
-            search_uri = identity.get("search_uri", "")
-            skip_train = True
         else:
             return None
         search_memory_type = str(strategy.get("search_memory_type", "experiences"))
@@ -371,8 +328,6 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
-        if skip_train:
-            command.append("--skip-train")
         if fixed_first_user_file is not None:
             command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
         if category_rerank.get("enabled"):
@@ -728,13 +683,7 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
 def _prepare_memory_corpora(plan: dict[str, Any], repo: Path, out: Path) -> list[dict[str, Any]]:
     corpus_cells: dict[str, dict[str, Any]] = {}
     for cell in plan["cells"]:
-        train_memory_mode = str(cell.get("train_memory_mode") or "")
-        should_prepare = bool(cell.get("train_required")) or train_memory_mode in {
-            "external",
-            "external_procedure_l2",
-            "custom_procedure_l2",
-        }
-        if cell.get("memory_backend") != "openviking" or not should_prepare:
+        if cell.get("memory_backend") != "openviking" or not bool(cell.get("train_required")):
             continue
         corpus_cells.setdefault(_memory_corpus_key(cell), cell)
     if not corpus_cells:
@@ -883,8 +832,20 @@ def _execute_cell(
         "stderr_tail": completed.stderr[-4000:],
     }
     row["artifacts"] = _cell_artifacts(cell, repo, out)
-    row["metrics"] = _cell_metrics(cell, row["artifacts"])
-    row["runtime_evidence"] = _cell_runtime_evidence(cell, row["artifacts"])
+    try:
+        row["metrics"] = _cell_metrics(cell, row["artifacts"])
+    except Exception as exc:
+        row["returncode"] = row["returncode"] or 1
+        row["metrics"] = None
+        row["metrics_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        row["runtime_evidence"] = _cell_runtime_evidence(cell, row["artifacts"])
+    except Exception as exc:
+        row["runtime_evidence"] = {
+            "status": "invalid",
+            "reasons": ["runtime_evidence_error"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     write_json(cell_result_path, row)
     return row
 
@@ -972,24 +933,39 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         category_rerank = strategy.get("category_rerank")
         if not isinstance(category_rerank, dict) or not category_rerank.get("enabled"):
             continue
-        raw_catalog_path = category_rerank.get("catalog_path")
-        catalog_path = Path(str(raw_catalog_path or "")).expanduser()
-        if raw_catalog_path and not catalog_path.is_absolute():
-            catalog_path = REPO_ROOT / catalog_path
-        exists = bool(raw_catalog_path and catalog_path.is_file())
+        raw_annotation_files = category_rerank.get("annotation_files") or category_rerank.get(
+            "category_annotation_files"
+        )
+        annotation_values = []
+        if isinstance(raw_annotation_files, dict):
+            for item in raw_annotation_files.values():
+                annotation_values.extend(item if isinstance(item, list) else [item])
+        elif isinstance(raw_annotation_files, list):
+            annotation_values.extend(raw_annotation_files)
+        elif raw_annotation_files:
+            annotation_values.append(raw_annotation_files)
+        annotation_paths = []
+        for value in annotation_values:
+            path = Path(str(value)).expanduser()
+            if not path.is_absolute():
+                path = REPO_ROOT / path
+            annotation_paths.append(path)
+        missing_annotation_paths = [str(path) for path in annotation_paths if not path.is_file()]
         category_rows.append(
             {
                 "strategy_id": strategy.get("id"),
-                "catalog_path": str(catalog_path) if raw_catalog_path else None,
-                "exists": exists,
+                "annotation_files": [str(path) for path in annotation_paths],
+                "exists": bool(annotation_paths) and not missing_annotation_paths,
+                "missing_annotation_files": missing_annotation_paths,
                 "apply_nodes": category_rerank.get("apply_nodes"),
                 "retrieve_limit": category_rerank.get("retrieve_limit"),
                 "inject_limit": category_rerank.get("inject_limit"),
             }
         )
-        if strict and not exists:
+        if strict and (not annotation_paths or missing_annotation_paths):
             errors.append(
-                f"missing category rerank catalog for {strategy.get('id')}: {raw_catalog_path}"
+                f"missing category rerank annotation sidecar for {strategy.get('id')}: "
+                f"{missing_annotation_paths or raw_annotation_files}"
             )
 
     scope_prompt_rows = []
@@ -1045,7 +1021,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,
-        "category_rerank_catalogs": category_rows,
+        "category_rerank_sidecars": category_rows,
         "scope_prompts": scope_prompt_rows,
         "split_files": split_rows,
         "errors": errors,
@@ -1082,6 +1058,11 @@ def main() -> int:
         help="Override benchmark.strategy_concurrency for parallel matrix cells.",
     )
     parser.add_argument(
+        "--task-max-concurrency",
+        type=int,
+        help="Override benchmark.task_max_concurrency inside each TAU-2 cell.",
+    )
+    parser.add_argument(
         "--strategy-id", action="append", help="Run only this strategy id; may be repeated."
     )
     parser.add_argument(
@@ -1114,8 +1095,12 @@ def main() -> int:
         raise SystemExit("--cell-concurrency must be >= 1")
     if args.strategy_concurrency is not None and args.strategy_concurrency < 1:
         raise SystemExit("--strategy-concurrency must be >= 1")
+    if args.task_max_concurrency is not None and args.task_max_concurrency < 1:
+        raise SystemExit("--task-max-concurrency must be >= 1")
 
     config = load_config(args.config)
+    if args.task_max_concurrency is not None:
+        config.setdefault("benchmark", {})["task_max_concurrency"] = args.task_max_concurrency
     out = output_dir(config, args.run_id)
     out.mkdir(parents=True, exist_ok=True)
     if args.preflight or args.strict_preflight:

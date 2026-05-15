@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,13 +17,107 @@ from benchmark.tau2.scripts.run_memory_v2_eval import (
     _runtime_evidence_status,
     _trace_category_summary,
 )
+from benchmark.tau2.scripts.build_category_catalog import _build_catalog
+from benchmark.tau2.scripts.generate_category_annotations import _basic_validate_annotation
+from benchmark.tau2.scripts.run_category_annotation_batches import _batch_ranges
 
 
-def _reranker() -> CategoryReranker:
+def _annotation(
+    *,
+    subject_type: str,
+    subject_id: str,
+    subject_ref: str,
+    category1: str,
+    category2: str,
+) -> dict:
+    return {
+        "schema_version": "memory_category_annotation.v0",
+        "annotation_id": f"{subject_type}:{subject_id}",
+        "request_id": f"{subject_type}:{subject_id}",
+        "producer": "llm_prompt",
+        "subject": {
+            "benchmark_family": "tau2",
+            "domain": "retail",
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "subject_ref": subject_ref,
+        },
+        "category": {
+            "category1": category1,
+            "category2": category2,
+            "category_source": "existing_catalog",
+            "confidence": 1.0,
+            "catalog_match": {
+                "matched": True,
+                "decision": "reuse",
+                "matched_category_id": f"{category1}:{category2}",
+            },
+        },
+        "ranking_features": {
+            "category1": category1,
+            "category2": category2,
+            "category_source": "existing_catalog",
+            "confidence": 1.0,
+        },
+    }
+
+
+def _write_sidecar(tmp_path: Path, *, first_user_query: str | None = None) -> Path:
+    rows = [
+        _annotation(
+            subject_type="query",
+            subject_id=(
+                "tau2_query_signature_"
+                "tau2_retail_pre_write_action_tools_exchange_delivered_order_items"
+            ),
+            subject_ref="unit#query",
+            category1="retail_order_post_shipment_service_request",
+            category2="delivered_order_exchange",
+        ),
+        _annotation(
+            subject_type="memory",
+            subject_id="delivered_return.md",
+            subject_ref="viking://agent/demo/memories/trajectories/delivered_return.md",
+            category1="retail_order_post_shipment_service_request",
+            category2="delivered_order_return",
+        ),
+        _annotation(
+            subject_type="memory",
+            subject_id="delivered_exchange.md",
+            subject_ref="viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            category1="retail_order_post_shipment_service_request",
+            category2="delivered_order_exchange",
+        ),
+        _annotation(
+            subject_type="memory",
+            subject_id="pending_cancel.md",
+            subject_ref="viking://agent/demo/memories/trajectories/pending_cancel.md",
+            category1="retail_order_cancellation",
+            category2="pending_order_cancel",
+        ),
+    ]
+    if first_user_query is not None:
+        query_hash = hashlib.sha256(first_user_query.encode("utf-8")).hexdigest()[:16]
+        rows.append(
+            _annotation(
+                subject_type="query",
+                subject_id=f"tau2_query_signature_tau2_retail_first_user_query_sha256_{query_hash}",
+                subject_ref="unit#first_user",
+                category1="retail_order_post_shipment_service_request",
+                category2="delivered_order_exchange",
+            )
+        )
+    path = tmp_path / "annotations.jsonl"
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+    return path
+
+
+def _reranker(tmp_path: Path) -> CategoryReranker:
+    sidecar = _write_sidecar(tmp_path)
     return CategoryReranker.from_payload(
         {
             "enabled": True,
-            "catalog_path": "benchmark/tau2/config/category_catalog.json",
+            "annotation_files": [str(sidecar)],
             "apply_nodes": ["before_write_tool_call"],
             "retrieve_limit": 6,
             "inject_limit": 2,
@@ -50,9 +145,10 @@ def test_category_rerank_config_matches_s89_alignment_shape() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     config = load_config(repo_root / "benchmark/tau2/config/category_rerank.yaml")
     strategies = {row["id"]: row for row in config["strategies"]}
-    category_strategy = strategies["memory_v2_trajectory_category_prewrite"]
+    category_strategy = strategies["memory_v2_trajectory_category_prewrite_exact"]
 
     assert config["benchmark"]["reasoning_effort"] == "high"
+    assert config["benchmark"]["domains"] == ["retail"]
     assert config["openviking"]["retrieval_top_k"] == 4
     assert category_strategy["memory_backend"] == "openviking"
     assert category_strategy["train_memory_mode"] == "experience_only"
@@ -68,84 +164,45 @@ def test_category_rerank_config_matches_s89_alignment_shape() -> None:
     assert category_rerank["mismatch_policy"] == "keep_positive_match_drop_mismatch"
     assert category_rerank["positive_match_required"] is True
     assert category_rerank["no_match_policy"] == "skip_injection"
+    assert category_rerank["missing_query_policy"] == "base_rank"
     assert category_rerank["search_score_weight"] == 0.0
+    assert "annotation_files" in category_rerank
 
     scope_prompt = category_strategy["scope_prompt"]
     assert scope_prompt["enabled"] is True
     assert scope_prompt["injection_point"] == "system_prompt"
     assert scope_prompt["domain_files"] == {
         "retail": "benchmark/tau2/config/scope_prompts/retail_memory_scope.md",
-        "airline": "benchmark/tau2/config/scope_prompts/airline_memory_scope.md",
     }
 
-    assert "memory_v2_trajectory_prewrite" in strategies
-    assert not _has_key_fragment(category_strategy, "annotation")
-    assert not _has_key_fragment(category_strategy, "sidecar")
+    assert "memory_v2_trajectory_prewrite_scope" in strategies
+    assert "memory_v2_trajectory_category_prewrite_priority" in strategies
+    assert "memory_v2_trajectory_category_prewrite_strict_pair" in strategies
+    assert _has_key_fragment(category_strategy, "annotation")
 
 
-def test_custom_s84_config_uses_external_procedure_corpus() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    config = load_config(repo_root / "benchmark/tau2/config/custom_s84_category.yaml")
-    strategy = config["strategies"][0]
-
-    assert strategy["id"] == "custom_s84_scope_category_positive_match"
-    assert strategy["train_required"] is False
-    assert strategy["train_memory_mode"] == "external_procedure_l2"
-    assert strategy["search_memory_type"] == "procedures"
-    assert strategy["retrieval_mode"] == "first_user_prewrite"
-    assert strategy["scope_prompt_files"] == {
-        "retail": "benchmark/tau2/config/scope_prompts/retail_memory_scope.md",
-        "airline": "benchmark/tau2/config/scope_prompts/airline_memory_scope.md",
-    }
-    assert strategy["external_openviking"]["retail"]["search_uri"].endswith(
-        "/memories/procedures/retail"
-    )
-    assert strategy["external_openviking"]["airline"]["search_uri"].endswith(
-        "/memories/procedures/airline"
-    )
-
-
-def test_tau2_command_supports_custom_s84_external_procedure_strategy() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    config = load_config(repo_root / "benchmark/tau2/config/custom_s84_category.yaml")
-    strategy = config["strategies"][0]
-    command = _tau2_command(
-        config,
-        domain="retail",
-        strategy=strategy,
-        configured_run_id="unit",
-        run_label="unit_retail_s84_r1",
-        task_ids=["5"],
-        num_tasks=None,
-        train_num_tasks=None,
-        seed=303,
-    )
-
-    assert command is not None
-    assert "--skip-train" in command
-    assert "--scope-prompt-file" in command
-    assert command[command.index("--search-uri") + 1].endswith("/memories/procedures/retail")
-    assert command[command.index("--prewrite-retrieval-top-k") + 1] == "6"
-    assert command[command.index("--prewrite-inject-top-k") + 1] == "2"
-
-
-def test_category_rerank_keeps_positive_category_match() -> None:
+def test_category_rerank_keeps_positive_category_match(tmp_path: Path) -> None:
     rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.99,
+            "_text": "return memory body",
+        },
         {
             "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
             "score": 0.25,
-            "_text": "Use exchange_delivered_order_items for a delivered order exchange replacement.",
+            "_text": "exchange memory body",
         },
         {
             "uri": "viking://agent/demo/memories/trajectories/pending_cancel.md",
-            "score": 0.99,
-            "_text": "Use cancel_pending_order for a pending order cancellation.",
+            "score": 0.95,
+            "_text": "cancel memory body",
         },
     ]
 
-    selected, trace_rows, diagnostics = _reranker().select(
+    selected, trace_rows, diagnostics = _reranker(tmp_path).select(
         domain="retail",
-        query="I need to exchange_delivered_order_items for a delivered order replacement.",
+        query="Before executing write-like tool call(s): exchange_delivered_order_items({})",
         rows=rows,
         decision_node="before_write_tool_call",
         base_limit=4,
@@ -156,30 +213,503 @@ def test_category_rerank_keeps_positive_category_match() -> None:
     assert diagnostics["mismatch_policy"] == "keep_positive_match_drop_mismatch"
     assert diagnostics["positive_match_level"] == "category2"
     assert diagnostics["inject_limit"] == 2
-    assert diagnostics["query_category"]["primary_category_id"] == (
-        "retail_order_post_shipment_service_request:delivered_order_exchange"
+    assert diagnostics["query_category"]["category_id"] == "retail_order_post_shipment_service_request:delivered_order_exchange"
+    assert [row["uri"] for row in selected] == [
+        "viking://agent/demo/memories/trajectories/delivered_exchange.md"
+    ]
+    assert trace_rows[0]["selected_for_injection"] is False
+    assert trace_rows[0]["category1_match"] is True
+    assert trace_rows[0]["category2_match"] is False
+    assert trace_rows[0]["category2_label_match"] is False
+    assert trace_rows[1]["selected_for_injection"] is True
+    assert trace_rows[1]["category_pair_match"] is True
+    assert trace_rows[1]["query_category1_prompt"] == "retail_order_post_shipment_service_request"
+    assert trace_rows[1]["memory_category1_prompt"] == "retail_order_post_shipment_service_request"
+    assert trace_rows[2]["selected_for_injection"] is False
+    assert trace_rows[2]["skipped_reason"] == "category_rerank"
+
+
+def test_build_category_catalog_groups_category_pairs() -> None:
+    rows = [
+        _annotation(
+            subject_type="memory",
+            subject_id="delivered_exchange_a.md",
+            subject_ref="viking://agent/demo/memories/trajectories/delivered_exchange_a.md",
+            category1="retail_order_post_shipment_service_request",
+            category2="delivered_order_exchange",
+        ),
+        _annotation(
+            subject_type="memory",
+            subject_id="delivered_exchange_b.md",
+            subject_ref="viking://agent/demo/memories/trajectories/delivered_exchange_b.md",
+            category1="retail_order_post_shipment_service_request",
+            category2="delivered_order_exchange",
+        ),
+        _annotation(
+            subject_type="memory",
+            subject_id="pending_cancel.md",
+            subject_ref="viking://agent/demo/memories/trajectories/pending_cancel.md",
+            category1="retail_order_cancellation",
+            category2="pending_order_cancel",
+        ),
+    ]
+
+    catalog = _build_catalog(rows)
+
+    assert catalog["schema_version"] == "memory_category_catalog.v0"
+    assert catalog["category_count"] == 2
+    grouped = {row["category_id"]: row for row in catalog["categories"]}
+    assert (
+        grouped[
+            "retail_order_post_shipment_service_request:delivered_order_exchange"
+        ]["source_annotation_count"]
+        == 2
+    )
+    assert grouped["retail_order_cancellation:pending_order_cancel"][
+        "source_annotation_count"
+    ] == 1
+
+
+def test_category_annotation_batch_ranges() -> None:
+    assert _batch_ranges(start_offset=20, end_offset=53, batch_size=10) == [
+        (20, 10),
+        (30, 10),
+        (40, 10),
+        (50, 3),
+    ]
+    assert _batch_ranges(start_offset=20, end_offset=53, batch_size=10, warmup_count=3) == [
+        (20, 1),
+        (21, 1),
+        (22, 1),
+        (23, 10),
+        (33, 10),
+        (43, 10),
+    ]
+
+
+def test_category_rerank_rejects_malformed_matched_category_id(tmp_path: Path) -> None:
+    sidecar = _write_sidecar(tmp_path)
+    rows = [json.loads(line) for line in sidecar.read_text().splitlines()]
+    rows[0]["category"]["catalog_match"]["matched_category_id"] = (
+        "retail_order_post_shipment_service_request:"
+    )
+    sidecar.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+
+    try:
+        CategoryReranker.from_payload(
+            {
+                "enabled": True,
+                "annotation_files": [str(sidecar)],
+                "apply_nodes": ["before_write_tool_call"],
+            },
+            repo_root=Path(__file__).resolve().parents[2],
+        )
+    except ValueError as exc:
+        assert "invalid matched_category_id" in str(exc)
+        assert "expected '<category1>:<category2>'" in str(exc)
+    else:
+        raise AssertionError("malformed category id should fail fast")
+
+
+def test_category_annotation_validation_rejects_prose_category_ids() -> None:
+    row = _annotation(
+        subject_type="memory",
+        subject_id="partial_cancel.md",
+        subject_ref="viking://agent/demo/memories/trajectories/partial_cancel.md",
+        category1="retail_order_cancellation_related_service_request",
+        category2=(
+            "partial pending unshipped order item cancellation handling with "
+            "identity verification"
+        ),
+    )
+
+    errors = _basic_validate_annotation(row)
+
+    assert any("$.category.category2 must be a reusable slug id" in error for error in errors)
+
+
+def test_category_annotation_validation_rejects_overlong_category_ids() -> None:
+    row = _annotation(
+        subject_type="memory",
+        subject_id="partial_cancel.md",
+        subject_ref="viking://agent/demo/memories/trajectories/partial_cancel.md",
+        category1="retail_order_cancellation",
+        category2=(
+            "pending_order_partial_cancellation_with_identity_verification_"
+            "human_transfer_and_user_confirmation"
+        ),
+    )
+
+    errors = _basic_validate_annotation(row)
+
+    assert any("$.category.category2 must be a compact reusable slug id" in error for error in errors)
+
+
+def test_category_catalog_rejects_prose_category_ids() -> None:
+    row = _annotation(
+        subject_type="memory",
+        subject_id="partial_cancel.md",
+        subject_ref="viking://agent/demo/memories/trajectories/partial_cancel.md",
+        category1="retail_order_cancellation_related_service_request",
+        category2="partial pending cancellation with human transfer",
+    )
+
+    try:
+        _build_catalog([row])
+    except SystemExit as exc:
+        assert "category2 must be a reusable slug id" in str(exc)
+    else:
+        raise AssertionError("catalog builder should reject prose category ids")
+
+
+def test_category_catalog_rejects_overlong_category_ids() -> None:
+    row = _annotation(
+        subject_type="memory",
+        subject_id="partial_cancel.md",
+        subject_ref="viking://agent/demo/memories/trajectories/partial_cancel.md",
+        category1="retail_order_cancellation",
+        category2=(
+            "pending_order_partial_cancellation_with_identity_verification_"
+            "human_transfer_and_user_confirmation"
+        ),
+    )
+
+    try:
+        _build_catalog([row])
+    except SystemExit as exc:
+        assert "category2 must be a compact reusable slug id" in str(exc)
+    else:
+        raise AssertionError("catalog builder should reject overlong category ids")
+
+
+def test_category_rerank_missing_query_can_fall_back_to_base_rank(tmp_path: Path) -> None:
+    sidecar = _write_sidecar(tmp_path)
+    reranker = CategoryReranker.from_payload(
+        {
+            "enabled": True,
+            "annotation_files": [str(sidecar)],
+            "apply_nodes": ["before_write_tool_call"],
+            "retrieve_limit": 6,
+            "inject_limit": 2,
+            "mismatch_policy": "keep_positive_match_drop_mismatch",
+            "positive_match_required": True,
+            "no_match_policy": "skip_injection",
+            "missing_query_policy": "base_rank",
+            "search_score_weight": 0.0,
+        },
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/pending_cancel.md",
+            "score": 0.99,
+            "_text": "cancel memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            "score": 0.25,
+            "_text": "exchange memory body",
+        },
+    ]
+
+    selected, trace_rows, diagnostics = reranker.select(
+        domain="retail",
+        query="Before executing write-like tool call(s): update_unknown_order({})",
+        rows=rows,
+        decision_node="before_write_tool_call",
+        base_limit=1,
+    )
+
+    assert diagnostics["applied"] is False
+    assert diagnostics["decision"] == "missing_query_sidecar_base_rank"
+    assert diagnostics["query_sidecar_coverage"] == "missing"
+    assert diagnostics["missing_query_policy"] == "base_rank"
+    assert [row["uri"] for row in selected] == [
+        "viking://agent/demo/memories/trajectories/pending_cancel.md"
+    ]
+    assert trace_rows[0]["selected_for_injection"] is True
+    assert trace_rows[1]["selected_for_injection"] is False
+
+
+def test_category_rerank_combo_query_uses_covered_tool_subquery(tmp_path: Path) -> None:
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.99,
+            "_text": "return memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            "score": 0.25,
+            "_text": "exchange memory body",
+        },
+    ]
+
+    selected, trace_rows, diagnostics = _reranker(tmp_path).select(
+        domain="retail",
+        query=(
+            "Before executing write-like tool call(s): "
+            "return_delivered_order_items({}); exchange_delivered_order_items({})"
+        ),
+        rows=rows,
+        decision_node="before_write_tool_call",
+        base_limit=4,
+    )
+
+    assert diagnostics["applied"] is True
+    assert diagnostics["query_sidecar_coverage"] == "partial"
+    assert diagnostics["decision"] == "soft_reranked_keep_category2_matches"
+    assert any(
+        signature.endswith("tools=exchange_delivered_order_items")
+        for signature in diagnostics["matched_query_signatures"]
+    )
+    assert any(
+        signature.endswith("tools=exchange_delivered_order_items,return_delivered_order_items")
+        for signature in diagnostics["missing_query_signatures"]
     )
     assert [row["uri"] for row in selected] == [
         "viking://agent/demo/memories/trajectories/delivered_exchange.md"
     ]
+    assert trace_rows[1]["query_category_signature"].endswith("tools=exchange_delivered_order_items")
+
+
+def test_category_rerank_priority_fills_category1_matches(tmp_path: Path) -> None:
+    first_user_query = "I need to exchange an item in a delivered order for a replacement."
+    sidecar = _write_sidecar(tmp_path, first_user_query=first_user_query)
+    reranker = CategoryReranker.from_payload(
+        {
+            "enabled": True,
+            "annotation_files": [str(sidecar)],
+            "apply_nodes": ["first_user"],
+            "retrieve_limit": 6,
+            "inject_limit": 2,
+            "retrieve_limits": {"first_user": 6},
+            "inject_limits": {"first_user": 4},
+            "mismatch_policy": "positive_priority_fill",
+            "positive_match_required": True,
+            "no_match_policy": "skip_injection",
+            "search_score_weight": 0.0,
+        },
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.9,
+            "_text": "return memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            "score": 0.1,
+            "_text": "exchange memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/pending_cancel.md",
+            "score": 0.8,
+            "_text": "cancel memory body",
+        },
+    ]
+
+    selected, trace_rows, diagnostics = reranker.select(
+        domain="retail",
+        query=first_user_query,
+        rows=rows,
+        decision_node="first_user",
+        base_limit=4,
+    )
+
+    assert diagnostics["decision"] == "soft_reranked_positive_priority_fill"
+    assert diagnostics["positive_match_level"] == "category2"
+    assert diagnostics["retrieve_limit"] == 6
+    assert diagnostics["inject_limit"] == 4
+    assert [row["uri"] for row in selected] == [
+        "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+        "viking://agent/demo/memories/trajectories/delivered_return.md",
+        "viking://agent/demo/memories/trajectories/pending_cancel.md",
+    ]
+    assert reranker.search_limit(4, decision_node="first_user") == 6
     assert trace_rows[0]["selected_for_injection"] is True
-    assert trace_rows[0]["query_category1_prompt"] == [
-        "retail_order_post_shipment_service_request"
-    ]
-    assert trace_rows[0]["memory_category1_prompt"] == [
-        "retail_order_post_shipment_service_request"
-    ]
-    assert trace_rows[1]["selected_for_injection"] is False
-    assert trace_rows[1]["skipped_reason"] == "category_rerank"
+    assert trace_rows[1]["selected_for_injection"] is True
+    assert trace_rows[2]["selected_for_injection"] is True
 
 
-def test_category_rerank_skips_non_target_node() -> None:
+def test_category_rerank_strict_pair_keeps_only_category1_and_category2_match(tmp_path: Path) -> None:
+    first_user_query = "I need to exchange an item in a delivered order for a replacement."
+    sidecar = _write_sidecar(tmp_path, first_user_query=first_user_query)
+    reranker = CategoryReranker.from_payload(
+        {
+            "enabled": True,
+            "annotation_files": [str(sidecar)],
+            "apply_nodes": ["first_user"],
+            "retrieve_limit": 6,
+            "inject_limit": 2,
+            "retrieve_limits": {"first_user": 6},
+            "inject_limits": {"first_user": 4},
+            "mismatch_policy": "strict_pair_match_only",
+            "positive_match_required": True,
+            "no_match_policy": "skip_injection",
+            "search_score_weight": 0.0,
+        },
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.9,
+            "_text": "return memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            "score": 0.1,
+            "_text": "exchange memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/pending_cancel.md",
+            "score": 0.8,
+            "_text": "cancel memory body",
+        },
+    ]
+
+    selected, trace_rows, diagnostics = reranker.select(
+        domain="retail",
+        query=first_user_query,
+        rows=rows,
+        decision_node="first_user",
+        base_limit=4,
+    )
+
+    assert diagnostics["decision"] == "soft_reranked_keep_strict_pair_matches"
+    assert diagnostics["positive_match_level"] == "category2"
+    assert diagnostics["dropped_mismatch_count"] == 2
+    assert [row["uri"] for row in selected] == [
+        "viking://agent/demo/memories/trajectories/delivered_exchange.md"
+    ]
+    assert trace_rows[0]["category1_match"] is True
+    assert trace_rows[0]["category2_match"] is False
+    assert trace_rows[0]["selected_for_injection"] is False
+    assert trace_rows[1]["category1_match"] is True
+    assert trace_rows[1]["category2_match"] is True
+    assert trace_rows[1]["selected_for_injection"] is True
+    assert trace_rows[2]["selected_for_injection"] is False
+
+
+def test_category_rerank_strict_pair_skips_category1_only_matches(tmp_path: Path) -> None:
+    first_user_query = "I need to exchange an item in a delivered order for a replacement."
+    sidecar = _write_sidecar(tmp_path, first_user_query=first_user_query)
+    reranker = CategoryReranker.from_payload(
+        {
+            "enabled": True,
+            "annotation_files": [str(sidecar)],
+            "apply_nodes": ["first_user"],
+            "retrieve_limits": {"first_user": 6},
+            "inject_limits": {"first_user": 4},
+            "mismatch_policy": "strict_pair_match_only",
+            "positive_match_required": True,
+            "no_match_policy": "skip_injection",
+            "search_score_weight": 0.0,
+        },
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.9,
+            "_text": "return memory body",
+        },
+    ]
+
+    selected, trace_rows, diagnostics = reranker.select(
+        domain="retail",
+        query=first_user_query,
+        rows=rows,
+        decision_node="first_user",
+        base_limit=4,
+    )
+
+    assert selected == []
+    assert diagnostics["decision"] == "no_strict_pair_category_match_skip_injection"
+    assert diagnostics["positive_match_level"] == "category1"
+    assert diagnostics["dropped_mismatch_count"] == 1
+    assert trace_rows[0]["category1_match"] is True
+    assert trace_rows[0]["category2_match"] is False
+    assert trace_rows[0]["selected_for_injection"] is False
+
+
+def test_category_rerank_supports_node_specific_mismatch_policy(tmp_path: Path) -> None:
+    first_user_query = "I need to exchange an item in a delivered order for a replacement."
+    sidecar = _write_sidecar(tmp_path, first_user_query=first_user_query)
+    reranker = CategoryReranker.from_payload(
+        {
+            "enabled": True,
+            "annotation_files": [str(sidecar)],
+            "apply_nodes": ["first_user", "before_write_tool_call"],
+            "retrieve_limits": {"first_user": 6, "before_write_tool_call": 6},
+            "inject_limits": {"first_user": 4, "before_write_tool_call": 2},
+            "mismatch_policy": "keep_positive_match_drop_mismatch",
+            "mismatch_policies": {
+                "first_user": "positive_priority_fill",
+                "before_write_tool_call": "keep_positive_match_drop_mismatch",
+            },
+            "positive_match_required": True,
+            "no_match_policy": "skip_injection",
+            "search_score_weight": 0.0,
+        },
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    rows = [
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_return.md",
+            "score": 0.9,
+            "_text": "return memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+            "score": 0.1,
+            "_text": "exchange memory body",
+        },
+        {
+            "uri": "viking://agent/demo/memories/trajectories/pending_cancel.md",
+            "score": 0.8,
+            "_text": "cancel memory body",
+        },
+    ]
+
+    first_user_selected, _, first_user_diagnostics = reranker.select(
+        domain="retail",
+        query=first_user_query,
+        rows=rows,
+        decision_node="first_user",
+        base_limit=4,
+    )
+    prewrite_selected, _, prewrite_diagnostics = reranker.select(
+        domain="retail",
+        query="Before executing write-like tool call(s): exchange_delivered_order_items({})",
+        rows=rows,
+        decision_node="before_write_tool_call",
+        base_limit=4,
+    )
+
+    assert first_user_diagnostics["mismatch_policy"] == "positive_priority_fill"
+    assert first_user_diagnostics["decision"] == "soft_reranked_positive_priority_fill"
+    assert [row["uri"] for row in first_user_selected] == [
+        "viking://agent/demo/memories/trajectories/delivered_exchange.md",
+        "viking://agent/demo/memories/trajectories/delivered_return.md",
+        "viking://agent/demo/memories/trajectories/pending_cancel.md",
+    ]
+    assert prewrite_diagnostics["mismatch_policy"] == "keep_positive_match_drop_mismatch"
+    assert prewrite_diagnostics["decision"] == "soft_reranked_keep_category2_matches"
+    assert [row["uri"] for row in prewrite_selected] == [
+        "viking://agent/demo/memories/trajectories/delivered_exchange.md"
+    ]
+
+
+def test_category_rerank_skips_non_target_node(tmp_path: Path) -> None:
     rows = [
         {"uri": "viking://agent/demo/memories/trajectories/one.md", "score": 0.2},
         {"uri": "viking://agent/demo/memories/trajectories/two.md", "score": 0.1},
     ]
 
-    selected, trace_rows, diagnostics = _reranker().select(
+    selected, trace_rows, diagnostics = _reranker(tmp_path).select(
         domain="retail",
         query="exchange_delivered_order_items",
         rows=rows,
@@ -245,9 +775,10 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
                 "enabled": True,
                 "applied": True,
                 "decision": "soft_reranked_keep_category2_matches",
+                "query_sidecar_coverage": "covered",
                 "query_category": {
                     "matched": True,
-                    "category_source": "tau2_category_catalog_keyword_match",
+                    "category_source": "existing_catalog",
                 },
             },
             "matches": [
@@ -255,7 +786,7 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
                     "uri": "viking://agent/example/memories/trajectories/delivered_exchange.md",
                     "selected_for_injection": True,
                     "injected": True,
-                    "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
+                    "memory_category_source_prompt": "existing_catalog",
                     "memory_category1_prompt": ["retail_order_post_shipment_service_request"],
                     "memory_category2_prompt": ["delivered_order_exchange"],
                     "category2_match": True,
@@ -268,7 +799,7 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
                 {
                     "uri": "viking://agent/example/memories/trajectories/pending_cancel.md",
                     "selected_for_injection": False,
-                    "memory_category_source_prompt": "tau2_category_catalog_keyword_match",
+                    "memory_category_source_prompt": "existing_catalog",
                     "memory_category1_prompt": ["retail_order_cancellation"],
                     "memory_category2_prompt": ["pending_order_cancel"],
                     "category1_match": False,
@@ -286,8 +817,9 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["trace_present"] is True
     assert summary["decision_nodes"]["before_write_tool_call"] == 1
     assert summary["category_decisions"]["soft_reranked_keep_category2_matches"] == 1
-    assert summary["query_category_sources"]["tau2_category_catalog_keyword_match"] == 1
-    assert summary["selected_memory_category_sources"]["tau2_category_catalog_keyword_match"] == 1
+    assert summary["query_sidecar_coverage"]["covered"] == 1
+    assert summary["query_category_sources"]["existing_catalog"] == 1
+    assert summary["selected_memory_category_sources"]["existing_catalog"] == 1
     assert summary["tool_calls"]["exchange_delivered_order_items"] == 1
     assert summary["rates"]["memory_category_candidate_coverage"] == 2 / 3
     assert summary["rates"]["selected_memory_category_coverage"] == 1.0
@@ -301,6 +833,9 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["counts"]["injected_concrete_memory_count"] == 1
     assert summary["counts"]["injected_positive_category_match_count"] == 1
     assert summary["counts"]["injected_concrete_positive_category_match_count"] == 1
+    assert summary["counts"]["query_sidecar_covered_event_count"] == 1
+    assert summary["counts"]["query_sidecar_partial_event_count"] == 0
+    assert summary["counts"]["query_sidecar_missing_event_count"] == 0
     assert summary["counts"]["memory_category_present_count"] == 2
     assert summary["counts"]["memory_category_matched_count"] == 1
     assert summary["rates"]["concrete_memory_candidate_rate"] == 2 / 3
@@ -308,6 +843,8 @@ def test_trace_category_summary_counts_runtime_sources(tmp_path: Path) -> None:
     assert summary["rates"]["injected_positive_category_match_rate"] == 1.0
     assert summary["rates"]["injected_concrete_positive_category_match_rate"] == 1.0
     assert summary["rates"]["injected_concrete_memory_rate"] == 1.0
+    assert summary["rates"]["query_sidecar_non_missing_event_rate"] == 1.0
+    assert summary["rates"]["query_sidecar_full_event_rate"] == 1.0
 
 
 def test_runtime_evidence_marks_aggregate_only_category_diagnostic() -> None:
@@ -662,7 +1199,7 @@ def test_runtime_evidence_marks_empty_corpus_probe_diagnostic() -> None:
     assert "empty_corpus_probe" in evidence["reasons"]
 
 
-def test_probe_corpus_counts_aggregate_and_concrete_matches() -> None:
+def test_probe_corpus_counts_aggregate_and_concrete_matches(tmp_path: Path) -> None:
     class FakeClient:
         def __init__(self) -> None:
             self.limit: int | None = None
@@ -688,7 +1225,7 @@ def test_probe_corpus_counts_aggregate_and_concrete_matches() -> None:
     client = FakeClient()
     probe = _probe_corpus(
         SimpleNamespace(
-            category_reranker=_reranker(),
+            category_reranker=_reranker(tmp_path),
             domain="airline",
             search_uri="viking://agent/a/memories/trajectories",
             retrieval_top_k=4,

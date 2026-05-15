@@ -1,19 +1,46 @@
 extends: trajectory.yaml
 
 benchmark:
-  name: tau2_openviking_fgmemory_category_rerank
+  name: tau2_openviking_trajectory_category_rerank
+  domains:
+    - retail
+
+x-retail-trajectory-category-sidecars: &retail_trajectory_category_sidecars
+  retail:
+    - ${TAU2_RETAIL_TRAJECTORY_QUERY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_retail_prewrite_query_annotations_workflow_c1_v2_20260515/annotations.jsonl}
+    - ${TAU2_RETAIL_TRAJECTORY_MEMORY_CATEGORY_ANNOTATIONS:-benchmark/tau2/result/category_annotations/tau2_pr_b_trajectory_view_retail_memory_workflow_c1_seed5_warm12_full_20260515_merged_memory_annotations/annotations.jsonl}
+
+x-trajectory-scope-prompt: &trajectory_scope_prompt
+  enabled: true
+  injection_point: system_prompt
+  domain_files:
+    retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+
+x-prewrite-category-base: &prewrite_category_base
+  enabled: true
+  annotation_files: *retail_trajectory_category_sidecars
+  apply_nodes:
+    - before_write_tool_call
+  retrieve_limit: 6
+  inject_limit: 2
+  positive_match_required: true
+  no_match_policy: skip_injection
+  missing_query_policy: base_rank
+  search_score_weight: 0.0
 
 strategies:
-  - id: memory_v2_trajectory_prewrite
-    label: OpenViking Memory V2 trajectory-view pre-write recall
+  - id: memory_v2_trajectory_prewrite_scope
+    label: OpenViking Memory V2 trajectory-view pre-write recall with scope prompt
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
     train_memory_mode: experience_only
     search_memory_type: trajectories
     retrieval_mode: first_user_prewrite
-  - id: memory_v2_trajectory_category_prewrite
-    label: OpenViking Memory V2 trajectory-view FGMemory-style pre-write recall
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_prewrite_exact
+    label: OpenViking Memory V2 trajectory-view scope + pre-write exact-pair category rerank
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
@@ -21,19 +48,32 @@ strategies:
     search_memory_type: trajectories
     retrieval_mode: first_user_prewrite
     category_rerank:
-      enabled: true
-      catalog_path: benchmark/tau2/config/category_catalog.json
-      apply_nodes:
-        - before_write_tool_call
-      retrieve_limit: 6
-      inject_limit: 2
+      <<: *prewrite_category_base
       mismatch_policy: keep_positive_match_drop_mismatch
-      positive_match_required: true
-      no_match_policy: skip_injection
-      search_score_weight: 0.0
-    scope_prompt:
-      enabled: true
-      injection_point: system_prompt
-      domain_files:
-        retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-        airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_prewrite_priority
+    label: OpenViking Memory V2 trajectory-view scope + pre-write category priority fill
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      <<: *prewrite_category_base
+      mismatch_policy: positive_priority_fill
+    scope_prompt: *trajectory_scope_prompt
+
+  - id: memory_v2_trajectory_category_prewrite_strict_pair
+    label: OpenViking Memory V2 trajectory-view scope + pre-write strict pair-only category rerank
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    category_rerank:
+      <<: *prewrite_category_base
+      mismatch_policy: strict_pair_match_only
+    scope_prompt: *trajectory_scope_prompt

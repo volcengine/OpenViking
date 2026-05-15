@@ -206,6 +206,7 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
     counters: Counter[str] = Counter()
     decision_nodes: Counter[str] = Counter()
     category_decisions: Counter[str] = Counter()
+    query_sidecar_coverage: Counter[str] = Counter()
     query_category_sources: Counter[str] = Counter()
     memory_category_sources: Counter[str] = Counter()
     selected_memory_category_sources: Counter[str] = Counter()
@@ -256,6 +257,11 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 counters["category_applied_event_count"] += 1
             if category.get("decision"):
                 category_decisions[str(category["decision"])] += 1
+            coverage = category.get("query_sidecar_coverage")
+            if coverage:
+                coverage_key = str(coverage)
+                query_sidecar_coverage[coverage_key] += 1
+                counters[f"query_sidecar_{coverage_key}_event_count"] += 1
             query_category = (
                 category.get("query_category")
                 if isinstance(category.get("query_category"), dict)
@@ -328,8 +334,15 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
         "selected_memory_category_matched_count",
         "injected_positive_category_match_count",
         "injected_concrete_positive_category_match_count",
+        "query_sidecar_covered_event_count",
+        "query_sidecar_partial_event_count",
+        "query_sidecar_missing_event_count",
     ]:
         counters[key] += 0
+    sidecar_non_missing_count = (
+        counters["query_sidecar_covered_event_count"]
+        + counters["query_sidecar_partial_event_count"]
+    )
     return {
         "trace_present": True,
         "trace_rows": trace_rows,
@@ -337,6 +350,7 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
         "counts": dict(counters),
         "decision_nodes": dict(decision_nodes),
         "category_decisions": dict(category_decisions),
+        "query_sidecar_coverage": dict(query_sidecar_coverage),
         "query_category_sources": dict(query_category_sources),
         "memory_category_sources": dict(memory_category_sources),
         "selected_memory_category_sources": dict(selected_memory_category_sources),
@@ -386,6 +400,14 @@ def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
                 if injected_count
                 else None
             ),
+            "query_sidecar_non_missing_event_rate": (
+                sidecar_non_missing_count / category_event_count if category_event_count else None
+            ),
+            "query_sidecar_full_event_rate": (
+                counters["query_sidecar_covered_event_count"] / category_event_count
+                if category_event_count
+                else None
+            ),
         },
     }
 
@@ -399,16 +421,21 @@ def _runtime_evidence_status(
     reasons: list[str] = []
     if category_rerank.get("enabled"):
         corpus_probe = corpus_probe if isinstance(corpus_probe, dict) else {}
+        probe_match_count = int(corpus_probe.get("match_count") or 0)
+        probe_concrete_match_count = int(
+            corpus_probe.get("concrete_match_count")
+            or corpus_probe.get("read_non_empty_count")
+            or 0
+        )
+        probe_aggregate_match_count = int(corpus_probe.get("aggregate_match_count") or 0)
         if not corpus_probe:
             reasons.append("missing_corpus_probe")
-        if corpus_probe and int(corpus_probe.get("match_count") or 0) <= 0:
+        if corpus_probe and probe_match_count <= 0:
             reasons.append("empty_corpus_probe")
-        if int(corpus_probe.get("match_count") or 0) > 0:
-            if int(corpus_probe.get("concrete_match_count") or 0) <= 0:
+        if probe_match_count > 0:
+            if probe_concrete_match_count <= 0:
                 reasons.append("no_concrete_corpus_probe_matches")
-            if int(corpus_probe.get("aggregate_match_count") or 0) == int(
-                corpus_probe.get("match_count") or 0
-            ):
+            if probe_aggregate_match_count == probe_match_count:
                 reasons.append("aggregate_only_corpus_probe")
 
         if not retrieval_trace_summary.get("trace_present"):
@@ -735,30 +762,6 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
     if corpus_manifest.is_file() and not args.force_train:
         return json.loads(corpus_manifest.read_text())
-
-    if args.skip_train:
-        client = _client(args)
-        try:
-            corpus_probe = _probe_corpus(args, client)
-        finally:
-            client.close()
-        manifest = {
-            "domain": args.domain,
-            "train_results": None,
-            "external_corpus": True,
-            "openviking": {
-                "url": args.openviking_url,
-                "account": args.openviking_account,
-                "user": args.openviking_user,
-                "agent_id": args.openviking_agent_id,
-                "search_uri": args.search_uri,
-            },
-            "committed_sessions": [],
-            "committed_session_count": 0,
-            "corpus_probe": corpus_probe,
-        }
-        _write_json(corpus_manifest, manifest)
-        return manifest
 
     _run_tau2(
         tau2_repo=args.tau2_repo,
@@ -1143,7 +1146,6 @@ def main() -> int:
     )
     parser.add_argument("--category-rerank-config", type=_json, default={})
     parser.add_argument("--scope-prompt-config", type=_json, default={})
-    parser.add_argument("--skip-train", action="store_true")
     parser.add_argument("--force-train", action="store_true")
     parser.add_argument("--prepare-corpus-only", action="store_true")
     parser.add_argument(
