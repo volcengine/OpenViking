@@ -16,6 +16,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
+_USE_MANAGER_DEFAULT_TIMEOUT = object()
 
 
 class LockManager:
@@ -93,21 +94,30 @@ class LockManager:
         self._handles[handle.id] = handle
         return handle
 
+    def _resolve_timeout(self, timeout):
+        return self._lock_timeout if timeout is _USE_MANAGER_DEFAULT_TIMEOUT else timeout
+
     async def acquire_point(
-        self, handle: LockHandle, path: str, timeout: Optional[float] = None
+        self,
+        handle: LockHandle,
+        path: str,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_point(
-            path, handle, timeout=timeout if timeout is not None else self._lock_timeout
+            path, handle, timeout=self._resolve_timeout(timeout)
         )
         if acquired:
             self._mark_handle_active(handle)
         return acquired
 
     async def acquire_subtree(
-        self, handle: LockHandle, path: str, timeout: Optional[float] = None
+        self,
+        handle: LockHandle,
+        path: str,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_subtree(
-            path, handle, timeout=timeout if timeout is not None else self._lock_timeout
+            path, handle, timeout=self._resolve_timeout(timeout)
         )
         if acquired:
             self._mark_handle_active(handle)
@@ -117,7 +127,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         """
         一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
@@ -150,7 +160,7 @@ class LockManager:
                 locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
                     path, handle,
-                    timeout=timeout if timeout is not None else self._lock_timeout,
+                    timeout=self._resolve_timeout(timeout),
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -171,7 +181,7 @@ class LockManager:
         handle: LockHandle,
         point_paths: List[str],
         subtree_paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         """"""
         subtree_set = set(subtree_paths)
@@ -191,12 +201,12 @@ class LockManager:
                 if is_subtree:
                     success = await self._path_lock.acquire_subtree(
                         path, handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=self._resolve_timeout(timeout),
                     )
                 else:
                     success = await self._path_lock.acquire_point(
                         path, handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=self._resolve_timeout(timeout),
                     )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -218,13 +228,13 @@ class LockManager:
         src: str,
         dst_parent: str,
         src_is_dir: bool = True,
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_mv(
             src,
             dst_parent,
             handle,
-            timeout=timeout if timeout is not None else self._lock_timeout,
+            timeout=self._resolve_timeout(timeout),
             src_is_dir=src_is_dir,
         )
         if acquired:
