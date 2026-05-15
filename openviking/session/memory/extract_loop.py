@@ -120,8 +120,15 @@ class ExtractLoop:
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 
         # 初始化 schema 生成器（使用 schemas 而非 registry）
-        self.schema_model_generator = SchemaModelGenerator(schemas)
-        self.schema_prompt_generator = SchemaPromptGenerator(schemas)
+        output_language = self.context_provider.get_output_language()
+        self.schema_model_generator = SchemaModelGenerator(
+            schemas,
+            template_context={"language": output_language},
+        )
+        self.schema_prompt_generator = SchemaPromptGenerator(
+            schemas,
+            template_context={"language": output_language},
+        )
         self.schema_model_generator.generate_all_models()
 
         # 预计算工具 schemas

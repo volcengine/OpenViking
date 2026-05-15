@@ -117,6 +117,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
         return resolve_output_language("\n".join(text_parts))
 
 
+    def get_output_language(self) -> str:
+        return self._output_language
+
     def instruction(self) -> str:
         output_language = self._output_language
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.

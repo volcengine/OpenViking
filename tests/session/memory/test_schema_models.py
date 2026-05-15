@@ -92,6 +92,67 @@ class TestSchemaModelGenerator:
         )
         return create_default_registry(str(schemas_dir))
 
+    def test_render_description_template_with_language(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="templated",
+            description="Summary must be written in {{ language }}.",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="Write this field in {{ language }}.",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+            filename_template="templated.md",
+            directory="test://dir",
+        )
+
+        generator = SchemaModelGenerator([memory_type], template_context={"language": "zh-CN"})
+        model = generator.create_flat_data_model(memory_type)
+        ops_model = generator.create_structured_operations_model(role_scope=None)
+
+        content_description = model.model_fields["content"].description
+        memory_description = ops_model.model_fields["templated"].description
+
+        assert "{{ language }}" not in content_description
+        assert "{{ language }}" not in memory_description
+        assert "zh-CN" in content_description
+        assert "zh-CN" in memory_description
+
+    def test_keep_plain_description_unchanged(self, sample_memory_type):
+        generator = SchemaModelGenerator([sample_memory_type], template_context={"language": "ja"})
+        model = generator.create_flat_data_model(sample_memory_type)
+
+        assert "First test field" in model.model_fields["field1"].description
+
+    def test_render_description_template_conditional_branch(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="conditional",
+            description="{% if language == 'en' %}English summary{% else %}{{ language }} summary{% endif %}",
+            fields=[
+                MemoryField(
+                    name="topic",
+                    field_type=FieldType.STRING,
+                    description="{% if language == 'en' %}snake_case only{% else %}natural {{ language }} phrase{% endif %}",
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+            filename_template="conditional.md",
+            directory="test://dir",
+        )
+
+        en_generator = SchemaModelGenerator([memory_type], template_context={"language": "en"})
+        zh_generator = SchemaModelGenerator([memory_type], template_context={"language": "zh-CN"})
+
+        en_model = en_generator.create_flat_data_model(memory_type)
+        zh_model = zh_generator.create_flat_data_model(memory_type)
+        zh_ops_model = zh_generator.create_structured_operations_model(role_scope=None)
+
+        assert en_model.model_fields["topic"].description == "snake_case only"
+        assert zh_model.model_fields["topic"].description == "natural zh-CN phrase"
+        assert "zh-CN summary" in zh_ops_model.model_fields["conditional"].description
+
     def test_create_flat_data_model(self, sample_memory_type, registry_with_sample):
         """Test creating a flat data model for a single memory type."""
         generator = SchemaModelGenerator(registry_with_sample)
@@ -239,6 +300,30 @@ class TestWikiLink:
         )
 
         assert link.link_type == LinkType.RELATED_TO
+
+
+    def test_schema_prompt_generator_renders_conditional_descriptions(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="conditional_prompt",
+            description="{% if language == 'en' %}English type{% else %}{{ language }} type{% endif %}",
+            fields=[
+                MemoryField(
+                    name="topic",
+                    field_type=FieldType.STRING,
+                    description="{% if language == 'en' %}english topic{% else %}{{ language }} topic{% endif %}",
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+        )
+
+        generator = SchemaPromptGenerator([memory_type], template_context={"language": "zh-CN"})
+
+        type_descriptions = generator.generate_type_descriptions()
+        field_descriptions = generator.generate_field_descriptions("conditional_prompt")
+
+        assert "zh-CN type" in type_descriptions
+        assert "zh-CN topic" in type_descriptions
+        assert "zh-CN topic" in field_descriptions
 
 
 class TestSchemaPromptGenerator:
