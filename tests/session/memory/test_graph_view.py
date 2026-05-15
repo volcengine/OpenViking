@@ -91,7 +91,26 @@ def test_render_graph_html_click_node_highlights_without_hiding_others():
     assert "const updatedEdges = edges.get().map" not in html
 
 
-def test_render_graph_html_escapes_newline_in_preview_truncated_marker():
+def test_render_graph_html_shows_node_content_preview_in_details():
+    nodes = [
+        {
+            "id": "viking://user/Caroline/memories/profile.md",
+            "uri": "viking://user/Caroline/memories/profile.md",
+            "label": "profile",
+            "memory_type": "profile",
+            "category": "",
+            "content_preview": "# Caroline\n- likes painting",
+            "content_truncated": False,
+        }
+    ]
+
+    html = _render_graph_html(nodes, [])
+
+    assert "detailContent.textContent = escapedPreviewText(node.content_preview, node.content_truncated);" in html
+    assert "return text || '(empty)';" in html
+
+
+def test_render_graph_html_does_not_show_preview_truncated_marker():
     nodes = [
         {
             "id": "viking://agent/demo/memories/experiences/a.md",
@@ -106,5 +125,5 @@ def test_render_graph_html_escapes_newline_in_preview_truncated_marker():
 
     html = _render_graph_html(nodes, [])
 
-    assert "\\n\\n[preview truncated]" in html
-    assert "desc += '\n\n[preview truncated]'" not in html
+    assert "[preview truncated]" not in html
+    assert "content_truncated" in html

@@ -33,6 +33,45 @@ async def test_collect_graph_data_includes_content_preview():
     assert edges == []
 
 
+@pytest.mark.asyncio
+async def test_collect_graph_data_keeps_profile_body_as_content_preview():
+    content = """# Caroline\n- likes painting\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"profile\", \"links\": []}\n-->"""
+
+    mock_fs = MagicMock()
+    mock_fs.glob = AsyncMock(return_value={"matches": ["viking://user/Caroline/memories/profile.md"]})
+    mock_fs.read_file = AsyncMock(return_value=content)
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+    nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
+
+    assert len(nodes) == 1
+    assert nodes[0]["memory_type"] == "profile"
+    assert nodes[0]["content_preview"] == "# Caroline\n- likes painting"
+    assert nodes[0]["content_truncated"] is False
+    assert edges == []
+
+
+@pytest.mark.asyncio
+async def test_collect_graph_data_infers_memory_type_from_parent_directory():
+    content = """# Caroline\n- likes painting\n\n<!-- MEMORY_FIELDS\n{\"links\": []}\n-->"""
+
+    mock_fs = MagicMock()
+    mock_fs.glob = AsyncMock(return_value={"matches": ["viking://user/Caroline/memories/profile.md"]})
+    mock_fs.read_file = AsyncMock(return_value=content)
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+    nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
+
+    assert len(nodes) == 1
+    assert nodes[0]["memory_type"] == "profile"
+    assert "# Caroline" in nodes[0]["content_preview"]
+    assert edges == []
+
+
 def test_memory_file_utils_write_preserves_memory_type_in_comment():
     memory_file = MemoryFile(
         uri="viking://user/default/memories/preferences/code_style.md",

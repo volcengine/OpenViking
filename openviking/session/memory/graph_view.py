@@ -67,6 +67,18 @@ class MemoryGraph:
     def _is_content_truncated(content: str, limit: int = 600) -> bool:
         return len((content or "").strip()) > limit
 
+    @staticmethod
+    def _infer_memory_type(uri: str, parsed_memory_type: str) -> str:
+        if parsed_memory_type:
+            return parsed_memory_type
+        parts = [part for part in uri.split("/") if part]
+        if len(parts) >= 2 and parts[-1].endswith(".md"):
+            parent = parts[-2]
+            if parent != "memories":
+                return parent
+            return parts[-1].replace(".md", "")
+        return ""
+
     async def _collect_graph_data(
         self,
         space_uris: List[str],
@@ -105,7 +117,7 @@ class MemoryGraph:
                     logger.warning(f"Failed to read/parse {uri}: {e}")
                     continue
 
-                memory_type = mf.memory_type or ""
+                inferred_memory_type = self._infer_memory_type(uri, mf.memory_type or "")
                 category = mf.extra_fields.get("category", "")
                 name = mf.extra_fields.get("name", "")
                 label = name if name else uri.split("/")[-1].replace(".md", "")
@@ -114,7 +126,7 @@ class MemoryGraph:
                     "id": uri,
                     "uri": uri,
                     "label": label,
-                    "memory_type": memory_type,
+                    "memory_type": inferred_memory_type,
                     "category": category,
                     "content_preview": self._build_content_preview(mf.content),
                     "content_truncated": self._is_content_truncated(mf.content),
@@ -361,9 +373,7 @@ const network = new vis.Network(
 );
 
 function escapedPreviewText(text, truncated) {{
-  let desc = text || '(empty)';
-  if (truncated) desc += '\\n\\n[preview truncated]';
-  return desc;
+  return text || '(empty)';
 }}
 
 function showTooltip(x, y, title, meta, desc) {{
