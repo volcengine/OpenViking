@@ -278,6 +278,9 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
         ObserverCommands::Retrieval => {
             commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
+        ObserverCommands::Filesystem => {
+            commands::observer::filesystem(&client, ctx.output_format, ctx.compact).await
+        }
         ObserverCommands::System => {
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
         }
@@ -949,7 +952,7 @@ pub async fn handle_find(
     threshold: Option<f64>,
     after: Option<String>,
     before: Option<String>,
-    level: Option<String>,
+    level: Option<Vec<i32>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -957,7 +960,12 @@ pub async fn handle_find(
         params.push(format!("--threshold {}", t));
     }
     append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
-    append_level_filter_params(&mut params, level.as_deref());
+    if let Some(ref l) = level {
+        params.push(format!(
+            "--level {}",
+            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        ));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -970,7 +978,7 @@ pub async fn handle_find(
         after.as_deref(),
         before.as_deref(),
         None,
-        level.as_deref(),
+        level,
         ctx.output_format,
         ctx.compact,
     )
@@ -985,7 +993,7 @@ pub async fn handle_search(
     threshold: Option<f64>,
     after: Option<String>,
     before: Option<String>,
-    level: Option<String>,
+    level: Option<Vec<i32>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -996,7 +1004,12 @@ pub async fn handle_search(
         params.push(format!("--threshold {}", t));
     }
     append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
-    append_level_filter_params(&mut params, level.as_deref());
+    if let Some(ref l) = level {
+        params.push(format!(
+            "--level {}",
+            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        ));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1010,7 +1023,7 @@ pub async fn handle_search(
         after.as_deref(),
         before.as_deref(),
         None,
-        level.as_deref(),
+        level,
         ctx.output_format,
         ctx.compact,
     )
@@ -1027,15 +1040,6 @@ pub fn append_time_filter_params(
     }
     if let Some(value) = before {
         params.push(format!("--before {}", value));
-    }
-}
-
-pub fn append_level_filter_params(
-    params: &mut Vec<String>,
-    level: Option<&str>,
-) {
-    if let Some(value) = level {
-        params.push(format!("--level {}", value));
     }
 }
 

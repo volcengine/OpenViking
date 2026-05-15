@@ -497,7 +497,7 @@ openviking stat viking://resources/my-project/docs
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock — either the path itself has a valid `.path.ovlock`, or any ancestor directory holds a SUBTREE lock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
 
 The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 

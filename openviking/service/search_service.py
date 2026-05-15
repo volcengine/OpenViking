@@ -50,6 +50,7 @@ class SearchService:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Complex search with session context.
 
@@ -60,6 +61,7 @@ class SearchService:
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
+            level: Filter by level (0=abstract, 1=overview, 2=file)
 
         Returns:
             FindResult
@@ -80,6 +82,7 @@ class SearchService:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            level=level,
         )
         return result
 
@@ -91,6 +94,7 @@ class SearchService:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -100,6 +104,7 @@ class SearchService:
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
+            level: Filter by level (0=abstract, 1=overview, 2=file)
 
         Returns:
             FindResult
@@ -114,5 +119,6 @@ class SearchService:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            level=level,
         )
         return result

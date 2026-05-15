@@ -336,7 +336,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
-        level: Option<String>,
+        level: Option<Vec<i32>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -361,7 +361,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
-        level: Option<String>,
+        level: Option<Vec<i32>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,

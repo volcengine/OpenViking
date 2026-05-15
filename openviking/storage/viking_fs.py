@@ -31,7 +31,6 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.storage.expr import PathScope
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -41,6 +40,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -450,9 +450,7 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
-        async def _estimate_deleted_count(
-            target_path: str, real_ctx: RequestContext
-        ) -> int:
+        async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
             vector_store = self._get_vector_store()
             if not vector_store:
@@ -493,11 +491,10 @@ class VikingFS:
                     details={"resource": uri, "expected_flag": "recursive"},
                 )
             lock_paths = [path]
-            lock_mode = "subtree"
+            lock_mode = "tree"
         else:
-            parent = path.rsplit("/", 1)[0] if "/" in path else path
-            lock_paths = [parent]
-            lock_mode = "point"
+            lock_paths = [path]
+            lock_mode = "exact"
 
         try:
             async with LockContext(
@@ -512,9 +509,7 @@ class VikingFS:
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
                 try:
-                    result = await self._run_in_threadpool(
-                        self.agfs.rm, path, recursive=recursive
-                    )
+                    result = await self._run_in_threadpool(self.agfs.rm, path, recursive=recursive)
                 except AGFSDirectoryNotEmptyError:
                     raise FailedPreconditionError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -533,7 +528,7 @@ class VikingFS:
                     result = {"estimated_deleted_count": estimated_count}
                 return result
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {uri}")
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
     async def mv(
         self,
@@ -563,16 +558,25 @@ class VikingFS:
         except Exception:
             raise FileNotFoundError(f"mv source not found: {old_uri}")
 
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+        lock_context = (
+            LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_path=new_path,
+                src_is_dir=True,
+                handle=lock_handle,
+            )
+            if is_dir
+            else LockContext(
+                get_lock_manager(),
+                [old_path, new_path],
+                lock_mode="exact",
+                handle=lock_handle,
+            )
+        )
 
-        async with LockContext(
-            get_lock_manager(),
-            [old_path],
-            lock_mode="mv",
-            mv_dst_parent_path=dst_parent,
-            src_is_dir=is_dir,
-            handle=lock_handle,
-        ):
+        async with lock_context:
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
 
@@ -921,8 +925,7 @@ class VikingFS:
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                self._grep_single_file(entry_uri, compiled_pattern, ctx)
-                for entry_uri in batch_uris
+                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
             for matches, scanned_count in batch_results:
@@ -1329,6 +1332,7 @@ class VikingFS:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
+        level: Optional[List[int]] = None,
     ):
         """Semantic search.
 
@@ -1404,6 +1408,7 @@ class VikingFS:
             limit=limit,
             score_threshold=score_threshold,
             scope_dsl=filter,
+            level=level,
         )
 
         # Convert QueryResult to FindResult
@@ -1433,6 +1438,7 @@ class VikingFS:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
+        level: Optional[List[int]] = None,
     ):
         """Complex search with session context.
 
@@ -1554,6 +1560,7 @@ class VikingFS:
                 limit=limit,
                 score_threshold=score_threshold,
                 scope_dsl=filter,
+                level=level,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
@@ -1969,14 +1976,13 @@ class VikingFS:
 
         old_path = self._uri_to_path(old_dir, ctx=real_ctx)
         new_path = self._uri_to_path(new_dir, ctx=real_ctx)
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
 
         try:
             async with LockContext(
                 get_lock_manager(),
                 [old_path],
                 lock_mode="mv",
-                mv_dst_parent_path=dst_parent,
+                mv_dst_path=new_path,
                 src_is_dir=True,
                 handle=lock_handle,
             ):
@@ -1989,7 +1995,7 @@ class VikingFS:
                 )
 
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {old_dir}")
+            raise ResourceBusyError(f"Resource is being processed: {old_dir}", uri=old_dir)
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
@@ -2003,19 +2009,11 @@ class VikingFS:
 
     async def _ensure_parent_dirs(self, path: str) -> None:
         """Recursively create all parent directories."""
-        # Remove leading slash if present, then split
-        parts = path.lstrip("/").split("/")
-        # If it's a file path (not just a directory), we need to create parent directories
-        # We create directories up to the last component (which might be a file)
-        for i in range(1, len(parts)):
-            parent = "/" + "/".join(parts[:i])
-            try:
-                await self._run_in_threadpool(self.agfs.mkdir, parent)
-            except Exception as e:
-                # Log the error but continue, as parent might already exist
-                # or we might be creating it in the next iteration
-                if "exist" not in str(e).lower() and "already" not in str(e).lower():
-                    logger.debug(f"Failed to create parent directory {parent}: {e}")
+        try:
+            await self._run_in_threadpool(self.agfs.ensure_parent_dirs, path)
+        except Exception as e:
+            # Log the error but continue
+            logger.debug(f"Failed to ensure parent directories for {path}: {e}")
 
     # ========== Relation Table Internal Methods ==========
 

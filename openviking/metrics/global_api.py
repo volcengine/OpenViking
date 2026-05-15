@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 """
-Global metrics bootstrap and event dispatch.
+Global metrics bootstrap and event subscription.
 
 This module provides:
 - A process-global MetricRegistry and PrometheusExporter instance for the server.
-- A lightweight in-process event router used by DataSources to emit events without
-  directly depending on MetricRegistry internals.
+- A metrics subscriber that consumes shared observability events without making
+  DataSources depend on MetricRegistry internals.
 
 Why an event router?
 Business code (models, encryption, HTTP middleware, etc.) calls DataSource APIs such as
-`VLMEventDataSource.record_call(...)`. DataSources emit events here. Collectors are the
-only layer allowed to write into MetricRegistry, keeping the architecture consistent.
+`VLMEventDataSource.record_call(...)`. DataSources publish observability events. Metrics
+collectors subscribe to those events and remain the only layer allowed to write into
+MetricRegistry, keeping the architecture consistent while letting other subscribers consume
+the same signal.
 """
 
 from __future__ import annotations
@@ -22,6 +24,12 @@ import inspect
 import threading
 from typing import Optional
 
+from openviking.observability.events import (
+    make_payload_subscriber,
+    register_event_subscriber,
+    try_publish_event,
+    unregister_event_subscriber,
+)
 from openviking.server.config import ServerConfig
 from openviking_cli.utils import get_logger
 
@@ -53,6 +61,7 @@ _lock = threading.Lock()
 _registry: Optional[MetricRegistry] = None
 _exporters: list = []
 _event_router: EventCollectorRouter | None = None
+_METRICS_EVENT_SUBSCRIBER = "metrics"
 
 
 def _shutdown_exporters_best_effort(exporters: list) -> None:
@@ -136,6 +145,7 @@ def init_metrics_from_server_config(
             _registry = None
             _exporters = []
             _event_router = None
+            unregister_event_subscriber(_METRICS_EVENT_SUBSCRIBER)
             reset_metric_account_dimension()
             if app is not None:
                 app.state.metrics_exporters = []
@@ -153,6 +163,10 @@ def init_metrics_from_server_config(
         _registry = registry or MetricRegistry()
         collector_manager = create_default_collector_manager(app=app, service=service)
         _event_router = _build_event_router(_registry)
+        register_event_subscriber(
+            _METRICS_EVENT_SUBSCRIBER,
+            make_payload_subscriber(_event_router.dispatch),
+        )
 
         _exporters = []
         exporters_config = config.observability.metrics.exporters
@@ -198,6 +212,7 @@ def shutdown_metrics(*, app=None) -> None:
         _registry = None
         _exporters = []
         _event_router = None
+        unregister_event_subscriber(_METRICS_EVENT_SUBSCRIBER)
         reset_metric_account_dimension()
         if app is not None:
             app.state.metrics_exporters = []
@@ -211,6 +226,7 @@ async def shutdown_metrics_async(*, app=None) -> None:
         _registry = None
         _exporters = []
         _event_router = None
+        unregister_event_subscriber(_METRICS_EVENT_SUBSCRIBER)
         reset_metric_account_dimension()
         if app is not None:
             app.state.metrics_exporters = []
@@ -250,15 +266,13 @@ def try_get_metrics_registry() -> MetricRegistry | None:
 
 def try_dispatch_event(event_name: str, payload: dict) -> None:
     """
-    Dispatch an in-process metrics event.
+    Publish an in-process observability event.
 
-    This is a best-effort API: if metrics are not initialized, it is a no-op.
-    Callers must not assume the event is recorded.
+    Kept for older call sites that imported the metrics API directly. The event is now
+    published to the shared bus, so non-metrics subscribers can consume it even when
+    Prometheus metrics are disabled.
     """
-    router = _event_router
-    if router is None:
-        return
-    router.dispatch(event_name, payload)
+    try_publish_event(event_name, payload)
 
 
 def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:

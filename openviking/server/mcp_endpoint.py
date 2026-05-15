@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextvars
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -176,7 +176,13 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def find(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
+async def find(
+    query: str,
+    target_uri: str = "",
+    limit: int = 10,
+    min_score: float = 0.35,
+    level: Optional[List[int]] = None,
+) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
     result = await service.search.find(
@@ -185,6 +191,7 @@ async def find(query: str, target_uri: str = "", limit: int = 10, min_score: flo
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
+        level=level,
     )
     return _format_search_result(result)
 
@@ -196,6 +203,7 @@ async def search(
     session_id: Optional[str] = None,
     limit: int = 10,
     min_score: float = 0.35,
+    level: Optional[List[int]] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -211,6 +219,7 @@ async def search(
         session=session,
         limit=limit,
         score_threshold=min_score,
+        level=level,
     )
     return _format_search_result(result)
 

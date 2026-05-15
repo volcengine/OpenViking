@@ -460,6 +460,11 @@ impl FileSystem for S3FileSystem {
         Ok(())
     }
 
+    async fn ensure_parent_dirs(&self, _path: &str, _mode: u32) -> Result<()> {
+        // S3 doesn't require directories to exist - no-op
+        Ok(())
+    }
+
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);

@@ -207,4 +207,9 @@ async def mv(
         if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(from_uri, "file")
         raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=from_uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
     return Response(status="ok", result={"from": from_uri, "to": to_uri})

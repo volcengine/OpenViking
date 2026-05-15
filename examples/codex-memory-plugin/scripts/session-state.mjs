@@ -2,8 +2,9 @@
  * Per-codex-session state for the OpenViking memory plugin.
  *
  * One state file per codex session_id, holding the long-lived OpenViking
- * session that we incrementally append turns to via the Stop hook. The
- * OV session is committed (which extracts memories) by the PreCompact
+ * session id that we incrementally append turns to via the Stop hook. The
+ * OV session id is derived as `cx-<codex-session-id>` for new captures.
+ * The OV session is committed (which extracts memories) by the PreCompact
  * hook or by the idle-sweep that runs at the tail of each Stop.
  *
  * State directory: $OPENVIKING_CODEX_STATE_DIR or ~/.openviking/codex-plugin-state
@@ -21,6 +22,18 @@ export function getStateDir() {
 
 function safeId(codexSessionId) {
   return String(codexSessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+export function deriveOvSessionId(codexSessionId) {
+  return `cx-${safeId(codexSessionId || "unknown")}`;
+}
+
+export function resolveOvSessionId(state) {
+  // Keep legacy persisted UUIDs so already-captured turns are not orphaned
+  // before their next commit. Fresh or cleared state derives the cx-* id.
+  if (state.ovSessionId) return state.ovSessionId;
+  state.ovSessionId = deriveOvSessionId(state.codexSessionId);
+  return state.ovSessionId;
 }
 
 function statePath(codexSessionId) {

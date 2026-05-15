@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
@@ -82,6 +83,8 @@ class SemanticDagExecutor:
         is_code_repo: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
+        coalesce_key: str = "",
+        coalesce_version: int = 0,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -96,6 +99,9 @@ class SemanticDagExecutor:
         self._is_code_repo = is_code_repo
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
+        self._coalesce_key = coalesce_key
+        self._coalesce_version = coalesce_version
+        self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
@@ -569,15 +575,48 @@ class SemanticDagExecutor:
                 summaries.append(item)
         return summaries
 
-    def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
+    @property
+    def stale(self) -> bool:
+        return self._stale
+
+    async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
         for idx, child_uri in enumerate(node.children_dirs):
             item = node.children_abstracts[idx]
             if item is None:
-                results.append({"name": child_uri.split("/")[-1], "abstract": ""})
+                try:
+                    abstract = await self._viking_fs.abstract(child_uri, ctx=self._ctx)
+                except Exception:
+                    abstract = ""
+                results.append({"name": child_uri.split("/")[-1], "abstract": abstract})
             else:
                 results.append(item)
         return results
+
+    def _is_stale(self) -> bool:
+        from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
+
+        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
+
+    async def _write_directory_semantics(
+        self,
+        dir_uri: str,
+        overview: str,
+        abstract: str,
+    ) -> bool:
+        wrote = await write_semantic_sidecars(
+            viking_fs=self._viking_fs,
+            dir_uri=dir_uri,
+            overview=overview,
+            abstract=abstract,
+            ctx=self._ctx,
+            is_stale=self._is_stale,
+            lifecycle_lock_handle_id=self._lifecycle_lock_handle_id,
+            log_prefix="[SemanticDag]",
+        )
+        if not wrote:
+            self._stale = True
+        return wrote
 
     async def _overview_task(self, dir_uri: str) -> None:
         node = self._nodes.get(dir_uri)
@@ -600,7 +639,7 @@ class SemanticDagExecutor:
             if overview is None or abstract is None:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
-                    children_abstracts = self._finalize_children_abstracts(node)
+                    children_abstracts = await self._finalize_children_abstracts(node)
                 async with self._llm_sem:
                     overview = await self._processor._generate_overview(
                         dir_uri, file_summaries, children_abstracts
@@ -608,10 +647,11 @@ class SemanticDagExecutor:
                 abstract = self._processor._extract_abstract_from_overview(overview)
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
-            # Write directly — protected by the outer lifecycle SUBTREE lock
+            # Write directly — protected by the outer lifecycle tree lock
             try:
-                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
-                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
+                wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
+                if not wrote:
+                    need_vectorize = False
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 

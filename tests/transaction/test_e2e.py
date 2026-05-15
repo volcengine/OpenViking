@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end lock tests using real AGFS backend.
 
-These tests exercise LockContext -> LockManager -> PathLock -> AGFS,
+These tests exercise LockContext -> LockManager -> PathLockEngine -> AGFS,
 verifying the acquire -> operate -> release lifecycle.
 """
 
@@ -33,9 +33,8 @@ def lock_manager(agfs_client):
 class TestLockContextCommit:
     async def test_lock_acquired_and_released(self, agfs_client, lock_manager, test_dir):
         """Lock is held inside the context and released after exit."""
-        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
-
-        async with LockContext(lock_manager, [test_dir], lock_mode="point"):
+        async with LockContext(lock_manager, [test_dir], lock_mode="exact") as handle:
+            lock_path = handle.locks[0]
             token = agfs_client.cat(lock_path)
             assert token is not None
 
@@ -45,7 +44,7 @@ class TestLockContextCommit:
         """Files written inside a lock context persist."""
         file_path = f"{test_dir}/committed-file.txt"
 
-        async with LockContext(lock_manager, [test_dir], lock_mode="point"):
+        async with LockContext(lock_manager, [test_dir], lock_mode="exact"):
             agfs_client.write(file_path, b"committed data")
 
         content = agfs_client.cat(file_path)
@@ -55,53 +54,55 @@ class TestLockContextCommit:
 class TestLockContextException:
     async def test_lock_released_on_exception(self, agfs_client, lock_manager, test_dir):
         """Lock is released even when an exception occurs inside the context."""
-        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
+        lock_path = ""
 
         with pytest.raises(RuntimeError):
-            async with LockContext(lock_manager, [test_dir], lock_mode="point"):
+            async with LockContext(lock_manager, [test_dir], lock_mode="exact") as handle:
+                lock_path = handle.locks[0]
                 token = agfs_client.cat(lock_path)
                 assert token is not None
                 raise RuntimeError("simulated failure")
 
+        assert lock_path
         assert _lock_file_gone(agfs_client, lock_path)
 
     async def test_exception_not_swallowed(self, agfs_client, lock_manager, test_dir):
         """Exceptions propagate through the context manager."""
         with pytest.raises(ValueError, match="test error"):
-            async with LockContext(lock_manager, [test_dir], lock_mode="point"):
+            async with LockContext(lock_manager, [test_dir], lock_mode="exact"):
                 raise ValueError("test error")
 
 
 class TestLockContextMv:
     async def test_mv_lock_acquires_both_paths(self, agfs_client, lock_manager, test_dir):
-        """mv lock mode acquires SUBTREE on both source and destination."""
+        """mv lock mode acquires tree source and exact destination locks."""
         src = f"{test_dir}/mv-src-{uuid.uuid4().hex}"
         dst = f"{test_dir}/mv-dst-{uuid.uuid4().hex}"
         agfs_client.mkdir(src)
         agfs_client.mkdir(dst)
 
-        async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=dst):
+        async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
             src_token = agfs_client.cat(f"{src}/{LOCK_FILE_NAME}")
             dst_token = agfs_client.cat(f"{dst}/{LOCK_FILE_NAME}")
             src_token_str = src_token.decode("utf-8") if isinstance(src_token, bytes) else src_token
             dst_token_str = dst_token.decode("utf-8") if isinstance(dst_token, bytes) else dst_token
-            assert ":S" in src_token_str
-            assert ":S" in dst_token_str
+            assert ":T" in src_token_str
+            assert ":E" in dst_token_str
 
         for path in [f"{src}/{LOCK_FILE_NAME}", f"{dst}/{LOCK_FILE_NAME}"]:
             assert _lock_file_gone(agfs_client, path)
 
 
-class TestLockContextSubtree:
-    async def test_subtree_lock_and_release(self, agfs_client, lock_manager, test_dir):
-        """Subtree lock is acquired and released."""
-        target = f"{test_dir}/sub-{uuid.uuid4().hex}"
+class TestLockContextTree:
+    async def test_tree_lock_and_release(self, agfs_client, lock_manager, test_dir):
+        """Tree lock is acquired and released."""
+        target = f"{test_dir}/tree-{uuid.uuid4().hex}"
         agfs_client.mkdir(target)
 
-        async with LockContext(lock_manager, [target], lock_mode="subtree"):
+        async with LockContext(lock_manager, [target], lock_mode="tree"):
             token = agfs_client.cat(f"{target}/{LOCK_FILE_NAME}")
             token_str = token.decode("utf-8") if isinstance(token, bytes) else token
-            assert ":S" in token_str
+            assert ":T" in token_str
 
         assert _lock_file_gone(agfs_client, f"{target}/{LOCK_FILE_NAME}")
 
@@ -110,7 +111,7 @@ class TestSequentialLocks:
     async def test_sequential_locks_on_same_path(self, agfs_client, lock_manager, test_dir):
         """Multiple sequential lock contexts on the same path succeed."""
         for i in range(3):
-            async with LockContext(lock_manager, [test_dir], lock_mode="point"):
+            async with LockContext(lock_manager, [test_dir], lock_mode="exact"):
                 agfs_client.write(f"{test_dir}/f{i}.txt", f"data-{i}".encode())
 
         for i in range(3):
@@ -118,8 +119,8 @@ class TestSequentialLocks:
             assert content == f"data-{i}".encode()
 
     async def test_lock_acquisition_failure(self, agfs_client, lock_manager, test_dir):
-        """LockContext raises LockAcquisitionError for nonexistent path."""
+        """LockContext raises LockAcquisitionError for unsupported lock mode."""
         nonexistent = f"{test_dir}/nonexistent-{uuid.uuid4().hex}"
         with pytest.raises(LockAcquisitionError):
-            async with LockContext(lock_manager, [nonexistent], lock_mode="point"):
+            async with LockContext(lock_manager, [nonexistent], lock_mode="unknown"):
                 pass

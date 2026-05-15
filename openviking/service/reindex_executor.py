@@ -311,7 +311,7 @@ class ReindexExecutor:
         started_at = time.perf_counter()
         counters = _ReindexCounters()
 
-        async with LockContext(get_lock_manager(), [path], lock_mode="subtree"):
+        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
             if object_type == "global_namespace":
                 await self._reindex_global_namespace(
                     uri=uri,

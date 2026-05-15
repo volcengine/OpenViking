@@ -5,7 +5,7 @@ Long-term semantic memory for [Codex](https://developers.openai.com/codex), powe
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
-- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a single long-lived OpenViking session keyed by Codex `session_id`. No commit per turn.
+- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` is a hard no-op (short reconnects re-fire `resume` and we don't want to commit a still-active session). See `DESIGN.md` for the full decision tree.
 
@@ -88,7 +88,7 @@ Connection / identity resolution order (highest to lowest, applies to both hooks
 
 1. **Environment variables**: `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`
 2. **`ovcli.conf`**: `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (`server.*` + optional `codex.*` tuning block)
+3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (only `server.url` / `server.root_api_key` as connection fallback; tuning fields under a legacy `codex.*` block are honored but deprecated — see [Tuning the plugin](#tuning-the-plugin))
 4. **Built-in defaults**: `http://127.0.0.1:1933`, unauthenticated
 
 The shell function wrapper handles step 1 for you by promoting ovcli.conf fields into env vars before exec'ing codex. Hooks then re-resolve the full chain inside Node; the MCP server URL is baked into `.mcp.json` at install time and the API key flows in via `OPENVIKING_API_KEY` (referenced by `bearer_token_env_var` in `.mcp.json`).
@@ -99,20 +99,23 @@ For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.co
 
 The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — by just changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper also omits empty env-var assignments entirely (so `OPENVIKING_API_KEY=` is never passed to codex), keeping `env_http_headers` for identity (`X-OpenViking-Account` / `User` / `Agent`) intact.
 
-Optional Codex-specific tuning lives under `codex` in `ovcli.conf`:
+### Tuning the plugin
 
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "...",
-  "codex": {
-    "agentId": "codex",
-    "recallLimit": 6,
-    "captureAssistantTurns": false,
-    "autoCommitOnCompact": true
-  }
-}
+All plugin behavior is controlled by `OPENVIKING_*` environment variables — set them in your shell rc (`~/.zshrc` / `~/.bashrc`) so every `codex` launch picks them up. The shell-function wrapper installed alongside the plugin already exports identity vars from `ovcli.conf`; tuning vars sit next to it.
+
+```sh
+# ~/.zshrc — examples
+export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
+export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_DEBUG=1
 ```
+
+Full list: see the `Misc env vars` block in `scripts/config.mjs`. Every field has a `OPENVIKING_*` counterpart and env vars always win.
+
+#### Legacy `codex` block in `ov.conf`
+
+Earlier plugin versions configured tuning fields under a `codex` block in `~/.openviking/ov.conf`. That still works for backward compat — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `codex.recallLimit`, etc.) — but **new deployments should prefer env vars**: this is the codex CLI's per-machine plugin tuning, and the server-side `ov.conf` is the wrong place for it. (It's read from `ov.conf`, not `ovcli.conf`, by historical accident in `scripts/config.mjs`.)
 
 ## Architecture
 
@@ -180,7 +183,7 @@ Codex injects `additionalContext` into the model turn, so memories arrive withou
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
-`auto-capture.mjs` keeps one long-lived OpenViking session per Codex `session_id` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction.
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction.
 
 ### PreCompact (deterministic commit)
 
@@ -188,7 +191,7 @@ Codex injects `additionalContext` into the model turn, so memories arrive withou
 
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
 2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-3. Reset state so the next `Stop` opens a fresh OV session for the post-compact half
+3. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 

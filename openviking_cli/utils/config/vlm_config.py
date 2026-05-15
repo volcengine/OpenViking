@@ -21,6 +21,7 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
 
+    backup: Optional["VLMConfig"] = Field(default=None, description="Backup VLM configuration for failover")
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
@@ -133,6 +134,14 @@ class VLMConfig(BaseModel):
                 raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
+    @model_validator(mode="after")
+    def validate_no_recursive_backup(self):
+        """Prevent recursive backup configurations"""
+        if self.backup is not None:
+            if self.backup.backup is not None:
+                raise ValueError("Backup VLM configuration cannot have its own backup (recursive backups are not allowed)")
+        return self
+
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
         if self.api_key and self.provider:
@@ -237,9 +246,17 @@ class VLMConfig(BaseModel):
         """Get VLM instance."""
         if self._vlm_instance is None:
             config_dict = self._build_vlm_config_dict()
-            from openviking.models.vlm import VLMFactory
+            from openviking.models.vlm import VLMFactory, FailoverVLM
 
-            self._vlm_instance = VLMFactory.create(config_dict)
+            primary = VLMFactory.create(config_dict)
+
+            # If backup is configured, wrap with FailoverVLM
+            if self.backup is not None and self.backup._has_any_config():
+                backup_config_dict = self.backup._build_vlm_config_dict()
+                backup = VLMFactory.create(backup_config_dict)
+                self._vlm_instance = FailoverVLM(primary, backup)
+            else:
+                self._vlm_instance = primary
         return self._vlm_instance
 
     def _build_vlm_config_dict(self) -> Dict[str, Any]:
@@ -348,3 +365,7 @@ class VLMConfig(BaseModel):
             tools=tools,
             messages=messages,
         )
+
+
+# Resolve forward reference for backup field
+VLMConfig.model_rebuild()

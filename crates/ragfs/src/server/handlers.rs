@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::{FileSystem, GrepResult, MountableFS, PluginConfig, WriteFlag};
+use crate::core::{FileSystem, FilesystemStats, GrepResult, MountableFS, PluginConfig, WriteFlag};
 
 /// Shared application state
 #[derive(Clone)]
@@ -71,6 +71,33 @@ pub struct FileQuery {
 pub struct DirQuery {
     /// Directory path
     pub path: String,
+    /// Optional permission mode (octal string, e.g. "755")
+    pub mode: Option<String>,
+}
+
+/// Query parameters for statistics operations
+#[derive(Debug, Deserialize)]
+pub struct StatsQuery {
+    /// Mount path (optional, if not provided returns all stats)
+    pub path: Option<String>,
+}
+
+/// Statistics response for a single mount
+#[derive(Debug, Serialize)]
+pub struct MountStats {
+    /// Mount path
+    pub path: String,
+    /// Plugin name
+    pub plugin: String,
+    /// Filesystem statistics
+    pub stats: FilesystemStats,
+}
+
+/// Statistics response for all mounts
+#[derive(Debug, Serialize)]
+pub struct AllStatsResponse {
+    /// Statistics for all mounts
+    pub mounts: Vec<MountStats>,
 }
 
 /// Request body for mount operation
@@ -273,6 +300,28 @@ pub async fn create_directory(
     }
 }
 
+/// POST /api/v1/directories/ensure-parent - Ensure parent directories exist
+pub async fn ensure_parent_dirs(
+    State(state): State<AppState>,
+    Query(query): Query<DirQuery>,
+) -> Response {
+    let mode = query.mode.and_then(|m| u32::from_str_radix(&m, 8).ok()).unwrap_or(0o755);
+    match state.fs.ensure_parent_dirs(&query.path, mode).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(ApiResponse::success(serde_json::json!({
+                "path": query.path
+            }))),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
 // ============================================================================
 // Mount Management Handlers
 // ============================================================================
@@ -411,6 +460,50 @@ pub async fn health_check() -> Response {
     };
 
     (StatusCode::OK, Json(ApiResponse::success(response))).into_response()
+}
+
+// ============================================================================
+// Statistics Handlers
+// ============================================================================
+
+/// GET /api/v1/stats - Get filesystem statistics
+pub async fn get_stats(State(state): State<AppState>, Query(query): Query<StatsQuery>) -> Response {
+    if let Some(path) = query.path {
+        // Get stats for a specific mount
+        match state.fs.get_mount_stats(&path).await {
+            Ok(stats) => {
+                let mounts = state.fs.list_mounts().await;
+                let plugin_name = mounts
+                    .into_iter()
+                    .find(|(p, _)| p == &path)
+                    .map(|(_, plugin)| plugin)
+                    .unwrap_or_default();
+
+                let mount_stats = MountStats {
+                    path,
+                    plugin: plugin_name,
+                    stats,
+                };
+
+                (StatusCode::OK, Json(ApiResponse::success(mount_stats))).into_response()
+            }
+            Err(e) => (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::error(e.to_string())),
+            )
+                .into_response(),
+        }
+    } else {
+        // Get stats for all mounts
+        let all_stats = state.fs.get_all_stats().await;
+        let mounts: Vec<MountStats> = all_stats
+            .into_iter()
+            .map(|(path, (plugin, stats))| MountStats { path, plugin, stats })
+            .collect();
+
+        let response = AllStatsResponse { mounts };
+        (StatusCode::OK, Json(ApiResponse::success(response))).into_response()
+    }
 }
 
 #[cfg(test)]

@@ -7,8 +7,9 @@
  * last_assistant_message. Stop fires per turn — NOT at session end.
  *
  * Strategy:
- *   1. For this codex session_id, lazily create one long-lived OpenViking
- *      session and remember it in state. Do NOT commit per turn.
+ *   1. For this codex session_id, derive one long-lived OpenViking session
+ *      id (`cx-<codex-session-id>`) and remember it in state. Do NOT commit
+ *      per turn.
  *   2. Read transcript_path, parse JSONL rollout, append every new
  *      user/assistant turn since last capture via add_message.
  *
@@ -27,7 +28,7 @@
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { loadState, saveState } from "./session-state.mjs";
+import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
@@ -137,21 +138,6 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// OpenViking session ops
-// ---------------------------------------------------------------------------
-
-async function ensureOvSession(state) {
-  if (state.ovSessionId) return state.ovSessionId;
-  const created = await fetchJSON("/api/v1/sessions", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-  if (!created?.session_id) return null;
-  state.ovSessionId = created.session_id;
-  return state.ovSessionId;
-}
-
 async function appendTurns(ovSessionId, turns) {
   let appended = 0;
   for (const turn of turns) {
@@ -231,9 +217,9 @@ async function main() {
 
   let added = 0;
   if (newTurns.length > 0) {
-    const ovSessionId = await ensureOvSession(state);
+    const ovSessionId = resolveOvSessionId(state);
     if (!ovSessionId) {
-      logError("ensure_ov_session", "failed to create OV session");
+      logError("resolve_ov_session", "failed to derive OV session id");
     } else {
       added = await appendTurns(ovSessionId, newTurns);
       state.capturedTurnCount += added;

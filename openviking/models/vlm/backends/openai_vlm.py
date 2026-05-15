@@ -393,11 +393,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -421,11 +422,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

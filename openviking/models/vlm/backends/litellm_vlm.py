@@ -395,10 +395,11 @@ class LiteLLMVLMProvider(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion synchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -422,10 +423,11 @@ class LiteLLMVLMProvider(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

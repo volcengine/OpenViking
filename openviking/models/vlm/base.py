@@ -332,3 +332,249 @@ class VLMFactory:
         from .registry import get_all_provider_names
 
         return get_all_provider_names()
+
+
+class FailoverVLM(VLMBase):
+    """VLM wrapper that provides failover to a backup VLM instance.
+
+    When the primary VLM instance fails with retryable errors (like rate limits),
+    this wrapper will automatically switch to using the backup VLM instance.
+    """
+
+    def __init__(self, primary: VLMBase, backup: VLMBase):
+        """Initialize FailoverVLM with primary and backup VLM instances.
+
+        Args:
+            primary: The primary VLM instance to use first
+            backup: The backup VLM instance to use when primary fails
+        """
+        # Use a dummy config since we're wrapping existing instances
+        config = {
+            "model": primary.model,
+            "provider": primary.provider,
+        }
+        super().__init__(config)
+
+        self.primary = primary
+        self.backup = backup
+        self._logger = logging.getLogger(__name__)
+        self._using_backup = False
+
+    def _should_failover(self, error: Exception) -> bool:
+        """Determine if an error should trigger failover to backup.
+
+        Args:
+            error: The exception that occurred
+
+        Returns:
+            True if failover should be attempted, False otherwise
+        """
+        # Check for common retryable/failover error patterns
+        error_str = str(error).lower()
+
+        # Rate limiting errors
+        rate_limit_patterns = [
+            "rate limit",
+            "ratelimit",
+            "too many requests",
+            "429",
+            "quota",
+        ]
+
+        # Server errors
+        server_error_patterns = [
+            "500",
+            "502",
+            "503",
+            "504",
+            "server error",
+            "service unavailable",
+            "timeout",
+        ]
+
+        # Connection errors
+        connection_patterns = [
+            "connection",
+            "network",
+            "unreachable",
+        ]
+
+        all_patterns = rate_limit_patterns + server_error_patterns + connection_patterns
+
+        return any(pattern in error_str for pattern in all_patterns)
+
+    def _get_completion_with_failover(
+        self,
+        method_name: str,
+        *args,
+        **kwargs
+    ):
+        """Execute a VLM method with failover support.
+
+        Args:
+            method_name: Name of the method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the VLM method
+
+        Raises:
+            The last exception encountered if both primary and backup fail
+        """
+        last_error = None
+
+        # Try primary first if not already using backup
+        if not self._using_backup:
+            try:
+                method = getattr(self.primary, method_name)
+                result = method(*args, **kwargs)
+                # If successful and we were in failover mode, consider switching back
+                # (but we'll stay conservative and keep using backup for this session)
+                return result
+            except Exception as e:
+                last_error = e
+                if self._should_failover(e):
+                    self._logger.warning(
+                        f"Primary VLM failed with error: {e}, switching to backup"
+                    )
+                    self._using_backup = True
+                else:
+                    # Not a failover-worthy error, re-raise
+                    raise
+
+        # Try backup
+        try:
+            method = getattr(self.backup, method_name)
+            return method(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            self._logger.error(f"Backup VLM also failed with error: {e}")
+            raise last_error
+
+    async def _get_completion_with_failover_async(
+        self,
+        method_name: str,
+        *args,
+        **kwargs
+    ):
+        """Execute an async VLM method with failover support.
+
+        Args:
+            method_name: Name of the async method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the async VLM method
+
+        Raises:
+            The last exception encountered if both primary and backup fail
+        """
+        last_error = None
+
+        # Try primary first if not already using backup
+        if not self._using_backup:
+            try:
+                method = getattr(self.primary, method_name)
+                result = await method(*args, **kwargs)
+                return result
+            except Exception as e:
+                last_error = e
+                if self._should_failover(e):
+                    self._logger.warning(
+                        f"Primary VLM failed with error: {e}, switching to backup"
+                    )
+                    self._using_backup = True
+                else:
+                    raise
+
+        # Try backup
+        try:
+            method = getattr(self.backup, method_name)
+            return await method(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            self._logger.error(f"Backup VLM also failed with error: {e}")
+            raise last_error
+
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion with failover support."""
+        return self._get_completion_with_failover(
+            "get_completion",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_completion_async(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion asynchronously with failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_completion_async",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    def get_vision_completion(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion with failover support."""
+        return self._get_completion_with_failover(
+            "get_vision_completion",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_vision_completion_async(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion asynchronously with failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_vision_completion_async",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    @property
+    def is_using_backup(self) -> bool:
+        """Check if currently using the backup VLM instance."""
+        return self._using_backup

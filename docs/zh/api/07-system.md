@@ -814,6 +814,64 @@ ov observer retrieval
 
 ---
 
+### observer.filesystem
+
+#### 1. API 实现介绍
+
+获取文件系统操作指标。
+
+**代码入口**:
+- `openviking/server/routers/observer.py:observer_filesystem` - HTTP 路由
+- `openviking/service/debug_service.py:ObserverService.filesystem` - 核心实现
+- `openviking/storage/observers/filesystem_observer.py` - 文件系统观察者
+- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
+
+#### 2. 接口和参数说明
+
+无参数。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+GET /api/v1/observer/filesystem
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/filesystem \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
+
+```python
+print(client.observer.filesystem)
+```
+
+**CLI**
+
+```bash
+ov observer filesystem
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "filesystem",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "..."
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### observer.system
 
 #### 1. API 实现介绍

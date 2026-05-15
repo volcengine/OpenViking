@@ -30,6 +30,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Respo
 from openviking.server.routers import (
     admin_router,
     bot_router,
+    console_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -214,10 +215,12 @@ def create_app(
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
         )
+        from openviking.observability.usage_audit import init_usage_audit_from_server_config
 
         init_metrics_from_server_config(config, app=app, service=service)
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
+        await init_usage_audit_from_server_config(config, app=app, service=service)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -273,7 +276,9 @@ def create_app(
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
+        from openviking.observability.usage_audit import shutdown_usage_audit
 
+        await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if oauth_gc_task is not None:
@@ -315,7 +320,30 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # Add HTTP observability middleware first (metrics, tracing)
+    # Body dump middleware must be registered BEFORE observability so it ends up
+    # nested inside the trace span (in Starlette, middleware added later wraps
+    # earlier-added ones — so earlier registration = inner layer).
+    if config.observability.dump_body.enabled:
+        from openviking.server.body_dump_middleware import (
+            create_dump_http_body_middleware,
+        )
+
+        _dump_body_fn = create_dump_http_body_middleware(
+            max_bytes=config.observability.dump_body.max_bytes,
+        )
+
+        @app.middleware("http")
+        async def dump_http_body(request: Request, call_next: Callable):
+            return await _dump_body_fn(request, call_next)
+
+        logger.info(
+            "HTTP body dump middleware enabled (max_bytes=%d) — bodies will be "
+            "attached to trace spans. Disable in production via "
+            "server.observability.dump_body.enabled=false.",
+            config.observability.dump_body.max_bytes,
+        )
+
+    # Add HTTP observability middleware (metrics, tracing).
     # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
     # We want timing to be the outermost layer to measure the full request duration.
     from openviking.observability.http_observability_middleware import (
@@ -472,6 +500,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
+    app.include_router(console_router)
     app.include_router(search_router)
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)

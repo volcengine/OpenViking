@@ -388,6 +388,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB 与模型使用统计
 

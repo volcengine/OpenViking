@@ -84,7 +84,7 @@ Resolution priority for every connection / identity field — env vars always wi
 
 1. **Environment variables** (`OPENVIKING_*`)
 2. **`ovcli.conf`** — `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`** — `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (`server.*` + optional `codex.*` tuning block)
+3. **`ov.conf`** — `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (only `server.url` / `server.root_api_key` as connection fallback; a legacy `codex.*` tuning block is still honored but deprecated — see [Tuning](#tuning))
 4. **Built-in defaults** (`http://127.0.0.1:1933`, unauthenticated)
 
 Hooks resolve this chain on every fire (changes to ovcli.conf take effect on the next hook). The MCP server URL is baked into `.mcp.json` at install time (changing the URL requires a re-install); the API key is read fresh from env on every codex launch via `bearer_token_env_var`, so rotating `OPENVIKING_API_KEY` in ovcli.conf only requires a codex restart, not a re-install.
@@ -106,22 +106,21 @@ For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.co
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle-TTL sweep threshold |
 | `OPENVIKING_DEBUG` | `false` | Write JSONL events to `~/.openviking/logs/codex-hooks.log` |
 
-Optional Codex-specific tuning lives under `codex` in `ovcli.conf`:
+### Tuning
 
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "...",
-  "codex": {
-    "agentId": "codex",
-    "recallLimit": 6,
-    "autoCommitOnCompact": true,
-    "debug": false
-  }
-}
+Plugin tuning is set via `OPENVIKING_*` environment variables in your shell rc — they take effect on every codex launch.
+
+```sh
+# ~/.zshrc
+export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
+export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_DEBUG=1
 ```
 
-The full field list is in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#configuration).
+The full field list is in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin).
+
+> **Legacy `codex.*` block**: earlier versions read tuning fields from a `codex` block in `~/.openviking/ov.conf`; that still works for backward compat. But codex is a client-side plugin and per-machine tuning doesn't belong in a server-scope `ov.conf` — new deployments should prefer env vars.
 
 ## Hook behavior
 
@@ -157,7 +156,7 @@ The plugin wires Codex up to OpenViking's built-in `/mcp` endpoint via streamabl
 | Hook runs but recall returns nothing | OpenViking server unreachable or wrong URL | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | Remote auth 401/403 from hooks but MCP works (or vice versa) | env vs ovcli.conf mismatch | Hooks re-read ovcli.conf every fire; MCP reads env only at codex start. Restart codex if you changed env. |
 
-Verbose debug logging: set `OPENVIKING_DEBUG=1` or `codex.debug=true` in `ovcli.conf` to write JSON-Lines events to `~/.openviking/logs/codex-hooks.log`.
+Verbose debug logging: set `OPENVIKING_DEBUG=1` (or legacy `codex.debug=true` in `ov.conf`) to write JSON-Lines events to `~/.openviking/logs/codex-hooks.log`.
 
 ## Differences from the Claude Code plugin
 

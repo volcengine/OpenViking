@@ -13,6 +13,8 @@ use tokio::sync::RwLock;
 use super::errors::{Error, Result};
 use super::filesystem::FileSystem;
 use super::plugin::ServicePlugin;
+use super::stats::{FilesystemStats, StatsCollector};
+use super::stats_wrapper::StatsWrappedFS;
 use super::types::{FileInfo, GrepResult, PluginConfig, WriteFlag};
 
 /// Information about a mounted filesystem
@@ -21,8 +23,11 @@ struct MountInfo {
     /// The mount path (e.g., "/memfs")
     path: String,
 
-    /// The filesystem instance
+    /// The filesystem instance (wrapped with statistics)
     fs: Arc<dyn FileSystem>,
+
+    /// The statistics collector for this mount
+    stats: Arc<StatsCollector>,
 
     /// The plugin that created this filesystem
     plugin_name: String,
@@ -97,10 +102,15 @@ impl MountableFS {
         // Initialize filesystem
         let fs = plugin.initialize(config.clone()).await?;
 
+        // Wrap with statistics
+        let wrapped_fs = StatsWrappedFS::new(fs);
+        let stats_collector = wrapped_fs.stats_collector();
+
         // Add to mounts
         let mount_info = MountInfo {
             path: normalized_path.clone(),
-            fs: Arc::from(fs),
+            fs: Arc::from(Box::new(wrapped_fs) as Box<dyn FileSystem>),
+            stats: stats_collector,
             plugin_name: config.name.clone(),
         };
 
@@ -138,6 +148,40 @@ impl MountableFS {
             .iter()
             .map(|(path, info)| (path.clone(), info.plugin_name.clone()))
             .collect()
+    }
+
+    /// Get statistics for a specific mount point
+    ///
+    /// # Arguments
+    /// * `path` - The mount path
+    ///
+    /// # Returns
+    /// The filesystem statistics for the mount
+    pub async fn get_mount_stats(&self, path: &str) -> Result<FilesystemStats> {
+        let normalized_path = normalize_path(path);
+        let mounts = self.mounts.read().await;
+
+        let mount_info = mounts
+            .get(&normalized_path)
+            .ok_or_else(|| Error::MountPointNotFound(normalized_path.clone()))?;
+
+        Ok(mount_info.stats.snapshot().await)
+    }
+
+    /// Get aggregated statistics for all mount points
+    ///
+    /// # Returns
+    /// A map of mount path to filesystem statistics
+    pub async fn get_all_stats(&self) -> HashMap<String, (String, FilesystemStats)> {
+        let mounts = self.mounts.read().await;
+        let mut result = HashMap::new();
+
+        for (path, info) in mounts.iter() {
+            let stats = info.stats.snapshot().await;
+            result.insert(path.clone(), (info.plugin_name.clone(), stats));
+        }
+
+        result
     }
 
     /// Find the mount point for a given path
@@ -278,6 +322,11 @@ impl FileSystem for MountableFS {
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
         mount_info.fs.truncate(&rel_path, size).await
+    }
+
+    async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+        mount_info.fs.ensure_parent_dirs(&rel_path, mode).await
     }
 
     async fn grep(

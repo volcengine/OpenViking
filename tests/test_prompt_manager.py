@@ -167,6 +167,57 @@ def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templat
     assert registry.get("custom_memory") is not None
 
 
+def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_templates_root(
+    tmp_path, monkeypatch
+):
+    resolved_templates_dir = tmp_path / "resolved-prompts"
+    resolved_memory_dir = resolved_templates_dir / "memory"
+    custom_memory_dir = tmp_path / "custom-memory"
+    resolved_memory_dir.mkdir(parents=True)
+    custom_memory_dir.mkdir(parents=True)
+    (resolved_memory_dir / "prompt_root.yaml").write_text(
+        json.dumps(
+            {
+                "memory_type": "prompt_root_memory",
+                "description": "schema from prompt manager root",
+                "directory": "viking://user/{{ user_space }}/memories/prompt-root",
+                "filename_template": "prompt-root.md",
+                "fields": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (custom_memory_dir / "custom.yaml").write_text(
+        json.dumps(
+            {
+                "memory_type": "custom_memory",
+                "description": "schema from custom memory dir",
+                "directory": "viking://user/{{ user_space }}/memories/custom",
+                "filename_template": "custom.md",
+                "fields": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        PromptManager,
+        "_resolve_templates_dir",
+        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(custom_templates_dir=str(custom_memory_dir))
+        ),
+    )
+
+    registry = MemoryTypeRegistry(load_schemas=True)
+
+    assert registry.get("custom_memory") is not None
+    assert registry.get("prompt_root_memory") is None
+
+
 def test_context_provider_schema_directories_use_prompt_manager_resolved_templates_root(
     tmp_path, monkeypatch
 ):
@@ -188,3 +239,37 @@ def test_context_provider_schema_directories_use_prompt_manager_resolved_templat
     provider = SessionExtractContextProvider(messages=[])
 
     assert provider.get_schema_directories() == [str(expected_memory_dir)]
+
+
+def test_context_provider_schema_directories_prefer_custom_memory_dir_over_prompt_manager_root(
+    tmp_path, monkeypatch
+):
+    resolved_templates_dir = tmp_path / "resolved-prompts"
+    custom_memory_dir = tmp_path / "custom-memory"
+
+    monkeypatch.setattr(
+        PromptManager,
+        "_resolve_templates_dir",
+        classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(
+                custom_templates_dir=str(custom_memory_dir),
+                eager_prefetch=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "os.path.exists",
+        lambda path: path == str(custom_memory_dir)
+        or path == str(PromptManager._get_bundled_templates_dir() / "memory"),
+    )
+
+    provider = SessionExtractContextProvider(messages=[])
+
+    assert provider.get_schema_directories() == [
+        str(PromptManager._get_bundled_templates_dir() / "memory"),
+        str(custom_memory_dir),
+    ]

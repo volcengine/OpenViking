@@ -17,7 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.search_filters import merge_time_filter, merge_level_filter
+from openviking.utils.search_filters import _resolve_levels, merge_time_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -47,16 +47,14 @@ def _resolve_search_filter(
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[TimeField],
-    level: Optional[Union[int, str, List[int]]] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
-        filter_with_time = merge_time_filter(
+        return merge_time_filter(
             request_filter,
             since=since,
             until=until,
             time_field=time_field,
         )
-        return merge_level_filter(filter_with_time, level=level)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
@@ -78,7 +76,6 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
-
     since: Optional[str] = None
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
@@ -137,7 +134,6 @@ async def find(
         request.since,
         request.until,
         request.time_field,
-        request.level,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
     execution = await run_operation(
@@ -150,6 +146,7 @@ async def find(
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
+            level=_resolve_levels(request.level) or None,
         ),
     )
     result = execution.result
@@ -176,7 +173,6 @@ async def search(
         request.since,
         request.until,
         request.time_field,
-        request.level,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
 
@@ -193,6 +189,7 @@ async def search(
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
+            level=_resolve_levels(request.level) or None,
         )
 
     execution = await run_operation(

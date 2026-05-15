@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
-from openviking.storage.transaction.path_lock import PathLock
+from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
 from openviking_cli.utils.logger import get_logger
 
@@ -29,7 +29,7 @@ class LockManager:
         redo_recovery_enabled: bool = True,
     ):
         self._agfs = agfs
-        self._path_lock = PathLock(agfs, lock_expire=lock_expire)
+        self._path_lock = PathLockEngine(agfs, lock_expire=lock_expire)
         self._lock_timeout = lock_timeout
         self._redo_recovery_enabled = redo_recovery_enabled
         self._redo_log = RedoLog(agfs)
@@ -93,34 +93,34 @@ class LockManager:
         self._handles[handle.id] = handle
         return handle
 
-    async def acquire_point(
+    async def acquire_exact_path(
         self, handle: LockHandle, path: str, timeout: Optional[float] = None
     ) -> bool:
-        acquired = await self._path_lock.acquire_point(
+        acquired = await self._path_lock.acquire_exact_path(
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
         if acquired:
             self._mark_handle_active(handle)
         return acquired
 
-    async def acquire_subtree(
+    async def acquire_tree(
         self, handle: LockHandle, path: str, timeout: Optional[float] = None
     ) -> bool:
-        acquired = await self._path_lock.acquire_subtree(
+        acquired = await self._path_lock.acquire_tree(
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
         if acquired:
             self._mark_handle_active(handle)
         return acquired
 
-    async def acquire_subtree_batch(
+    async def acquire_tree_batch(
         self,
         handle: LockHandle,
         paths: List[str],
         timeout: Optional[float] = None,
     ) -> bool:
         """
-        一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
+        一次性对多个路径进行树锁加锁，使用有序加锁法防止死锁
 
         核心思想：
         1. 对路径按照固定的顺序进行排序，确保所有进程获取锁的顺序一致
@@ -148,10 +148,10 @@ class LockManager:
         try:
             for path in sorted_paths:
                 locks_before = set(handle.locks)
-                success = await self._path_lock.acquire_subtree(
+                success = await self._path_lock.acquire_tree(
                     path,
                     handle,
-                    timeout=timeout,
+                    timeout=timeout if timeout is not None else self._lock_timeout,
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -163,21 +163,56 @@ class LockManager:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to acquire subtree batch lock: {e}")
+            logger.error(f"Failed to acquire tree batch lock: {e}")
             await self._path_lock.release_selected(handle, acquired_lock_paths)
             return False
 
-    async def acquire_mixed_batch(
+    async def acquire_exact_path_batch(
         self,
         handle: LockHandle,
-        point_paths: List[str],
-        subtree_paths: List[str],
+        paths: List[str],
         timeout: Optional[float] = None,
     ) -> bool:
-        """"""
-        subtree_set = set(subtree_paths)
-        point_only = [p for p in point_paths if p not in subtree_set]
-        all_pairs = [(p, False) for p in point_only] + [(p, True) for p in subtree_set]
+        if not paths:
+            self._mark_handle_active(handle)
+            return True
+
+        sorted_paths = sorted(dict.fromkeys(paths), key=lambda x: (len(x), x))
+        acquired_lock_paths: List[str] = []
+
+        try:
+            for path in sorted_paths:
+                locks_before = set(handle.locks)
+                success = await self._path_lock.acquire_exact_path(
+                    path,
+                    handle,
+                    timeout=timeout if timeout is not None else self._lock_timeout,
+                )
+                if not success:
+                    await self._path_lock.release_selected(handle, acquired_lock_paths)
+                    return False
+                newly = [lp for lp in handle.locks if lp not in locks_before]
+                acquired_lock_paths.extend(newly)
+
+            self._mark_handle_active(handle)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire exact-path batch lock: {e}")
+            await self._path_lock.release_selected(handle, acquired_lock_paths)
+            return False
+
+    async def acquire_exact_tree_batch(
+        self,
+        handle: LockHandle,
+        exact_paths: List[str],
+        tree_paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        exact_set = set(exact_paths)
+        tree_set = set(tree_paths)
+        exact_only = [p for p in exact_set if p not in tree_set]
+        all_pairs = [(p, False) for p in exact_only] + [(p, True) for p in tree_set]
 
         if not all_pairs:
             self._mark_handle_active(handle)
@@ -187,19 +222,19 @@ class LockManager:
         acquired_lock_paths: List[str] = []
 
         try:
-            for path, is_subtree in sorted_pairs:
+            for path, is_tree in sorted_pairs:
                 locks_before = set(handle.locks)
-                if is_subtree:
-                    success = await self._path_lock.acquire_subtree(
+                if is_tree:
+                    success = await self._path_lock.acquire_tree(
                         path,
                         handle,
-                        timeout=timeout,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
                     )
                 else:
-                    success = await self._path_lock.acquire_point(
+                    success = await self._path_lock.acquire_exact_path(
                         path,
                         handle,
-                        timeout=timeout,
+                        timeout=timeout if timeout is not None else self._lock_timeout,
                     )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -211,7 +246,7 @@ class LockManager:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to acquire mixed batch lock: {e}")
+            logger.error(f"Failed to acquire exact/tree batch lock: {e}")
             await self._path_lock.release_selected(handle, acquired_lock_paths)
             return False
 
@@ -219,13 +254,13 @@ class LockManager:
         self,
         handle: LockHandle,
         src: str,
-        dst_parent: str,
+        dst: str,
         src_is_dir: bool = True,
         timeout: Optional[float] = None,
     ) -> bool:
         acquired = await self._path_lock.acquire_mv(
             src,
-            dst_parent,
+            dst,
             handle,
             timeout=timeout if timeout is not None else self._lock_timeout,
             src_is_dir=src_is_dir,

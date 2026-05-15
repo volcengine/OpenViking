@@ -27,8 +27,6 @@ const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
 const MEMORY_INTENT_RE = /记住|记下|remember|save|store|偏好|preference|规则|rule|事实|fact/i;
 const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
-export const CAPTURE_LIMIT = 3;
-
 function resolveCaptureMinLength(text: string): number {
   return CJK_CHAR_REGEX.test(text) ? 4 : 10;
 }
@@ -274,21 +272,6 @@ export function extractTextsFromUserMessages(messages: unknown[]): string[] {
   return texts;
 }
 
-function formatToolUseBlock(b: Record<string, unknown>): string {
-  const name = typeof b.name === "string" ? b.name : "unknown";
-  let inputStr = "";
-  if (b.input !== undefined && b.input !== null) {
-    try {
-      inputStr = typeof b.input === "string" ? b.input : JSON.stringify(b.input);
-    } catch {
-      inputStr = String(b.input);
-    }
-  }
-  return inputStr
-    ? `[toolUse: ${name}]\n${inputStr}`
-    : `[toolUse: ${name}]`;
-}
-
 function formatToolResultContent(content: unknown): string {
   if (typeof content === "string") return content.trim();
   if (Array.isArray(content)) {
@@ -307,39 +290,6 @@ function formatToolResultContent(content: unknown): string {
     } catch {
       return String(content);
     }
-  }
-  return "";
-}
-
-/**
- * Extract text from a single message without a `[role]:` prefix.
- * Used by afterTurn to send messages with their actual role.
- */
-export function extractSingleMessageText(msg: unknown): string {
-  if (!msg || typeof msg !== "object") return "";
-  const m = msg as Record<string, unknown>;
-  const role = m.role as string;
-  if (!role || role === "system") return "";
-
-  if (role === "toolResult") {
-    const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
-    const resultText = formatToolResultContent(m.content);
-    return resultText ? `[${toolName} result]: ${resultText}` : "";
-  }
-
-  const content = m.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const block of content) {
-      const b = block as Record<string, unknown>;
-      if (b?.type === "text" && typeof b.text === "string") {
-        parts.push((b.text as string).trim());
-      } else if (b?.type === "toolUse") {
-        parts.push(formatToolUseBlock(b));
-      }
-    }
-    return parts.join("\n");
   }
   return "";
 }
@@ -367,7 +317,7 @@ function extractPartText(content: unknown): string {
 /**
  * 结构化消息类型 - 用于 afterTurn 发送到 OpenViking
  */
-export type ExtractedMessage = {
+type ExtractedMessage = {
   role: "user" | "assistant";
   parts: Array<{
     type: "text";
@@ -459,7 +409,6 @@ export function extractNewTurnMessages(
     }
 
     // user/assistant -> type: "text"
-    // 统一 role 为 user
     const content = msg.content;
     const text = extractPartText(content);
 
