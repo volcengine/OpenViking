@@ -6,16 +6,33 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+import asyncio
+import time
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.archive_finalize_tasks import (
+    STATE_COMPLETED,
+    STATE_PREPARING,
+    STATE_RUNNING,
+    STATE_TERMINAL_FAILED,
+    ArchiveFinalizeTask,
+    ArchiveFinalizeTaskStore,
+    get_archive_finalize_task_store,
+)
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    InvalidArgumentError,
+    NotFoundError,
+    NotInitializedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -33,6 +50,9 @@ class SessionService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
+        self._archive_task_store: Optional[ArchiveFinalizeTaskStore] = None
+        self._archive_worker_task: Optional[asyncio.Task] = None
+        self._archive_worker_stop: Optional[asyncio.Event] = None
 
     def set_dependencies(
         self,
@@ -44,6 +64,100 @@ class SessionService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
+        self._archive_task_store = get_archive_finalize_task_store()
+        self._start_archive_finalize_worker()
+
+    async def close(self) -> None:
+        """Stop background session workers."""
+        if self._archive_worker_stop:
+            self._archive_worker_stop.set()
+        if self._archive_worker_task:
+            self._archive_worker_task.cancel()
+            try:
+                await self._archive_worker_task
+            except asyncio.CancelledError:
+                pass
+        self._archive_worker_task = None
+        self._archive_worker_stop = None
+
+    def _start_archive_finalize_worker(self) -> None:
+        if self._archive_worker_task and not self._archive_worker_task.done():
+            return
+        self._archive_worker_stop = asyncio.Event()
+        self._archive_worker_task = asyncio.create_task(self._archive_finalize_worker_loop())
+
+    async def _archive_finalize_worker_loop(self) -> None:
+        owner = f"session-archive-worker-{uuid4()}"
+        while self._archive_worker_stop is not None and not self._archive_worker_stop.is_set():
+            try:
+                store = self._archive_task_store or get_archive_finalize_task_store()
+                task = store.claim_next(owner)
+                if task is None:
+                    await asyncio.sleep(0.2)
+                    continue
+                await self._process_archive_finalize_task(store, task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Archive finalize worker loop failed")
+                await asyncio.sleep(0.5)
+
+    async def _process_archive_finalize_task(
+        self,
+        store: ArchiveFinalizeTaskStore,
+        task: ArchiveFinalizeTask,
+    ) -> None:
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
+        ctx = task.request_context()
+        session = self.session(ctx, task.session_id)
+        try:
+            await session.load()
+        except Exception:
+            logger.debug("Failed to load session %s before archive finalize", task.session_id)
+        if task.claimed_from_state == STATE_PREPARING:
+            messages_uri = f"{task.archive_uri}/messages.jsonl"
+            if not await self._viking_fs.exists(messages_uri, ctx=ctx):
+                store.delete(ctx, task.session_id, task.archive_id)
+                get_task_tracker().fail(
+                    task.task_tracker_id,
+                    "archive_prepare_abandoned: messages.jsonl missing",
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                )
+                return
+        try:
+            await session.finalize_archive_from_task(
+                task.task_tracker_id,
+                task.archive_uri,
+                task.usage_records,
+            )
+            store.complete(task)
+        except asyncio.CancelledError:
+            store.release(task)
+            raise
+        except Exception as exc:
+            error = str(exc)
+            state = store.fail(task, error)
+            await session._write_failed_marker(
+                task.archive_uri,
+                stage="archive_finalize",
+                error=error,
+            )
+            if state == STATE_TERMINAL_FAILED:
+                tracker = get_task_tracker()
+                tracker.fail(
+                    task.task_tracker_id,
+                    error,
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                )
+                logger.warning(
+                    "Archive finalize terminal failed session=%s archive=%s error=%s",
+                    task.session_id,
+                    task.archive_id,
+                    error,
+                )
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -229,8 +343,8 @@ class SessionService:
     ) -> Dict[str, Any]:
         """Async commit a session.
 
-        Phase 1 (archive) always runs inline.  Phase 2 (memory extraction)
-        runs in a background task, returning a task_id for polling.
+        Archive payload writing runs inline. Archive finalization runs through
+        the persistent SQLite task log and returns a task_id for polling.
 
         Args:
             session_id: Session ID to commit
@@ -256,6 +370,58 @@ class SessionService:
             user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
+
+    async def retry_archive_finalize(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Retry a terminal failed archive finalize task."""
+        self._ensure_initialized()
+        store = self._archive_task_store or get_archive_finalize_task_store()
+        task = store.get(ctx, session_id, archive_id)
+        archive_uri = f"{canonical_session_uri(session_id)}/history/{archive_id}"
+
+        if task is None:
+            try:
+                await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=ctx)
+            except Exception as exc:
+                raise NotFoundError(archive_id, "session archive") from exc
+            tracker_task = get_task_tracker().create(
+                "session_commit",
+                resource_id=session_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            store.create_preparing(
+                ctx=ctx,
+                session_id=session_id,
+                archive_id=archive_id,
+                archive_uri=archive_uri,
+                task_tracker_id=tracker_task.task_id,
+                usage_records=[],
+            )
+            store.mark_pending(ctx, session_id, archive_id)
+            task = store.get(ctx, session_id, archive_id)
+        elif task.state == STATE_COMPLETED:
+            return {"status": "already_completed", "task": task.to_dict()}
+        elif task.state == STATE_RUNNING and task.lease_until > time.time():
+            return {"status": STATE_RUNNING, "task": task.to_dict()}
+        elif task.state != STATE_TERMINAL_FAILED:
+            raise InvalidArgumentError(
+                f"Archive {archive_id} is not terminal failed (state={task.state})"
+            )
+        else:
+            tracker_task = get_task_tracker().create(
+                "session_commit",
+                resource_id=session_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            task = store.reset_for_retry(task, task_tracker_id=tracker_task.task_id)
+
+        return {"status": "accepted", "task": task.to_dict() if task else None}
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.

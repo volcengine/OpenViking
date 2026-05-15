@@ -369,6 +369,8 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
+        await self._session_service.close()
+
         if self._watch_scheduler:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None
