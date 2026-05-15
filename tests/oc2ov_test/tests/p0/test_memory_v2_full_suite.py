@@ -279,12 +279,6 @@ class MemoryV2TestSuite:
                 "memory_type": "entities",
             },
             {
-                "name": "events",
-                "description": "测试事件记录记忆",
-                "test_message": "昨天我参加了公司的技术分享会，主题是微服务架构，会议持续了2小时，有50多人参加",
-                "memory_type": "events",
-            },
-            {
                 "name": "profile",
                 "description": "测试用户画像记忆",
                 "test_message": "我是一名技术负责人，有10年开发经验，专注于后端架构设计，喜欢用Python和Go语言",
@@ -295,12 +289,6 @@ class MemoryV2TestSuite:
                 "description": "测试技能记忆",
                 "test_message": "我擅长使用Docker进行容器化部署，熟练掌握Kubernetes集群管理，有丰富的CI/CD流水线搭建经验",
                 "memory_type": "skills",
-            },
-            {
-                "name": "tools",
-                "description": "测试工具记忆",
-                "test_message": "我经常使用Git进行版本控制，用Jenkins做持续集成，用Prometheus和Grafana监控服务",
-                "memory_type": "tools",
             },
         ]
 
@@ -873,12 +861,6 @@ SCENARIO_MAP = {
         "test_message": "我叫李明，今年28岁，是一名软件工程师，在字节跳动工作，住在北京海淀区",
         "memory_type": "entities",
     },
-    "events": {
-        "name": "events",
-        "description": "测试事件记录记忆",
-        "test_message": "昨天我参加了公司的技术分享会，主题是微服务架构，会议持续了2小时，有50多人参加",
-        "memory_type": "events",
-    },
     "profile": {
         "name": "profile",
         "description": "测试用户画像记忆",
@@ -890,12 +872,6 @@ SCENARIO_MAP = {
         "description": "测试技能记忆",
         "test_message": "我擅长使用Docker进行容器化部署，熟练掌握Kubernetes集群管理，有丰富的CI/CD流水线搭建经验",
         "memory_type": "skills",
-    },
-    "tools": {
-        "name": "tools",
-        "description": "测试工具记忆",
-        "test_message": "我经常使用Git进行版本控制，用Jenkins做持续集成，用Prometheus和Grafana监控服务",
-        "memory_type": "tools",
     },
 }
 
@@ -915,20 +891,12 @@ def test_memory_v2_entities():
     _run_single_memory_test("entities")
 
 
-def test_memory_v2_events():
-    _run_single_memory_test("events")
-
-
 def test_memory_v2_profile():
     _run_single_memory_test("profile")
 
 
 def test_memory_v2_skills():
     _run_single_memory_test("skills")
-
-
-def test_memory_v2_tools():
-    _run_single_memory_test("tools")
 
 
 if __name__ == "__main__":

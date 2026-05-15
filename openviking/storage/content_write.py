@@ -179,15 +179,16 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_tree(handle, lock_path)
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
         previous_content: Optional[str] = None
         content_written = False
-        lock_transferred = False
+        semantic_enqueued = False
+        lock_released = False
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
@@ -200,10 +201,12 @@ class ContentWriteCoordinator:
                 changed_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
+                lifecycle_lock_handle_id="",
                 change_type="added" if mode == "create" else "modified",
             )
-            lock_transferred = True
+            semantic_enqueued = True
+            await lock_manager.release(handle)
+            lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -219,7 +222,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
             )
         except Exception:
-            if not lock_transferred and content_written:
+            if not semantic_enqueued and content_written:
                 await self._rollback_direct_write(
                     uri=uri,
                     previous_content=previous_content,
@@ -227,7 +230,7 @@ class ContentWriteCoordinator:
                     ctx=ctx,
                     lock_handle=handle,
                 )
-            if not lock_transferred:
+            if not lock_released:
                 await lock_manager.release(handle)
             raise
         finally:

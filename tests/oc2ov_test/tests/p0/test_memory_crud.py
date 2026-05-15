@@ -1,68 +1,10 @@
 """
 记忆 CRUD 操作测试
-测试目标：验证记忆的增删改查功能
+测试目标：验证记忆的增删改查功能（读取验证已由 test_memory_v2_full_suite 覆盖）
 """
-
-import time
 
 from tests.base_cli_test import BaseOpenClawCLITest
 from tests.p0.test_context_engine import OVSessionVerifier
-
-
-class TestMemoryRead(BaseOpenClawCLITest):
-    """
-    记忆读取验证测试
-    测试目标：验证记忆读取功能是否正常
-    测试场景：写入用户信息后，逐项验证各字段的读取
-    """
-
-    def test_memory_read_verify(self):
-        """测试场景：逐项信息读取验证"""
-        session_id = self.generate_unique_session_id(prefix="read_verify")
-        verifier = OVSessionVerifier()
-
-        self.logger.info("[1/4] 记录 OV session 快照")
-        before_sessions = verifier.list_session_ids()
-
-        self.logger.info("[2/4] 写入用户信息")
-        message = "我叫测试用户-读取验证，今年40岁，住在华南区，职业是前端工程师"
-        self.send_and_retry_on_timeout(message, session_id=session_id)
-
-        self.smart_wait_for_sync(
-            check_message="我叫什么名字",
-            keywords=["测试用户", "读取验证"],
-            timeout=30.0,
-            session_id=session_id,
-        )
-
-        self.logger.info("[3/4] 显式 commit 确保新信息写入记忆文件，覆盖旧数据")
-        ov_session_id = verifier.find_new_session_id(before_sessions)
-        if ov_session_id:
-            task_id = verifier.commit_session(ov_session_id)
-            if task_id:
-                result = verifier.poll_task_until_done(task_id)
-                if result:
-                    self.logger.info(f"  Commit 状态: {result.get('status')}")
-        time.sleep(5)
-
-        self.logger.info("[4/4] 逐项验证记忆读取")
-        queries = [
-            (
-                "根据我刚才告诉你的信息，我住在哪里？请只根据我们当前对话中我告诉你的信息回答",
-                [["华南", "华南区", "华北", "北京"]],
-                "地区验证",
-            ),
-            (
-                "根据我刚才告诉你的信息，我的职业是什么？请只根据我们当前对话中我告诉你的信息回答",
-                [["前端", "工程师", "前端工程师", "产品经理"]],
-                "职业验证",
-            ),
-        ]
-
-        for query, expected_keywords, desc in queries:
-            self.logger.info(f"  查询: {query} (场景: {desc})")
-            resp = self.send_and_retry_on_timeout(query, session_id=session_id)
-            self.assertAnyKeywordInResponse(resp, expected_keywords, case_sensitive=False)
 
 
 class TestMemoryUpdate(BaseOpenClawCLITest):
