@@ -199,7 +199,7 @@ class PrimaryBackupSwitcher:
     When an error of type ERROR_CLASS_PERMANENT or ERROR_CLASS_QUOTA_EXCEEDED occurs,
     switches to backup immediately. Then, after either:
     - 10 minutes have passed, OR
-    - 50 requests have been made to backup
+    - 200 requests have been made to backup
     it will attempt to failback to primary. If failback fails, it switches back
     to backup and resets the timer/counter.
     """
@@ -207,7 +207,7 @@ class PrimaryBackupSwitcher:
     def __init__(
         self,
         failback_timeout_seconds: float = 600.0,  # 10 minutes
-        failback_request_count: int = 50,
+        failback_request_count: int = 200,
     ):
         self._failback_timeout = failback_timeout_seconds
         self._failback_request_count = failback_request_count
