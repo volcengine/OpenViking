@@ -227,7 +227,11 @@ export function loadConfig() {
       num(cx.captureMaxLength, 24000),
     ))),
     captureTimeoutMs,
-    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cx.captureAssistantTurns === true),
+    // Default true: a "memory plugin" without assistant-side capture only sees half the
+    // conversation, which makes extraction noticeably worse. Mirrors the claude-code plugin
+    // (examples/claude-code-memory-plugin/scripts/config.mjs). Operators who want the old
+    // user-only behavior can set OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or codex.captureAssistantTurns=false.
+    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cx.captureAssistantTurns !== false),
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),

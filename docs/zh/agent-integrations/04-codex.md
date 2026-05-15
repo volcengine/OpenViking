@@ -83,7 +83,7 @@ installer 替你做的三件事，你也可以自己手动做：
 
 1. **环境变量**（`OPENVIKING_*`）
 2. **`ovcli.conf`** — `~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`** — `~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`（顶层 `server.*` + 可选的 `codex.*` 调参块）
+3. **`ov.conf`** — `~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`（只用 `server.url` / `server.root_api_key` 当连接 fallback；`codex.*` 调参块仍被读取但已废弃，见下面 [调参](#调参)）
 4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
 
 Hook 每次触发都重新解析这条优先级链——改完 ovcli.conf 下一次 hook 立即生效。MCP server URL 在 install 时固化进 `.mcp.json`（改 URL 要重跑 installer），但 API key 通过 `bearer_token_env_var` 在 codex 启动时从 env 读，所以**轮换 API key 只需重启 codex，不必重装**。
@@ -105,22 +105,21 @@ Hook 每次触发都重新解析这条优先级链——改完 ovcli.conf 下一
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart 闲置 TTL 清理阈值 |
 | `OPENVIKING_DEBUG` | `false` | 把 hook 日志写到 `~/.openviking/logs/codex-hooks.log` |
 
-可选的 Codex 专属调参放在 `ovcli.conf` 的 `codex` 块下：
+### 调参
 
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "...",
-  "codex": {
-    "agentId": "codex",
-    "recallLimit": 6,
-    "autoCommitOnCompact": true,
-    "debug": false
-  }
-}
+调参用 `OPENVIKING_*` 环境变量，写进 shell rc 即可。每次 codex 启动都生效。
+
+```sh
+# ~/.zshrc
+export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
+export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_DEBUG=1
 ```
 
-完整字段列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#configuration)。
+完整字段列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
+
+> **遗留 `codex.*` 块**：早期版本支持把调参字段放在 `~/.openviking/ov.conf` 的 `codex` 块下，仍向后兼容。但 codex 是 client 侧插件，per-machine 的调参不该住在 server-scope 的 `ov.conf` 里——新部署请用环境变量。
 
 ## Hook 行为
 
@@ -156,7 +155,7 @@ Hook 每次触发都重新解析这条优先级链——改完 ovcli.conf 下一
 | Hook 触发但召回为空 | OpenViking 服务器不可达或 URL 不对 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | Hook 401/403 但 MCP 工具可用，或反之 | env vs ovcli.conf 不一致 | Hook 每次都重读 ovcli.conf，MCP 只在 codex 启动读 env。改完 env 要重启 codex。 |
 
-调试日志：设 `OPENVIKING_DEBUG=1` 或 `ovcli.conf` 里 `codex.debug=true`，会把 JSON-Lines 事件写到 `~/.openviking/logs/codex-hooks.log`。
+调试日志：设 `OPENVIKING_DEBUG=1`（或老配置 `ov.conf` 里 `codex.debug=true`），会把 JSON-Lines 事件写到 `~/.openviking/logs/codex-hooks.log`。
 
 ## 与 Claude Code 插件的差异
 

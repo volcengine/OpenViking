@@ -88,7 +88,7 @@ Connection / identity resolution order (highest to lowest, applies to both hooks
 
 1. **Environment variables**: `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`
 2. **`ovcli.conf`**: `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (`server.*` + optional `codex.*` tuning block)
+3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (only `server.url` / `server.root_api_key` as connection fallback; tuning fields under a legacy `codex.*` block are honored but deprecated — see [Tuning the plugin](#tuning-the-plugin))
 4. **Built-in defaults**: `http://127.0.0.1:1933`, unauthenticated
 
 The shell function wrapper handles step 1 for you by promoting ovcli.conf fields into env vars before exec'ing codex. Hooks then re-resolve the full chain inside Node; the MCP server URL is baked into `.mcp.json` at install time and the API key flows in via `OPENVIKING_API_KEY` (referenced by `bearer_token_env_var` in `.mcp.json`).
@@ -99,20 +99,23 @@ For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.co
 
 The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — by just changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper also omits empty env-var assignments entirely (so `OPENVIKING_API_KEY=` is never passed to codex), keeping `env_http_headers` for identity (`X-OpenViking-Account` / `User` / `Agent`) intact.
 
-Optional Codex-specific tuning lives under `codex` in `ovcli.conf`:
+### Tuning the plugin
 
-```jsonc
-{
-  "url": "https://ov.example.com",
-  "api_key": "...",
-  "codex": {
-    "agentId": "codex",
-    "recallLimit": 6,
-    "captureAssistantTurns": false,
-    "autoCommitOnCompact": true
-  }
-}
+All plugin behavior is controlled by `OPENVIKING_*` environment variables — set them in your shell rc (`~/.zshrc` / `~/.bashrc`) so every `codex` launch picks them up. The shell-function wrapper installed alongside the plugin already exports identity vars from `ovcli.conf`; tuning vars sit next to it.
+
+```sh
+# ~/.zshrc — examples
+export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
+export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_DEBUG=1
 ```
+
+Full list: see the `Misc env vars` block in `scripts/config.mjs`. Every field has a `OPENVIKING_*` counterpart and env vars always win.
+
+#### Legacy `codex` block in `ov.conf`
+
+Earlier plugin versions configured tuning fields under a `codex` block in `~/.openviking/ov.conf`. That still works for backward compat — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `codex.recallLimit`, etc.) — but **new deployments should prefer env vars**: this is the codex CLI's per-machine plugin tuning, and the server-side `ov.conf` is the wrong place for it. (It's read from `ov.conf`, not `ovcli.conf`, by historical accident in `scripts/config.mjs`.)
 
 ## Architecture
 
