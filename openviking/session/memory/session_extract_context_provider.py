@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
+from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFileContent
@@ -473,7 +474,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""
         if self._schema_directories is None:
-            memory_templates_dir = str(resolve_memory_templates_dir())
+            memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
@@ -481,6 +482,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):
                     self._schema_directories.append(custom_dir_expanded)
+            else:
+                memory_templates_dir = str(resolve_memory_templates_dir())
+                if memory_templates_dir != str(
+                    PromptManager._get_bundled_templates_dir() / "memory"
+                ) and os.path.exists(memory_templates_dir):
+                    self._schema_directories.append(memory_templates_dir)
         return self._schema_directories
 
     def _get_registry(self) -> MemoryTypeRegistry:

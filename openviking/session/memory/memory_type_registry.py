@@ -39,12 +39,12 @@ class MemoryTypeRegistry:
             self._load_schemas()
 
     def _load_schemas(self) -> None:
-        """Load schemas from the resolved memory templates directory and custom directory."""
+        """Load schemas from built-in templates, then custom/configured overrides."""
         import os
 
         from openviking_cli.utils.config import get_openviking_config
 
-        memory_templates_dir = str(resolve_memory_templates_dir())
+        memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
@@ -57,13 +57,23 @@ class MemoryTypeRegistry:
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load from custom directory (if configured) - use replace to allow overriding built-in templates
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
             if os.path.exists(custom_dir_expanded):
                 custom_loaded = self.load_from_directory(custom_dir_expanded, replace=True)
                 logger.info(
                     f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
+                )
+        else:
+            memory_templates_dir = str(resolve_memory_templates_dir())
+            if memory_templates_dir != str(
+                PromptManager._get_bundled_templates_dir() / "memory"
+            ) and os.path.exists(memory_templates_dir):
+                loaded = self.load_from_directory(memory_templates_dir, replace=True)
+                logger.info(
+                    "Loaded %s memory schemas from configured prompt templates: %s",
+                    loaded,
+                    memory_templates_dir,
                 )
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
