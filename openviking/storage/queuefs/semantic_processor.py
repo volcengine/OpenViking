@@ -39,6 +39,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -347,7 +348,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         except Exception as e:
             error_class = classify_api_error(e)
-            if error_class == "permanent":
+            if error_class == ERROR_CLASS_PERMANENT:
                 logger.critical(
                     f"Permanent API error processing semantic message, dropping: {e}",
                     exc_info=True,

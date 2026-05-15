@@ -32,6 +32,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -520,7 +521,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         except Exception:
                             pass
 
-                        if error_class == "permanent":
+                        if error_class == ERROR_CLASS_PERMANENT:
                             logger.critical(error_msg)
                             self._circuit_breaker.record_failure(embed_err)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)

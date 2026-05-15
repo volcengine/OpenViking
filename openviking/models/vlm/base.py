@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.utils.model_retry import is_quota_exceeded_api_error
 from openviking.utils.time_utils import format_iso8601
 from openviking_cli.utils import get_logger
 
@@ -363,12 +364,20 @@ class FailoverVLM(VLMBase):
     def _should_failover(self, error: Exception) -> bool:
         """Determine if an error should trigger failover to backup.
 
+        Account quota exceeded errors (e.g. ``AccountQuotaExceeded``) trigger
+        immediate failover without retry — the quota will not recover within
+        the session.
+
         Args:
             error: The exception that occurred
 
         Returns:
             True if failover should be attempted, False otherwise
         """
+        # Quota-exceeded errors always trigger failover (no point retrying).
+        if is_quota_exceeded_api_error(error):
+            return True
+
         # Check for common retryable/failover error patterns
         error_str = str(error).lower()
 

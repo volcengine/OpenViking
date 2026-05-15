@@ -146,6 +146,31 @@ class TestFailoverVLM:
         backup.get_completion.assert_called_once()
         assert failover.is_using_backup is True
 
+    def test_primary_fails_quota_exceeded_fails_to_backup(self):
+        """Test that AccountQuotaExceeded triggers immediate failover."""
+        primary = Mock()
+        primary.model = "primary-model"
+        primary.provider = "volcengine"
+        primary.get_completion.side_effect = Exception(
+            'API Error: 429 {"error":{"code":"AccountQuotaExceeded",'
+            '"message":"You have exceeded the 5-hour usage quota. '
+            'It will reset at 2026-05-14 17:18:52 +0800 CST."}}'
+        )
+
+        backup = Mock()
+        backup.model = "backup-model"
+        backup.provider = "openai"
+        backup.get_completion.return_value = "backup response"
+
+        failover = FailoverVLM(primary, backup)
+
+        result = failover.get_completion(prompt="test")
+
+        assert result == "backup response"
+        primary.get_completion.assert_called_once()
+        backup.get_completion.assert_called_once()
+        assert failover.is_using_backup is True
+
     def test_primary_fails_timeout_fails_to_backup(self):
         """Test that timeout errors trigger failover to backup."""
         primary = Mock()
