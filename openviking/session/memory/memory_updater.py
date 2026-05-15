@@ -386,7 +386,12 @@ class MemoryUpdater:
 
         # Apply links to endpoint files not covered by upsert_operations
         if operations.resolved_links:
-            await self._apply_links_to_existing_files(operations.resolved_links, result, ctx)
+            await self._apply_links_to_existing_files(
+                operations.resolved_links,
+                result,
+                ctx,
+                deleted_uris=set(result.deleted_uris),
+            )
 
         tracer.info(f"Memory operations applied: {result.summary()}")
 
@@ -538,6 +543,7 @@ class MemoryUpdater:
         resolved_links: List[StoredLink],
         result: MemoryUpdateResult,
         ctx: RequestContext,
+        deleted_uris: Optional[set[str]] = None,
     ) -> None:
         """Apply links to endpoint files that are NOT in the current upsert batch.
 
@@ -551,19 +557,22 @@ class MemoryUpdater:
 
         # Collect URIs of files being upserted (links handled in _apply_upsert)
         upserted_uris = set()
+        deleted_uris = deleted_uris or set()
         for op in result.written_uris + result.edited_uris:
             upserted_uris.add(op)
+
+        skipped_uris = upserted_uris | deleted_uris
 
         # Group remaining links by target file and field
         # file_links[uri]["links"] = forward links, file_links[uri]["backlinks"] = backlinks
         file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
         for link in resolved_links:
             # Forward link -> from_uri's "links"
-            if link.from_uri not in upserted_uris:
+            if link.from_uri not in skipped_uris:
                 file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
                 file_links[link.from_uri]["links"].append(link)
             # Backlink -> to_uri's "backlinks"
-            if link.to_uri not in upserted_uris:
+            if link.to_uri not in skipped_uris:
                 file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
                 file_links[link.to_uri]["backlinks"].append(link)
 

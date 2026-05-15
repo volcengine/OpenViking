@@ -16,6 +16,7 @@ from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
@@ -197,6 +198,70 @@ class TestMemoryUpdater:
             ctx,
             None,
         )
+    @pytest.mark.asyncio
+    async def test_apply_operations_skips_link_updates_for_deleted_uris(self, monkeypatch):
+        deleted_uri = "viking://agent/agent_sample_3/memories/experiences/old.md"
+        written_uri = "viking://agent/agent_sample_3/memories/experiences/new.md"
+
+        schema = MemoryTypeSchema(
+            memory_type="experiences",
+            description="experience memory",
+            directory="viking://agent/{{ agent_space }}/memories/experiences",
+            filename_template="{{ experience_name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        updater = MemoryUpdater(registry=registry)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=AssertionError("deleted URI should not be read"))
+        mock_viking_fs.write_file = AsyncMock()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        resolved = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"experience_name": "new"},
+                    memory_type="experiences",
+                    uris=[written_uri],
+                )
+            ],
+            delete_file_contents=[MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"})],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=deleted_uri,
+                    to_uri=written_uri,
+                )
+            ],
+        )
+
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater.supplement_operation_uris",
+            lambda *args, **kwargs: None,
+        )
+
+        async def mock_apply_upsert(resolved_op, ctx, extract_context=None):
+            return None
+
+        async def mock_apply_delete(uri, ctx):
+            assert uri == deleted_uri
+
+        updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
+        updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+        result = await updater.apply_operations(operations=resolved, ctx=ctx)
+
+        assert result.written_uris == [written_uri]
+        assert result.deleted_uris == [deleted_uri]
+        mock_viking_fs.read_file.assert_not_awaited()
 
 
 # The TestApplyWriteWithContentInFields tests are outdated because WriteOp no longer exists
