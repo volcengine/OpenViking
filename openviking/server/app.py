@@ -594,12 +594,18 @@ def create_app(
         logger.warning("Skipping OAuth router registration: %s", e)
 
     # Favicon: shared with the console static assets so 1933/console use the same logo.
+    # Some MCP clients (claude.ai connector cards) resolve the icon relative to the
+    # connector URL (e.g. {mcp_url}/favicon.ico) rather than the origin, so the same
+    # files are also exposed under /mcp/.
     _static_dir = Path(__file__).resolve().parent.parent / "console" / "static"
     _favicon_headers = {"Cache-Control": "public, max-age=86400"}
     _favicon_files = {
         "/favicon.ico": ("favicon.ico", "image/x-icon"),
         "/favicon.png": ("favicon-32.png", "image/png"),
         "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+        "/mcp/favicon.ico": ("favicon.ico", "image/x-icon"),
+        "/mcp/favicon.png": ("favicon-32.png", "image/png"),
+        "/mcp/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
     }
 
     def _make_favicon_handler(filename: str, media_type: str):
