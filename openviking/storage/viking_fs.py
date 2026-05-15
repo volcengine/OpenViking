@@ -551,12 +551,17 @@ class VikingFS:
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
 
-        # Verify source exists and determine type before locking
+        # Verify source exists and determine type before locking.
         try:
             stat = await self._run_in_threadpool(self.agfs.stat, old_path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
-        except Exception:
-            raise FileNotFoundError(f"mv source not found: {old_uri}")
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=old_uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
+            raise FileNotFoundError(f"mv source not found: {old_uri}") from exc
 
         lock_context = (
             LockContext(

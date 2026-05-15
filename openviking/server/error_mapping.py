@@ -9,6 +9,7 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
     AGFSHTTPError,
+    AGFSNotFoundError,
     AGFSTimeoutError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -365,6 +366,8 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
 
 def is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, FileNotFoundError):
+        return True
+    if isinstance(exc, AGFSNotFoundError):
         return True
     if isinstance(exc, AGFSHTTPError) and exc.status_code == 404:
         return True
