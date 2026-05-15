@@ -11,6 +11,7 @@ logger = get_logger(__name__)
 
 # Lock file name
 LOCK_FILE_NAME = ".path.ovlock"
+FILE_LOCK_SUFFIX = ".ovlock"
 
 # Lock type constants
 LOCK_TYPE_POINT = "P"
@@ -18,6 +19,7 @@ LOCK_TYPE_SUBTREE = "S"
 
 # Default poll interval when waiting for a lock (seconds)
 _POLL_INTERVAL = 0.2
+_WAIT_LOG_INTERVAL = 10.0
 
 
 @dataclass
@@ -65,6 +67,39 @@ class PathLock:
     def _get_lock_path(self, path: str) -> str:
         path = path.rstrip("/")
         return f"{path}/{LOCK_FILE_NAME}"
+
+    def _is_file_target_path(self, path: str) -> bool:
+        """Best-effort判断 path 是否是文件目标路径（用于 point 文件锁）。"""
+        normalized = path.rstrip("/")
+        name = normalized.rsplit("/", 1)[-1] if "/" in normalized else normalized
+        if not name:
+            return False
+        # Lock artifacts are not user file targets.
+        if name.endswith(FILE_LOCK_SUFFIX) or name == LOCK_FILE_NAME:
+            return False
+        try:
+            stat = self._agfs.stat(normalized)
+            if isinstance(stat, dict):
+                return not bool(stat.get("isDir", False))
+        except Exception:
+            pass
+        # Fallback heuristic for non-existing targets.
+        return "." in name
+
+    def _get_point_lock_path(self, target_path: str) -> Tuple[str, str]:
+        """Return (lock_path, ensure_dir_path) for point locks.
+
+        - Directory target: lock at <dir>/.path.ovlock
+        - File target: lock at <parent>/.<filename>.ovlock
+        """
+        target = target_path.rstrip("/")
+        if self._is_file_target_path(target):
+            parent = self._get_parent_path(target)
+            if not parent:
+                return self._get_lock_path(target), target
+            name = target.rsplit("/", 1)[-1]
+            return f"{parent}/.{name}{FILE_LOCK_SUFFIX}", parent
+        return self._get_lock_path(target), target
 
     def _ensure_directory_exists(self, path: str):
         """确保目录存在，不存在则创建"""
@@ -173,6 +208,11 @@ class PathLock:
 
     async def _owned_lock_type(self, path: str, owner: LockOwner) -> Optional[str]:
         lock_path = self._get_lock_path(path)
+        return await self._owned_lock_type_for_lock_path(lock_path, owner)
+
+    async def _owned_lock_type_for_lock_path(
+        self, lock_path: str, owner: LockOwner
+    ) -> Optional[str]:
         if lock_path not in owner.locks:
             return None
         token = self._read_token(lock_path)
@@ -234,6 +274,14 @@ class PathLock:
                 if not name or name in (".", ".."):
                     continue
                 if not entry.get("isDir", False):
+                    # File-level point locks are stored as ".<filename>.ovlock"
+                    if name.endswith(FILE_LOCK_SUFFIX):
+                        file_lock_path = f"{path.rstrip('/')}/{name}"
+                        token = self._read_token(file_lock_path)
+                        if token is not None:
+                            owner_id, _, _ = _parse_fencing_token(token)
+                            if owner_id != exclude_owner_id:
+                                return file_lock_path
                     continue
                 subdir = f"{path.rstrip('/')}/{name}"
                 subdir_lock = self._get_lock_path(subdir)
@@ -253,8 +301,8 @@ class PathLock:
         self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
     ) -> bool:
         owner_id = owner.id
-        lock_path = self._get_lock_path(path)
-        owned_lock_type = await self._owned_lock_type(path, owner)
+        lock_path, ensure_dir_path = self._get_point_lock_path(path)
+        owned_lock_type = await self._owned_lock_type_for_lock_path(lock_path, owner)
         if owned_lock_type in {LOCK_TYPE_POINT, LOCK_TYPE_SUBTREE}:
             owner.add_lock(lock_path)
             logger.debug(f"[POINT] Reusing owned lock on: {path}")
@@ -268,9 +316,11 @@ class PathLock:
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
+        wait_start = asyncio.get_running_loop().time()
+        next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
         # 确保目录存在
-        if not self._ensure_directory_exists(path):
+        if not self._ensure_directory_exists(ensure_dir_path):
             logger.warning(f"[POINT] Failed to ensure directory exists: {path}")
             return False
 
@@ -283,6 +333,13 @@ class PathLock:
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(f"[POINT] Timeout waiting for lock on: {path}")
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[POINT] Still waiting for lock on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -299,6 +356,13 @@ class PathLock:
                         f"[POINT] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
                     )
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[POINT] Still waiting for ancestor SUBTREE lock: {ancestor_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -326,6 +390,13 @@ class PathLock:
                     if not backed_off:
                         await self._remove_lock_file(lock_path)
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[POINT] Still waiting after conflict check on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -333,6 +404,13 @@ class PathLock:
                 logger.debug(f"[POINT] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[POINT] Still waiting for lock ownership verification: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -359,6 +437,8 @@ class PathLock:
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
+        wait_start = asyncio.get_running_loop().time()
+        next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
         # 确保目录存在
         if not self._ensure_directory_exists(path):
@@ -374,6 +454,13 @@ class PathLock:
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(f"[SUBTREE] Timeout waiting for lock on: {path}")
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[SUBTREE] Still waiting for lock on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -391,6 +478,13 @@ class PathLock:
                         f"[SUBTREE] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
                     )
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[SUBTREE] Still waiting for ancestor SUBTREE lock: {ancestor_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -405,6 +499,13 @@ class PathLock:
                         f"[SUBTREE] Timeout waiting for descendant lock: {desc_conflict}"
                     )
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[SUBTREE] Still waiting for descendant lock: {desc_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -434,6 +535,13 @@ class PathLock:
                     if not backed_off:
                         await self._remove_lock_file(lock_path)
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[SUBTREE] Still waiting after conflict check on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
@@ -441,6 +549,13 @@ class PathLock:
                 logger.debug(f"[SUBTREE] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[SUBTREE] Still waiting for lock ownership verification: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 

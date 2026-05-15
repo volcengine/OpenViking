@@ -420,8 +420,8 @@ class TestCompressorV2:
         logger.info("Test completed successfully!")
 
     @pytest.mark.asyncio
-    async def test_v2_lock_acquire_respects_max_retries(self):
-        """v2 memory extraction should stop after configured lock retry limit."""
+    async def test_v2_lock_acquire_waits_without_retry_loop(self):
+        """v2 memory extraction should delegate waiting to lock manager without local retries."""
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
@@ -429,6 +429,7 @@ class TestCompressorV2:
 
         class DummySchema:
             directory = "viking://user/{{ user_space }}/memories/events"
+            filename_template = "event.md"
 
             def filename_has_variables(self):
                 return False
@@ -468,7 +469,6 @@ class TestCompressorV2:
                 return_value=SimpleNamespace(initialize_memory_files=AsyncMock()),
             ),
             patch.object(compressor, "_get_or_create_react", return_value=DummyOrchestrator()),
-            patch("openviking.session.compressor_v2.asyncio.sleep", new=AsyncMock()),
         ):
             initialize_openviking_config()
             config = get_openviking_config()
@@ -481,6 +481,62 @@ class TestCompressorV2:
             )
 
         assert result == []
-        assert lock_manager.acquire_mixed_batch.await_count == 2
-        for call in lock_manager.acquire_mixed_batch.await_args_list:
-            assert call.kwargs["timeout"] is not None
+        assert lock_manager.acquire_mixed_batch.await_count == 1
+        call = lock_manager.acquire_mixed_batch.await_args_list[0]
+        assert call.kwargs["timeout"] is None
+        assert call.kwargs["point_paths"] == ["/local/default/user/default/memories/events/event.md"]
+
+    @pytest.mark.asyncio
+    async def test_extract_phase_waits_on_subtree_lock_without_retry_loop(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+
+        class DummySchema:
+            directory = "viking://user/{{ user_space }}/memories/experiences"
+
+        class DummyProvider:
+            _transaction_handle = None
+
+            def get_memory_schemas(self, _ctx):
+                return [DummySchema()]
+
+            def _get_registry(self):
+                return object()
+
+        class DummyVikingFS(MockVikingFS):
+            agfs = object()
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: object(),
+            acquire_subtree_batch=AsyncMock(return_value=False),
+            release=AsyncMock(),
+        )
+        memory_config = SimpleNamespace(v2_lock_max_retries=0, v2_lock_retry_interval_seconds=0.0)
+        config = SimpleNamespace(
+            memory=memory_config,
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=DummyVikingFS()),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch("openviking.session.compressor_v2.ExtractLoop") as mock_extract_loop,
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+        ):
+            mock_extract_loop.return_value = SimpleNamespace(run=AsyncMock())
+
+            result = await compressor._run_extract_phase(
+                provider=DummyProvider(),
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=False,
+                phase_label="phase2",
+            )
+
+        assert result is None
+        assert lock_manager.acquire_subtree_batch.await_count == 1
+        call = lock_manager.acquire_subtree_batch.await_args_list[0]
+        assert call.kwargs["timeout"] is None

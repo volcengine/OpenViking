@@ -191,7 +191,7 @@ class SessionCompressorV2:
                 # 固定文件名 schema（如 soul.md、identity.md）只需 POINT 锁，
                 # 避免因 SUBTREE 锁阻塞子目录（trajectories/experiences）的并发加锁。
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-                point_lock_dirs: list = []   # 固定文件名 schema → POINT 锁
+                point_lock_paths: list = []  # 固定文件名 schema → POINT 锁
                 subtree_lock_dirs: list = [] # 变量文件名 schema → SUBTREE 锁
                 for schema in schemas:
                     if not schema.directory:
@@ -214,40 +214,30 @@ class SessionCompressorV2:
                                 if dir_path not in subtree_lock_dirs:
                                     subtree_lock_dirs.append(dir_path)
                             else:
-                                if dir_path not in point_lock_dirs:
-                                    point_lock_dirs.append(dir_path)
+                                filename_template = getattr(schema, "filename_template", "") or ""
+                                if (
+                                    filename_template
+                                    and "{{" not in filename_template
+                                    and "}}" not in filename_template
+                                ):
+                                    point_path = f"{dir_path.rstrip('/')}/{filename_template}"
+                                else:
+                                    # Backward-compatible fallback for non-standard schemas.
+                                    point_path = dir_path
+                                if point_path not in point_lock_paths:
+                                    point_lock_paths.append(point_path)
                 logger.debug(
-                    f"Memory schema lock dirs: point={point_lock_dirs}, subtree={subtree_lock_dirs}"
+                    f"Memory schema lock paths: point={point_lock_paths}, subtree={subtree_lock_dirs}"
                 )
 
-                retry_interval = config.memory.v2_lock_retry_interval_seconds
-                max_retries = config.memory.v2_lock_max_retries
-                per_attempt_timeout = getattr(lock_manager, "_lock_timeout", 0.0)
-                retry_count = 0
-
-                # 循环重试获取锁（机制确保不会死锁）
-                while True:
-                    lock_acquired = await lock_manager.acquire_mixed_batch(
-                        transaction_handle,
-                        point_paths=point_lock_dirs,
-                        subtree_paths=subtree_lock_dirs,
-                        timeout=per_attempt_timeout,
-                    )
-                    if lock_acquired:
-                        break
-                    retry_count += 1
-                    if max_retries > 0 and retry_count >= max_retries:
-                        raise TimeoutError(
-                            "Failed to acquire memory locks after "
-                            f"{retry_count} retries (max={max_retries})"
-                        )
-
-                    logger.warning(
-                        "Failed to acquire memory locks, retrying "
-                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
-                    )
-                    if retry_interval > 0:
-                        await asyncio.sleep(retry_interval)
+                lock_acquired = await lock_manager.acquire_mixed_batch(
+                    transaction_handle,
+                    point_paths=point_lock_paths,
+                    subtree_paths=subtree_lock_dirs,
+                    timeout=None,
+                )
+                if not lock_acquired:
+                    raise TimeoutError("Failed to acquire memory locks")
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
 
@@ -574,25 +564,13 @@ class SessionCompressorV2:
                     if dir_path not in memory_schema_dirs:
                         memory_schema_dirs.append(dir_path)
 
-                retry_interval = config.memory.v2_lock_retry_interval_seconds
-                max_retries = config.memory.v2_lock_max_retries
-                retry_count = 0
-                while True:
-                    lock_acquired = await lock_manager.acquire_subtree_batch(
-                        transaction_handle,
-                        memory_schema_dirs,
-                        timeout=None,
-                    )
-                    if lock_acquired:
-                        break
-                    retry_count += 1
-                    if max_retries > 0 and retry_count >= max_retries:
-                        raise TimeoutError(
-                            f"[{phase_label}] Failed to acquire memory locks after "
-                            f"{retry_count} retries (max={max_retries})"
-                        )
-                    if retry_interval > 0:
-                        await asyncio.sleep(retry_interval)
+                lock_acquired = await lock_manager.acquire_subtree_batch(
+                    transaction_handle,
+                    memory_schema_dirs,
+                    timeout=None,
+                )
+                if not lock_acquired:
+                    raise TimeoutError(f"[{phase_label}] Failed to acquire memory locks")
 
             provider._transaction_handle = transaction_handle
             orchestrator._transaction_handle = transaction_handle
