@@ -9,8 +9,10 @@ import pytest
 import yaml
 
 from openviking.session.memory.dataclass import (
+    LinkType,
     MemoryField,
     MemoryTypeSchema,
+    WikiLink,
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
@@ -221,6 +223,22 @@ class TestSchemaModelGenerator:
             assert "custom_field" in model.model_fields
             assert "memory_type" in model.model_fields
             assert "uri" in model.model_fields
+
+
+class TestWikiLink:
+    def test_invalid_link_type_falls_back_to_related_to(self):
+        link = WikiLink.model_validate(
+            {
+                "f": 1,
+                "t": 2,
+                "link_type": "inspired",
+                "weight": 0.7,
+                "match_text": "memory",
+                "description": "derived by model",
+            }
+        )
+
+        assert link.link_type == LinkType.RELATED_TO
 
 
 class TestSchemaPromptGenerator:

@@ -55,6 +55,18 @@ class WikiLink(BaseModel):
     Invalid links (null f/t) are filtered in _resolve_links.
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_link_type(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_link_type = data.get("link_type")
+            if raw_link_type is not None:
+                try:
+                    data["link_type"] = LinkType(raw_link_type)
+                except (ValueError, TypeError):
+                    data["link_type"] = LinkType.RELATED_TO
+        return data
+
     f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
         ..., description="From page_id. Use the page_id from the item's 'page_id' field."
     )
@@ -304,12 +316,20 @@ class FaultTolerantBaseModel(BaseModel):
         - str -> int/float (目标是数字)
         - str/dict -> list (目标是 list)
         - list 元素类型容错
+        - 非法 LinkType -> related_to
         """
         origin_type = cls.get_origin_type(field_type)
 
         # json_repair 会把 None 转换成 'None'
         if value == "None" and origin_type is not str:
             return None
+
+        if isinstance(origin_type, type) and issubclass(origin_type, Enum):
+            if origin_type is LinkType:
+                try:
+                    return origin_type(value)
+                except (ValueError, TypeError):
+                    return LinkType.RELATED_TO
 
         if origin_type is str:
             return cls.any_to_str(value)

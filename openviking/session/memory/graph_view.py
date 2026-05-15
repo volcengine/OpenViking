@@ -56,6 +56,17 @@ class MemoryGraph:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
 
+    @staticmethod
+    def _build_content_preview(content: str, limit: int = 600) -> str:
+        text = (content or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "…"
+
+    @staticmethod
+    def _is_content_truncated(content: str, limit: int = 600) -> bool:
+        return len((content or "").strip()) > limit
+
     async def _collect_graph_data(
         self,
         space_uris: List[str],
@@ -105,6 +116,8 @@ class MemoryGraph:
                     "label": label,
                     "memory_type": memory_type,
                     "category": category,
+                    "content_preview": self._build_content_preview(mf.content),
+                    "content_truncated": self._is_content_truncated(mf.content),
                 }
 
                 for link_data in mf.links:
@@ -191,8 +204,19 @@ class MemoryGraph:
 
 
 def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
-    nodes_json = json.dumps(nodes, ensure_ascii=False)
-    edges_json = json.dumps(edges, ensure_ascii=False)
+    elements = [
+        {"data": node}
+        for node in nodes
+    ] + [
+        {
+            "data": {
+                "id": f"edge-{idx}",
+                **edge,
+            }
+        }
+        for idx, edge in enumerate(edges)
+    ]
+    elements_json = json.dumps(elements, ensure_ascii=False)
     type_colors_json = json.dumps(TYPE_COLORS)
     link_styles_json = json.dumps(LINK_STYLES)
 
@@ -203,156 +227,172 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Memory Graph</title>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ background: #1a1a2e; font-family: -apple-system, sans-serif; overflow: hidden; }}
-  #tooltip {{
-    position: absolute; display: none; background: rgba(30,30,50,0.95);
-    border: 1px solid #444; border-radius: 6px; padding: 8px 12px;
-    color: #eee; font-size: 12px; max-width: 320px; pointer-events: none; z-index: 10;
-  }}
-  #tooltip .tt-label {{ font-weight: bold; font-size: 14px; margin-bottom: 4px; }}
-  #tooltip .tt-type {{ color: #888; margin-bottom: 2px; }}
-  #tooltip .tt-uri {{ color: #666; font-size: 10px; word-break: break-all; }}
-  #legend {{
-    position: absolute; top: 12px; right: 12px; background: rgba(30,30,50,0.9);
-    border: 1px solid #444; border-radius: 6px; padding: 10px 14px; color: #ccc;
-    font-size: 11px;
-  }}
-  #legend h4 {{ margin-bottom: 6px; font-size: 13px; }}
-  .legend-item {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
-  .legend-dot {{ width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }}
-  .legend-line {{ width: 20px; height: 2px; flex-shrink: 0; }}
-  #stats {{
-    position: absolute; bottom: 12px; left: 12px; color: #666; font-size: 11px;
-  }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; }}
+  #app {{ display: grid; grid-template-columns: 1fr 320px; height: 100vh; }}
+  #cy {{ width: 100%; height: 100vh; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 60%); }}
+  #sidebar {{ border-left: 1px solid #334155; background: rgba(15, 23, 42, 0.96); padding: 16px; overflow: auto; }}
+  #sidebar h3 {{ margin: 0 0 12px; font-size: 16px; }}
+  #sidebar .muted {{ color: #94a3b8; font-size: 12px; }}
+  #sidebar .block {{ margin-top: 14px; padding-top: 14px; border-top: 1px solid #1e293b; }}
+  #sidebar pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: #cbd5e1; }}
+  #legend {{ position: fixed; left: 16px; top: 16px; z-index: 10; background: rgba(15, 23, 42, 0.92); border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; max-width: 280px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }}
+  #legend h4 {{ margin: 0 0 8px; font-size: 13px; }}
+  .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; color: #cbd5e1; }}
+  .legend-chip {{ width: 12px; height: 12px; border-radius: 4px; flex: 0 0 12px; }}
+  .legend-line {{ width: 22px; height: 3px; border-radius: 999px; flex: 0 0 22px; }}
+  #tooltip {{ position: fixed; display: none; max-width: 420px; pointer-events: none; z-index: 20; background: rgba(15,23,42,0.96); border: 1px solid #475569; border-radius: 12px; padding: 12px 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.35); }}
+  #tooltip .title {{ font-weight: 600; margin-bottom: 4px; }}
+  #tooltip .meta {{ font-size: 12px; color: #94a3b8; margin-bottom: 8px; }}
+  #tooltip .desc {{ font-size: 12px; line-height: 1.5; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }}
 </style>
+<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
 </head>
 <body>
-<div id="tooltip"><div class="tt-label"></div><div class="tt-type"></div><div class="tt-uri"></div></div>
 <div id="legend"></div>
-<div id="stats"></div>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<div id="tooltip"><div class="title"></div><div class="meta"></div><div class="desc"></div></div>
+<div id="app">
+  <div id="cy"></div>
+  <aside id="sidebar">
+    <h3>Memory Graph</h3>
+    <div class="muted">Hover to preview. Click a node to focus its neighbors.</div>
+    <div class="block">
+      <div id="detail-title">No selection</div>
+      <div id="detail-meta" class="muted"></div>
+      <pre id="detail-content">Move the mouse over a node or edge to inspect it.</pre>
+    </div>
+  </aside>
+</div>
 <script>
-const nodes = {nodes_json};
-const edges = {edges_json};
+const elements = {elements_json};
 const typeColors = {type_colors_json};
 const linkStyles = {link_styles_json};
-
-const W = window.innerWidth, H = window.innerHeight;
 const tooltip = document.getElementById('tooltip');
-const legend = document.getElementById('legend');
-const stats = document.getElementById('stats');
+const detailTitle = document.getElementById('detail-title');
+const detailMeta = document.getElementById('detail-meta');
+const detailContent = document.getElementById('detail-content');
 
-const svg = d3.select('body').append('svg').attr('width', W).attr('height', H);
-const g = svg.append('g');
-svg.call(d3.zoom().scaleExtent([0.1, 8]).on('zoom', e => g.attr('transform', e.transform)));
-
-// Arrow markers per link type
-const linkTypes = [...new Set(edges.map(e => e.link_type))];
-const defs = svg.append('defs');
-linkTypes.forEach(lt => {{
-  const style = linkStyles[lt] || {{color:'#999',dash:'none'}};
-  defs.append('marker')
-    .attr('id', 'arrow-' + lt)
-    .attr('viewBox', '0 -5 10 10')
-    .attr('refX', 20).attr('refY', 0)
-    .attr('markerWidth', 6).attr('markerHeight', 6)
-    .attr('orient', 'auto')
-    .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', style.color);
+const cy = cytoscape({{
+  container: document.getElementById('cy'),
+  elements,
+  style: [
+    {{
+      selector: 'node',
+      style: {{
+        'shape': 'round-rectangle',
+        'background-color': ele => typeColors[ele.data('memory_type')] || '#64748b',
+        'label': 'data(label)',
+        'color': '#e2e8f0',
+        'font-size': 11,
+        'text-wrap': 'wrap',
+        'text-max-width': 120,
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'width': 120,
+        'height': 42,
+        'padding': '10px',
+        'border-width': 2,
+        'border-color': '#0f172a'
+      }}
+    }},
+    {{
+      selector: 'edge',
+      style: {{
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'line-color': ele => (linkStyles[ele.data('link_type')] || {{color:'#94a3b8'}}).color,
+        'target-arrow-color': ele => (linkStyles[ele.data('link_type')] || {{color:'#94a3b8'}}).color,
+        'line-style': ele => (linkStyles[ele.data('link_type')] || {{dash:'none'}}).dash === 'none' ? 'solid' : 'dashed',
+        'width': ele => Math.max(2, Number(ele.data('weight') || 1) * 4),
+        'opacity': 0.85
+      }}
+    }},
+    {{
+      selector: '.faded',
+      style: {{ 'opacity': 0.12 }}
+    }},
+    {{
+      selector: '.highlighted',
+      style: {{ 'opacity': 1, 'z-index': 999 }}
+    }}
+  ],
+  layout: {{ name: 'cose', animate: false, padding: 36 }}
 }});
 
-// Simulation
-const simulation = d3.forceSimulation(nodes)
-  .force('link', d3.forceLink(edges).id(d => d.id).distance(80).strength(0.5))
-  .force('charge', d3.forceManyBody().strength(-200))
-  .force('center', d3.forceCenter(W/2, H/2))
-  .force('collision', d3.forceCollide().radius(18));
-
-// Edges
-const link = g.append('g').selectAll('line')
-  .data(edges).join('line')
-  .attr('stroke', d => (linkStyles[d.link_type]||{{}}).color || '#555')
-  .attr('stroke-width', d => Math.max(1, d.weight * 2.5))
-  .attr('stroke-dasharray', d => (linkStyles[d.link_type]||{{}}).dash || 'none')
-  .attr('marker-end', d => 'url(#arrow-' + d.link_type + ')')
-  .attr('opacity', 0.6);
-
-// Nodes
-const node = g.append('g').selectAll('circle')
-  .data(nodes).join('circle')
-  .attr('r', d => {{
-    const deg = edges.filter(e => e.source.id === d.id || e.target.id === d.id).length;
-    return 6 + Math.min(deg * 1.5, 16);
-  }})
-  .attr('fill', d => typeColors[d.memory_type] || '#636e72')
-  .attr('stroke', '#2d3436').attr('stroke-width', 1.5)
-  .call(d3.drag()
-    .on('start', (e,d) => {{ if(!e.active) simulation.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }})
-    .on('drag', (e,d) => {{ d.fx=e.x; d.fy=e.y; }})
-    .on('end', (e,d) => {{ if(!e.active) simulation.alphaTarget(0); d.fx=null; d.fy=null; }})
-  );
-
-// Labels
-const label = g.append('g').selectAll('text')
-  .data(nodes).join('text')
-  .text(d => d.label.length > 20 ? d.label.slice(0,18)+'…' : d.label)
-  .attr('font-size', 10).attr('fill', '#ccc')
-  .attr('text-anchor', 'middle').attr('dy', -14)
-  .attr('pointer-events', 'none');
-
-// Hover highlight
-node.on('mouseover', (e, d) => {{
-  tooltip.style.display = 'block';
-  tooltip.querySelector('.tt-label').textContent = d.label;
-  tooltip.querySelector('.tt-type').textContent = d.memory_type ? '[' + d.memory_type + ']' + (d.category ? ' ' + d.category : '') : '';
-  tooltip.querySelector('.tt-uri').textContent = d.uri;
-  const connected = new Set([d.id]);
-  edges.forEach(e => {{
-    if (e.source.id === d.id) connected.add(e.target.id);
-    if (e.target.id === d.id) connected.add(e.source.id);
-  }});
-  node.attr('opacity', n => connected.has(n.id) ? 1 : 0.15);
-  link.attr('opacity', e => (e.source.id === d.id || e.target.id === d.id) ? 0.9 : 0.05);
-  label.attr('opacity', n => connected.has(n.id) ? 1 : 0.1);
-}})
-.on('mousemove', e => {{
-  tooltip.style.left = (e.pageX + 12) + 'px';
-  tooltip.style.top = (e.pageY - 28) + 'px';
-}})
-.on('mouseout', () => {{
-  tooltip.style.display = 'none';
-  node.attr('opacity', 1);
-  link.attr('opacity', 0.6);
-  label.attr('opacity', 1);
-}});
-
-// Tick
-simulation.on('tick', () => {{
-  link.attr('x1', d=>d.source.x).attr('y1', d=>d.source.y)
-      .attr('x2', d=>d.target.x).attr('y2', d=>d.target.y);
-  node.attr('cx', d=>d.x).attr('cy', d=>d.y);
-  label.attr('x', d=>d.x).attr('y', d=>d.y);
-}});
-
-// Legend
-let legendHtml = '<h4>Nodes (memory_type)</h4>';
-const usedTypes = [...new Set(nodes.map(n => n.memory_type).filter(Boolean))];
-usedTypes.forEach(t => {{
-  legendHtml += '<div class="legend-item"><div class="legend-dot" style="background:' +
-    (typeColors[t]||'#636e72') + '"></div>' + t + '</div>';
-}});
-const usedLinkTypes = [...new Set(edges.map(e => e.link_type).filter(Boolean))];
-if (usedLinkTypes.length) {{
-  legendHtml += '<h4 style="margin-top:8px">Edges (link_type)</h4>';
-  usedLinkTypes.forEach(lt => {{
-    const s = linkStyles[lt] || {{color:'#999',dash:'none'}};
-    legendHtml += '<div class="legend-item"><div class="legend-line" style="background:' +
-      s.color + '"></div>' + lt + '</div>';
-  }});
+function renderLegend() {{
+  const legend = document.getElementById('legend');
+  const typeItems = Object.entries(typeColors).map(([k, v]) => `<div class="legend-item"><span class="legend-chip" style="background:${{v}}"></span><span>${{k}}</span></div>`).join('');
+  const edgeItems = Object.entries(linkStyles).map(([k, v]) => `<div class="legend-item"><span class="legend-line" style="background:${{v.color}}"></span><span>${{k}}</span></div>`).join('');
+  legend.innerHTML = `<h4>Memory Types</h4>${{typeItems}}<h4 style="margin-top:12px;">Link Types</h4>${{edgeItems}}`;
 }}
-legend.innerHTML = legendHtml;
 
-stats.textContent = nodes.length + ' nodes · ' + edges.length + ' edges';
+function showTooltip(evt, title, meta, desc) {{
+  tooltip.style.display = 'block';
+  tooltip.querySelector('.title').textContent = title || '';
+  tooltip.querySelector('.meta').textContent = meta || '';
+  tooltip.querySelector('.desc').textContent = desc || '';
+  tooltip.style.left = (evt.originalEvent.clientX + 16) + 'px';
+  tooltip.style.top = (evt.originalEvent.clientY + 16) + 'px';
+}}
+
+function hideTooltip() {{
+  tooltip.style.display = 'none';
+}}
+
+function showNodeDetails(node) {{
+  detailTitle.textContent = node.data('label') || node.id();
+  detailMeta.textContent = `${{node.data('memory_type') || 'unknown'}} · ${{node.data('uri') || ''}}`;
+  detailContent.textContent = node.data('content_preview') || '(empty)';
+  if (node.data('content_truncated')) {{
+    detailContent.textContent += '\\n\\n[preview truncated]';
+  }}
+}}
+
+function showEdgeDetails(edge) {{
+  detailTitle.textContent = edge.data('link_type') || 'relation';
+  detailMeta.textContent = `weight=${{edge.data('weight')}}`;
+  detailContent.textContent = edge.data('description') || '(no description)';
+}}
+
+function focusNeighborhood(node) {{
+  cy.elements().addClass('faded').removeClass('highlighted');
+  const neighborhood = node.closedNeighborhood();
+  neighborhood.removeClass('faded').addClass('highlighted');
+}}
+
+cy.on('mouseover', 'node', evt => {{
+  const node = evt.target;
+  const meta = `${{node.data('memory_type') || 'unknown'}} · ${{node.data('uri') || ''}}`;
+  let desc = node.data('content_preview') || '(empty)';
+  if (node.data('content_truncated')) desc += '\\n\\n[preview truncated]';
+  showTooltip(evt, node.data('label') || node.id(), meta, desc);
+  showNodeDetails(node);
+}});
+
+cy.on('mouseover', 'edge', evt => {{
+  const edge = evt.target;
+  const meta = `${{edge.data('link_type')}} · weight=${{edge.data('weight')}}`;
+  showTooltip(evt, edge.data('description') || edge.data('link_type'), meta, edge.data('description') || '(no description)');
+  showEdgeDetails(edge);
+}});
+
+cy.on('mousemove', 'node, edge', evt => {{
+  tooltip.style.left = (evt.originalEvent.clientX + 16) + 'px';
+  tooltip.style.top = (evt.originalEvent.clientY + 16) + 'px';
+}});
+
+cy.on('mouseout', 'node, edge', () => hideTooltip());
+cy.on('tap', 'node', evt => focusNeighborhood(evt.target));
+cy.on('tap', evt => {{
+  if (evt.target === cy) {{
+    cy.elements().removeClass('faded highlighted');
+    detailTitle.textContent = 'No selection';
+    detailMeta.textContent = '';
+    detailContent.textContent = 'Move the mouse over a node or edge to inspect it.';
+  }}
+}});
+
+renderLegend();
 </script>
 </body>
 </html>"""
