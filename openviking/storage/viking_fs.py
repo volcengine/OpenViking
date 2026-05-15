@@ -1040,7 +1040,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
-        entries = await self.tree(uri, node_limit=1000000, ctx=ctx)
+        entries = await self.tree(uri, node_limit=1000000, level_limit=None, ctx=ctx)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:

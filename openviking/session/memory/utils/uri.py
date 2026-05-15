@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 import jinja2
 
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperations
+from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.utils.model import model_to_dict
 from openviking_cli.utils import get_logger
@@ -240,9 +241,27 @@ def supplement_operation_uris(
     extract_context: ExtractContext = None,
     isolation_handler: MemoryIsolationHandler = None,
 ):
-
     logger.info(f"[supplement_operation_uris] isolation_handler: {isolation_handler}")
+    page_id_map = getattr(extract_context, "page_id_map", None) if extract_context is not None else None
+
     for operation in operations.upsert_operations:
+        if operation.page_id is not None and page_id_map is not None:
+            resolved_uri = page_id_map.resolve(operation.page_id)
+            if resolved_uri:
+                operation.uris = [resolved_uri]
+                old_file = operation.old_memory_file_content
+                if old_file is not None:
+                    memory_type_schema = registry.get(operation.memory_type)
+                    immutable_fields = {
+                        field.name
+                        for field in memory_type_schema.fields
+                        if field.merge_op != MergeOp.PATCH
+                    }
+                    for field_name in immutable_fields:
+                        if field_name in old_file.extra_fields:
+                            operation.memory_fields[field_name] = old_file.extra_fields[field_name]
+                continue
+
         memory_type_schema = registry.get(operation.memory_type)
         uris = isolation_handler.calculate_memory_uris(
             memory_type_schema=memory_type_schema,

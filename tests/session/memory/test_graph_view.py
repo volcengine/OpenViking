@@ -43,7 +43,7 @@ def test_render_graph_html_embeds_vis_network_viewer_metadata():
 def test_render_graph_html_omits_header_copy():
     html = _render_graph_html([], [])
 
-    assert "Memory Graph" not in html
+    assert "<h3>Memory Graph</h3>" not in html
     assert "Hover to preview. Click a node to focus its neighbors." not in html
 
 
@@ -51,6 +51,7 @@ def test_render_graph_html_stops_physics_after_stabilization():
     html = _render_graph_html([], [])
 
     assert "network.once('stabilized'" in html
+    assert "network.fit({ animation: false, padding: 80 });" in html
     assert "network.setOptions({ physics: false })" in html
 
 

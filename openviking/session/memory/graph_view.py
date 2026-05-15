@@ -463,6 +463,7 @@ function applyFilter(shouldFit = true) {{
 }}
 
 network.once('stabilized', () => {{
+  network.fit({{ animation: false, padding: 80 }});
   network.setOptions({{ physics: false }});
 }});
 

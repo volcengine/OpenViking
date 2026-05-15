@@ -114,6 +114,61 @@ class TestMemoryUpdater:
 
         assert updater._registry == registry
 
+    def test_page_id_edit_keeps_existing_uri_and_identity_fields(self):
+        """Existing page_id edits should keep the read page URI and immutable identity."""
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.register(
+            MemoryTypeSchema(
+                memory_type="entities",
+                description="entity memory",
+                directory="viking://user/{{ user_space }}/memories/entities",
+                filename_template="{{ name }}.md",
+                fields=[
+                    MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                    MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+                ],
+            )
+        )
+
+        existing_uri = "viking://user/alice/memories/entities/Melanie.md"
+        old_file = MemoryFile(
+            uri=existing_uri,
+            content="old content",
+            memory_type="entities",
+            extra_fields={"name": "Melanie"},
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=old_file,
+            memory_fields={"name": "WrongName", "content": "new content"},
+            memory_type="entities",
+            uris=[],
+            page_id=7,
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+        )
+        isolation_handler = MagicMock()
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://user/alice/memories/entities/WrongName.md"
+        ]
+        extract_context = SimpleNamespace(page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri))
+
+        from openviking.session.memory.utils.uri import supplement_operation_uris
+
+        supplement_operation_uris(
+            operations=operations,
+            registry=registry,
+            extract_context=extract_context,
+            isolation_handler=isolation_handler,
+        )
+
+        assert operation.uris == [existing_uri]
+        assert operation.memory_fields["name"] == "Melanie"
+        assert operation.memory_fields["content"] == "new content"
+        isolation_handler.calculate_memory_uris.assert_not_called()
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("policy", "schema_directory", "resolved_uri", "expected_directory", "memory_type"),
