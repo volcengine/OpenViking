@@ -15,40 +15,82 @@ def test_feedback_collector_exports_summary_and_channel_gauges(
     sessions_dir.mkdir(parents=True)
 
     (sessions_dir / "cli__default__session-1.jsonl").write_text(
-        json.dumps(
-            {
-                "_type": "metadata",
-                "session_key": "cli__default__session-1",
-                "updated_at": "2026-05-01T10:00:00",
-                "metadata": {
-                    "feedback_events": [{"response_id": "resp-1", "feedback_type": "thumb_up"}],
-                    "response_outcomes": {
-                        "resp-1": {"outcome_label": "positive_feedback"},
-                        "resp-2": {"outcome_label": "resolved"},
-                    },
-                },
-            }
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "_type": "metadata",
+                        "session_key": "cli__default__session-1",
+                        "updated_at": "2026-05-01T10:00:00",
+                        "metadata": {
+                            "feedback_events": [
+                                {"response_id": "resp-1", "feedback_type": "thumb_up"}
+                            ],
+                            "response_outcomes": {
+                                "resp-1": {"outcome_label": "positive_feedback"},
+                                "resp-2": {"outcome_label": "resolved"},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 1",
+                        "response_id": "resp-1",
+                        "timestamp": "2026-05-01T10:00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 2",
+                        "response_id": "resp-2",
+                        "timestamp": "2026-05-01T10:01:00",
+                    }
+                ),
+            ]
         )
         + "\n",
         encoding="utf-8",
     )
     (sessions_dir / "bot_api__demo__session-2.jsonl").write_text(
-        json.dumps(
-            {
-                "_type": "metadata",
-                "session_key": "bot_api__demo__session-2",
-                "updated_at": "2026-05-03T10:00:00",
-                "metadata": {
-                    "feedback_events": [
-                        {"response_id": "resp-3", "feedback_type": "thumb_down"},
-                        {"response_id": "resp-3", "feedback_type": "thumb_down"},
-                    ],
-                    "response_outcomes": {
-                        "resp-3": {"outcome_label": "negative_feedback"},
-                        "resp-4": {"outcome_label": "reasked"},
-                    },
-                },
-            }
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "_type": "metadata",
+                        "session_key": "bot_api__demo__session-2",
+                        "updated_at": "2026-05-03T10:00:00",
+                        "metadata": {
+                            "feedback_events": [
+                                {"response_id": "resp-3", "feedback_type": "thumb_down"},
+                                {"response_id": "resp-3", "feedback_type": "thumb_down"},
+                            ],
+                            "response_outcomes": {
+                                "resp-3": {"outcome_label": "negative_feedback"},
+                                "resp-4": {"outcome_label": "reasked"},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 3",
+                        "response_id": "resp-3",
+                        "timestamp": "2026-05-03T10:00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 4",
+                        "response_id": "resp-4",
+                        "timestamp": "2026-05-03T10:01:00",
+                    }
+                ),
+            ]
         )
         + "\n",
         encoding="utf-8",
@@ -77,16 +119,32 @@ def test_feedback_collector_reuses_last_values_with_valid_zero_on_failure(
     sessions_dir.mkdir(parents=True)
 
     (sessions_dir / "cli__default__session-1.jsonl").write_text(
-        json.dumps(
-            {
-                "_type": "metadata",
-                "session_key": "cli__default__session-1",
-                "updated_at": "2026-05-01T10:00:00",
-                "metadata": {
-                    "feedback_events": [{"response_id": "resp-1", "feedback_type": "thumb_up"}],
-                    "response_outcomes": {"resp-1": {"outcome_label": "positive_feedback"}},
-                },
-            }
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "_type": "metadata",
+                        "session_key": "cli__default__session-1",
+                        "updated_at": "2026-05-01T10:00:00",
+                        "metadata": {
+                            "feedback_events": [
+                                {"response_id": "resp-1", "feedback_type": "thumb_up"}
+                            ],
+                            "response_outcomes": {
+                                "resp-1": {"outcome_label": "positive_feedback"}
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 1",
+                        "response_id": "resp-1",
+                        "timestamp": "2026-05-01T10:00:00",
+                    }
+                ),
+            ]
         )
         + "\n",
         encoding="utf-8",

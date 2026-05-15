@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -185,12 +186,19 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     assert payload["session_id"] == "cli__default__session-1"
     assert payload["channel"] == "cli__default"
     assert payload["session_type"] == "cli"
-    assert payload["sender_id"] == "user-1"
-    assert payload["content"] == "final answer"
-    assert payload["token_usage"] == {"prompt_tokens": 12, "completion_tokens": 8}
-    assert payload["iteration"] == 3
+    assert payload["user_id"] == "user-1"
+    assert payload["prompt_tokens"] == 12
+    assert payload["completion_tokens"] == 8
+    assert payload["total_tokens"] == 20
+    assert payload["iteration_count"] == 3
     assert payload["tool_count"] == 2
     assert payload["tools_used_names"] == ["search_docs", "fetch_page"]
-    assert payload["has_tools"] is True
-    assert payload["time_cost"] >= 0
+    assert payload["response_length"] == len("final answer")
+    assert payload["has_reasoning"] is False
+    assert payload["time_cost_ms"] >= 0
+    assert payload["created_at"]
     assert fake_langfuse.calls == [(response.response_id, payload)]
+
+    session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
+    metadata = json.loads(session_path.read_text().splitlines()[0])
+    assert metadata["metadata"]["response_facts"][response.response_id] == payload

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MessageRole(str, Enum):
@@ -92,6 +92,13 @@ class FeedbackRequest(BaseModel):
         default=None,
         description="Bot channel ID for multi-channel routing (optional)",
     )
+
+    @model_validator(mode="after")
+    def validate_rating_feedback(self) -> "FeedbackRequest":
+        """Require a numeric score when the client submits rating feedback."""
+        if self.feedback_type == FeedbackType.RATING and self.feedback_score is None:
+            raise ValueError("feedback_score is required when feedback_type is rating")
+        return self
 
 
 class FeedbackResponse(BaseModel):

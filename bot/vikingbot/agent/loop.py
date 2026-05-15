@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from contextlib import AsyncExitStack
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -674,6 +675,17 @@ class AgentLoop:
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
 
+            response_completed = self._build_response_completed_payload(
+                msg=msg,
+                response_id=response_id,
+                final_content=final_content,
+                final_reasoning_content=final_reasoning_content,
+                token_usage=token_usage,
+                time_cost_seconds=time.time() - start_time,
+                iteration=iteration,
+                tools_used=tools_used,
+            )
+
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
@@ -686,22 +698,8 @@ class AgentLoop:
                     sender_id=msg.sender_id,
                     reasoning_content=final_reasoning_content,
                 )
+                session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
-
-            time_cost = round(time.time() - start_time, 2)
-            if tools_used is not None:
-                tools_used_names = [tool["tool_name"] for tool in tools_used]
-            else:
-                tools_used_names = []
-            response_completed = self._build_response_completed_payload(
-                msg=msg,
-                response_id=response_id,
-                final_content=final_content,
-                token_usage=token_usage,
-                time_cost=time_cost,
-                iteration=iteration,
-                tools_used_names=tools_used_names,
-            )
             LangfuseClient.get_instance().update_generation_metadata(
                 response_id, response_completed
             )
@@ -723,9 +721,9 @@ class AgentLoop:
                 metadata=response_metadata,
                 response_id=response_id,
                 token_usage=token_usage,
-                time_cost=time_cost,
-                iteration=iteration,
-                tools_used_names=tools_used_names,
+                time_cost=response_completed["time_cost_ms"] / 1000,
+                iteration=response_completed["iteration_count"],
+                tools_used_names=response_completed["tools_used_names"],
             )
         finally:
             long_running_notified = True
@@ -740,25 +738,37 @@ class AgentLoop:
         msg: InboundMessage,
         response_id: str,
         final_content: str,
+        final_reasoning_content: str | None,
         token_usage: dict[str, Any],
-        time_cost: float,
+        time_cost_seconds: float,
         iteration: int,
-        tools_used_names: list[str],
+        tools_used: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Build a stable response fact shared by analytics sinks."""
+        prompt_tokens = int(token_usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(token_usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(token_usage.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+        tools_used_names = [
+            str(tool_name)
+            for tool in (tools_used or [])
+            if (tool_name := tool.get("tool_name")) is not None
+        ]
         return {
             "response_id": response_id,
             "session_id": msg.session_key.safe_name(),
+            "user_id": msg.sender_id,
             "channel": msg.session_key.channel_key(),
             "session_type": msg.session_key.type,
-            "sender_id": msg.sender_id,
-            "content": final_content,
-            "token_usage": token_usage,
-            "time_cost": time_cost,
-            "iteration": iteration,
+            "time_cost_ms": round(time_cost_seconds * 1000),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "iteration_count": iteration,
             "tool_count": len(tools_used_names),
             "tools_used_names": tools_used_names,
-            "has_tools": bool(tools_used_names),
+            "response_length": len(final_content),
+            "created_at": datetime.now().isoformat(),
+            "has_reasoning": bool(final_reasoning_content),
         }
 
     async def _evaluate_previous_response_outcome(

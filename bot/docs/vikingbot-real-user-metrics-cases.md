@@ -34,6 +34,12 @@
 
 建议所有查询都先带上 `valid="1"`。
 
+当前分母口径说明：
+
+1. `responses_total` 统计的是 session JSONL 中所有带 `response_id` 的 assistant 最终回答，不要求这些回答已经进入 `response_outcomes`。
+2. `feedback_coverage`、`positive_feedback_rate`、`negative_feedback_rate`、`reask_rate`、`one_turn_resolution_rate` 都是基于 `responses_total` 重新聚合出来的快照比例。
+3. `thumbs_up_rate`、`thumbs_down_rate` 仍然只在显式 feedback 样本内部计算，因此它们的分母是 `feedback_total`，不是 `responses_total`。
+
 ## 2. 环境前提
 
 需要先确认：
@@ -165,7 +171,7 @@ openviking_feedback_one_turn_resolution_rate{valid="1"}
 
 1. 会变：`events_total`、`thumb_up_total`、`responses_with_feedback_total`、`positive_outcomes_total` 通常各增加 `1`；如果你先看过基线，再在一次 scrape 之后复查，这几个 total 最容易确认。
 2. 不该变：`thumb_down_total`、`negative_outcomes_total`、`reasked_outcomes_total`、`follow_up_without_feedback_outcomes_total` 在这个场景通常不应直接增加，因为当前动作是对同一条 response 提交显式正向反馈，而不是差评或追问。
-3. 可能不明显：`coverage`、`thumbs_up_rate`、`one_turn_resolution_rate` 通常会上升或保持不变，但如果历史 response 和历史 feedback 已经很多，显示上也可能接近不变；其中 `one_turn_resolution_rate` 会受当前实现把 `resolved + positive_feedback` 都算入 one-turn resolution 的影响。
+3. 可能不明显：`coverage`、`thumbs_up_rate`、`one_turn_resolution_rate` 通常会上升或保持不变，但如果历史 response 和历史 feedback 已经很多，显示上也可能接近不变；其中 `thumbs_up_rate` 的分母是 `feedback_total`，`one_turn_resolution_rate` 的分母是 `responses_total`，并且当前实现会把 `resolved + positive_feedback` 都算入 one-turn resolution。
 
 ## 5. 案例 3：用户点踩，验证负向反馈链路
 
@@ -227,7 +233,7 @@ openviking_feedback_negative_feedback_rate{valid="1"}
 
 1. 会变：`events_total`、`thumb_down_total`、`negative_outcomes_total` 通常各增加 `1`；如果基线样本不多，这几个 total 的跳变会比较直观。
 2. 不该变：`thumb_up_total`、`positive_outcomes_total`、`reasked_outcomes_total`、`resolved_outcomes_total`、`follow_up_without_feedback_outcomes_total` 在这个场景通常不应直接增加，因为这里只提交了显式负向反馈，没有发生追问或静默结束。
-3. 可能不明显：`thumbs_down_rate`、`negative_feedback_rate` 通常会上升或保持不变，但如果历史样本很多，比例变化可能很小；因此仍然优先看 total 是否按预期跳变。
+3. 可能不明显：`thumbs_down_rate`、`negative_feedback_rate` 通常会上升或保持不变，但如果历史样本很多，比例变化可能很小；其中 `thumbs_down_rate` 的分母是 `feedback_total`，`negative_feedback_rate` 的分母是 `responses_total`，因此仍然优先看 total 是否按预期跳变。
 
 ## 6. 案例 4：用户马上追问，验证 `reasked`
 
@@ -290,7 +296,7 @@ openviking_feedback_reask_rate{valid="1"}
 预期结果：
 
 1. `reasked_outcomes_total` 增加 `1`。
-2. `reask_rate` 不下降，通常会上升或保持不变。
+2. `reask_rate` 不下降，通常会上升或保持不变；它的分母是全量历史 `responses_total`，不是已经写入 outcome 的回答子集。
 3. `responses_total` 通常还会因为第二次 `/bot/v1/chat` 再增加 `1`，但真正被打上 `reasked` 的是第一轮 assistant response，而不是第二轮新生成的 response。
 4. `events_total`、`thumb_up_total`、`thumb_down_total`、`responses_with_feedback_total` 通常不变，因为这个场景没有显式调用 `/bot/v1/feedback`。
 5. `positive_outcomes_total`、`negative_outcomes_total`、`resolved_outcomes_total`、`follow_up_without_feedback_outcomes_total` 通常不应因为这一步直接增加；如果你看到增长，通常说明混入了其他验证样本，或第二次提问已经越过 10 分钟窗口而被判成了别的 outcome。
@@ -396,7 +402,7 @@ openviking_feedback_one_turn_resolution_rate{valid="1"}
 
 预期结果：
 
-1. 会变：`resolved_outcomes_total` 有机会增加 `1`，`one_turn_resolution_rate` 也可能上升或保持不变。
+1. 会变：`resolved_outcomes_total` 有机会增加 `1`，`one_turn_resolution_rate` 也可能上升或保持不变；当前该 rate 的分母是全量 `responses_total`。
 2. 不该变：`events_total`、`thumb_up_total`、`thumb_down_total`、`responses_with_feedback_total` 在这个场景通常不变，因为既没有显式 feedback，也没有后续追问；`negative_outcomes_total`、`reasked_outcomes_total`、`follow_up_without_feedback_outcomes_total` 也通常不应直接增加。
 3. 可能不明显：`resolved` 相比 `thumb_up`、`thumb_down`、`reasked` 更适合作为补充验证项，因为它依赖后续 outcome 评估时机，出现时间和幅度都不如显式反馈稳定；因此看到短时间内没有立刻跳变，不一定表示链路异常。
 
@@ -485,8 +491,10 @@ openviking_feedback_channel_one_turn_resolution_rate{channel="bot_api__demo",val
 5. 10 分钟后 follow-up 且无 feedback 时，`openviking_feedback_follow_up_without_feedback_outcomes_total` 增加。
 6. 如环境启用了多 channel，`openviking_feedback_channel_*` 会按目标 channel 出现并跳变。
 
+补充判定原则：如果 rate 没有明显跳变，但对应 total 已按预期变化，通常仍可视为链路正常，因为这些 rate 都是对全量历史回答重新聚合的快照值。
+
 ## 12. 相关文档
 
-- `bot/docs/vikingbot-feedback-observability-validation.md`
+- `bot/docs/vikingbot-feedback-observability-design.md`
 - `bot/docs/vikingbot-phase3-outcome-validation-with-openviking-server.md`
 - `docs/zh/guides/12-vikingbot-metrics-validation.md`

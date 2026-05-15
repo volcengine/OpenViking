@@ -254,6 +254,7 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
     try:
         with open(session_path, encoding="utf-8") as f:
             first_line = f.readline().strip()
+            remaining_lines = f.readlines()
     except OSError:
         return None
 
@@ -284,6 +285,7 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
 
     feedback_events = metadata.get("feedback_events", [])
     response_outcomes = metadata.get("response_outcomes", {})
+    response_ids = _collect_response_ids(remaining_lines)
 
     feedback_by_response = {
         event.get("response_id")
@@ -293,7 +295,7 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
 
     metrics: dict[str, Any] = {
         "session_key": session_key,
-        "responses_total": len(response_outcomes),
+        "responses_total": len(response_ids),
         "responses_with_feedback": len(feedback_by_response),
         "feedback_total": 0,
         "thumb_up_total": 0,
@@ -346,18 +348,36 @@ def _finalize_session_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         metrics["thumb_down_total"], metrics["feedback_total"]
     )
     metrics["positive_feedback_rate"] = _safe_ratio(
-        metrics["positive_feedback_total"], metrics["outcomes_total"]
+        metrics["positive_feedback_total"], metrics["responses_total"]
     )
     metrics["negative_feedback_rate"] = _safe_ratio(
-        metrics["negative_feedback_total"], metrics["outcomes_total"]
+        metrics["negative_feedback_total"], metrics["responses_total"]
     )
-    metrics["reask_rate"] = _safe_ratio(metrics["reasked_total"], metrics["outcomes_total"])
+    metrics["reask_rate"] = _safe_ratio(metrics["reasked_total"], metrics["responses_total"])
     metrics["one_turn_resolution_rate"] = _safe_ratio(
         metrics["resolved_total"] + metrics["positive_feedback_total"],
-        metrics["outcomes_total"],
+        metrics["responses_total"],
     )
 
     return metrics
+
+
+def _collect_response_ids(lines: list[str]) -> set[str]:
+    response_ids: set[str] = set()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("role") != "assistant":
+            continue
+        response_id = record.get("response_id")
+        if isinstance(response_id, str) and response_id:
+            response_ids.add(response_id)
+    return response_ids
 
 
 def _merge_feedback_stats(totals: dict[str, Any], session_metrics: dict[str, Any]) -> None:
@@ -446,15 +466,15 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
         "thumbs_up_rate": _safe_ratio(totals["thumb_up_total"], totals["feedback_total"]),
         "thumbs_down_rate": _safe_ratio(totals["thumb_down_total"], totals["feedback_total"]),
         "positive_feedback_rate": _safe_ratio(
-            totals["positive_feedback_total"], totals["outcomes_total"]
+            totals["positive_feedback_total"], totals["responses_total"]
         ),
         "negative_feedback_rate": _safe_ratio(
-            totals["negative_feedback_total"], totals["outcomes_total"]
+            totals["negative_feedback_total"], totals["responses_total"]
         ),
-        "reask_rate": _safe_ratio(totals["reasked_total"], totals["outcomes_total"]),
+        "reask_rate": _safe_ratio(totals["reasked_total"], totals["responses_total"]),
         "one_turn_resolution_rate": _safe_ratio(
             totals["resolved_total"] + totals["positive_feedback_total"],
-            totals["outcomes_total"],
+            totals["responses_total"],
         ),
     }
 
@@ -471,17 +491,17 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
                 channel_totals["thumb_down_total"], channel_totals["feedback_total"]
             ),
             "positive_feedback_rate": _safe_ratio(
-                channel_totals["positive_feedback_total"], channel_totals["outcomes_total"]
+                channel_totals["positive_feedback_total"], channel_totals["responses_total"]
             ),
             "negative_feedback_rate": _safe_ratio(
-                channel_totals["negative_feedback_total"], channel_totals["outcomes_total"]
+                channel_totals["negative_feedback_total"], channel_totals["responses_total"]
             ),
             "reask_rate": _safe_ratio(
-                channel_totals["reasked_total"], channel_totals["outcomes_total"]
+                channel_totals["reasked_total"], channel_totals["responses_total"]
             ),
             "one_turn_resolution_rate": _safe_ratio(
                 channel_totals["resolved_total"] + channel_totals["positive_feedback_total"],
-                channel_totals["outcomes_total"],
+                channel_totals["responses_total"],
             ),
         }
         for channel, channel_totals in sorted(totals["channels"].items())

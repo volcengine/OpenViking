@@ -149,8 +149,11 @@ class OpenAPIChannel(BaseChannel):
             logger.warning("No global config provided, cannot load BotChannels")
             return
 
-        # Get all channel configs
-        channels_config = self._global_config.channels_config
+        # Some tests and lightweight callers only provide gateway settings.
+        channels_config = getattr(self._global_config, "channels_config", None)
+        if channels_config is None:
+            return
+
         all_channel_configs = channels_config.get_all_channels()
 
         for ch_config in all_channel_configs:
