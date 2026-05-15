@@ -363,7 +363,6 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
-| limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**
@@ -704,7 +703,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
-| node_limit | int | 否 | None | 最大搜索节点数 |
+| node_limit | int | 否 | None | 最大返回节点数 |
 | level_limit | int | 否 | 5 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**

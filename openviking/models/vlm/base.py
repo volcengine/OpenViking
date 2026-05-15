@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.utils.model_retry import is_quota_exceeded_api_error
+from openviking.utils.model_retry import classify_api_error, ERROR_CLASS_QUOTA_EXCEEDED, ERROR_CLASS_TRANSIENT
 from openviking.utils.time_utils import format_iso8601
 from openviking_cli.utils import get_logger
 
@@ -254,20 +254,6 @@ class VLMBase(ABC):
         """
         return self._token_tracker.to_dict()
 
-    def get_token_usage_summary(self) -> Dict[str, Any]:
-        """Get token usage summary
-
-        Returns:
-            Dict[str, Any]: Token usage summary
-        """
-        total_usage = self._token_tracker.get_total_usage()
-        return {
-            "total_prompt_tokens": total_usage.prompt_tokens,
-            "total_completion_tokens": total_usage.completion_tokens,
-            "total_tokens": total_usage.total_tokens,
-            "last_updated": format_iso8601(total_usage.last_updated),
-        }
-
     def reset_token_usage(self) -> None:
         """Reset token usage"""
         self._token_tracker.reset()
@@ -374,43 +360,8 @@ class FailoverVLM(VLMBase):
         Returns:
             True if failover should be attempted, False otherwise
         """
-        # Quota-exceeded errors always trigger failover (no point retrying).
-        if is_quota_exceeded_api_error(error):
-            return True
-
-        # Check for common retryable/failover error patterns
-        error_str = str(error).lower()
-
-        # Rate limiting errors
-        rate_limit_patterns = [
-            "rate limit",
-            "ratelimit",
-            "too many requests",
-            "429",
-            "quota",
-        ]
-
-        # Server errors
-        server_error_patterns = [
-            "500",
-            "502",
-            "503",
-            "504",
-            "server error",
-            "service unavailable",
-            "timeout",
-        ]
-
-        # Connection errors
-        connection_patterns = [
-            "connection",
-            "network",
-            "unreachable",
-        ]
-
-        all_patterns = rate_limit_patterns + server_error_patterns + connection_patterns
-
-        return any(pattern in error_str for pattern in all_patterns)
+        error_class = classify_api_error(error)
+        return error_class in (ERROR_CLASS_QUOTA_EXCEEDED, ERROR_CLASS_TRANSIENT)
 
     def _get_completion_with_failover(
         self,
@@ -587,3 +538,39 @@ class FailoverVLM(VLMBase):
     def is_using_backup(self) -> bool:
         """Check if currently using the backup VLM instance."""
         return self._using_backup
+
+    @property
+    def _active_vlm(self) -> VLMBase:
+        """Get the currently active VLM instance."""
+        return self.backup if self._using_backup else self.primary
+
+    def update_token_usage(
+        self,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        duration_seconds: float = 0.0,
+    ) -> None:
+        """Update token usage for the currently active instance."""
+        self._active_vlm.update_token_usage(
+            model_name=model_name,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            duration_seconds=duration_seconds,
+        )
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get combined token usage from both primary and backup instances."""
+        from openviking.models.vlm.token_usage import TokenUsageTracker
+        merged_tracker = TokenUsageTracker.merge(
+            self.primary._token_tracker,
+            self.backup._token_tracker
+        )
+        return merged_tracker.to_dict()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage for both primary and backup instances."""
+        self.primary.reset_token_usage()
+        self.backup.reset_token_usage()

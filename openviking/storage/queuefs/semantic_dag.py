@@ -248,7 +248,7 @@ class SemanticDagExecutor:
         self._parent[dir_uri] = parent_uri
 
         try:
-            children_dirs, file_paths = await self._list_dir(dir_uri)
+            children_dirs, file_paths = await self._list_dir(dir_uri, "_dispatch_dir")
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
             if self._recursive:
@@ -294,12 +294,12 @@ class SemanticDagExecutor:
             elif self._root_done:
                 self._root_done.set()
 
-    async def _list_dir(self, uri: str) -> tuple[list[str], list[str]]:
+    async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
         try:
             entries = await self._viking_fs.ls(uri, ctx=self._ctx)
         except Exception as e:
-            logger.warning(f"Failed to list directory {uri}: {e}")
+            logger.warning(f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}")
             return [], []
 
         children_dirs: List[str] = []
@@ -438,7 +438,7 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
-            target_dirs, target_files = await self._list_dir(target_path)
+            target_dirs, target_files = await self._list_dir(target_path, "_check_dir_children_changed")
             current_file_names = {f.split("/")[-1] for f in current_files}
             target_file_names = {f.split("/")[-1] for f in target_files}
             if current_file_names != target_file_names:

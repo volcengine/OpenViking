@@ -211,3 +211,34 @@ class TokenUsageTracker:
         )
         total = self.get_total_usage()
         return f"TokenUsageTracker(total={total.total_tokens}, models=[{models}])"
+
+    @staticmethod
+    def merge(*trackers: "TokenUsageTracker") -> "TokenUsageTracker":
+        """Merge multiple TokenUsageTracker instances into one.
+
+        Args:
+            *trackers: One or more TokenUsageTracker instances to merge
+
+        Returns:
+            New TokenUsageTracker with merged data
+        """
+        merged = TokenUsageTracker()
+
+        for tracker in trackers:
+            for model_name, model_usage in tracker._usage_by_model.items():
+                for provider_name, provider_usage in model_usage.usage_by_provider.items():
+                    merged.update(
+                        model_name=model_name,
+                        provider=provider_name,
+                        prompt_tokens=provider_usage.prompt_tokens,
+                        completion_tokens=provider_usage.completion_tokens,
+                    )
+                    # Update call count (update() only increments by 1)
+                    if provider_usage.call_count > 1:
+                        merged_model = merged._usage_by_model[model_name]
+                        merged_provider = merged_model.usage_by_provider[provider_name]
+                        merged_provider.call_count = provider_usage.call_count
+                        # Update last_updated
+                        merged_provider.last_updated = provider_usage.last_updated
+
+        return merged

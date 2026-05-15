@@ -17,13 +17,13 @@ PERMANENT_API_ERROR_PATTERNS = (
     "400",
     "401",
     "403",
-    "Forbidden",
-    "Unauthorized",
-    "AccountOverdue",
+    "forbidden",
+    "unauthorized",
+    "accountoverdue",
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
-    "AccountQuotaExceeded",
+    "quotaexceeded", # also 429
     "quota limit",
     "quota exceed",
     "usage quota",
@@ -37,14 +37,14 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "502",
     "503",
     "504",
-    "TooManyRequests",
-    "RateLimit",
-    "RequestBurstTooFast",
+    "toomanyrequests",
+    "ratelimit",
+    "requestbursttoofast",
     "timeout",
-    "Timeout",
-    "ConnectionError",
-    "Connection refused",
-    "Connection reset",
+    "timeout",
+    "connectionerror",
+    "connection refused",
+    "connection reset",
 )
 
 
@@ -65,20 +65,23 @@ def classify_api_error(error: Exception) -> str:
         texts.append(str(error.__cause__))
 
     for text in texts:
+        text_lower = text.lower()
         for pattern in PERMANENT_API_ERROR_PATTERNS:
-            if pattern in text:
+            if pattern in text_lower:
                 return ERROR_CLASS_PERMANENT
 
     # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
     # is classified as quota_exceeded, not transient.
     for text in texts:
+        text_lower = text.lower()
         for pattern in QUOTA_EXCEEDED_PATTERNS:
-            if pattern.lower() in text.lower():
+            if pattern in text_lower:
                 return ERROR_CLASS_QUOTA_EXCEEDED
 
     for text in texts:
+        text_lower = text.lower()
         for pattern in TRANSIENT_API_ERROR_PATTERNS:
-            if pattern in text:
+            if pattern in text_lower:
                 return ERROR_CLASS_TRANSIENT
 
     return ERROR_CLASS_UNKNOWN
