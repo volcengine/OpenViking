@@ -4,6 +4,25 @@
 from openviking.session.memory.graph_view import _render_graph_html
 
 
+def test_render_graph_html_uses_transparent_node_fill_with_typed_borders():
+    nodes = [
+        {
+            "id": "viking://agent/demo/memories/experiences/a.md",
+            "uri": "viking://agent/demo/memories/experiences/a.md",
+            "label": "a",
+            "memory_type": "experiences",
+            "category": "",
+            "content_preview": "hello world",
+            "content_truncated": False,
+        }
+    ]
+
+    html = _render_graph_html(nodes, [])
+
+    assert '"background": "rgba(15, 23, 42, 0)"' in html
+    assert '"border": "#fd79a8"' in html
+
+
 def test_render_graph_html_embeds_vis_network_viewer_metadata():
     nodes = [
         {

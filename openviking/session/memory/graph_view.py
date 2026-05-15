@@ -225,10 +225,10 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
                 "label": node.get("label") or node["id"],
                 "shape": "box",
                 "color": {
-                    "background": color,
+                    "background": "rgba(15, 23, 42, 0)",
                     "border": color,
-                    "highlight": {"background": color, "border": color},
-                    "hover": {"background": color, "border": color},
+                    "highlight": {"background": "rgba(15, 23, 42, 0)", "border": color},
+                    "hover": {"background": "rgba(15, 23, 42, 0)", "border": color},
                 },
                 "font": {"color": "#e2e8f0", "size": 12},
                 "margin": 10,
