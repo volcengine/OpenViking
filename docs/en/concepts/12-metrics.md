@@ -268,7 +268,8 @@ These metrics summarize persisted VikingBot feedback and outcome data at scrape 
 | Metric Family | Type | Common Labels | Meaning |
 |---------------|------|---------------|---------|
 | `openviking_feedback_sessions_scanned_total` | Gauge | `valid` | number of bot sessions scanned for the current snapshot |
-| `openviking_feedback_responses_total` | Gauge | `valid` | total responses included in the snapshot |
+| `openviking_feedback_responses_total` | Gauge | `valid` | total persisted assistant responses included in the snapshot, including legacy responses outside the new observability contract |
+| `openviking_feedback_tracked_responses_total` | Gauge | `valid` | responses covered by the current feedback observability contract (`metadata.feedback_events` or `metadata.response_outcomes`) |
 | `openviking_feedback_responses_with_feedback_total` | Gauge | `valid` | responses that have at least one explicit feedback event |
 | `openviking_feedback_events_total` | Gauge | `valid` | explicit feedback event count |
 | `openviking_feedback_thumb_up_total` | Gauge | `valid` | thumb-up event count |
@@ -278,14 +279,16 @@ These metrics summarize persisted VikingBot feedback and outcome data at scrape 
 | `openviking_feedback_reasked_outcomes_total` | Gauge | `valid` | responses classified as reasked outcomes |
 | `openviking_feedback_resolved_outcomes_total` | Gauge | `valid` | responses classified as resolved outcomes |
 | `openviking_feedback_follow_up_without_feedback_outcomes_total` | Gauge | `valid` | responses followed up without explicit feedback |
-| `openviking_feedback_coverage` | Gauge | `valid` | fraction of responses with explicit feedback |
+| `openviking_feedback_coverage` | Gauge | `valid` | fraction of tracked responses with explicit feedback |
 | `openviking_feedback_thumbs_up_rate` | Gauge | `valid` | fraction of feedback events that are thumbs up |
 | `openviking_feedback_thumbs_down_rate` | Gauge | `valid` | fraction of feedback events that are thumbs down |
-| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | fraction of responses with positive feedback outcomes |
-| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | fraction of responses with negative feedback outcomes |
-| `openviking_feedback_reask_rate` | Gauge | `valid` | fraction of responses that led to reasking |
-| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | fraction of responses resolved in one turn |
+| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | fraction of tracked responses with positive feedback outcomes |
+| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | fraction of tracked responses with negative feedback outcomes |
+| `openviking_feedback_reask_rate` | Gauge | `valid` | fraction of tracked responses that led to reasking |
+| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | fraction of tracked responses resolved in one turn |
 | `openviking_feedback_channel_*` | Gauge | `channel, valid` | per-channel variants of response volume, feedback volume, negative outcomes, reasks, coverage, thumb rates, and one-turn resolution |
+
+For mixed historical data, use `openviking_feedback_tracked_responses_total` as the denominator reference for rate panels. `openviking_feedback_responses_total` is kept to show overall persisted assistant-response volume, including legacy responses that predate the current feedback metadata contract.
 
 Typical usage:
 

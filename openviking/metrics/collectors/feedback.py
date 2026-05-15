@@ -3,16 +3,24 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 
-from vikingbot.config.loader import load_config
-from vikingbot.observability.feedback_stats import compute_feedback_stats
-
 from .base import CollectorConfig, DomainStatsMetricCollector
+
+
+def load_config():
+    module = importlib.import_module("vikingbot.config.loader")
+    return module.load_config()
+
+
+def compute_feedback_stats(*args, **kwargs):
+    module = importlib.import_module("vikingbot.observability.feedback_stats")
+    return module.compute_feedback_stats(*args, **kwargs)
 
 
 @dataclass
@@ -25,6 +33,9 @@ class FeedbackCollector(DomainStatsMetricCollector):
         DOMAIN, "sessions_scanned", unit="total"
     )
     RESPONSES_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "responses", unit="total")
+    TRACKED_RESPONSES_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "tracked_responses", unit="total"
+    )
     RESPONSES_WITH_FEEDBACK_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN, "responses_with_feedback", unit="total"
     )
@@ -65,6 +76,9 @@ class FeedbackCollector(DomainStatsMetricCollector):
     CHANNEL_RESPONSES_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN, "channel_responses", unit="total"
     )
+    CHANNEL_TRACKED_RESPONSES_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "channel_tracked_responses", unit="total"
+    )
     CHANNEL_EVENTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN, "channel_events", unit="total"
     )
@@ -88,6 +102,7 @@ class FeedbackCollector(DomainStatsMetricCollector):
     _SUMMARY_METRICS: ClassVar[tuple[tuple[str, str], ...]] = (
         (SESSIONS_SCANNED_TOTAL, "sessions_scanned"),
         (RESPONSES_TOTAL, "responses_total"),
+        (TRACKED_RESPONSES_TOTAL, "tracked_responses_total"),
         (RESPONSES_WITH_FEEDBACK_TOTAL, "responses_with_feedback"),
         (EVENTS_TOTAL, "feedback_total"),
         (THUMB_UP_TOTAL, "thumb_up_total"),
@@ -108,6 +123,7 @@ class FeedbackCollector(DomainStatsMetricCollector):
 
     _CHANNEL_METRICS: ClassVar[tuple[tuple[str, str], ...]] = (
         (CHANNEL_RESPONSES_TOTAL, "responses_total"),
+        (CHANNEL_TRACKED_RESPONSES_TOTAL, "tracked_responses_total"),
         (CHANNEL_EVENTS_TOTAL, "feedback_total"),
         (CHANNEL_NEGATIVE_OUTCOMES_TOTAL, "negative_feedback_total"),
         (CHANNEL_REASKED_OUTCOMES_TOTAL, "reasked_total"),

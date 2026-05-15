@@ -77,6 +77,7 @@ class MetricsConfig(BaseModel):
     """Metrics subsystem configuration."""
 
     enabled: bool = False
+    bot_data_path: Optional[str] = None
     account_dimension: MetricsAccountDimensionConfig = Field(
         default_factory=MetricsAccountDimensionConfig
     )

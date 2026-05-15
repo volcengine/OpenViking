@@ -161,7 +161,7 @@ def init_metrics_from_server_config(
             max_active_accounts=int(account_dimension.max_active_accounts),
         )
         _registry = registry or MetricRegistry()
-        collector_manager = create_default_collector_manager(app=app, service=service)
+        collector_manager = create_default_collector_manager(app=app, service=service, config=config)
         _event_router = _build_event_router(_registry)
         register_event_subscriber(
             _METRICS_EVENT_SUBSCRIBER,

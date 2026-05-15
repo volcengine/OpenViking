@@ -109,6 +109,7 @@ def test_compute_feedback_stats_aggregates_minimal_metrics(temp_dir):
 
     assert stats["summary"]["sessions_scanned"] == 2
     assert stats["summary"]["responses_total"] == 5
+    assert stats["summary"]["tracked_responses_total"] == 5
     assert stats["summary"]["responses_with_feedback"] == 2
     assert stats["summary"]["feedback_total"] == 3
     assert stats["summary"]["thumb_up_total"] == 1
@@ -574,7 +575,7 @@ def test_build_feedback_stats_display_applies_filters_and_sorting(temp_dir):
     assert "cli__default__session-1" not in display["sessions_markdown"]
 
 
-def test_compute_feedback_stats_counts_all_assistant_responses_in_denominators(temp_dir):
+def test_compute_feedback_stats_preserves_all_assistant_responses_total_but_uses_tracked_denominators(temp_dir):
     sessions_dir = temp_dir / "bot" / "sessions"
     sessions_dir.mkdir(parents=True)
 
@@ -621,15 +622,18 @@ def test_compute_feedback_stats_counts_all_assistant_responses_in_denominators(t
     stats = compute_feedback_stats(temp_dir / "bot", include_sessions=True)
 
     assert stats["summary"]["responses_total"] == 2
+    assert stats["summary"]["tracked_responses_total"] == 1
     assert stats["summary"]["outcomes_total"] == 1
     assert stats["summary"]["responses_with_feedback"] == 1
-    assert stats["summary"]["feedback_coverage"] == 0.5
-    assert stats["summary"]["positive_feedback_rate"] == 0.5
-    assert stats["summary"]["one_turn_resolution_rate"] == 0.5
+    assert stats["summary"]["feedback_coverage"] == 1.0
+    assert stats["summary"]["positive_feedback_rate"] == 1.0
+    assert stats["summary"]["one_turn_resolution_rate"] == 1.0
     assert stats["channels"]["cli__default"]["responses_total"] == 2
-    assert stats["channels"]["cli__default"]["positive_feedback_rate"] == 0.5
+    assert stats["channels"]["cli__default"]["tracked_responses_total"] == 1
+    assert stats["channels"]["cli__default"]["positive_feedback_rate"] == 1.0
     assert stats["sessions"][0]["responses_total"] == 2
-    assert stats["sessions"][0]["positive_feedback_rate"] == 0.5
+    assert stats["sessions"][0]["tracked_responses_total"] == 1
+    assert stats["sessions"][0]["positive_feedback_rate"] == 1.0
 
 
 def test_compute_feedback_stats_counts_rating_feedback_via_outcomes(temp_dir):
@@ -684,6 +688,7 @@ def test_compute_feedback_stats_counts_rating_feedback_via_outcomes(temp_dir):
     stats = compute_feedback_stats(temp_dir / "bot", include_sessions=True)
 
     assert stats["summary"]["responses_total"] == 2
+    assert stats["summary"]["tracked_responses_total"] == 2
     assert stats["summary"]["responses_with_feedback"] == 1
     assert stats["summary"]["feedback_total"] == 1
     assert stats["summary"]["thumb_up_total"] == 0
@@ -694,3 +699,70 @@ def test_compute_feedback_stats_counts_rating_feedback_via_outcomes(temp_dir):
     assert stats["summary"]["one_turn_resolution_rate"] == 1.0
     assert stats["channels"]["cli__default"]["feedback_coverage"] == 0.5
     assert stats["sessions"][0]["positive_feedback_rate"] == 0.5
+
+
+def test_compute_feedback_stats_uses_tracked_responses_as_rate_denominator(temp_dir):
+    sessions_dir = temp_dir / "bot" / "sessions"
+    sessions_dir.mkdir(parents=True)
+
+    (sessions_dir / "cli__default__session-1.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "_type": "metadata",
+                        "session_key": "cli__default__session-1",
+                        "updated_at": "2026-05-01T10:00:00",
+                        "metadata": {
+                            "feedback_events": [
+                                {"response_id": "resp-1", "feedback_type": "thumb_up"}
+                            ],
+                            "response_outcomes": {
+                                "resp-1": {"outcome_label": "positive_feedback"},
+                                "resp-2": {"outcome_label": "resolved"},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 1",
+                        "response_id": "resp-1",
+                        "timestamp": "2026-05-01T10:00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "legacy answer 2",
+                        "response_id": "resp-legacy-2",
+                        "timestamp": "2026-05-01T10:01:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "legacy answer 3",
+                        "response_id": "resp-legacy-3",
+                        "timestamp": "2026-05-01T10:02:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stats = compute_feedback_stats(temp_dir / "bot", include_sessions=True)
+
+    assert stats["summary"]["responses_total"] == 3
+    assert stats["summary"]["tracked_responses_total"] == 2
+    assert stats["summary"]["responses_with_feedback"] == 1
+    assert stats["summary"]["feedback_coverage"] == 0.5
+    assert stats["summary"]["positive_feedback_rate"] == 0.5
+    assert stats["summary"]["one_turn_resolution_rate"] == 1.0
+    assert stats["channels"]["cli__default"]["responses_total"] == 3
+    assert stats["channels"]["cli__default"]["tracked_responses_total"] == 2
+    assert stats["sessions"][0]["responses_total"] == 3
+    assert stats["sessions"][0]["tracked_responses_total"] == 2

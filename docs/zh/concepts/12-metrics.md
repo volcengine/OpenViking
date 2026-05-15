@@ -271,7 +271,8 @@ scrape_configs:
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
 | `openviking_feedback_sessions_scanned_total` | Gauge | `valid` | 当前快照扫描到的 bot session 数量 |
-| `openviking_feedback_responses_total` | Gauge | `valid` | 当前快照纳入统计的 response 总数 |
+| `openviking_feedback_responses_total` | Gauge | `valid` | 当前快照纳入统计的 assistant response 总数，包含尚未接入新观测契约的历史 response |
+| `openviking_feedback_tracked_responses_total` | Gauge | `valid` | 已被当前 feedback 观测契约覆盖的 response 总数（来自 `metadata.feedback_events` 或 `metadata.response_outcomes`） |
 | `openviking_feedback_responses_with_feedback_total` | Gauge | `valid` | 至少带有一个显式反馈事件的 response 数量 |
 | `openviking_feedback_events_total` | Gauge | `valid` | 显式反馈事件总数 |
 | `openviking_feedback_thumb_up_total` | Gauge | `valid` | thumb-up 事件数 |
@@ -281,14 +282,16 @@ scrape_configs:
 | `openviking_feedback_reasked_outcomes_total` | Gauge | `valid` | 被归类为 reask outcome 的 response 数量 |
 | `openviking_feedback_resolved_outcomes_total` | Gauge | `valid` | 被归类为 resolved outcome 的 response 数量 |
 | `openviking_feedback_follow_up_without_feedback_outcomes_total` | Gauge | `valid` | 有 follow-up 但没有显式反馈的 outcome 数量 |
-| `openviking_feedback_coverage` | Gauge | `valid` | 带显式反馈的 response 占比 |
+| `openviking_feedback_coverage` | Gauge | `valid` | 已跟踪 response 中带显式反馈的占比 |
 | `openviking_feedback_thumbs_up_rate` | Gauge | `valid` | feedback event 中 thumb-up 的占比 |
 | `openviking_feedback_thumbs_down_rate` | Gauge | `valid` | feedback event 中 thumb-down 的占比 |
-| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | response 中 positive feedback outcome 的占比 |
-| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | response 中 negative feedback outcome 的占比 |
-| `openviking_feedback_reask_rate` | Gauge | `valid` | response 导致 reask 的占比 |
-| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | response 一轮解决的占比 |
+| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | 已跟踪 response 中 positive feedback outcome 的占比 |
+| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | 已跟踪 response 中 negative feedback outcome 的占比 |
+| `openviking_feedback_reask_rate` | Gauge | `valid` | 已跟踪 response 中导致 reask 的占比 |
+| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | 已跟踪 response 中一轮解决的占比 |
 | `openviking_feedback_channel_*` | Gauge | `channel, valid` | 按 channel 细分的 response 数量、feedback 数量、negative outcome、reask、coverage、thumb rate 与 one-turn resolution |
+
+对于新旧历史数据混合的场景，rate 类图表应优先结合 `openviking_feedback_tracked_responses_total` 理解分母。`openviking_feedback_responses_total` 仍然保留，用于观察包含历史遗留 response 在内的整体 assistant 响应体量。
 
 适用场景：
 

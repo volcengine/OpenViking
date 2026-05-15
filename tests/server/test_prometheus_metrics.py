@@ -4,7 +4,6 @@
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -216,15 +215,11 @@ class TestMetricsEndpoint:
             encoding="utf-8",
         )
 
-        monkeypatch.setattr(
-            "openviking.metrics.collectors.feedback.load_config",
-            lambda: SimpleNamespace(bot_data_path=tmp_path / "bot"),
-        )
-
         config = ServerConfig(
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
+                    bot_data_path=str(tmp_path / "bot"),
                     exporters=MetricsExportersConfig(
                         prometheus=PrometheusExporterConfig(enabled=True)
                     ),
@@ -245,6 +240,21 @@ class TestMetricsEndpoint:
                 )
         finally:
             shutdown_metrics(app=app)
+
+    def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
+        import importlib
+        import sys
+
+        monkeypatch.setitem(sys.modules, "vikingbot", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.config", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.config.loader", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.observability", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.observability.feedback_stats", None)
+
+        bootstrap = importlib.reload(importlib.import_module("openviking.metrics.bootstrap"))
+        manager = bootstrap.create_default_collector_manager(app=None, service=None)
+
+        assert "FeedbackCollector" not in [type(c).__name__ for c in manager._collectors]
 
 
 def test_reinitializing_metrics_shuts_down_existing_exporters(monkeypatch):

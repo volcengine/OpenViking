@@ -10,6 +10,7 @@ from typing import Any
 
 FEEDBACK_STATS_SORT_FIELDS = (
     "responses_total",
+    "tracked_responses_total",
     "responses_with_feedback",
     "feedback_total",
     "thumb_up_total",
@@ -32,6 +33,7 @@ FEEDBACK_STATS_SORT_FIELDS = (
 _SUMMARY_METRICS = (
     ("Sessions Scanned", "sessions_scanned", "count"),
     ("Responses", "responses_total", "count"),
+    ("Tracked Responses", "tracked_responses_total", "count"),
     ("Responses With Feedback", "responses_with_feedback", "count"),
     ("Feedback Events", "feedback_total", "count"),
     ("Thumbs Up", "thumb_up_total", "count"),
@@ -72,6 +74,7 @@ def compute_feedback_stats(
     totals: dict[str, Any] = {
         "sessions_scanned": 0,
         "responses_total": 0,
+        "tracked_responses_total": 0,
         "responses_with_feedback": 0,
         "feedback_total": 0,
         "thumb_up_total": 0,
@@ -292,10 +295,16 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
         for event in feedback_events
         if isinstance(event, dict) and event.get("response_id")
     }
+    tracked_response_ids = feedback_by_response | {
+        response_id
+        for response_id, payload in response_outcomes.items()
+        if isinstance(response_id, str) and response_id and isinstance(payload, dict)
+    }
 
     metrics: dict[str, Any] = {
         "session_key": session_key,
         "responses_total": len(response_ids),
+        "tracked_responses_total": len(tracked_response_ids),
         "responses_with_feedback": len(feedback_by_response),
         "feedback_total": 0,
         "thumb_up_total": 0,
@@ -340,23 +349,24 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
 
 
 def _finalize_session_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    tracked_responses_total = metrics["tracked_responses_total"]
     metrics["feedback_coverage"] = _safe_ratio(
-        metrics["responses_with_feedback"], metrics["responses_total"]
+        metrics["responses_with_feedback"], tracked_responses_total
     )
     metrics["thumbs_up_rate"] = _safe_ratio(metrics["thumb_up_total"], metrics["feedback_total"])
     metrics["thumbs_down_rate"] = _safe_ratio(
         metrics["thumb_down_total"], metrics["feedback_total"]
     )
     metrics["positive_feedback_rate"] = _safe_ratio(
-        metrics["positive_feedback_total"], metrics["responses_total"]
+        metrics["positive_feedback_total"], tracked_responses_total
     )
     metrics["negative_feedback_rate"] = _safe_ratio(
-        metrics["negative_feedback_total"], metrics["responses_total"]
+        metrics["negative_feedback_total"], tracked_responses_total
     )
-    metrics["reask_rate"] = _safe_ratio(metrics["reasked_total"], metrics["responses_total"])
+    metrics["reask_rate"] = _safe_ratio(metrics["reasked_total"], tracked_responses_total)
     metrics["one_turn_resolution_rate"] = _safe_ratio(
         metrics["resolved_total"] + metrics["positive_feedback_total"],
-        metrics["responses_total"],
+        tracked_responses_total,
     )
 
     return metrics
@@ -386,6 +396,7 @@ def _merge_feedback_stats(totals: dict[str, Any], session_metrics: dict[str, Any
         channel,
         {
             "responses_total": 0,
+            "tracked_responses_total": 0,
             "responses_with_feedback": 0,
             "feedback_total": 0,
             "thumb_up_total": 0,
@@ -425,6 +436,7 @@ def _merge_feedback_stats(totals: dict[str, Any], session_metrics: dict[str, Any
             "channel": channel,
             "updated_at": session_metrics["updated_at"],
             "responses_total": session_metrics["responses_total"],
+            "tracked_responses_total": session_metrics["tracked_responses_total"],
             "responses_with_feedback": session_metrics["responses_with_feedback"],
             "feedback_total": session_metrics["feedback_total"],
             "thumb_up_total": session_metrics["thumb_up_total"],
@@ -450,6 +462,7 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "sessions_scanned": totals["sessions_scanned"],
         "responses_total": totals["responses_total"],
+        "tracked_responses_total": totals["tracked_responses_total"],
         "responses_with_feedback": totals["responses_with_feedback"],
         "feedback_total": totals["feedback_total"],
         "thumb_up_total": totals["thumb_up_total"],
@@ -461,20 +474,20 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
         "resolved_total": totals["resolved_total"],
         "follow_up_without_feedback_total": totals["follow_up_without_feedback_total"],
         "feedback_coverage": _safe_ratio(
-            totals["responses_with_feedback"], totals["responses_total"]
+            totals["responses_with_feedback"], totals["tracked_responses_total"]
         ),
         "thumbs_up_rate": _safe_ratio(totals["thumb_up_total"], totals["feedback_total"]),
         "thumbs_down_rate": _safe_ratio(totals["thumb_down_total"], totals["feedback_total"]),
         "positive_feedback_rate": _safe_ratio(
-            totals["positive_feedback_total"], totals["responses_total"]
+            totals["positive_feedback_total"], totals["tracked_responses_total"]
         ),
         "negative_feedback_rate": _safe_ratio(
-            totals["negative_feedback_total"], totals["responses_total"]
+            totals["negative_feedback_total"], totals["tracked_responses_total"]
         ),
-        "reask_rate": _safe_ratio(totals["reasked_total"], totals["responses_total"]),
+        "reask_rate": _safe_ratio(totals["reasked_total"], totals["tracked_responses_total"]),
         "one_turn_resolution_rate": _safe_ratio(
             totals["resolved_total"] + totals["positive_feedback_total"],
-            totals["responses_total"],
+            totals["tracked_responses_total"],
         ),
     }
 
@@ -482,7 +495,7 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
         channel: {
             **channel_totals,
             "feedback_coverage": _safe_ratio(
-                channel_totals["responses_with_feedback"], channel_totals["responses_total"]
+                channel_totals["responses_with_feedback"], channel_totals["tracked_responses_total"]
             ),
             "thumbs_up_rate": _safe_ratio(
                 channel_totals["thumb_up_total"], channel_totals["feedback_total"]
@@ -491,17 +504,17 @@ def _finalize_feedback_stats(totals: dict[str, Any]) -> dict[str, Any]:
                 channel_totals["thumb_down_total"], channel_totals["feedback_total"]
             ),
             "positive_feedback_rate": _safe_ratio(
-                channel_totals["positive_feedback_total"], channel_totals["responses_total"]
+                channel_totals["positive_feedback_total"], channel_totals["tracked_responses_total"]
             ),
             "negative_feedback_rate": _safe_ratio(
-                channel_totals["negative_feedback_total"], channel_totals["responses_total"]
+                channel_totals["negative_feedback_total"], channel_totals["tracked_responses_total"]
             ),
             "reask_rate": _safe_ratio(
-                channel_totals["reasked_total"], channel_totals["responses_total"]
+                channel_totals["reasked_total"], channel_totals["tracked_responses_total"]
             ),
             "one_turn_resolution_rate": _safe_ratio(
                 channel_totals["resolved_total"] + channel_totals["positive_feedback_total"],
-                channel_totals["responses_total"],
+                channel_totals["tracked_responses_total"],
             ),
         }
         for channel, channel_totals in sorted(totals["channels"].items())

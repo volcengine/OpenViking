@@ -101,9 +101,14 @@ def test_feedback_collector_exports_summary_and_channel_gauges(
 
     assert 'openviking_feedback_sessions_scanned_total{valid="1"} 2.0' in text
     assert 'openviking_feedback_responses_total{valid="1"} 4.0' in text
+    assert 'openviking_feedback_tracked_responses_total{valid="1"} 4.0' in text
     assert 'openviking_feedback_events_total{valid="1"} 3.0' in text
     assert 'openviking_feedback_coverage{valid="1"} 0.5' in text
     assert 'openviking_feedback_one_turn_resolution_rate{valid="1"} 0.5' in text
+    assert (
+        'openviking_feedback_channel_tracked_responses_total{channel="cli__default",valid="1"} 2.0'
+        in text
+    )
     assert 'openviking_feedback_channel_events_total{channel="cli__default",valid="1"} 1.0' in text
     assert 'openviking_feedback_channel_events_total{channel="bot_api__demo",valid="1"} 2.0' in text
     assert (
