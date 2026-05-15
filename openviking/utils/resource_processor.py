@@ -114,9 +114,10 @@ class ResourceProcessor:
 
         Workflow:
         1. Parse source (writes to temp directory)
-        2. TreeBuilder moves to AGFS
-        3. (Optional) Build vector index
-        4. (Optional) Summarize
+        2. TreeBuilder builds final URI metadata
+        3. Source commit moves temp content to the final path
+        4. (Optional) Build vector index
+        5. (Optional) Summarize
         """
         result = {
             "status": "success",
@@ -246,7 +247,7 @@ class ResourceProcessor:
                 except Exception:
                     pass
 
-            # ============ Phase 3.5: 首次添加立即落盘 + 生命周期锁 ============
+            # ============ Phase 3.5: Source commit + lifecycle lock ============
             root_uri = result.get("root_uri")
             temp_uri = result.get("temp_uri")  # temp_doc_uri
             original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
@@ -254,50 +255,30 @@ class ResourceProcessor:
             lifecycle_lock_handle_id = ""
 
             if root_uri and temp_uri:
-                from openviking.storage.transaction import LockContext, get_lock_manager
+                from openviking.storage.transaction import get_lock_manager
 
                 stage_start = time.perf_counter()
                 stage_status = "ok"
                 viking_fs = get_viking_fs()
                 lock_manager = get_lock_manager()
                 try:
-                    target_exists = await viking_fs.exists(root_uri, ctx=ctx)
-
-                    if not target_exists:
-                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                        parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
-
-                        parent_uri = "/".join(root_uri.rstrip("/").rsplit("/", 1)[:-1])
-                        if parent_uri:
-                            await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
-
-                        async with LockContext(lock_manager, [parent_path], lock_mode="point"):
-                            if candidate_uri:
-                                with viking_fs.bind_request_context(ctx):
-                                    root_uri = await self.tree_builder._resolve_unique_uri(
-                                        candidate_uri
-                                    )
-                                result["root_uri"] = root_uri
-                                dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-
-                            src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                            await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
-
-                            lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                                lock_manager, dst_path
-                            )
-
-                        try:
-                            await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
-                        except Exception:
-                            pass
-
-                        result["temp_uri"] = root_uri
-                    else:
-                        resource_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                        lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                            lock_manager, resource_path
+                    if candidate_uri:
+                        root_uri, lifecycle_lock_handle_id = await self._commit_unique_candidate(
+                            candidate_uri=candidate_uri,
+                            ctx=ctx,
                         )
+                        result["root_uri"] = root_uri
+                    else:
+                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                        handle = lock_manager.create_handle()
+                        try:
+                            lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
+                                lock_manager, dst_path, uri=root_uri, handle=handle
+                            )
+                        except Exception:
+                            await lock_manager.release(handle)
+                            lifecycle_lock_handle_id = ""
+                            raise
                 except Exception:
                     stage_status = "error"
                     raise
@@ -311,12 +292,6 @@ class ResourceProcessor:
                         )
                     except Exception:
                         pass
-
-                    # Only switch to root_uri after a first-time persist. For repeated
-                    # writes to an existing target we must keep the fresh temp tree so
-                    # semantic processing can diff temp source against target_uri.
-                    if not target_exists:
-                        temp_uri = root_uri
 
             # ============ Phase 4: Optional Steps ============
             build_index = kwargs.get("build_index", True)
@@ -353,12 +328,27 @@ class ResourceProcessor:
                     except Exception:
                         pass
             elif lifecycle_lock_handle_id:
-                # 无下游处理接管锁，主动释放
+                # No downstream worker will sync temp content or release the lifecycle lock.
                 from openviking.storage.transaction import get_lock_manager
 
-                handle = get_lock_manager().get_handle(lifecycle_lock_handle_id)
+                lock_manager = get_lock_manager()
+                handle = lock_manager.get_handle(lifecycle_lock_handle_id)
                 if handle:
-                    await get_lock_manager().release(handle)
+                    if temp_uri:
+                        from openviking.pyagfs.helpers import cp as agfs_cp
+
+                        viking_fs = get_viking_fs()
+                        src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                        await asyncio.to_thread(
+                            agfs_cp,
+                            viking_fs.agfs,
+                            src_path,
+                            dst_path,
+                            recursive=True,
+                        )
+                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                    await lock_manager.release(handle)
 
             # 恢复原始 temp_uri 用于输出
             if original_temp_uri is not None:
@@ -366,12 +356,66 @@ class ResourceProcessor:
 
             return result
 
+    async def _commit_unique_candidate(
+        self,
+        *,
+        candidate_uri: str,
+        ctx: RequestContext,
+        max_attempts: int = 100,
+    ) -> tuple[str, str]:
+        """Pick the first free candidate URI and reserve it with a lifecycle TreeLock."""
+        from openviking.storage.errors import ResourceBusyError
+        from openviking.storage.transaction import get_lock_manager
+
+        viking_fs = get_viking_fs()
+        lock_manager = get_lock_manager()
+
+        for attempt in range(max_attempts + 1):
+            root_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
+            if await viking_fs.exists(root_uri, ctx=ctx):
+                continue
+
+            dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+            handle = lock_manager.create_handle()
+            try:
+                lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
+                    lock_manager, dst_path, uri=root_uri, handle=handle, timeout=0.0
+                )
+                return root_uri, lifecycle_lock_handle_id
+            except ResourceBusyError:
+                await lock_manager.release(handle)
+                continue
+            except Exception:
+                await lock_manager.release(handle)
+                raise
+
+        raise FileExistsError(
+            f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
+        )
+
     @staticmethod
-    async def _try_acquire_lifecycle_lock(lock_manager, path: str) -> str:
-        """尝试获取 SUBTREE 生命周期锁，失败时优雅降级返回空字符串。"""
-        handle = lock_manager.create_handle()
-        if await lock_manager.acquire_subtree(handle, path):
+    async def _acquire_lifecycle_lock(
+        lock_manager,
+        path: str,
+        *,
+        uri: str = "",
+        handle=None,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """Acquire per-resource TreeLock lifecycle lock or raise a structured conflict."""
+        from openviking.storage.errors import ResourceBusyError
+
+        owns_handle = handle is None
+        if handle is None:
+            handle = lock_manager.create_handle()
+        if await lock_manager.acquire_tree(handle, path, timeout=timeout):
             return handle.id
+        if owns_handle:
+            await lock_manager.release(handle)
         logger.warning(f"[ResourceProcessor] Failed to acquire lifecycle lock on {path}")
-        await lock_manager.release(handle)
-        return ""
+        raise ResourceBusyError(
+            f"Resource is busy: {uri or path}",
+            uri=uri or path,
+            conflict_type="path_busy",
+            retryable=True,
+        )

@@ -251,7 +251,7 @@ class AsyncOpenViking:
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
-            to: Exact target URI (must not exist yet).
+            to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).

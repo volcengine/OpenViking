@@ -316,6 +316,7 @@ scrape_configs:
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB 与模型使用统计
 

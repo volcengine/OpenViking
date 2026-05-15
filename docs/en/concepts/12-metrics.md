@@ -313,6 +313,7 @@ Typical `component` values include:
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB and Model Usage Statistics
 

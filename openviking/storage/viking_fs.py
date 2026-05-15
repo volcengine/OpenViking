@@ -491,11 +491,10 @@ class VikingFS:
                     details={"resource": uri, "expected_flag": "recursive"},
                 )
             lock_paths = [path]
-            lock_mode = "subtree"
+            lock_mode = "tree"
         else:
-            parent = path.rsplit("/", 1)[0] if "/" in path else path
-            lock_paths = [parent]
-            lock_mode = "point"
+            lock_paths = [path]
+            lock_mode = "exact"
 
         try:
             async with LockContext(
@@ -510,9 +509,7 @@ class VikingFS:
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
                 try:
-                    result = await self._run_in_threadpool(
-                        self.agfs.rm, path, recursive=recursive
-                    )
+                    result = await self._run_in_threadpool(self.agfs.rm, path, recursive=recursive)
                 except AGFSDirectoryNotEmptyError:
                     raise FailedPreconditionError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -531,7 +528,7 @@ class VikingFS:
                     result = {"estimated_deleted_count": estimated_count}
                 return result
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {uri}")
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
     async def mv(
         self,
@@ -561,16 +558,25 @@ class VikingFS:
         except Exception:
             raise FileNotFoundError(f"mv source not found: {old_uri}")
 
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+        lock_context = (
+            LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_path=new_path,
+                src_is_dir=True,
+                handle=lock_handle,
+            )
+            if is_dir
+            else LockContext(
+                get_lock_manager(),
+                [old_path, new_path],
+                lock_mode="exact",
+                handle=lock_handle,
+            )
+        )
 
-        async with LockContext(
-            get_lock_manager(),
-            [old_path],
-            lock_mode="mv",
-            mv_dst_parent_path=dst_parent,
-            src_is_dir=is_dir,
-            handle=lock_handle,
-        ):
+        async with lock_context:
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
 
@@ -919,8 +925,7 @@ class VikingFS:
         for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
             batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
             batch_jobs = [
-                self._grep_single_file(entry_uri, compiled_pattern, ctx)
-                for entry_uri in batch_uris
+                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
             ]
             batch_results = await asyncio.gather(*batch_jobs)
             for matches, scanned_count in batch_results:
@@ -1971,14 +1976,13 @@ class VikingFS:
 
         old_path = self._uri_to_path(old_dir, ctx=real_ctx)
         new_path = self._uri_to_path(new_dir, ctx=real_ctx)
-        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
 
         try:
             async with LockContext(
                 get_lock_manager(),
                 [old_path],
                 lock_mode="mv",
-                mv_dst_parent_path=dst_parent,
+                mv_dst_path=new_path,
                 src_is_dir=True,
                 handle=lock_handle,
             ):
@@ -1991,7 +1995,7 @@ class VikingFS:
                 )
 
         except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {old_dir}")
+            raise ResourceBusyError(f"Resource is being processed: {old_dir}", uri=old_dir)
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

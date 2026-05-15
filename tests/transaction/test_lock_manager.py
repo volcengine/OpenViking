@@ -26,26 +26,26 @@ def lm(agfs_client):
 
 
 class TestLockManagerBasic:
-    async def test_create_handle_and_acquire_point(self, agfs_client, lm, test_dir):
+    async def test_create_handle_and_acquire_exact_path(self, agfs_client, lm, test_dir):
         handle = lm.create_handle()
-        ok = await lm.acquire_point(handle, test_dir)
+        ok = await lm.acquire_exact_path(handle, test_dir)
         assert ok is True
 
-        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
+        lock_path = handle.locks[0]
         content = agfs_client.cat(lock_path)
         assert content is not None
 
         await lm.release(handle)
         assert _lock_file_gone(agfs_client, lock_path)
 
-    async def test_acquire_subtree(self, agfs_client, lm, test_dir):
+    async def test_acquire_tree(self, agfs_client, lm, test_dir):
         handle = lm.create_handle()
-        ok = await lm.acquire_subtree(handle, test_dir)
+        ok = await lm.acquire_tree(handle, test_dir)
         assert ok is True
 
         token = agfs_client.cat(f"{test_dir}/{LOCK_FILE_NAME}")
         token_str = token.decode("utf-8") if isinstance(token, bytes) else token
-        assert ":S" in token_str
+        assert ":T" in token_str
 
         await lm.release(handle)
 
@@ -65,9 +65,10 @@ class TestLockManagerBasic:
 
     async def test_release_removes_from_active(self, lm, test_dir):
         handle = lm.create_handle()
+
+        await lm.acquire_exact_path(handle, test_dir)
         assert handle.id in lm.get_active_handles()
 
-        await lm.acquire_point(handle, test_dir)
         await lm.release(handle)
 
         assert handle.id not in lm.get_active_handles()
@@ -75,19 +76,21 @@ class TestLockManagerBasic:
     async def test_stop_releases_all(self, agfs_client, lm, test_dir):
         h1 = lm.create_handle()
         h2 = lm.create_handle()
-        await lm.acquire_point(h1, test_dir)
+        await lm.acquire_exact_path(h1, test_dir)
 
         sub = f"{test_dir}/sub-{uuid.uuid4().hex}"
         agfs_client.mkdir(sub)
-        await lm.acquire_point(h2, sub)
+        await lm.acquire_exact_path(h2, sub)
 
         await lm.stop()
         assert len(lm.get_active_handles()) == 0
 
-    async def test_nonexistent_path_fails(self, lm):
+    async def test_exact_path_allows_missing_target(self, lm):
         handle = lm.create_handle()
-        ok = await lm.acquire_point(handle, "/local/nonexistent-xyz")
-        assert ok is False
+        ok = await lm.acquire_exact_path(handle, "/local/nonexistent-xyz")
+        assert ok is True
+
+        await lm.release(handle)
 
     async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
         lm._redo_log = MagicMock()

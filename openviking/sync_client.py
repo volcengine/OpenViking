@@ -148,6 +148,8 @@ class SyncOpenViking:
         """Add resource to OpenViking (resources scope only)
 
         Args:
+            to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
+            parent: Target parent URI for automatic child naming.
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
             **kwargs: Extra options forwarded to the parser chain, e.g.

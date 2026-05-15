@@ -15,7 +15,7 @@ from openviking.storage.transaction.lock_manager import (
     release_all_locks,
     reset_lock_manager,
 )
-from openviking.storage.transaction.path_lock import PathLock
+from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
 
 __all__ = [
@@ -23,7 +23,7 @@ __all__ = [
     "LockHandle",
     "LockManager",
     "LockOwner",
-    "PathLock",
+    "PathLockEngine",
     "RedoLog",
     "get_lock_manager",
     "init_lock_manager",

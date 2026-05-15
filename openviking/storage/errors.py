@@ -48,4 +48,17 @@ class LockAcquisitionError(LockError):
 
 
 class ResourceBusyError(LockError):
-    """Raised when a resource is locked by an ongoing operation (e.g. semantic processing)."""
+    """Raised when a resource is locked by an ongoing operation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        uri: str | None = None,
+        conflict_type: str = "path_busy",
+        retryable: bool = True,
+    ):
+        super().__init__(message)
+        self.uri = uri
+        self.conflict_type = conflict_type
+        self.retryable = retryable
