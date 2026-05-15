@@ -276,6 +276,7 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
 - `server.observability.metrics`：metrics 子系统与 exporter 配置
 - `server.observability.traces`：trace 导出配置
 - `server.observability.logs`：log 导出配置
+- `server.observability.dump_body`：把 HTTP 请求/响应 body（按 content-type 过滤、按字节截断）作为属性挂到当前 trace span 上，便于在 trace UI 中调试。默认关闭，因为 body 可能含密钥/高基数内容
 
 示例：
 
@@ -321,6 +322,10 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
         "endpoint": "otel-collector:4317",
         "service_name": "openviking-server",
         "headers": {}
+      },
+      "dump_body": {
+        "enabled": false,
+        "max_bytes": 4096
       }
     }
   }
