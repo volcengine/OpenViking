@@ -430,6 +430,9 @@ class TestCompressorV2:
         class DummySchema:
             directory = "viking://user/{{ user_space }}/memories/events"
 
+            def filename_has_variables(self):
+                return False
+
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
                 return [DummySchema()]
@@ -452,7 +455,7 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: object(),
-            acquire_subtree_batch=AsyncMock(return_value=False),
+            acquire_mixed_batch=AsyncMock(return_value=False),
             release=AsyncMock(),
         )
 
@@ -478,4 +481,6 @@ class TestCompressorV2:
             )
 
         assert result == []
-        assert lock_manager.acquire_subtree_batch.await_count == 2
+        assert lock_manager.acquire_mixed_batch.await_count == 2
+        for call in lock_manager.acquire_mixed_batch.await_args_list:
+            assert call.kwargs["timeout"] is not None

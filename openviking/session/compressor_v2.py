@@ -222,6 +222,7 @@ class SessionCompressorV2:
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
+                per_attempt_timeout = getattr(lock_manager, "_lock_timeout", 0.0)
                 retry_count = 0
 
                 # 循环重试获取锁（机制确保不会死锁）
@@ -230,7 +231,7 @@ class SessionCompressorV2:
                         transaction_handle,
                         point_paths=point_lock_dirs,
                         subtree_paths=subtree_lock_dirs,
-                        timeout=None,
+                        timeout=per_attempt_timeout,
                     )
                     if lock_acquired:
                         break
