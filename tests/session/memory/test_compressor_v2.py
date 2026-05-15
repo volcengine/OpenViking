@@ -420,6 +420,42 @@ class TestCompressorV2:
         logger.info("Test completed successfully!")
 
     @pytest.mark.asyncio
+    async def test_extract_long_term_memories_logs_agfs_fallback_at_debug(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+
+        dummy_registry = SimpleNamespace(initialize_memory_files=AsyncMock())
+        dummy_orchestrator = SimpleNamespace(
+            context_provider=SimpleNamespace(get_memory_schemas=lambda _ctx: []),
+            _transaction_handle=None,
+            run=AsyncMock(return_value=(None, [])),
+        )
+
+        with (
+            patch("openviking.storage.viking_fs.get_viking_fs", return_value=None),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=None),
+            patch(
+                "openviking.session.memory.memory_type_registry.create_default_registry",
+                return_value=dummy_registry,
+            ),
+            patch.object(compressor, "_get_or_create_react", return_value=dummy_orchestrator),
+            patch("openviking.session.compressor_v2.logger.warning") as warning_mock,
+            patch("openviking.session.compressor_v2.logger.debug") as debug_mock,
+        ):
+            result = await compressor.extract_long_term_memories(
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=False,
+            )
+
+        assert result == []
+        warning_mock.assert_not_called()
+        debug_mock.assert_any_call("AGFS unavailable, running memory extraction without locks")
+
+    @pytest.mark.asyncio
     async def test_v2_lock_acquire_waits_without_retry_loop(self):
         """v2 memory extraction should delegate waiting to lock manager without local retries."""
         compressor = SessionCompressorV2(vikingdb=None)

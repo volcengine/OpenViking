@@ -353,7 +353,7 @@ def parse_value_with_tolerance(value, annotation):
     try:
         return TypeAdapter(annotation).validate_python(parsed_value, strict=False)
     except Exception as e:
-        tracer.error(f"TypeAdapter validation failed: {e}")
+        tracer.info(f"TypeAdapter validation failed (recoverable): {e}")
 
         # For list types, try filtering invalid items
         if get_origin(annotation) is list and isinstance(parsed_value, list):
@@ -365,13 +365,13 @@ def parse_value_with_tolerance(value, annotation):
                         validated_item = TypeAdapter(item_type).validate_python(item, strict=False)
                         filtered_items.append(validated_item)
                     except Exception:
-                        tracer.error(f"Skipping invalid list item: {item}")
+                        tracer.info(f"Skipping invalid list item: {item}")
                         continue
 
             if filtered_items:
                 return filtered_items
             else:
-                tracer.error("All list items were filtered out, returning empty list")
+                tracer.info("All list items were filtered out, returning empty list")
                 return []
 
         # Re-raise for non-list types
@@ -450,8 +450,8 @@ def parse_json_with_stability(
         # First try direct model validation
         return model_class.model_validate(parsed_data, strict=False), None
     except Exception as e:
-        logger.exception(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
-        logger.exception(f"content={content}")
+        logger.info(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
+        logger.info(f"content={content}")
         # Fallback: Apply value fault tolerance to each field individually
         try:
             field_types = get_type_hints(model_class)

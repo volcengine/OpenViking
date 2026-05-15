@@ -166,7 +166,7 @@ class SessionCompressorV2:
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
-            logger.warning("VikingFS or AGFS not available, running without lock mechanism")
+            logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
             # Create extract context from messages
