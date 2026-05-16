@@ -53,7 +53,7 @@ function loadCases() {
   throw new Error("OPENVIKING_RECALL_PROBE_CASES must be a non-empty JSON array");
 }
 
-function runAutoRecall(prompt) {
+function runAutoRecall(prompt, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [autoRecallPath], {
       env: { ...process.env },
@@ -61,10 +61,25 @@ function runAutoRecall(prompt) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`auto-recall timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code !== 0) {
         reject(new Error(`auto-recall exited ${code}: ${stderr || stdout}`));
         return;
