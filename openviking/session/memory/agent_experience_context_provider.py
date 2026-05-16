@@ -11,7 +11,7 @@ source_trajectories as grounding material.
 """
 
 import jinja2
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import to_user_space, to_agent_space
 from openviking.server.identity import RequestContext
@@ -133,10 +133,29 @@ All memory content must be written in {output_language}.
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
                 mf = MemoryFileUtils.read(raw, uri=uri)
-                results.append({"uri": uri, "content": mf.content})
+                result = mf.to_metadata()
+                result["content"] = mf.content
+                result["uri"] = uri
+                results.append(result)
             except Exception as e:
                 tracer.error(f"Failed to read source trajectory {uri}: {e}")
         return results
+
+    def _build_context_result(
+        self,
+        *,
+        uri: str,
+        context_role: str,
+        result: Optional[Dict[str, Any]] = None,
+        memory_file: Optional[MemoryFile] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(result or {})
+        if memory_file is not None:
+            payload = memory_file.to_metadata()
+            payload["content"] = memory_file.content
+        payload["uri"] = uri
+        payload["context_role"] = context_role
+        return payload
 
     async def prefetch(self) -> List[Dict]:
         if not isinstance(self.messages, list):
@@ -175,86 +194,75 @@ All memory content must be written in {output_language}.
                     tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
 
         prefetch_messages: List[Dict[str, Any]] = [self._build_conversation_message()]
-        prefetch_messages.append(
-            {
-                "role": "user",
-                "content": "\n".join(
-                    [
-                        "## New Trajectory",
-                        f"URI: `{self.trajectory_uri}`",
-                        "",
-                        self.trajectory_summary,
-                    ]
-                ),
-            }
+        add_tool_call_pair_to_messages(
+            messages=prefetch_messages,
+            call_id="new-trajectory",
+            tool_name="read",
+            params={"uri": self.trajectory_uri},
+            result=self._build_context_result(
+                uri=self.trajectory_uri,
+                context_role="new_trajectory",
+                result={
+                    "memory_type": "trajectories",
+                    "content": self.trajectory_summary,
+                },
+            ),
         )
         call_id_seq = 0
 
-        # Build candidate experiences section
-        exp_sections: List[str] = []
         for idx, exp_uri in enumerate(candidate_uris):
             result = await self.read_file(exp_uri)
             if result is None:
                 continue
 
             self.prefetched_uris.append(exp_uri)
+            mf = self._read_file_contents.get(exp_uri)
+            if not mf:
+                continue
+
             add_tool_call_pair_to_messages(
                 messages=prefetch_messages,
                 call_id=call_id_seq,
                 tool_name="read",
                 params={"uri": exp_uri},
-                result=result,
+                result=self._build_context_result(
+                    uri=exp_uri,
+                    context_role="candidate_experience",
+                    result=result,
+                ),
             )
             call_id_seq += 1
-            mf = self._read_file_contents.get(exp_uri)
-            if not mf:
-                continue
-            exp_name = mf.extra_fields.get("experience_name", "")
 
-            page_id = result.get("page_id")
-            page_id_label = f" [page_id: {page_id}]" if page_id is not None else ""
-            section = f"### Experience {idx + 1}: `{exp_name}`{page_id_label}\nURI: `{exp_uri}`"
-
-            # Attach source trajectories for top-3 only
             if idx < SOURCE_TRAJ_TOP_K and viking_fs:
                 source_trajs = await self._load_source_trajectories(
                     exp_uri, mf.extra_fields, viking_fs, ctx
                 )
-                if source_trajs:
-                    traj_lines = ["\n#### Source Trajectories (for reference only)"]
-                    for i, t in enumerate(source_trajs, 1):
-                        traj_lines.append(f"\n**Trajectory {i}** (`{t['uri']}`):\n{t['content']}")
-                    section += "\n" + "\n".join(traj_lines)
+                for source_idx, source_result in enumerate(source_trajs):
+                    source_uri = source_result["uri"]
+                    add_tool_call_pair_to_messages(
+                        messages=prefetch_messages,
+                        call_id=f"source-{idx}-{source_idx}",
+                        tool_name="read",
+                        params={"uri": source_uri},
+                        result=self._build_context_result(
+                            uri=source_uri,
+                            context_role="candidate_source_trajectory",
+                            result=source_result,
+                        ),
+                    )
 
-            exp_sections.append(section)
-
-        lines = []
-
-        if exp_sections:
-            lines += [
-                "",
-                "---",
-                "",
-                "## Candidate Existing Experiences",
-                "",
-                "\n\n---\n\n".join(exp_sections),
-            ]
-        else:
-            lines += [
-                "",
-                "---",
-                "",
-                "## Candidate Existing Experiences",
-                "",
-                "No existing experiences found.",
-            ]
-
-        lines += [
-            "",
-            "---",
-            "",
-            "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip**. Output JSON only.",
-        ]
-
-        prefetch_messages.append({"role": "user", "content": "\n".join(lines)})
+        prefetch_messages.append(
+            {
+                "role": "user",
+                "content": "\n".join(
+                    [
+                        "You have already read the conversation, one `new_trajectory`, candidate experience memories, and optional `candidate_source_trajectory` references.",
+                        "Treat `new_trajectory` as the new execution to incorporate.",
+                        "Treat `candidate_experience` as existing memories you may update, replace, or skip.",
+                        "Treat `candidate_source_trajectory` as reference-only context for understanding a candidate experience; do not modify it directly.",
+                        "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip**. Output JSON only.",
+                    ]
+                ),
+            }
+        )
         return prefetch_messages

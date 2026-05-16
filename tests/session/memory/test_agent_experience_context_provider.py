@@ -13,7 +13,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_starts_with_session_conversation_message():
+async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajectory_read():
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
@@ -29,13 +29,20 @@ async def test_agent_experience_prefetch_starts_with_session_conversation_messag
     provider.set_page_id_map(PageIdMap())
     provider.search_files = AsyncMock(return_value=[])
 
-    messages = await provider.prefetch()
+    with patch(
+        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
+    ) as add_tool_call_pair:
+        messages = await provider.prefetch()
 
     assert messages[0]["role"] == "user"
     assert "## Conversation History" in messages[0]["content"]
     assert "After exploring, analyze the conversation" in messages[0]["content"]
-    assert messages[1]["role"] == "user"
-    assert "## New Trajectory" in messages[1]["content"]
+    assert add_tool_call_pair.call_count == 1
+    assert add_tool_call_pair.call_args_list[0].kwargs["result"]["context_role"] == "new_trajectory"
+    assert add_tool_call_pair.call_args_list[0].kwargs["result"]["memory_type"] == "trajectories"
+    assert add_tool_call_pair.call_args_list[0].kwargs["result"]["uri"] == provider.trajectory_uri
+    assert messages[-1]["role"] == "user"
+    assert "candidate_experience" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -62,6 +69,7 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         "experience_name": "personal_experience_sharing_conversation_flow",
         "content": "1 | line one\n2 | line two",
         "page_id": 1,
+        "memory_type": "experiences",
     }
     provider.read_file = AsyncMock(return_value=read_result)
     provider._read_file_contents = {
@@ -77,4 +85,6 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         messages = await provider.prefetch()
 
     assert any(msg.get("role") == "user" for msg in messages)
-    assert add_tool_call_pair.called
+    assert add_tool_call_pair.call_count == 2
+    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
