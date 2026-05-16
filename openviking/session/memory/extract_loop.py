@@ -352,8 +352,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             errors=errors,
         )
 
-        return resolved, raw_links
-        # 调用 supplement_operation_uris 填充 uris
         if self._isolation_handler:
             supplement_operation_uris(
                 operations=resolved,
@@ -362,7 +360,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 isolation_handler=self._isolation_handler,
             )
 
-        # 填充 old_memory_file_content：从 _read_file_contents 获取已读取的文件内容
         for op in upsert_operations:
             for uri in op.uris:
                 old_content = self.context_provider.read_file_contents.get(uri)
@@ -370,11 +367,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
-        # Register new page_ids (100+) and resolve links are deferred to
-        # finalize_operations(), which runs after refetch is complete.
-        # This ensures refetch results get proper 1-99 page_ids instead
-        # of inheriting 100+ IDs from register_new_page_id.
-        return resolved
+        return resolved, raw_links
 
     async def finalize_operations(self, operations: ResolvedOperations, raw_links: List) -> None:
         """Register new page_ids and resolve links after refetch is complete.
@@ -452,9 +445,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 self._page_id_map.register_new_page_id(to_uri, link.t)
 
             if not from_uri or not to_uri:
-                tracer.error(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
-                             f"from_uri={from_uri}, to_uri={to_uri}, "
-                             f"op_page_map_keys={list(op_page_map.keys())}")
+                tracer.info(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
+                            f"from_uri={from_uri}, to_uri={to_uri}, "
+                            f"op_page_map_keys={list(op_page_map.keys())}")
                 continue
 
             if from_uri == to_uri:

@@ -83,8 +83,12 @@ class WikiLink(BaseModel):
         LINK_TYPE_DEFAULT,
         description=(
             "A short relation label describing how the source relates to the target. "
-            "Let the model invent the label when helpful. Use 1-3 lowercase snake_case words, "
-            "not a sentence. Examples: related_to, inspired_by, works_with."
+            "Prefer one of these lowercase snake_case values: belongs_to, related_to, "
+            "derived_from, caused_by, contradicts, evolved_from. "
+            "Use belongs_to for part-of/profile membership, related_to for general association, "
+            "derived_from for extracted/summary facts, caused_by for direct causation, "
+            "contradicts for mutually inconsistent facts, and evolved_from for time-based changes. "
+            "Do not invent new link_type values unless absolutely necessary."
         ),
     )
     weight: float = Field(1.0, description="Association weight 0~1")
