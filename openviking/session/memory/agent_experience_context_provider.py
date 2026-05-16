@@ -174,7 +174,8 @@ All memory content must be written in {output_language}.
                 except Exception as e:
                     tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
 
-        prefetch_messages: List[Dict[str, Any]] = [
+        prefetch_messages: List[Dict[str, Any]] = [self._build_conversation_message()]
+        prefetch_messages.append(
             {
                 "role": "user",
                 "content": "\n".join(
@@ -186,7 +187,7 @@ All memory content must be written in {output_language}.
                     ]
                 ),
             }
-        ]
+        )
         call_id_seq = 0
 
         # Build candidate experiences section

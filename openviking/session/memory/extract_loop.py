@@ -438,7 +438,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         for link in raw_links:
             if link.f is None or link.t is None:
-                tracer.error(f"Skipping link with null page_ids: f={link.f}, t={link.t}")
+                tracer.info(f"Skipping link with null page_ids: f={link.f}, t={link.t}")
                 continue
             from_uri = self._page_id_map.resolve(link.f)
             to_uri = self._page_id_map.resolve(link.t)

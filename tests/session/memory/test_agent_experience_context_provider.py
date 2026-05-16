@@ -13,6 +13,32 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
+async def test_agent_experience_prefetch_starts_with_session_conversation_message():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+    provider._viking_fs = AsyncMock()
+    provider._transaction_handle = None
+    provider.set_page_id_map(PageIdMap())
+    provider.search_files = AsyncMock(return_value=[])
+
+    messages = await provider.prefetch()
+
+    assert messages[0]["role"] == "user"
+    assert "## Conversation History" in messages[0]["content"]
+    assert "After exploring, analyze the conversation" in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "## New Trajectory" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_agent_experience_prefetch_includes_structured_read_results():
     provider = AgentExperienceContextProvider(
         messages=[],
