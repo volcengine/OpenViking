@@ -367,6 +367,18 @@ async function main() {
   );
   const topMemoryScore = Math.max(...memories.map((m) => rankForInjection(m, profile)));
   const topBaseScore = Math.max(...memories.map((m) => clampScore(m.score)));
+  if (injectableMemories.length === 0) {
+    log("skip", {
+      stage: "confidence_gate",
+      reason: "no candidate passed combined inject confidence",
+      topMemoryScore,
+      topBaseScore,
+      minInjectScore: cfg.minInjectScore,
+      minBaseInjectScore: cfg.minBaseInjectScore,
+    });
+    emit();
+    return;
+  }
   if (topMemoryScore < cfg.minInjectScore || topBaseScore < cfg.minBaseInjectScore) {
     log("skip", {
       stage: "confidence_gate",
