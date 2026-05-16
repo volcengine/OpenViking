@@ -129,6 +129,7 @@ class MemoryGraph:
                     "memory_type": inferred_memory_type,
                     "category": category,
                     "content_preview": self._build_content_preview(mf.content),
+                    "content_full": mf.content or "",
                     "content_truncated": self._is_content_truncated(mf.content),
                 }
 
@@ -237,6 +238,7 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
                 "category": node.get("category", ""),
                 "uri": node.get("uri", ""),
                 "content_preview": node.get("content_preview", ""),
+                "content_full": node.get("content_full", ""),
                 "content_truncated": node.get("content_truncated", False),
             }
         )
@@ -281,7 +283,14 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
   #sidebar h3 {{ margin: 0 0 12px; font-size: 16px; }}
   #sidebar .muted {{ color: #94a3b8; font-size: 12px; }}
   #sidebar .block {{ margin-top: 14px; padding-top: 14px; border-top: 1px solid #1e293b; }}
-  #sidebar pre {{ white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: #cbd5e1; }}
+  #detail-content {{ white-space: normal; word-break: break-word; font-size: 12px; line-height: 1.6; color: #cbd5e1; }}
+  #detail-content p, #detail-content ul, #detail-content ol, #detail-content pre, #detail-content blockquote, #detail-content h1, #detail-content h2, #detail-content h3, #detail-content h4 {{ margin: 0 0 12px; }}
+  #detail-content ul, #detail-content ol {{ padding-left: 18px; }}
+  #detail-content code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(30, 41, 59, 0.9); padding: 1px 4px; border-radius: 4px; }}
+  #detail-content pre {{ overflow-x: auto; background: rgba(15, 23, 42, 0.72); padding: 10px 12px; border-radius: 8px; }}
+  #detail-content pre code {{ background: transparent; padding: 0; }}
+  #detail-content blockquote {{ border-left: 3px solid #475569; padding-left: 10px; color: #94a3b8; }}
+  #detail-content a {{ color: #60a5fa; text-decoration: underline; cursor: pointer; }}
   #legend {{ position: fixed; left: 16px; top: 16px; z-index: 10; background: rgba(15, 23, 42, 0.92); border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; max-width: 300px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }}
   #legend h4 {{ margin: 0 0 8px; font-size: 13px; }}
   .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; color: #cbd5e1; }}
@@ -306,7 +315,7 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
     <div class="block">
       <div id="detail-title">No selection</div>
       <div id="detail-meta" class="muted"></div>
-      <pre id="detail-content">Move the mouse over a node or edge to inspect it.</pre>
+      <div id="detail-content">Move the mouse over a node or edge to inspect it.</div>
     </div>
   </aside>
 </div>
@@ -372,15 +381,119 @@ const network = new vis.Network(
   }}
 );
 
+function resolveRelativeUri(baseUri, relativeUri) {{
+  if (!relativeUri) {{
+    return '';
+  }}
+  if (relativeUri.startsWith('viking://')) {{
+    return relativeUri;
+  }}
+  if (!baseUri.startsWith('viking://')) {{
+    return relativeUri;
+  }}
+
+  const baseParts = baseUri.split('/');
+  baseParts.pop();
+
+  for (const segment of relativeUri.split('/')) {{
+    if (!segment || segment === '.') {{
+      continue;
+    }}
+    if (segment === '..') {{
+      if (baseParts.length > 3) {{
+        baseParts.pop();
+      }}
+      continue;
+    }}
+    baseParts.push(segment);
+  }}
+
+  return baseParts.join('/');
+}}
+
+function escapeHtml(text) {{
+  return (text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}}
+
 function escapedPreviewText(text, truncated) {{
   return text || '(empty)';
 }}
 
-function showTooltip(x, y, title, meta, desc) {{
+function renderMarkdown(text, baseUri = '') {{
+  const source = text || '';
+  if (!source.trim()) {{
+    return '<p>(empty)</p>';
+  }}
+
+  const codeBlocks = [];
+  let html = escapeHtml(source).replace(/```([\s\S]*?)```/g, (_, code) => {{
+    const token = `__CODE_BLOCK_${{codeBlocks.length}}__`;
+    codeBlocks.push(`<pre><code>${{code.trim()}}</code></pre>`);
+    return token;
+  }});
+
+  html = html.replace(/^###\s+(.*)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^##\s+(.*)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^#\s+(.*)$/gm, '<h1>$1</h1>');
+  html = html.replace(/^>\s?(.*)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {{
+    const resolvedUri = resolveRelativeUri(baseUri, href);
+    if (resolvedUri.startsWith('viking://')) {{
+      return `<a href="${{href}}" data-target-uri="${{resolvedUri}}">${{label}}</a>`;
+    }}
+    return `<a href="${{href}}">${{label}}</a>`;
+  }});
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  const lines = html.split('\n');
+  const rendered = [];
+  let listItems = [];
+
+  const flushList = () => {{
+    if (listItems.length > 0) {{
+      rendered.push(`<ul>${{listItems.join('')}}</ul>`);
+      listItems = [];
+    }}
+  }};
+
+  for (const line of lines) {{
+    if (/^<h[1-3]>|^<blockquote>|^<pre>/.test(line)) {{
+      flushList();
+      rendered.push(line);
+      continue;
+    }}
+    if (/^[-*]\s+/.test(line)) {{
+      listItems.push(`<li>${{line.replace(/^[-*]\s+/, '')}}</li>`);
+      continue;
+    }}
+    if (!line.trim()) {{
+      flushList();
+      continue;
+    }}
+    flushList();
+    rendered.push(`<p>${{line}}</p>`);
+  }}
+  flushList();
+
+  html = rendered.join('');
+  codeBlocks.forEach((block, index) => {{
+    html = html.replace(`__CODE_BLOCK_${{index}}__`, block);
+  }});
+  return html;
+}}
+
+function showTooltip(x, y, title, meta, desc, baseUri = '') {{
   tooltip.style.display = 'block';
   tooltip.querySelector('.title').textContent = title || '';
   tooltip.querySelector('.meta').textContent = meta || '';
-  tooltip.querySelector('.desc').textContent = desc || '';
+  tooltip.querySelector('.desc').innerHTML = renderMarkdown(desc || '', baseUri);
   tooltip.style.left = (x + 16) + 'px';
   tooltip.style.top = (y + 16) + 'px';
 }}
@@ -389,10 +502,21 @@ function hideTooltip() {{
   tooltip.style.display = 'none';
 }}
 
+function focusNodeById(targetNodeId) {{
+  if (!targetNodeId || !nodes.get(targetNodeId)) {{
+    return;
+  }}
+  const connectedNodeIds = network.getConnectedNodes(targetNodeId);
+  network.unselectAll();
+  network.selectNodes([targetNodeId, ...connectedNodeIds]);
+  network.focus(targetNodeId, {{ animation: false, scale: 1.0 }});
+  showNodeDetails(nodes.get(targetNodeId));
+}}
+
 function showNodeDetails(node) {{
   detailTitle.textContent = node.label || node.id;
   detailMeta.textContent = `${{node.memory_type || 'unknown'}} · ${{node.uri || ''}}`;
-  detailContent.textContent = escapedPreviewText(node.content_preview, node.content_truncated);
+  detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');
 }}
 
 function showEdgeDetails(edge) {{
@@ -465,6 +589,16 @@ function applyFilter(shouldFit = false) {{
   network.setOptions({{ physics: false }});
 }}
 
+detailContent.addEventListener('click', (event) => {{
+  const link = event.target.closest('a[data-target-uri]');
+  if (!link) {{
+    return;
+  }}
+  event.preventDefault();
+  const targetNodeId = link.dataset.targetUri;
+  focusNodeById(targetNodeId);
+}});
+
 network.once('stabilized', () => {{
   network.fit({{ animation: false, padding: 80 }});
   network.setOptions({{ physics: false }});
@@ -474,14 +608,14 @@ network.on('hoverNode', (params) => {{
   const node = nodes.get(params.node);
   const meta = `${{node.memory_type || 'unknown'}} · ${{node.uri || ''}}`;
   const desc = escapedPreviewText(node.content_preview, node.content_truncated);
-  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, node.label || node.id, meta, desc);
+  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, node.label || node.id, meta, desc, node.uri || '');
   showNodeDetails(node);
 }});
 
 network.on('hoverEdge', (params) => {{
   const edge = edges.get(params.edge);
   const meta = `${{edge.link_type}} · weight=${{edge.weight}}`;
-  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, edge.description || edge.link_type, meta, edge.description || '(no description)');
+  showTooltip(params.event.srcEvent.clientX, params.event.srcEvent.clientY, edge.description || edge.link_type, meta, edge.description || '(no description)', '');
   showEdgeDetails(edge);
 }});
 
@@ -490,11 +624,7 @@ network.on('blurEdge', hideTooltip);
 network.on('click', (params) => {{
   if (params.nodes.length > 0) {{
     const focusNodeId = params.nodes[0];
-    const focusNode = nodes.get(focusNodeId);
-    showNodeDetails(focusNode);
-    const connectedNodeIds = network.getConnectedNodes(focusNodeId);
-    network.unselectAll();
-    network.selectNodes([focusNodeId, ...connectedNodeIds]);
+    focusNodeById(focusNodeId);
     return;
   }}
 
@@ -506,7 +636,7 @@ network.on('click', (params) => {{
   restoreVisibleGraph();
   detailTitle.textContent = 'No selection';
   detailMeta.textContent = '';
-  detailContent.textContent = 'Move the mouse over a node or edge to inspect it.';
+  detailContent.innerHTML = '<p>Move the mouse over a node or edge to inspect it.</p>';
 }});
 
 renderLegend();

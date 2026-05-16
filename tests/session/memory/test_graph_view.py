@@ -4,6 +4,67 @@
 from openviking.session.memory.graph_view import _render_graph_html
 
 
+def test_render_graph_html_supports_relative_markdown_links():
+    nodes = [
+        {
+            "id": "viking://user/Caroline/memories/profile.md",
+            "uri": "viking://user/Caroline/memories/profile.md",
+            "label": "profile",
+            "memory_type": "profile",
+            "category": "",
+            "content_preview": "[music](./preferences/music.md)",
+            "content_full": "[music](./preferences/music.md)\n[up](../events/2023/05/08/test.md)",
+            "content_truncated": False,
+        }
+    ]
+
+    html = _render_graph_html(nodes, [])
+
+    assert "function resolveRelativeUri(baseUri, relativeUri)" in html
+    assert "const resolvedUri = resolveRelativeUri(baseUri, href);" in html
+    assert "data-target-uri=\"${resolvedUri}\"" in html
+
+
+def test_render_graph_html_renders_tooltip_content_as_markdown():
+    html = _render_graph_html([], [])
+
+    assert "tooltip.querySelector('.desc').innerHTML = renderMarkdown(desc || '', baseUri);" in html
+    assert "tooltip.querySelector('.desc').textContent = desc || '';" not in html
+
+
+def test_render_graph_html_embeds_full_markdown_content_and_link_targets():
+    nodes = [
+        {
+            "id": "viking://user/Caroline/memories/profile.md",
+            "uri": "viking://user/Caroline/memories/profile.md",
+            "label": "profile",
+            "memory_type": "profile",
+            "category": "",
+            "content_preview": "# Caroline",
+            "content_full": "# Caroline\n\nSee [music](viking://user/Caroline/memories/preferences/music.md)",
+            "content_truncated": False,
+        }
+    ]
+    edges = [
+        {
+            "source": "viking://user/Caroline/memories/profile.md",
+            "target": "viking://user/Caroline/memories/preferences/music.md",
+            "link_type": "related_to",
+            "weight": 1.0,
+            "description": "music preference",
+        }
+    ]
+
+    html = _render_graph_html(nodes, edges)
+
+    assert '"content_full": "# Caroline\\n\\nSee [music](viking://user/Caroline/memories/preferences/music.md)"' in html
+    assert "function renderMarkdown" in html
+    assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
+    assert "detailContent.addEventListener('click'" in html
+    assert "const targetNodeId = link.dataset.targetUri;" in html
+    assert "network.focus(targetNodeId" in html
+
+
 def test_render_graph_html_filter_does_not_auto_fit_graph():
     html = _render_graph_html([], [])
 
@@ -112,7 +173,8 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
 def test_render_graph_html_click_node_highlights_without_hiding_others():
     html = _render_graph_html([], [])
 
-    assert "network.selectNodes([focusNodeId, ...connectedNodeIds]);" in html
+    assert "function focusNodeById(targetNodeId)" in html
+    assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" in html
     assert "const updatedNodes = nodes.get().map" not in html
     assert "const updatedEdges = edges.get().map" not in html
 
@@ -132,7 +194,7 @@ def test_render_graph_html_shows_node_content_preview_in_details():
 
     html = _render_graph_html(nodes, [])
 
-    assert "detailContent.textContent = escapedPreviewText(node.content_preview, node.content_truncated);" in html
+    assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
     assert "return text || '(empty)';" in html
 
 
