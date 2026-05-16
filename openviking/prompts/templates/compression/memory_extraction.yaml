@@ -204,25 +204,57 @@ template: |
 
   # Three-Level Structure
 
-  Each memory contains three levels, each serving a purpose:
+  Each memory contains three levels. **Keep all levels concise — memories are sticky notes, not essays.**
 
-  **abstract (L0)**: Index layer, plain text one-liner
+  **abstract (L0)**: Index layer, plain text one-liner. **Target: 1 sentence, ~50-80 characters.**
+  - This is the PRIMARY retrieval key — it MUST be specific enough to distinguish this memory from others.
   - Merge types (preferences/entities/profile/patterns): `[Merge key]: [Description]`
     - preferences: `Python code style: No type hints, concise and direct`
-    - entities: `OpenViking project: AI Agent long-term memory management system`
-    - profile: `User basic info: AI development engineer, 3 years experience`
+    - entities: `OpenViking: AI Agent 长期记忆系统，Python+AGFS，本地 oMLX embedding`
+    - profile: `AI 开发工程师，3年 LLM 应用经验，专注 Agent 架构`
     - patterns: `Teaching topic handling: Outline→Plan→Generate PPT`
   - Independent types (events/cases): Specific description
-    - events: `Decided to refactor memory system: Simplify to 5 categories`
+    - events: `2026-03-10 禁用 Lossless-Claw：CJK token 低估 3x + 预算失控`
     - cases: `Band not recognized → Request member/album/style details`
 
-  **overview (L1)**: Structured summary layer, organized with Markdown headings
+  **overview (L1)**: Structured summary layer, organized with Markdown headings. **Target: 3-5 bullet points.**
   - preferences: `## Preference Domain` / `## Specific Preferences`
   - entities: `## Basic Info` / `## Core Attributes`
   - events: `## Decision Content` / `## Reason` / `## Result`
   - cases: `## Problem` / `## Solution`
 
-  **content (L2)**: Detailed expansion layer, free Markdown, includes background, timeline, complete narrative
+  **content (L2)**: Core facts layer. **Target: 2-4 sentences with all essential specifics.**
+  - Capture ONLY the facts that would be lost if this memory were deleted.
+  - Include: names, versions, numbers, configurations, error messages, solutions.
+  - Exclude: background narratives, general explanations, elaboration of obvious points.
+  - Think: "What would I write on a sticky note to remind myself?"
+
+  **❌ BAD content** (too long, narrative-heavy):
+  ```
+  OpenViking is a long-term memory management system for AI Agents, originally open-sourced by
+  Volcengine, with the user currently maintaining a local instance and developing it as a
+  memory-openviking plugin compatible with the OpenClaw environment. The system employs a
+  front-end/back-end separated architecture built around an AGFS foundation... [1200+ chars]
+  ```
+
+  **✅ GOOD content** (concise, fact-dense):
+  ```
+  OpenViking (OV): 火山引擎开源 AI Agent 长期记忆系统，用户本地维护。Python+AGFS，viking:// URI，
+  L0-L4 分层上下文。本地 oMLX 4bit-DWQ embedding，dashscope/qwen3.5-plus VLM。
+  296 记忆文件，2872 向量，34MB vectordb。
+  ```
+
+  **❌ BAD content** (single memory with too many topics):
+  ```
+  Lossless-Claw (LCM v0.2.8) was a third-party LLM context auto-compression plugin...
+  The disablement resulted from fatal defects... The Meridian project now serves as
+  the successor... [1400+ chars mixing entity + cause + successor]
+  ```
+
+  **✅ GOOD** (split into separate memories):
+  Memory 1 [entities]: `Lossless-Claw (LCM v0.2.8): OpenClaw LLM 压缩插件，Martian-Engineering 开发，2026-03-10 已禁用。`
+  Memory 2 [cases]: `LCM 禁用原因：estimateTokens 对 CJK 低估 3x；assemble() 无预算控制致注入膨胀。`
+  Memory 3 [entities]: `Meridian: LCM 后继，复用~1200行。SQLite+FTS5、tiktoken、三区预算硬分配。`
 
   # Few-shot Examples
 
