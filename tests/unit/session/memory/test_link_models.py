@@ -14,13 +14,8 @@ from openviking.session.memory.dataclass import (
 
 
 class TestLinkType:
-    def test_all_types_defined(self):
+    def test_default_value_defined(self):
         assert LinkType.RELATED_TO == "related_to"
-        assert LinkType.BELONGS_TO == "belongs_to"
-        assert LinkType.CAUSED_BY == "caused_by"
-        assert LinkType.DERIVED_FROM == "derived_from"
-        assert LinkType.CONTRADICTS == "contradicts"
-        assert LinkType.EVOLVED_FROM == "evolved_from"
 
 
 class TestWikiLink:
@@ -28,7 +23,7 @@ class TestWikiLink:
         link = WikiLink(f=1, t=2, match_text=None)
         assert link.f == 1
         assert link.t == 2
-        assert link.link_type == LinkType.RELATED_TO
+        assert link.link_type == "related_to"
         assert link.weight == 1.0
         assert link.match_text is None
 
@@ -36,11 +31,12 @@ class TestWikiLink:
         link = WikiLink(
             f=1,
             t=3,
-            link_type=LinkType.BELONGS_TO,
+            link_type="belongs_to",
             weight=0.9,
             match_text="Caroline",
             description="Preference belongs to Caroline",
         )
+        assert link.link_type == "belongs_to"
         assert link.match_text == "Caroline"
         assert link.weight == 0.9
 
@@ -57,25 +53,25 @@ class TestStoredLink:
         link = StoredLink(
             from_uri="viking://a",
             to_uri="viking://b",
-            link_type=LinkType.BELONGS_TO,
+            link_type="belongs_to",
             weight=0.9,
             created_at="2026-05-09T10:00:00+00:00",
         )
         assert link.from_uri == "viking://a"
         assert link.to_uri == "viking://b"
-        assert link.link_type == LinkType.BELONGS_TO
+        assert link.link_type == "belongs_to"
 
     def test_model_dump(self):
         link = StoredLink(
             from_uri="viking://a",
             to_uri="viking://b",
-            link_type=LinkType.RELATED_TO,
+            link_type="related_to",
             created_at="2026-05-09T10:00:00+00:00",
         )
         d = link.model_dump()
         assert d["from_uri"] == "viking://a"
         assert d["to_uri"] == "viking://b"
-        assert d["link_type"] == LinkType.RELATED_TO
+        assert d["link_type"] == "related_to"
         assert "direction" not in d
 
 
@@ -92,7 +88,7 @@ class TestResolvedOperationsLinks:
         link = StoredLink(
             from_uri="viking://a",
             to_uri="viking://b",
-            link_type=LinkType.RELATED_TO,
+            link_type="related_to",
             created_at="2026-05-09T10:00:00+00:00",
         )
         ops = ResolvedOperations(

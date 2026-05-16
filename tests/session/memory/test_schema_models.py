@@ -287,20 +287,26 @@ class TestSchemaModelGenerator:
 
 
 class TestWikiLink:
-    def test_invalid_link_type_falls_back_to_related_to(self):
+    def test_invalid_link_type_keeps_freeform_short_label(self):
         link = WikiLink.model_validate(
             {
                 "f": 1,
                 "t": 2,
-                "link_type": "inspired",
+                "link_type": "inspired_by",
                 "weight": 0.7,
                 "match_text": "memory",
                 "description": "derived by model",
             }
         )
 
-        assert link.link_type == LinkType.RELATED_TO
+        assert link.link_type == "inspired_by"
 
+    def test_link_type_schema_is_open_string_without_enum(self):
+        schema = WikiLink.model_json_schema()
+        link_type_schema = schema["properties"]["link_type"]
+
+        assert link_type_schema["type"] == "string"
+        assert "enum" not in link_type_schema
 
     def test_schema_prompt_generator_renders_conditional_descriptions(self):
         memory_type = MemoryTypeSchema(

@@ -5,6 +5,7 @@ Core domain data classes for memory system.
 """
 
 import json
+import re
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -36,10 +37,14 @@ T = TypeVar("T")
 # ============================================================================
 
 
-class LinkType(str, Enum):
-    """Link relationship types between memory pages."""
+LINK_TYPE_DEFAULT = "related_to"
+_LINK_TYPE_RE = re.compile(r"^[a-z]+(?:_[a-z]+){0,2}$")
 
-    RELATED_TO = "related_to"
+
+class LinkType(str, Enum):
+    """Legacy predefined link labels kept for compatibility in tests/call sites."""
+
+    RELATED_TO = LINK_TYPE_DEFAULT
     BELONGS_TO = "belongs_to"
     CAUSED_BY = "caused_by"
     DERIVED_FROM = "derived_from"
@@ -61,10 +66,11 @@ class WikiLink(BaseModel):
         if isinstance(data, dict):
             raw_link_type = data.get("link_type")
             if raw_link_type is not None:
-                try:
-                    data["link_type"] = LinkType(raw_link_type)
-                except (ValueError, TypeError):
-                    data["link_type"] = LinkType.RELATED_TO
+                normalized = str(raw_link_type).strip().lower().replace("-", "_").replace(" ", "_")
+                if _LINK_TYPE_RE.fullmatch(normalized):
+                    data["link_type"] = normalized
+                else:
+                    data["link_type"] = LINK_TYPE_DEFAULT
         return data
 
     f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
@@ -73,15 +79,14 @@ class WikiLink(BaseModel):
     t: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
         ..., description="To page_id. Use the page_id from the item's 'page_id' field."
     )
-    link_type: LinkType = Field(LinkType.RELATED_TO, description=(
-        "Relationship type. Available: "
-        "related_to (general association), "
-        "belongs_to (A is part of/owned by B), "
-        "caused_by (A was caused by B), "
-        "derived_from (A was derived from B), "
-        "contradicts (A contradicts B), "
-        "evolved_from (A is an evolution/update of B)"
-    ))
+    link_type: str = Field(
+        LINK_TYPE_DEFAULT,
+        description=(
+            "A short relation label describing how the source relates to the target. "
+            "Let the model invent the label when helpful. Use 1-3 lowercase snake_case words, "
+            "not a sentence. Examples: related_to, inspired_by, works_with."
+        ),
+    )
     weight: float = Field(1.0, description="Association weight 0~1")
     match_text: Annotated[
         Optional[str],
@@ -106,7 +111,7 @@ class StoredLink(BaseModel):
 
     from_uri: str
     to_uri: str
-    link_type: LinkType = LinkType.RELATED_TO
+    link_type: str = LINK_TYPE_DEFAULT
     weight: float = 1.0
     match_text: Optional[str] = None  # single word, must exist verbatim in conversation
     description: str = ""
