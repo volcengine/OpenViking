@@ -3,6 +3,27 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.3.17 (2026-05-15)
+
+### 重点更新
+
+- **Agent 集成**：新增 LangChain 与 LangGraph 集成 `openviking.integrations.langchain`（`OpenVikingRetriever`、`with_openviking_context()`、`OpenVikingChatMessageHistory`、`OpenVikingContextMiddleware`、`OpenVikingStore`（LangGraph store）、`create_openviking_tools()`）；Codex / OpenCode 插件改造为通过生命周期 hooks 做自动召回、逐轮捕获和 PreCompact 前提交，并直接连接 OpenViking 原生 `/mcp` 端点。
+- **OVPack v2 与完整备份恢复**：`ov export` / `ov import` 支持 v2 manifest、文件校验、portable index scalar、可选 dense vector snapshot 和冲突策略；新增 `ov backup` / `ov restore` 用于公共 scope 的完整迁移。
+- **原生 CLI 分发**：新增 `@openviking/cli` npm 包，可通过 `npm i -g @openviking/cli` 使用 `ov`；Rust CLI 发布流水线扩展 Linux musl 构建、npm trusted publishing 和 CLI 集成测试。
+- **检索与文件系统能力**：`find` / `search` 新增 `level` 过滤，可限定 L0 abstract、L1 overview 或 L2 文件命中；资源文件增加 Phase 1 WebDAV 适配；`observer.filesystem` 暴露文件系统观测入口。
+- **Console 与 Usage/Audit**：新增 Usage/Audit 模块和 `/api/v1/console/*` BFF，基于现有 observability event bus 统计 token、检索次数、上下文提交热力图、请求审计和上下文库存。
+- **存储与并发可靠性**：增强精确路径锁和生命周期锁修复内容写入并发覆盖；阻塞后端调用移出 event loop；QueueFS SQLite 持久化扩展；`storage.task_tracker.backend` 新增 `persistent` 后端支持多实例 task 查询。
+
+### 升级说明
+
+- `storage.task_tracker.backend` 是新增配置。单实例部署可继续使用默认 `memory`；多实例或需要重启后查询 `task_id` 的部署可切换到 `persistent`。
+- `vlm.backup` 只支持一层 backup，且只在 rate limit、`5xx`、连接失败和 timeout 等可重试错误上触发；认证、权限和计费类错误不会自动切换。
+- `vlm.extra_request_body` 会合并到 OpenAI SDK / LiteLLM 的 `extra_body`，适合接入 Ollama、OpenAI-compatible gateway 或其他需要额外 JSON 字段的 provider。
+- Codex 插件新部署建议使用 `OPENVIKING_*` 环境变量调优；旧的 `ov.conf` 中 `codex.*` 配置仍保留兼容，但不再推荐作为首选。
+- OVPack dense vector snapshot 只支持纯 dense index；embedding provider、model、input、参数和 dimension 不兼容时，在 `--vector-mode auto` 下回退重算，在 `--vector-mode require` 下失败。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.16...v0.3.17)
+
 ## v0.3.14 (2026-04-30)
 
 ### 重点更新
