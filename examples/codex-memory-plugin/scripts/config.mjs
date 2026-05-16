@@ -251,6 +251,14 @@ export function loadConfig() {
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
+    commitPollTimeoutMs: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_POLL_TIMEOUT_MS,
+      num(cx.commitPollTimeoutMs, 45000),
+    ))),
+    commitPollIntervalMs: Math.max(250, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_POLL_INTERVAL_MS,
+      num(cx.commitPollIntervalMs, 1000),
+    ))),
 
     debug,
     debugLogPath,

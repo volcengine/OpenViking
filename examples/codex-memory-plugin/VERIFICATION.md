@@ -90,7 +90,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: `OpenViking session cx-verify-sess is committed`.
+Expect: `pre-compact commit: cx-verify-sess is committed; N memory item(s) extracted` (or an "extraction is still running" message if the async task exceeds the poll timeout).
 
 State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
@@ -141,7 +141,7 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: `OpenViking session cx-verify-sess is committed`.
+Expect: `OpenViking session cx-verify-sess is committed; N memory item(s) extracted`.
 After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op

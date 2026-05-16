@@ -113,6 +113,8 @@ export OPENVIKING_FULL_CONTENT_SCORE=0.65
 export OPENVIKING_RECALL_MAX_MEMORY_CHARS=1200
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_COMMIT_POLL_TIMEOUT_MS=45000
+export OPENVIKING_COMMIT_POLL_INTERVAL_MS=1000
 export OPENVIKING_DEBUG=1
 ```
 
@@ -223,7 +225,8 @@ successful no-op, not an error.
 
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
 2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-3. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+3. If the server returns an async `task_id`, poll `/api/v1/tasks/{task_id}` briefly so the hook message reflects the actual extraction count instead of the immediate accepted response
+4. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
