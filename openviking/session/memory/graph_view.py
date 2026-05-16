@@ -10,6 +10,7 @@ Usage:
     path = await graph.build_graph(["viking://user/a/memories", "viking://user/b/memories"], "viking://user/default/memories/.graph.html", ctx=ctx)
 """
 
+import hashlib
 import json
 from typing import Any, Dict, List, Optional
 
@@ -34,15 +35,12 @@ TYPE_COLORS = {
     "trajectories": "#6c5ce7",
 }
 
-# Link type → style mapping
-LINK_STYLES = {
-    "related_to": {"color": "#999", "dash": "none"},
-    "belongs_to": {"color": "#3498db", "dash": "none"},
-    "caused_by": {"color": "#e74c3c", "dash": "6,3"},
-    "derived_from": {"color": "#9b59b6", "dash": "none"},
-    "contradicts": {"color": "#e74c3c", "dash": "2,2"},
-    "evolved_from": {"color": "#2ecc71", "dash": "none"},
-}
+
+def _color_for_link_type(link_type: str) -> str:
+    normalized = (link_type or "related_to").strip() or "related_to"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    hue = int(digest[:8], 16) % 360
+    return f"hsl({hue}, 72%, 58%)"
 
 
 class MemoryGraph:
@@ -92,17 +90,19 @@ class MemoryGraph:
         edges: List[Dict[str, Any]] = []
 
         for space_uri in space_uris:
-            glob_result = await viking_fs.glob(
-                "**/*.md",
-                uri=space_uri,
-                node_limit=None,
+            entries = await viking_fs.tree(
+                space_uri,
+                node_limit=1000000,
+                level_limit=None,
                 ctx=ctx,
             )
-            all_uris = glob_result.get("matches", [])
             md_uris = [
-                u
-                for u in all_uris
-                if not u.endswith("/.overview.md") and not u.endswith("/.abstract.md")
+                entry["uri"]
+                for entry in entries
+                if not entry.get("isDir")
+                and entry.get("rel_path", "").endswith(".md")
+                and not entry.get("rel_path", "").endswith("/.overview.md")
+                and not entry.get("rel_path", "").endswith("/.abstract.md")
             ]
 
             logger.info(f"[build_graph] Found {len(md_uris)} memory files under {space_uri}")
@@ -114,8 +114,8 @@ class MemoryGraph:
                         continue
                     mf = MemoryFileUtils.read(content, uri=uri)
                 except Exception as e:
-                    logger.warning(f"Failed to read/parse {uri}: {e}")
-                    continue
+                    logger.error(f"Failed to read/parse {uri}: {e}")
+                    raise
 
                 inferred_memory_type = self._infer_memory_type(uri, mf.memory_type or "")
                 category = mf.extra_fields.get("category", "")
@@ -148,18 +148,6 @@ class MemoryGraph:
                             "description": link_data.get("description", ""),
                         }
                     )
-
-        for edge in edges:
-            for key in ("source", "target"):
-                uri = edge[key]
-                if uri not in nodes:
-                    nodes[uri] = {
-                        "id": uri,
-                        "uri": uri,
-                        "label": uri.split("/")[-1].replace(".md", ""),
-                        "memory_type": "",
-                        "category": "",
-                    }
 
         seen = set()
         unique_edges = []
@@ -229,12 +217,12 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
                 "label": node.get("label") or node["id"],
                 "shape": "box",
                 "color": {
-                    "background": "rgba(15, 23, 42, 0)",
+                    "background": "#0f172a",
                     "border": color,
-                    "highlight": {"background": "rgba(15, 23, 42, 0)", "border": color},
-                    "hover": {"background": "rgba(15, 23, 42, 0)", "border": color},
+                    "highlight": {"background": "#0f172a", "border": color},
+                    "hover": {"background": "#0f172a", "border": color},
                 },
-                "font": {"color": "#e2e8f0", "size": 12},
+                "font": {"color": "#f8fafc", "size": 12},
                 "margin": 10,
                 "widthConstraint": {"minimum": 120, "maximum": 180},
                 "memory_type": node.get("memory_type", ""),
@@ -248,19 +236,20 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
 
     vis_edges = []
     for idx, edge in enumerate(edges):
-        style = LINK_STYLES.get(edge.get("link_type") or "", {"color": "#94a3b8", "dash": "none"})
+        link_type = edge.get("link_type") or "related_to"
+        color = _color_for_link_type(link_type)
         vis_edges.append(
             {
                 "id": f"edge-{idx}",
                 "from": edge["source"],
                 "to": edge["target"],
-                "label": edge.get("link_type", "related_to"),
-                "color": {"color": style["color"], "highlight": style["color"], "hover": style["color"]},
-                "dashes": style["dash"] != "none",
+                "label": link_type,
+                "color": {"color": color, "highlight": color, "hover": color},
+                "dashes": False,
                 "width": max(2, float(edge.get("weight", 1.0)) * 4),
                 "arrows": "to",
                 "smooth": {"type": "dynamic"},
-                "link_type": edge.get("link_type", "related_to"),
+                "link_type": link_type,
                 "weight": float(edge.get("weight", 1.0)),
                 "description": edge.get("description", ""),
             }
@@ -269,7 +258,6 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
     nodes_json = _script_safe_json(vis_nodes)
     edges_json = _script_safe_json(vis_edges)
     type_colors_json = _script_safe_json(TYPE_COLORS)
-    link_styles_json = _script_safe_json(LINK_STYLES)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -329,7 +317,6 @@ window.__OPENVIKING_VIS_NETWORK_SOURCE__ = "external";
 const originalNodes = {nodes_json};
 const originalEdges = {edges_json};
 const typeColors = {type_colors_json};
-const linkStyles = {link_styles_json};
 const tooltip = document.getElementById('tooltip');
 const detailTitle = document.getElementById('detail-title');
 const detailMeta = document.getElementById('detail-meta');
@@ -353,6 +340,7 @@ if (!window.vis || !window.vis.DataSet || !window.vis.Network) {{
 const nodes = new vis.DataSet(originalNodes);
 const edges = new vis.DataSet(originalEdges);
 const activeMemoryTypes = new Set();
+const activeLinkTypes = new Set();
 
 const network = new vis.Network(
   document.getElementById('graph'),
@@ -528,7 +516,7 @@ function focusNodeById(targetNodeId) {{
   }}
   const connectedNodeIds = network.getConnectedNodes(targetNodeId);
   network.unselectAll();
-  network.selectNodes([targetNodeId, ...connectedNodeIds]);
+  network.selectNodes([targetNodeId]);
   showNodeDetails(nodes.get(targetNodeId));
 }}
 
@@ -550,8 +538,15 @@ function renderLegend() {{
     const activeClass = isActive ? 'active' : (activeMemoryTypes.size > 0 ? 'dimmed' : '');
     return `<div class="legend-item"><button class="${{activeClass}}" data-memory-type="${{k}}"><span class="legend-chip" style="background:${{v}}"></span><span>${{k}}</span></button></div>`;
   }}).join('');
-  const edgeItems = Object.entries(linkStyles).map(([k, v]) => `<div class="legend-item"><span class="legend-line" style="background:${{v.color}}"></span><span>${{k}}</span></div>`).join('');
-  legend.innerHTML = `<h4>Memory Types</h4>${{typeItems}}<div class="muted" style="margin:6px 0 10px;">Click types to filter. Click again to clear each selection.</div><h4 style="margin-top:12px;">Link Types</h4>${{edgeItems}}`;
+  const linkTypes = [...new Set(originalEdges.map((edge) => edge.link_type).filter(Boolean))].sort();
+  const edgeItems = linkTypes.map((linkType) => {{
+    const color = originalEdges.find((edge) => edge.link_type === linkType)?.color?.color || '#94a3b8';
+    const isActive = activeLinkTypes.has(linkType);
+    const activeClass = isActive ? 'active' : (activeLinkTypes.size > 0 ? 'dimmed' : '');
+    return `<div class="legend-item"><button class="${{activeClass}}" data-link-type="${{linkType}}"><span class="legend-line" style="background:${{color}}"></span><span>${{linkType}}</span></button></div>`;
+  }}).join('');
+  const linkSection = edgeItems ? `<h4 style="margin-top:12px;">Link Types</h4>${{edgeItems}}` : '';
+  legend.innerHTML = `<h4>Memory Types</h4>${{typeItems}}<div class="muted" style="margin:6px 0 10px;">Click types to filter. Click again to clear each selection.</div>${{linkSection}}`;
   legend.querySelectorAll('button[data-memory-type]').forEach((button) => {{
     button.addEventListener('click', () => {{
       const memoryType = button.dataset.memoryType;
@@ -559,6 +554,18 @@ function renderLegend() {{
         activeMemoryTypes.delete(memoryType);
       }} else {{
         activeMemoryTypes.add(memoryType);
+      }}
+      applyFilter();
+      renderLegend();
+    }});
+  }});
+  legend.querySelectorAll('button[data-link-type]').forEach((button) => {{
+    button.addEventListener('click', () => {{
+      const linkType = button.dataset.linkType;
+      if (activeLinkTypes.has(linkType)) {{
+        activeLinkTypes.delete(linkType);
+      }} else {{
+        activeLinkTypes.add(linkType);
       }}
       applyFilter();
       renderLegend();
@@ -584,14 +591,14 @@ function restoreVisibleGraph(selectedNodeIds = []) {{
 }}
 
 function applyFilter(shouldFit = false) {{
-  if (activeMemoryTypes.size === 0) {{
+  if (activeMemoryTypes.size === 0 && activeLinkTypes.size === 0) {{
     restoreVisibleGraph();
     return;
   }}
 
-  const visibleNodes = originalNodes.filter(node => activeMemoryTypes.has(node.memory_type));
+  const visibleNodes = originalNodes.filter(node => activeMemoryTypes.size === 0 || activeMemoryTypes.has(node.memory_type));
   const visibleNodeIds = new Set(visibleNodes.map(node => node.id));
-  const visibleEdges = originalEdges.filter(edge => visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to));
+  const visibleEdges = originalEdges.filter(edge => (activeLinkTypes.size === 0 || activeLinkTypes.has(edge.link_type)) && visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to));
   const visibleEdgeIds = new Set(visibleEdges.map(edge => edge.id));
 
   nodes.update(originalNodes.map(node => ({{

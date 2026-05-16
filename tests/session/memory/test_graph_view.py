@@ -72,7 +72,7 @@ def test_render_graph_html_filter_does_not_auto_fit_graph():
     assert "network.fit({ animation: false });" not in html
 
 
-def test_render_graph_html_uses_transparent_node_fill_with_typed_borders():
+def test_render_graph_html_uses_dark_node_background_with_light_text():
     nodes = [
         {
             "id": "viking://agent/demo/memories/experiences/a.md",
@@ -87,7 +87,10 @@ def test_render_graph_html_uses_transparent_node_fill_with_typed_borders():
 
     html = _render_graph_html(nodes, [])
 
-    assert '"background": "rgba(15, 23, 42, 0)"' in html
+    assert '"background": "#0f172a"' in html
+    assert '"highlight": {"background": "#0f172a", "border": "#fd79a8"}' in html
+    assert '"hover": {"background": "#0f172a", "border": "#fd79a8"}' in html
+    assert '"font": {"color": "#f8fafc", "size": 12}' in html
     assert '"border": "#fd79a8"' in html
 
 
@@ -179,11 +182,11 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
     assert "hidden: false" in html
 
 
-def test_render_graph_html_click_node_does_not_focus_viewport():
+def test_render_graph_html_click_node_selects_only_current_node():
     html = _render_graph_html([], [])
 
-    assert "network.focus(targetNodeId" not in html
-    assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" in html
+    assert "network.selectNodes([targetNodeId]);" in html
+    assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" not in html
 
 
 def test_render_graph_html_uses_faster_stabilization_configuration():
@@ -213,20 +216,58 @@ def test_render_graph_html_shows_node_content_preview_in_details():
     assert "return text || '(empty)';" in html
 
 
-def test_render_graph_html_does_not_show_preview_truncated_marker():
-    nodes = [
+
+
+
+
+def test_render_graph_html_renders_dynamic_relationship_legend_from_edges():
+    edges = [
         {
-            "id": "viking://agent/demo/memories/experiences/a.md",
-            "uri": "viking://agent/demo/memories/experiences/a.md",
-            "label": "a",
-            "memory_type": "experiences",
-            "category": "",
-            "content_preview": "hello\nworld",
-            "content_truncated": True,
+            "source": "viking://user/Caroline/memories/profile.md",
+            "target": "viking://user/Caroline/memories/preferences/music.md",
+            "link_type": "inspired_by",
+            "weight": 1.0,
+            "description": "same hash color",
+        },
+        {
+            "source": "viking://user/Caroline/memories/preferences/music.md",
+            "target": "viking://user/Caroline/memories/events/show.md",
+            "link_type": "works_with",
+            "weight": 1.0,
+            "description": "different hash color",
+        },
+        {
+            "source": "viking://user/Caroline/memories/events/show.md",
+            "target": "viking://user/Caroline/memories/entities/band.md",
+            "link_type": "inspired_by",
+            "weight": 0.5,
+            "description": "same hash color again",
+        },
+    ]
+
+    html = _render_graph_html([], edges)
+
+    assert "const activeLinkTypes = new Set();" in html
+    assert "const linkTypes = [...new Set(originalEdges.map((edge) => edge.link_type).filter(Boolean))].sort();" in html
+    assert "activeLinkTypes.has(linkType)" in html
+    assert "activeLinkTypes.add(linkType)" in html
+    assert "activeLinkTypes.delete(linkType)" in html
+    assert "inspired_by" in html
+    assert "works_with" in html
+
+
+def test_render_graph_html_uses_hsl_palette_with_fixed_saturation_and_lightness():
+    edges = [
+        {
+            "source": "viking://user/Caroline/memories/profile.md",
+            "target": "viking://user/Caroline/memories/preferences/music.md",
+            "link_type": "inspired_by",
+            "weight": 1.0,
+            "description": "same hash color",
         }
     ]
 
-    html = _render_graph_html(nodes, [])
+    html = _render_graph_html([], edges)
 
-    assert "[preview truncated]" not in html
-    assert "content_truncated" in html
+    assert '"color": {"color": "hsl(' in html
+    assert ', 72%, 58%)"' in html

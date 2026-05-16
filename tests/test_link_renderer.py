@@ -140,6 +140,40 @@ class TestRenderLinks:
         )
         assert result == "Caroline went to the store."
 
+    def test_ascii_boundary_matches_when_surrounded_by_non_ascii_word_chars(self):
+        content = "(car), car."
+        links = [
+            {
+                "from_uri": "viking://user/Caroline/memories/profile.md",
+                "to_uri": "viking://user/Caroline/memories/entities/vehicles/car.md",
+                "weight": 1.0,
+                "match_text": "car",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Caroline/memories/profile.md",
+            links,
+        )
+        assert result == "([car](entities/vehicles/car.md)), car."
+
+    def test_ascii_boundary_matches_next_to_cjk_text(self):
+        content = "她喜欢car，也喜欢旅行。"
+        links = [
+            {
+                "from_uri": "viking://user/Caroline/memories/profile.md",
+                "to_uri": "viking://user/Caroline/memories/entities/vehicles/car.md",
+                "weight": 1.0,
+                "match_text": "car",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Caroline/memories/profile.md",
+            links,
+        )
+        assert result == "她喜欢[car](entities/vehicles/car.md)，也喜欢旅行。"
+
     def test_no_match_text_skipped(self):
         content = "Some content here."
         links = [

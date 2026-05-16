@@ -11,13 +11,36 @@ class LinkRenderer:
     _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)\s]+)\)")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
     _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+    _ASCII_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
 
     @staticmethod
-    def _build_match_pattern(match_text: str) -> re.Pattern[str]:
+    def _contains_cjk(text: str) -> bool:
+        return bool(LinkRenderer._CJK_RE.search(text))
+
+    @staticmethod
+    def _is_ascii_word_char(char: str) -> bool:
+        return bool(char and LinkRenderer._ASCII_WORD_CHAR_RE.fullmatch(char))
+
+    @staticmethod
+    def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
         escaped = re.escape(match_text)
-        if LinkRenderer._CJK_RE.search(match_text):
-            return re.compile(escaped)
-        return re.compile(r"\b" + escaped + r"\b", re.IGNORECASE)
+        if LinkRenderer._contains_cjk(match_text):
+            match = re.search(escaped, content)
+            if not match:
+                return None
+            return match.start(), match.end()
+
+        pattern = re.compile(escaped, re.IGNORECASE)
+        for match in pattern.finditer(content):
+            start, end = match.start(), match.end()
+            left_char = content[start - 1] if start > 0 else ""
+            right_char = content[end] if end < len(content) else ""
+            if LinkRenderer._is_ascii_word_char(left_char) or LinkRenderer._is_ascii_word_char(
+                right_char
+            ):
+                continue
+            return start, end
+        return None
 
     @staticmethod
     def render_links(content: str, source_uri: str, links: List[Dict]) -> str:
@@ -45,12 +68,11 @@ class LinkRenderer:
             rel = LinkRenderer.relative_path(source_uri, to_uri)
             link_target = rel if rel is not None else to_uri
 
-            pattern = LinkRenderer._build_match_pattern(match_text)
-            match = pattern.search(content)
-            if not match:
+            match_span = LinkRenderer._find_match_span(content, match_text)
+            if not match_span:
                 continue
 
-            start, end = match.start(), match.end()
+            start, end = match_span
             # Skip if overlaps with an existing replacement
             if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
                 continue
