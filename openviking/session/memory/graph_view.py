@@ -217,6 +217,9 @@ class MemoryGraph:
 
 
 def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
+    def _script_safe_json(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False).replace("</", r"<\/")
+
     vis_nodes = []
     for node in nodes:
         color = TYPE_COLORS.get(node.get("memory_type") or "", "#64748b")
@@ -263,10 +266,10 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
             }
         )
 
-    nodes_json = json.dumps(vis_nodes, ensure_ascii=False)
-    edges_json = json.dumps(vis_edges, ensure_ascii=False)
-    type_colors_json = json.dumps(TYPE_COLORS, ensure_ascii=False)
-    link_styles_json = json.dumps(LINK_STYLES, ensure_ascii=False)
+    nodes_json = _script_safe_json(vis_nodes)
+    edges_json = _script_safe_json(vis_edges)
+    type_colors_json = _script_safe_json(TYPE_COLORS)
+    link_styles_json = _script_safe_json(LINK_STYLES)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -304,6 +307,9 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
   #tooltip .meta {{ font-size: 12px; color: #94a3b8; margin-bottom: 8px; }}
   #tooltip .desc {{ font-size: 12px; line-height: 1.5; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }}
 </style>
+<script>
+window.__OPENVIKING_VIS_NETWORK_SOURCE__ = "external";
+</script>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
@@ -330,6 +336,20 @@ const detailMeta = document.getElementById('detail-meta');
 const detailContent = document.getElementById('detail-content');
 const legend = document.getElementById('legend');
 
+function renderInitError(message) {{
+  const graph = document.getElementById('graph');
+  if (graph) {{
+    graph.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;padding:24px;color:#e2e8f0;text-align:center;line-height:1.6;">${{message}}</div>`;
+  }}
+  detailTitle.textContent = 'Graph unavailable';
+  detailMeta.textContent = '';
+  detailContent.textContent = message;
+  legend.innerHTML = '';
+}}
+
+if (!window.vis || !window.vis.DataSet || !window.vis.Network) {{
+  renderInitError('Graph library failed to load. If you opened this file locally, check network access or regenerate it with an embedded graph library bundle.');
+}} else {{
 const nodes = new vis.DataSet(originalNodes);
 const edges = new vis.DataSet(originalEdges);
 const activeMemoryTypes = new Set();
@@ -341,13 +361,13 @@ const network = new vis.Network(
     autoResize: true,
     interaction: {{ hover: true, tooltipDelay: 100, navigationButtons: true, keyboard: true }},
     physics: {{
-      stabilization: {{ iterations: 500, updateInterval: 25 }},
+      stabilization: {{ iterations: 250, updateInterval: 25 }},
       barnesHut: {{
         gravitationalConstant: -7000,
         centralGravity: 0.18,
-        springLength: 170,
+        springLength: 120,
         springConstant: 0.02,
-        damping: 0.16,
+        damping: 0.24,
         avoidOverlap: 0.2,
       }},
       minVelocity: 0.75,
@@ -452,7 +472,7 @@ function renderMarkdown(text, baseUri = '') {{
   html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  const lines = html.split('\n');
+  const lines = html.split('\\n');
   const rendered = [];
   let listItems = [];
 
@@ -509,7 +529,6 @@ function focusNodeById(targetNodeId) {{
   const connectedNodeIds = network.getConnectedNodes(targetNodeId);
   network.unselectAll();
   network.selectNodes([targetNodeId, ...connectedNodeIds]);
-  network.focus(targetNodeId, {{ animation: false, scale: 1.0 }});
   showNodeDetails(nodes.get(targetNodeId));
 }}
 
@@ -640,6 +659,7 @@ network.on('click', (params) => {{
 }});
 
 renderLegend();
+}}
 </script>
 </body>
 </html>"""

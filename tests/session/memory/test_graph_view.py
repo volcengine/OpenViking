@@ -62,7 +62,7 @@ def test_render_graph_html_embeds_full_markdown_content_and_link_targets():
     assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
     assert "detailContent.addEventListener('click'" in html
     assert "const targetNodeId = link.dataset.targetUri;" in html
-    assert "network.focus(targetNodeId" in html
+    assert "network.focus(targetNodeId" not in html
 
 
 def test_render_graph_html_filter_does_not_auto_fit_graph():
@@ -127,11 +127,20 @@ def test_render_graph_html_embeds_vis_network_viewer_metadata():
     assert "cytoscape" not in html.lower()
 
 
-def test_render_graph_html_omits_header_copy():
+def test_render_graph_html_embeds_vis_network_load_guard():
     html = _render_graph_html([], [])
 
-    assert "<h3>Memory Graph</h3>" not in html
-    assert "Hover to preview. Click a node to focus its neighbors." not in html
+    assert 'window.__OPENVIKING_VIS_NETWORK_SOURCE__ = "external";' in html
+    assert '<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>' in html
+    assert "if (!window.vis || !window.vis.DataSet || !window.vis.Network)" in html
+    assert "Graph library failed to load. If you opened this file locally" in html
+
+
+def test_render_graph_html_keeps_newline_escape_in_split_call():
+    html = _render_graph_html([], [])
+
+    assert "const lines = html.split('\\n');" in html
+    assert "const lines = html.split('\n');" not in html
 
 
 def test_render_graph_html_stops_physics_after_stabilization():
@@ -146,9 +155,9 @@ def test_render_graph_html_uses_tighter_layout_configuration():
     html = _render_graph_html([], [])
 
     assert "gravitationalConstant: -7000" in html
-    assert "springLength: 170" in html
+    assert "springLength: 120" in html
     assert "avoidOverlap: 0.2" in html
-    assert "stabilization: { iterations: 500" in html
+    assert "stabilization: { iterations: 250" in html
 
 
 def test_render_graph_html_supports_multi_select_memory_type_filter():
@@ -170,13 +179,19 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
     assert "hidden: false" in html
 
 
-def test_render_graph_html_click_node_highlights_without_hiding_others():
+def test_render_graph_html_click_node_does_not_focus_viewport():
     html = _render_graph_html([], [])
 
-    assert "function focusNodeById(targetNodeId)" in html
+    assert "network.focus(targetNodeId" not in html
     assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" in html
-    assert "const updatedNodes = nodes.get().map" not in html
-    assert "const updatedEdges = edges.get().map" not in html
+
+
+def test_render_graph_html_uses_faster_stabilization_configuration():
+    html = _render_graph_html([], [])
+
+    assert "stabilization: { iterations: 250" in html
+    assert "springLength: 120" in html
+    assert "damping: 0.24" in html
 
 
 def test_render_graph_html_shows_node_content_preview_in_details():

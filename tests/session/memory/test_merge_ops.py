@@ -54,6 +54,14 @@ class TestPatchOp:
         assert "PATCH" in desc
         assert "test content" in desc
 
+    def test_get_output_schema_description_string_mentions_target_file_binding(self):
+        """String patch description should bind SEARCH to the target file content."""
+        op = PatchOp(FieldType.STRING)
+        desc = op.get_output_schema_description("test content")
+        assert "page_id" in desc
+        assert "SEARCH" in desc
+        assert "target file" in desc
+
     def test_get_output_schema_description_other(self):
         """Non-string field description should mention replace."""
         op = PatchOp(FieldType.INT64)
@@ -106,9 +114,9 @@ class TestSumOp:
         assert op.apply(None, 10) == 10
 
     def test_apply_invalid_values(self):
-        """Invalid values should fall back to patch."""
+        """Invalid values should keep current."""
         op = SumOp()
-        assert op.apply("not a number", 10) == 10
+        assert op.apply("not a number", 10) == "not a number"
 
 
 class TestImmutableOp:
@@ -184,6 +192,15 @@ class TestSearchReplaceBlock:
         )
         assert block.search == "old content"
         assert block.replace == "new content"
+
+    def test_search_description_mentions_page_bound_target_file(self):
+        """SEARCH description should require exact text from the target file."""
+        description = SearchReplaceBlock.model_fields["search"].description
+        assert description is not None
+        assert "page_id" in description
+        assert "read result" in description
+        assert "other memory" in description
+        assert "exact" in description
 
 
 class TestStrPatch:
