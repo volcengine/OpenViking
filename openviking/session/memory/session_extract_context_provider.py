@@ -360,6 +360,24 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             tracer.error(f"Failed to search: {e}")
             return []
 
+    async def _append_structured_read_result(
+        self,
+        messages: List[Dict[str, Any]],
+        call_id: int,
+        file_uri: str,
+    ) -> int:
+        result = await self.read_file(file_uri)
+        if result is not None:
+            add_tool_call_pair_to_messages(
+                messages=messages,
+                call_id=call_id,
+                tool_name="read",
+                params={"uri": file_uri},
+                result=result,
+            )
+            return call_id + 1
+        return call_id
+
     async def prefetch(self) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
@@ -451,16 +469,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
-            result = await self.read_file(file_uri)
-            if result is not None:
-                add_tool_call_pair_to_messages(
-                    messages=pre_fetch_messages,
-                    call_id=call_id_seq,
-                    tool_name="read",
-                    params={"uri": file_uri},
-                    result=result,
-                )
-                call_id_seq += 1
+            call_id_seq = await self._append_structured_read_result(
+                messages=pre_fetch_messages,
+                call_id=call_id_seq,
+                file_uri=file_uri,
+            )
 
         # eager_prefetch 模式：读取搜索结果 top-N
         if self._eager_prefetch:
@@ -468,16 +481,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             for file_uri in topn_files:
                 if not file_uri:
                     continue
-                result = await self.read_file(file_uri)
-                if result is not None:
-                    add_tool_call_pair_to_messages(
-                        messages=pre_fetch_messages,
-                        call_id=call_id_seq,
-                        tool_name="read",
-                        params={"uri": file_uri},
-                        result=result,
-                    )
-                    call_id_seq += 1
+                call_id_seq = await self._append_structured_read_result(
+                    messages=pre_fetch_messages,
+                    call_id=call_id_seq,
+                    file_uri=file_uri,
+                )
 
         return pre_fetch_messages
 

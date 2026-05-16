@@ -440,12 +440,9 @@ function restoreVisibleGraph(selectedNodeIds = []) {{
   network.setOptions({{ physics: false }});
 }}
 
-function applyFilter(shouldFit = true) {{
+function applyFilter(shouldFit = false) {{
   if (activeMemoryTypes.size === 0) {{
     restoreVisibleGraph();
-    if (shouldFit) {{
-      network.fit({{ animation: false }});
-    }}
     return;
   }}
 
@@ -462,10 +459,6 @@ function applyFilter(shouldFit = true) {{
     id: edge.id || `edge-${{index}}`,
     hidden: !visibleEdgeIds.has(edge.id || `edge-${{index}}`),
   }})));
-
-  if (visibleNodes.length > 0 && shouldFit) {{
-    network.fit({{ animation: false }});
-  }}
 
   network.unselectAll();
   network.selectNodes(visibleNodes.map(node => node.id));

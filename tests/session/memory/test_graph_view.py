@@ -4,6 +4,13 @@
 from openviking.session.memory.graph_view import _render_graph_html
 
 
+def test_render_graph_html_filter_does_not_auto_fit_graph():
+    html = _render_graph_html([], [])
+
+    assert "function applyFilter(shouldFit = false)" in html
+    assert "network.fit({ animation: false });" not in html
+
+
 def test_render_graph_html_uses_transparent_node_fill_with_typed_borders():
     nodes = [
         {

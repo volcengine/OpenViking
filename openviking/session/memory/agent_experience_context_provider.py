@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 from openviking.core.namespace import to_user_space, to_agent_space
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -173,6 +174,21 @@ All memory content must be written in {output_language}.
                 except Exception as e:
                     tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
 
+        prefetch_messages: List[Dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": "\n".join(
+                    [
+                        "## New Trajectory",
+                        f"URI: `{self.trajectory_uri}`",
+                        "",
+                        self.trajectory_summary,
+                    ]
+                ),
+            }
+        ]
+        call_id_seq = 0
+
         # Build candidate experiences section
         exp_sections: List[str] = []
         for idx, exp_uri in enumerate(candidate_uris):
@@ -181,6 +197,14 @@ All memory content must be written in {output_language}.
                 continue
 
             self.prefetched_uris.append(exp_uri)
+            add_tool_call_pair_to_messages(
+                messages=prefetch_messages,
+                call_id=call_id_seq,
+                tool_name="read",
+                params={"uri": exp_uri},
+                result=result,
+            )
+            call_id_seq += 1
             mf = self._read_file_contents.get(exp_uri)
             if not mf:
                 continue
@@ -188,7 +212,7 @@ All memory content must be written in {output_language}.
 
             page_id = result.get("page_id")
             page_id_label = f" [page_id: {page_id}]" if page_id is not None else ""
-            section = f"### Experience {idx + 1}: `{exp_name}`{page_id_label}\nURI: `{exp_uri}`\n\n{mf.content}"
+            section = f"### Experience {idx + 1}: `{exp_name}`{page_id_label}\nURI: `{exp_uri}`"
 
             # Attach source trajectories for top-3 only
             if idx < SOURCE_TRAJ_TOP_K and viking_fs:
@@ -203,13 +227,7 @@ All memory content must be written in {output_language}.
 
             exp_sections.append(section)
 
-        # Assemble single user message
-        lines = [
-            "## New Trajectory",
-            f"URI: `{self.trajectory_uri}`",
-            "",
-            self.trajectory_summary,
-        ]
+        lines = []
 
         if exp_sections:
             lines += [
@@ -237,4 +255,5 @@ All memory content must be written in {output_language}.
             "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip**. Output JSON only.",
         ]
 
-        return [{"role": "user", "content": "\n".join(lines)}]
+        prefetch_messages.append({"role": "user", "content": "\n".join(lines)})
+        return prefetch_messages
