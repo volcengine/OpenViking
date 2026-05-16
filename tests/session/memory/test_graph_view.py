@@ -68,7 +68,7 @@ def test_render_graph_html_embeds_full_markdown_content_and_link_targets():
 def test_render_graph_html_filter_does_not_auto_fit_graph():
     html = _render_graph_html([], [])
 
-    assert "function applyFilter(shouldFit = false)" in html
+    assert "function applyFilter()" in html
     assert "network.fit({ animation: false });" not in html
 
 
@@ -179,7 +179,8 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
     assert "nodes.clear()" not in html
     assert "edges.clear()" not in html
     assert "restoreVisibleGraph()" in html
-    assert "hidden: false" in html
+    assert "function updateVisibility(nodeIdsToShow, edgeIdsToShow)" in html
+    assert "hidden: shouldHide" in html
 
 
 def test_render_graph_html_click_node_selects_only_current_node():
@@ -189,12 +190,30 @@ def test_render_graph_html_click_node_selects_only_current_node():
     assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" not in html
 
 
-def test_render_graph_html_uses_faster_stabilization_configuration():
+
+
+def test_render_graph_html_updates_only_changed_visibility_states():
     html = _render_graph_html([], [])
 
-    assert "stabilization: { iterations: 250" in html
-    assert "springLength: 120" in html
-    assert "damping: 0.24" in html
+    assert "function updateVisibility(nodeIdsToShow, edgeIdsToShow)" in html
+    assert "if (nodes.get(node.id)?.hidden !== shouldHide)" in html
+    assert "if (edges.get(edgeId)?.hidden !== shouldHide)" in html
+    assert "if (nodeUpdates.length > 0)" in html
+    assert "if (edgeUpdates.length > 0)" in html
+
+
+def test_render_graph_html_filter_does_not_select_all_visible_nodes():
+    html = _render_graph_html([], [])
+
+    assert "network.selectNodes(visibleNodes.map(node => node.id));" not in html
+
+
+def test_render_graph_html_does_not_reset_physics_during_filter_or_restore():
+    html = _render_graph_html([], [])
+
+    assert "network.setOptions({ physics: false });" in html
+    assert "network.setOptions({ physics: false })" in html
+    assert html.count("network.setOptions({ physics: false });") == 1
 
 
 def test_render_graph_html_shows_node_content_preview_in_details():

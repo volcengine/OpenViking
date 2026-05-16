@@ -514,7 +514,6 @@ function focusNodeById(targetNodeId) {{
   if (!targetNodeId || !nodes.get(targetNodeId)) {{
     return;
   }}
-  const connectedNodeIds = network.getConnectedNodes(targetNodeId);
   network.unselectAll();
   network.selectNodes([targetNodeId]);
   showNodeDetails(nodes.get(targetNodeId));
@@ -573,24 +572,43 @@ function renderLegend() {{
   }});
 }}
 
+function updateVisibility(nodeIdsToShow, edgeIdsToShow) {{
+  const nodeUpdates = [];
+  originalNodes.forEach((node) => {{
+    const shouldHide = !nodeIdsToShow.has(node.id);
+    if (nodes.get(node.id)?.hidden !== shouldHide) {{
+      nodeUpdates.push({{ id: node.id, hidden: shouldHide }});
+    }}
+  }});
+  if (nodeUpdates.length > 0) {{
+    nodes.update(nodeUpdates);
+  }}
+
+  const edgeUpdates = [];
+  originalEdges.forEach((edge, index) => {{
+    const edgeId = edge.id || `edge-${{index}}`;
+    const shouldHide = !edgeIdsToShow.has(edgeId);
+    if (edges.get(edgeId)?.hidden !== shouldHide) {{
+      edgeUpdates.push({{ id: edgeId, hidden: shouldHide }});
+    }}
+  }});
+  if (edgeUpdates.length > 0) {{
+    edges.update(edgeUpdates);
+  }}
+}}
+
 function restoreVisibleGraph(selectedNodeIds = []) {{
-  const nodeSelection = new Set(selectedNodeIds);
-  nodes.update(originalNodes.map(node => ({{
-    id: node.id,
-    hidden: false,
-  }})));
-  edges.update(originalEdges.map((edge, index) => ({{
-    id: edge.id || `edge-${{index}}`,
-    hidden: false,
-  }})));
+  updateVisibility(
+    new Set(originalNodes.map(node => node.id)),
+    new Set(originalEdges.map((edge, index) => edge.id || `edge-${{index}}`)),
+  );
   network.unselectAll();
   if (selectedNodeIds.length > 0) {{
     network.selectNodes(selectedNodeIds);
   }}
-  network.setOptions({{ physics: false }});
 }}
 
-function applyFilter(shouldFit = false) {{
+function applyFilter() {{
   if (activeMemoryTypes.size === 0 && activeLinkTypes.size === 0) {{
     restoreVisibleGraph();
     return;
@@ -599,20 +617,10 @@ function applyFilter(shouldFit = false) {{
   const visibleNodes = originalNodes.filter(node => activeMemoryTypes.size === 0 || activeMemoryTypes.has(node.memory_type));
   const visibleNodeIds = new Set(visibleNodes.map(node => node.id));
   const visibleEdges = originalEdges.filter(edge => (activeLinkTypes.size === 0 || activeLinkTypes.has(edge.link_type)) && visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to));
-  const visibleEdgeIds = new Set(visibleEdges.map(edge => edge.id));
+  const visibleEdgeIds = new Set(visibleEdges.map((edge, index) => edge.id || `edge-${{index}}`));
 
-  nodes.update(originalNodes.map(node => ({{
-    id: node.id,
-    hidden: !visibleNodeIds.has(node.id),
-  }})));
-  edges.update(originalEdges.map((edge, index) => ({{
-    id: edge.id || `edge-${{index}}`,
-    hidden: !visibleEdgeIds.has(edge.id || `edge-${{index}}`),
-  }})));
-
+  updateVisibility(visibleNodeIds, visibleEdgeIds);
   network.unselectAll();
-  network.selectNodes(visibleNodes.map(node => node.id));
-  network.setOptions({{ physics: false }});
 }}
 
 detailContent.addEventListener('click', (event) => {{
