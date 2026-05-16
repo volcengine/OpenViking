@@ -10,6 +10,14 @@ class LinkRenderer:
 
     _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)\s]+)\)")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
+    _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+
+    @staticmethod
+    def _build_match_pattern(match_text: str) -> re.Pattern[str]:
+        escaped = re.escape(match_text)
+        if LinkRenderer._CJK_RE.search(match_text):
+            return re.compile(escaped)
+        return re.compile(r"\b" + escaped + r"\b", re.IGNORECASE)
 
     @staticmethod
     def render_links(content: str, source_uri: str, links: List[Dict]) -> str:
@@ -37,7 +45,7 @@ class LinkRenderer:
             rel = LinkRenderer.relative_path(source_uri, to_uri)
             link_target = rel if rel is not None else to_uri
 
-            pattern = re.compile(r"\b" + re.escape(match_text) + r"\b", re.IGNORECASE)
+            pattern = LinkRenderer._build_match_pattern(match_text)
             match = pattern.search(content)
             if not match:
                 continue

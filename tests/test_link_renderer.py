@@ -1,6 +1,8 @@
 import pytest
 
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 
 class TestRelativePath:
@@ -241,6 +243,26 @@ class TestRenderLinks:
         )
         assert result == content
 
+    def test_chinese_match_without_word_boundaries(self):
+        content = "她喜欢角色扮演游戏，也喜欢开放世界游戏。"
+        links = [
+            {
+                "from_uri": "viking://user/Caroline/memories/profile.md",
+                "to_uri": "viking://user/Caroline/memories/entities/games/rpg.md",
+                "weight": 1.0,
+                "match_text": "角色扮演游戏",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Caroline/memories/profile.md",
+            links,
+        )
+        assert (
+            result
+            == "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"
+        )
+
 
 class TestStripLinks:
     def test_strip_relative_link(self):
@@ -326,3 +348,23 @@ class TestRoundTrip:
         )
         stripped = LinkRenderer.strip_links(rendered)
         assert stripped == original
+
+    def test_memory_file_utils_write_renders_chinese_links(self):
+        memory_file = MemoryFile(
+            uri="viking://user/Caroline/memories/profile.md",
+            content="她喜欢角色扮演游戏，也喜欢开放世界游戏。",
+            links=[
+                {
+                    "from_uri": "viking://user/Caroline/memories/profile.md",
+                    "to_uri": "viking://user/Caroline/memories/entities/games/rpg.md",
+                    "weight": 1.0,
+                    "match_text": "角色扮演游戏",
+                }
+            ],
+            extra_fields={"memory_type": "profile"},
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+
+        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" in written
+        assert '"match_text": "角色扮演游戏"' in written
