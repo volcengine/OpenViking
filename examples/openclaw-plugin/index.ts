@@ -21,6 +21,7 @@ import {
 } from "./text-utils.js";
 import {
   clampScore,
+  passesRecallScoreThreshold,
   postProcessMemories,
   pickMemoriesForInjection,
 } from "./memory-ranking.js";
@@ -1090,10 +1091,12 @@ const contextEnginePlugin = {
             };
           }
 
-          const leafOnly = (result.memories ?? []).filter((m) => !m.level || m.level === 2);
+          const leafOnly = (result.memories ?? [])
+            .filter((m) => !m.level || m.level === 2)
+            .filter((m) => passesRecallScoreThreshold(m, scoreThreshold));
           const processed = postProcessMemories(leafOnly, {
             limit: requestLimit,
-            scoreThreshold,
+            scoreThreshold: 0,
           });
           const memories = pickMemoriesForInjection(processed, limit, query);
           if (memories.length === 0) {

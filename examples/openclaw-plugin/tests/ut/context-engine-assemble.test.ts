@@ -155,6 +155,125 @@ describe("context-engine assemble()", () => {
     }
   });
 
+  it("skips low-score resources during auto-recall", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallResources: true,
+            recallScoreThreshold: 0.5,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find
+        .mockResolvedValueOnce({ memories: [], total: 0 })
+        .mockResolvedValueOnce({ memories: [], total: 0 })
+        .mockResolvedValueOnce({
+          resources: [
+            {
+              uri: "viking://resources/second-brain/noisy-transcript.md",
+              level: 2,
+              category: "",
+              abstract: "A loose raw transcript with unrelated meeting chatter.",
+              score: 0.55,
+            },
+          ],
+          total: 1,
+        });
+
+      const sourceMessages = [
+        { role: "assistant", content: "Previous answer." },
+        { role: "user", content: "Посмотри что там было и подскажи" },
+      ];
+
+      const result = await engine.assemble({
+        sessionId: "session-low-score-resource",
+        messages: sourceMessages,
+      });
+
+      expect(result.messages).toBe(sourceMessages);
+      expect(client.find).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still injects strong user memories for Russian OpenViking queries", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallResources: true,
+            recallScoreThreshold: 0.5,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find
+        .mockResolvedValueOnce({
+          memories: [
+            {
+              uri: "viking://user/default/memories/entities/openviking/docker_regression_test.md",
+              level: 2,
+              category: "",
+              abstract: "OV Docker regression marker survived the migration.",
+              score: 0.68,
+            },
+          ],
+          total: 1,
+        })
+        .mockResolvedValueOnce({ memories: [], total: 0 })
+        .mockResolvedValueOnce({ resources: [], total: 0 });
+
+      const sourceMessages = [
+        { role: "assistant", content: "Previous answer." },
+        { role: "user", content: "Напомни контрольную метку OV Docker regression test после миграции" },
+      ];
+
+      const result = await engine.assemble({
+        sessionId: "session-russian-ov-query",
+        messages: sourceMessages,
+      });
+
+      expect(result.messages[1]?.content).toMatch(/^<relevant-memories>/);
+      expect(result.messages[1]?.content).toContain("[memory] OV Docker regression marker");
+      expect(result.messages[1]?.content).toContain(sourceMessages[1]!.content);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("passes through transformContext messages when the latest message is not user", async () => {
     const { engine, getClient } = makeEngine(
       {
