@@ -398,19 +398,59 @@ const en = {
   },
   retrieval: {
     title: 'Retrieval',
-    searchPlaceholder: 'Enter search content, e.g.: cat memory / resources filesystem',
+    searchPlaceholder: 'Search context, e.g. how to authenticate users',
     send: 'Search',
     controls: {
-      function: 'find()',
+      function: 'Retrieval Function',
+      modes: {
+        find: 'find()',
+        search: 'search()',
+      },
       resultCount: 'Results',
       path: 'Path',
       pathPlaceholder: '/',
+      scope: 'Scope',
+      customScope: 'Custom scope',
+      customScopePlaceholder: 'resources/project or viking://...',
+      effectiveScope: 'Scope',
+      allContexts: 'All contexts',
+      scopes: {
+        all: {
+          label: 'All contexts',
+        },
+        resources: {
+          label: 'Resources',
+        },
+        custom: {
+          label: 'Custom URI',
+        },
+      },
+      sessionId: 'Session ID',
+      sessionPlaceholder: 'session_id (optional)',
     },
     results: {
       title: 'Search Results',
       topN: 'Search Results (Top{{count}})',
     },
+    types: {
+      resource: 'Resources',
+      memory: 'Memories',
+      skill: 'Skills',
+    },
+    queryPlan: {
+      title: '{{count}} planned queries',
+      more: '+{{count}} more',
+    },
+    loading: {
+      vector: 'Searching vector indexes...',
+      scan: 'Scanning context hierarchy...',
+      match: 'Matching semantic context...',
+      rerank: 'Reranking results...',
+    },
     empty: {
+      checking: 'Checking retrievable context...',
+      readyTitle: 'Retrievable context is available',
+      readyDescription: 'Enter a keyword and press Enter to search',
       title: 'No retrievable context yet',
       description: 'Upload your first resource to get started.',
       upload: 'Upload File',
