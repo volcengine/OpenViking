@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
@@ -187,7 +188,8 @@ class MemoryReadTool(MemoryTool):
             # Add 1-based line numbers to content for LLM readability & link extraction
             raw_content = mf.content
             if raw_content:
-                lines = raw_content.split("\n")
+                stripped_content = LinkRenderer.strip_links(raw_content)
+                lines = stripped_content.split("\n")
                 numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))
                 llm_result["content"] = numbered
             return llm_result

@@ -30,6 +30,37 @@ class TestMemoryTools:
         assert "uri" in tool.parameters["properties"]
         assert "required" in tool.parameters
 
+    @pytest.mark.asyncio
+    async def test_read_tool_strips_local_memory_links_from_llm_content(self):
+        class MockPageIdMap:
+            def get_page_id(self, uri):
+                return None
+
+        class MockVikingFS:
+            async def read_file(self, uri, ctx=None, **kwargs):
+                return (
+                    "Gina values [emotional support](../../events/2023/03/23/mutual_business_support.md) "
+                    "with Jon.\n\n"
+                    "<!-- MEMORY_FIELDS\n"
+                    "{\"memory_type\": \"experiences\"}\n"
+                    "-->"
+                )
+
+        tool_ctx = ToolContext(
+            viking_fs=MockVikingFS(),
+            request_ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER),
+            default_search_uris=[],
+            read_file_contents={},
+            page_id_map=MockPageIdMap(),
+        )
+
+        result = await MemoryReadTool().execute(
+            tool_ctx,
+            uri="viking://user/default/memories/experiences/test.md",
+        )
+
+        assert result["content"] == "1 | Gina values emotional support with Jon."
+
     def test_search_tool_properties(self):
         """Test MemorySearchTool properties."""
         tool = MemorySearchTool()
