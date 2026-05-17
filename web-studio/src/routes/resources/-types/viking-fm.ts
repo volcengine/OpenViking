@@ -94,9 +94,23 @@ export interface FindResultItem {
   relations: Array<{ uri: string; abstract: string }>
 }
 
+export interface FindQueryPlanItem {
+  query: string
+  context_type?: FindContextType | null
+  intent?: string | null
+  priority?: number | null
+}
+
+export interface FindQueryPlan {
+  reasoning?: string | null
+  queries: FindQueryPlanItem[]
+}
+
 export interface GroupedFindResult {
   memories: FindResultItem[]
   resources: FindResultItem[]
   skills: FindResultItem[]
   total: number
+  query_plan?: FindQueryPlan | null
+  provenance?: Array<Record<string, unknown>> | null
 }

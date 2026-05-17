@@ -1,7 +1,11 @@
-import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postContentWrite, postSearchFind } from '#/lib/ov-client'
+import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postContentWrite, postSearchFind, postSearchSearch } from '#/lib/ov-client'
 
 import { fileNameFromUri, formatModTime, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
 import type {
+  FindContextType,
+  FindQueryPlan,
+  FindQueryPlanItem,
+  FindResultItem,
   GroupedFindResult,
   VikingApiError,
   VikingFsEntry,
@@ -163,6 +167,90 @@ export interface FetchFindOptions {
   filter?: Record<string, unknown>
 }
 
+export interface FetchSearchOptions extends FetchFindOptions {
+  sessionId?: string
+}
+
+const FIND_CONTEXT_TYPES = ['resource', 'memory', 'skill'] as const
+
+function isFindContextType(value: unknown): value is FindContextType {
+  return FIND_CONTEXT_TYPES.some((type) => type === value)
+}
+
+function normalizeFindItems(value: unknown, fallbackType: FindContextType): FindResultItem[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      uri: typeof item.uri === 'string' ? item.uri : '',
+      context_type: isFindContextType(item.context_type) ? item.context_type : fallbackType,
+      level: typeof item.level === 'number' ? item.level : 2,
+      score: typeof item.score === 'number' ? item.score : 0,
+      abstract: typeof item.abstract === 'string' ? item.abstract : '',
+      overview: typeof item.overview === 'string' ? item.overview : null,
+      category: typeof item.category === 'string' ? item.category : '',
+      match_reason: typeof item.match_reason === 'string' ? item.match_reason : '',
+      tags: typeof item.tags === 'string'
+        ? item.tags
+        : Array.isArray(item.tags)
+          ? item.tags.filter((tag): tag is string => typeof tag === 'string').join(', ')
+          : undefined,
+      relations: Array.isArray(item.relations)
+        ? item.relations
+          .filter((relation): relation is Record<string, unknown> => relation !== null && typeof relation === 'object' && !Array.isArray(relation))
+          .map((relation) => ({
+            uri: typeof relation.uri === 'string' ? relation.uri : '',
+            abstract: typeof relation.abstract === 'string' ? relation.abstract : '',
+          }))
+        : [],
+    }))
+}
+
+function normalizeQueryPlan(value: unknown): FindQueryPlan | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return null
+
+  const data = value as Record<string, unknown>
+  const queries = Array.isArray(data.queries)
+    ? data.queries
+      .filter((query): query is Record<string, unknown> => query !== null && typeof query === 'object' && !Array.isArray(query))
+      .map<FindQueryPlanItem>((query) => ({
+        query: typeof query.query === 'string' ? query.query : '',
+        context_type: isFindContextType(query.context_type) ? query.context_type : null,
+        intent: typeof query.intent === 'string' ? query.intent : null,
+        priority: typeof query.priority === 'number' ? query.priority : null,
+      }))
+      .filter((query) => query.query.trim().length > 0)
+    : []
+
+  return {
+    reasoning: typeof data.reasoning === 'string' ? data.reasoning : null,
+    queries,
+  }
+}
+
+function normalizeGroupedFindResult(result: unknown): GroupedFindResult {
+  const data = result !== null && typeof result === 'object' && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : {}
+  const memories = normalizeFindItems(data.memories, 'memory')
+  const resources = normalizeFindItems(data.resources, 'resource')
+  const skills = normalizeFindItems(data.skills, 'skill')
+  const total = typeof data.total === 'number' ? data.total : memories.length + resources.length + skills.length
+
+  return {
+    memories,
+    resources,
+    skills,
+    total,
+    query_plan: normalizeQueryPlan(data.query_plan),
+    provenance: Array.isArray(data.provenance)
+      ? data.provenance.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item))
+      : null,
+  }
+}
+
 export async function fetchFind(query: string, options: FetchFindOptions = {}): Promise<GroupedFindResult> {
   try {
     const result = await getOvResult(
@@ -177,19 +265,32 @@ export async function fetchFind(query: string, options: FetchFindOptions = {}): 
       }),
     )
 
-    const data = result as Record<string, unknown>
-    return {
-      memories: Array.isArray(data.memories) ? data.memories : [],
-      resources: Array.isArray(data.resources) ? data.resources : [],
-      skills: Array.isArray(data.skills) ? data.skills : [],
-      total: typeof data.total === 'number' ? data.total : 0,
-    }
+    return normalizeGroupedFindResult(result)
   } catch (error) {
     throw toVikingApiError(error)
   }
 }
 
-const FIND_CONTEXT_TYPES = ['resource', 'memory', 'skill'] as const
+export async function fetchSearch(query: string, options: FetchSearchOptions = {}): Promise<GroupedFindResult> {
+  try {
+    const result = await getOvResult(
+      postSearchSearch({
+        body: {
+          query,
+          target_uri: options.targetUri,
+          session_id: options.sessionId,
+          limit: options.limit ?? 10,
+          score_threshold: options.scoreThreshold,
+          filter: options.filter,
+        },
+      }),
+    )
+
+    return normalizeGroupedFindResult(result)
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
 
 export async function fetchFindAllTypes(query: string, options: Omit<FetchFindOptions, 'targetUri' | 'filter'> = {}): Promise<GroupedFindResult> {
   const results = await Promise.allSettled(
@@ -203,13 +304,10 @@ export async function fetchFindAllTypes(query: string, options: Omit<FetchFindOp
 
   const merged: GroupedFindResult = { memories: [], resources: [], skills: [], total: 0 }
 
-  for (const [i, r] of results.entries()) {
-    if (r.status !== 'fulfilled') continue
-    const ct = FIND_CONTEXT_TYPES[i]
-    if (ct === 'resource') merged.resources = r.value.resources
-    else if (ct === 'memory') merged.memories = r.value.memories
-    else if (ct === 'skill') merged.skills = r.value.skills
-  }
+  const [resourceResult, memoryResult, skillResult] = results
+  if (resourceResult.status === 'fulfilled') merged.resources = resourceResult.value.resources
+  if (memoryResult.status === 'fulfilled') merged.memories = memoryResult.value.memories
+  if (skillResult.status === 'fulfilled') merged.skills = skillResult.value.skills
 
   merged.total = merged.memories.length + merged.resources.length + merged.skills.length
   return merged

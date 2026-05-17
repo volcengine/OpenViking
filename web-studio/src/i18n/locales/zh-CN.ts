@@ -398,19 +398,59 @@ const zhCN = {
   },
   retrieval: {
     title: '检索',
-    searchPlaceholder: '请输入检索内容，例如：cat memory / resources filesystem',
+    searchPlaceholder: '输入检索内容，例如：how to authenticate users',
     send: '检索',
     controls: {
-      function: 'find()',
+      function: '检索函数',
+      modes: {
+        find: 'find()',
+        search: 'search()',
+      },
       resultCount: '返回数量',
       path: '路径',
       pathPlaceholder: '/',
+      scope: '检索范围',
+      customScope: '自定义范围',
+      customScopePlaceholder: 'resources/project 或 viking://...',
+      effectiveScope: '范围',
+      allContexts: '全部上下文',
+      scopes: {
+        all: {
+          label: '全部上下文',
+        },
+        resources: {
+          label: '资源库',
+        },
+        custom: {
+          label: '自定义 URI',
+        },
+      },
+      sessionId: 'Session ID',
+      sessionPlaceholder: 'session_id（可选）',
     },
     results: {
       title: '检索结果',
       topN: '检索结果（Top{{count}}）',
     },
+    types: {
+      resource: 'Resources',
+      memory: 'Memories',
+      skill: 'Skills',
+    },
+    queryPlan: {
+      title: '查询计划 {{count}} 条',
+      more: '+{{count}} 条',
+    },
+    loading: {
+      vector: '正在检索向量索引...',
+      scan: '扫描知识库层级结构...',
+      match: '匹配语义相关内容...',
+      rerank: '对结果重排序...',
+    },
     empty: {
+      checking: '正在检查可检索上下文...',
+      readyTitle: '已有可检索上下文',
+      readyDescription: '输入关键词后按 Enter 开始检索',
       title: '当前还没有可检索的上下文',
       description: '先上传您的第一份资源吧～',
       upload: '上传文件',

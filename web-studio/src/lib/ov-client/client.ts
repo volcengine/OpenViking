@@ -9,7 +9,7 @@ import { addRequestLog, updateRequestLog } from '../request-logs'
 import { DEFAULT_API_KEY_STORAGE_KEY } from './types'
 import type { OvClientAdapter, OvClientOptions, OvConnectionState, OvErrorEnvelope } from './types'
 
-const DEFAULT_TELEMETRY_PATHS = new Set(['/api/v1/search/find', '/api/v1/resources'])
+const DEFAULT_TELEMETRY_PATHS = new Set(['/api/v1/search/find', '/api/v1/search/search', '/api/v1/resources'])
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
 const WEB_STUDIO_AGENT_ID = 'web-studio'
 const REQUEST_LOG_META_KEY = '__ovRequestLog'
