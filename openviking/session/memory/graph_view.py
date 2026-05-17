@@ -222,7 +222,7 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
                 "color": {
                     "background": "#0f172a",
                     "border": color,
-                    "highlight": {"background": "#0f172a", "border": color},
+                    "highlight": {"background": "#f8fafc", "border": color},
                     "hover": {"background": "#0f172a", "border": color},
                 },
                 "font": {"color": "#f8fafc", "size": 12},
@@ -386,7 +386,7 @@ const network = new vis.Network(
         label(values) {{
           values.size = Math.max(values.size || 12, 18);
           values.bold = true;
-          values.font = {{ ...(values.font || {{}}), color: '#0f172a' }};
+          values.color = '#0f172a';
         }},
       }},
     }},

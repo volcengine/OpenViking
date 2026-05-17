@@ -87,7 +87,6 @@ def test_render_graph_html_uses_dark_node_background_with_light_text():
     html = _render_graph_html(nodes, [])
 
     assert '"background": "#0f172a"' in html
-    assert '"highlight": {"background": "#0f172a", "border": "#fd79a8"}' in html
     assert '"hover": {"background": "#0f172a", "border": "#fd79a8"}' in html
     assert '"font": {"color": "#f8fafc", "size": 12}' in html
     assert '"border": "#fd79a8"' in html
@@ -184,10 +183,24 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
 
 
 def test_render_graph_html_inverts_selected_node_colors():
-    html = _render_graph_html([], [])
+    nodes = [
+        {
+            "id": "viking://agent/demo/memories/experiences/a.md",
+            "uri": "viking://agent/demo/memories/experiences/a.md",
+            "label": "a",
+            "memory_type": "experiences",
+            "category": "",
+            "content_preview": "hello world",
+            "content_truncated": False,
+        }
+    ]
 
+    html = _render_graph_html(nodes, [])
+
+    assert '"highlight": {"background": "#f8fafc", "border": "#fd79a8"}' in html
+    assert '"font": {"color": "#f8fafc", "size": 12}' in html
     assert "values.color = { background: '#f8fafc', border: values.color.border };" in html
-    assert "values.font = { ...(values.font || {}), color: '#0f172a' };" in html
+    assert "values.color = '#0f172a';" in html
 
 
 def test_render_graph_html_edge_details_include_source_and_target_uris():
