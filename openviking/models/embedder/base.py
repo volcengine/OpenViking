@@ -263,6 +263,22 @@ class EmbedderBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        try:
+            from openviking.metrics.datasources import EmbeddingEventDataSource
+            from openviking.observability.context import get_root_observability_context
+
+            root_context = get_root_observability_context()
+            EmbeddingEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=0.0,
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=root_context.account_id if root_context is not None else None,
+            )
+        except Exception:
+            # Metrics must never break embedding calls.
+            pass
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
