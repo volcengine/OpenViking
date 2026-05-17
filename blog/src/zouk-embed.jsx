@@ -212,7 +212,7 @@ export function ZoukInteractiveBlog({ route }) {
   const authHeaders = useMemo(() => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
-    'X-Workspace-Id': encodeURIComponent(CONFIG.workspaceId),
+    'X-Workspace-Id': CONFIG.workspaceId,
   }), [token]);
 
   const visibleMessages = useMemo(
@@ -257,7 +257,7 @@ export function ZoukInteractiveBlog({ route }) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${nextToken}`,
-        'X-Workspace-Id': encodeURIComponent(CONFIG.workspaceId),
+        'X-Workspace-Id': CONFIG.workspaceId,
         'X-Channel': target,
         'X-Limit': '80',
       },
