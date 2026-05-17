@@ -89,16 +89,18 @@ class LinkRenderer:
 
     @staticmethod
     def strip_links(content: str) -> str:
-        """Remove viking:// and relative markdown links, keeping only the link text.
+        """Remove relative markdown links, keeping only the link text.
 
-        External links (http://, https://, etc.) and anchor links are preserved.
+        External links, viking:// links, anchor links, and absolute-path links are preserved.
         """
 
         def _replace_link(m: re.Match) -> str:
             target = m.group("target")
             if target.startswith("#"):
                 return m.group(0)
-            if "://" in target and not target.startswith("viking://"):
+            if target.startswith("/"):
+                return m.group(0)
+            if "://" in target:
                 return m.group(0)
             return m.group("text")
 
@@ -116,6 +118,8 @@ class LinkRenderer:
         if not src or not tgt:
             return None
         if src[0] != tgt[0]:
+            return None
+        if len(src) < 2 or len(tgt) < 2 or src[1] != tgt[1]:
             return None
 
         common = 0

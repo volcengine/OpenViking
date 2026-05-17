@@ -15,6 +15,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -122,15 +123,17 @@ class MemoryGraph:
                 name = mf.extra_fields.get("name", "")
                 label = name if name else uri.split("/")[-1].replace(".md", "")
 
+                rendered_content = LinkRenderer.render_links(mf.content or "", uri, mf.links)
+
                 nodes[uri] = {
                     "id": uri,
                     "uri": uri,
                     "label": label,
                     "memory_type": inferred_memory_type,
                     "category": category,
-                    "content_preview": self._build_content_preview(mf.content),
-                    "content_full": mf.content or "",
-                    "content_truncated": self._is_content_truncated(mf.content),
+                    "content_preview": self._build_content_preview(rendered_content),
+                    "content_full": rendered_content,
+                    "content_truncated": self._is_content_truncated(rendered_content),
                 }
 
                 for link_data in mf.links:

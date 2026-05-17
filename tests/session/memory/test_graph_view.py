@@ -240,18 +240,24 @@ def test_render_graph_html_renders_dynamic_relationship_legend_from_edges():
     assert "works_with" in html
 
 
-def test_render_graph_html_uses_hsl_palette_with_fixed_saturation_and_lightness():
-    edges = [
+
+
+def test_render_graph_html_keeps_node_label_plain_text_while_rendering_body_links():
+    nodes = [
         {
-            "source": "viking://user/Caroline/memories/profile.md",
-            "target": "viking://user/Caroline/memories/preferences/music.md",
-            "link_type": "inspired_by",
-            "weight": 1.0,
-            "description": "same hash color",
+            "id": "viking://user/Caroline/memories/profile.md",
+            "uri": "viking://user/Caroline/memories/profile.md",
+            "label": "Caroline profile",
+            "memory_type": "profile",
+            "category": "",
+            "content_preview": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。",
+            "content_full": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。",
+            "content_truncated": False,
         }
     ]
 
-    html = _render_graph_html([], edges)
+    html = _render_graph_html(nodes, [])
 
-    assert '"color": {"color": "hsl(' in html
-    assert ', 72%, 58%)"' in html
+    assert '"label": "Caroline profile"' in html
+    assert '"content_full": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"' in html
+    assert '"content_preview": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"' in html

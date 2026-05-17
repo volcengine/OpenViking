@@ -314,6 +314,11 @@ class TestStripLinks:
         result = LinkRenderer.strip_links(content)
         assert result == content
 
+    def test_keep_viking_uri_link_when_target_uses_supported_scheme(self):
+        content = "Check [skill](viking://agent/Bot/memories/skills/research.md)."
+        result = LinkRenderer.strip_links(content)
+        assert result == content
+
     def test_keep_anchor_link(self):
         content = "Jump to [section](#intro)."
         result = LinkRenderer.strip_links(content)
@@ -391,7 +396,7 @@ class TestRoundTrip:
 
         assert memory_file.plain_content() == "Worked with Frank Ocean."
 
-    def test_memory_file_utils_write_renders_chinese_links(self):
+    def test_memory_file_utils_write_keeps_plain_text_body_and_preserves_links_metadata(self):
         memory_file = MemoryFile(
             uri="viking://user/Caroline/memories/profile.md",
             content="她喜欢角色扮演游戏，也喜欢开放世界游戏。",
@@ -408,5 +413,29 @@ class TestRoundTrip:
 
         written = MemoryFileUtils.write(memory_file)
 
-        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" in written
+        assert "她喜欢角色扮演游戏，也喜欢开放世界游戏。" in written
+        assert "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。" not in written
         assert '"match_text": "角色扮演游戏"' in written
+
+    def test_repeated_memory_file_utils_write_does_not_persist_nested_links(self):
+        memory_file = MemoryFile(
+            uri="viking://user/Gina/memories/profile.md",
+            content="Gina",
+            links=[
+                {
+                    "from_uri": "viking://user/Gina/memories/profile.md",
+                    "to_uri": "viking://user/Gina/memories/events/2023/02/08/Gina与Jon的日常交流.md",
+                    "weight": 1.0,
+                    "match_text": "Gina",
+                }
+            ],
+            extra_fields={"memory_type": "profile"},
+        )
+
+        first_write = MemoryFileUtils.write(memory_file)
+        reparsed = MemoryFileUtils.read(first_write, uri=memory_file.uri)
+        second_write = MemoryFileUtils.write(reparsed)
+
+        assert "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)" not in first_write
+        assert "[[Gina](events/2023/02/08/Gina与Jon的日常交流.md)](events/2023/02/08/Gina与Jon的日常交流.md)" not in second_write
+        assert "Gina" in second_write

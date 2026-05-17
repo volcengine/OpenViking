@@ -91,26 +91,13 @@ class MemoryFileUtils:
         content_template: Optional[str] = None,
         extract_context: Any = None,
     ) -> str:
-        """Serialize a MemoryFile and render links in the content body.
-
-        Handles template rendering first, then renders links in the body
-        (before MEMORY_FIELDS comment) so content_template output is not overwritten.
-        """
+        """Serialize a MemoryFile as plain-text body plus MEMORY_FIELDS metadata."""
         metadata = memory_file.to_metadata()
-        links = metadata.get("links", [])
-        full_content = _serialize_with_metadata(
+        return _serialize_with_metadata(
             metadata,
             content_template=content_template,
             extract_context=extract_context,
         )
-        if not links:
-            return full_content
-        split = LinkRenderer._MEMORY_FIELDS_RE.split(full_content, maxsplit=1)
-        if len(split) == 3:
-            body, separator, remainder = split
-            rendered_body = LinkRenderer.render_links(body, memory_file.uri, links)
-            return rendered_body + separator + remainder
-        return full_content
 
     @staticmethod
     def truncate_content(content: str, max_chars: int = DEFAULT_TRUNCATE_MAX_CHARS) -> str:
