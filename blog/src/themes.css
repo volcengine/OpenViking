@@ -554,40 +554,6 @@ html {
   line-height: 1.4;
 }
 
-.zouk-reader-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--th-line);
-  background: color-mix(in oklab, var(--th-bg-2) 64%, transparent);
-}
-
-.zouk-reader-head-text {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.zouk-reader-head span {
-  color: var(--th-ink);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.zouk-reader-head strong {
-  color: var(--th-mute);
-  font-family: var(--th-font-mono);
-  font-size: 10px;
-  font-weight: 400;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.zouk-reader-profile-mark,
 .zouk-reader-avatar {
   flex: 0 0 auto;
   display: inline-flex;
@@ -598,31 +564,6 @@ html {
   color: var(--th-accent);
   font-family: var(--th-font-mono);
   font-weight: 500;
-}
-
-.zouk-reader-profile-mark {
-  width: 34px;
-  height: 34px;
-  font-size: 13px;
-}
-
-.zouk-reader-close {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--th-mute);
-  cursor: pointer;
-}
-
-.zouk-reader-close:hover {
-  color: var(--th-ink);
-  border-color: var(--th-line);
 }
 
 .zouk-reader-drag {
@@ -953,24 +894,6 @@ html {
     padding: 0;
   }
 
-  .zouk-reader-head {
-    justify-content: flex-start;
-    padding: 0 0 14px;
-    border: 0;
-    background: transparent;
-  }
-
-  .zouk-reader-head-text {
-    display: none;
-  }
-
-  .zouk-reader-profile-mark {
-    width: 30px;
-    height: 30px;
-    background: color-mix(in oklab, var(--th-bg-2) 66%, transparent);
-    color: var(--th-mute);
-  }
-
   .zouk-reader-messages {
     padding: 0 0 12px;
     gap: 16px;
@@ -1053,10 +976,6 @@ html {
     height: 5px;
     border-radius: 999px;
     background: color-mix(in oklab, var(--th-mute) 58%, transparent);
-  }
-
-  .zouk-reader-head {
-    display: none;
   }
 
   .zouk-reader-messages {

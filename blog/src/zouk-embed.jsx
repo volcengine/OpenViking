@@ -583,14 +583,6 @@ export function ZoukInteractiveBlog({ route }) {
             <div className="zouk-reader-handle" />
           </div>
 
-          <div className="zouk-reader-head">
-            <div className="zouk-reader-profile-mark" aria-hidden="true">Z</div>
-            <div className="zouk-reader-head-text">
-              <span>Message #{CONFIG.channel}</span>
-              <strong>{status === 'connected' || status === 'sending' ? 'Connected' : status === 'connecting' ? 'Connecting' : 'Zouk'}</strong>
-            </div>
-          </div>
-
           <div className="zouk-reader-messages" ref={scrollRef}>
             {status === 'connecting' && !visibleMessages.length ? (
               <div className="zouk-reader-empty">Connecting to Zouk...</div>
