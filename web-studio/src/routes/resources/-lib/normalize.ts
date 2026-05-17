@@ -1,4 +1,7 @@
+import { fileNameFromUri, joinUri, normalizeDirUri, normalizeFileUri } from '#/lib/viking-uri'
 import type { VikingFileType, VikingFsEntry } from '../-types/viking-fm'
+
+export { fileNameFromUri, joinUri, normalizeDirUri, normalizeFileUri, parentUri } from '#/lib/viking-uri'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -46,37 +49,6 @@ function pickFirstNonEmpty(values: Array<unknown>): unknown {
   return ''
 }
 
-function fileNameFromUri(uri: string): string {
-  const trimmed = uri.endsWith('/') ? uri.slice(0, -1) : uri
-  const index = trimmed.lastIndexOf('/')
-  if (index < 0) return trimmed
-  return trimmed.slice(index + 1) || trimmed
-}
-
-export { fileNameFromUri }
-
-export function normalizeDirUri(uri: string): string {
-  const value = uri.trim()
-  if (!value) {
-    return 'viking://'
-  }
-  if (value === 'viking://') {
-    return value
-  }
-  return value.endsWith('/') ? value : `${value}/`
-}
-
-export function normalizeFileUri(uri: string): string {
-  const value = uri.trim()
-  if (!value) {
-    return 'viking://'
-  }
-  if (value === 'viking://') {
-    return value
-  }
-  return value.endsWith('/') ? value.slice(0, -1) : value
-}
-
 export function sameUri(left: string, right: string): boolean {
   const leftNormalized = left.endsWith('/') || left === 'viking://'
     ? normalizeDirUri(left)
@@ -86,33 +58,6 @@ export function sameUri(left: string, right: string): boolean {
     : normalizeFileUri(right)
 
   return leftNormalized === rightNormalized
-}
-
-export function parentUri(uri: string): string {
-  const normalized = normalizeDirUri(uri)
-  if (normalized === 'viking://') {
-    return normalized
-  }
-
-  const body = normalized.slice('viking://'.length, -1)
-  if (!body.includes('/')) {
-    return 'viking://'
-  }
-
-  return `viking://${body.slice(0, body.lastIndexOf('/') + 1)}`
-}
-
-export function joinUri(baseUri: string, child: string): string {
-  const raw = child.trim()
-  if (!raw) {
-    return normalizeDirUri(baseUri)
-  }
-  if (raw.startsWith('viking://')) {
-    return raw
-  }
-
-  const normalizedBase = normalizeDirUri(baseUri)
-  return `${normalizedBase}${raw.replace(/^\//, '')}`
 }
 
 export function parseSizeToBytes(value: unknown): number | null {

@@ -79,38 +79,10 @@ export interface VikingApiError {
 
 // --- Find / Search types ---
 
-export type FindContextType = 'memory' | 'resource' | 'skill'
-
-export interface FindResultItem {
-  uri: string
-  context_type: FindContextType
-  level: number
-  score: number
-  abstract: string
-  overview?: string | null
-  category: string
-  match_reason: string
-  tags?: string
-  relations: Array<{ uri: string; abstract: string }>
-}
-
-export interface FindQueryPlanItem {
-  query: string
-  context_type?: FindContextType | null
-  intent?: string | null
-  priority?: number | null
-}
-
-export interface FindQueryPlan {
-  reasoning?: string | null
-  queries: FindQueryPlanItem[]
-}
-
-export interface GroupedFindResult {
-  memories: FindResultItem[]
-  resources: FindResultItem[]
-  skills: FindResultItem[]
-  total: number
-  query_plan?: FindQueryPlan | null
-  provenance?: Array<Record<string, unknown>> | null
-}
+export type {
+  FindContextType,
+  FindQueryPlan,
+  FindQueryPlanItem,
+  FindResultItem,
+  GroupedFindResult,
+} from '#/lib/retrieval'
