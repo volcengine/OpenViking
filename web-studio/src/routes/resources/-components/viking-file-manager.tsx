@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
+import { ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 
@@ -219,10 +219,6 @@ export function VikingFileManager({
     }
   }, [])
 
-  const handleGoParent = () => {
-    updateUri(parentUri(currentUri))
-  }
-
   const handleRefresh = async () => {
     await invalidateList()
     await listQuery.refetch()
@@ -285,13 +281,10 @@ export function VikingFileManager({
     <div className="flex h-10 items-center gap-1 border-b px-3">
       {!showTree && (
         <>
-          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.parent')} onClick={handleGoParent}>
-            <ArrowUp className="size-4" />
-          </Button>
           <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
             <RefreshCcw className="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.search')} onClick={() => setPaletteOpen(true)}>
+          <Button variant="secondary" size="icon" className="h-8 w-fit px-2" title={t('toolbar.search')} onClick={() => setPaletteOpen(true)}>
             <Search className="size-4" />
           </Button>
           <div className="mx-1 h-4 w-px bg-border" />
@@ -343,14 +336,11 @@ export function VikingFileManager({
         {showTree && (
           <>
             <section className="flex min-h-0 flex-col bg-muted/30" style={{ width: treeWidth, minWidth: treeWidth }}>
-              <div className="flex h-10 items-center gap-1 border-b px-2">
-                <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.parent')} onClick={handleGoParent}>
-                  <ArrowUp className="size-4" />
-                </Button>
+              <div className="flex h-10 items-center gap-1 overflow-hidden border-b px-2">
                 <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
                   <RefreshCcw className="size-4" />
                 </Button>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex w-fit items-center gap-1.5">
                   <Button
                     type="button"
                     size="sm"
@@ -371,9 +361,9 @@ export function VikingFileManager({
                     {t('toolbar.upload')}
                   </Button>
                   <Button
-                    variant="ghost"
+                    variant="secondary"
                     size="icon"
-                    className="size-7"
+                    className="h-8 w-fit px-2"
                     title={t('toolbar.search')}
                     onClick={() => setPaletteOpen(true)}
                   >
@@ -418,7 +408,7 @@ export function VikingFileManager({
                 <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
                   <FolderOpen className="size-16 text-muted-foreground/20" />
                   <p className="text-sm text-muted-foreground">{t('emptyState.title')}</p>
-                  <Button size="sm" className="gap-1.5" onClick={() => setUploadDialogOpen(true)}>
+                  <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setUploadDialogOpen(true)}>
                     <Upload className="size-4" />
                     {t('emptyState.upload')}
                   </Button>

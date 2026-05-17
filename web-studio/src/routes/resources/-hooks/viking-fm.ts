@@ -27,10 +27,11 @@ export function useVikingFsList(uri: string, options: VikingListQueryOptions = {
   })
 }
 
-export function useVikingFsTree(rootUri: string, options: VikingTreeQueryOptions = {}) {
+export function useVikingFsTree(rootUri: string, options: VikingTreeQueryOptions = {}, enabled = true) {
   return useQuery({
     queryKey: ['viking-fs-tree', normalizeDirUri(rootUri), options],
     queryFn: () => fetchFsTree(normalizeDirUri(rootUri), options),
+    enabled,
     ...DEFAULT_QUERY_OPTS,
   })
 }

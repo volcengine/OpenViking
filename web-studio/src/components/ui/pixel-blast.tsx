@@ -383,7 +383,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
     scene: THREE.Scene;
     camera: THREE.OrthographicCamera;
     material: THREE.ShaderMaterial;
-    clock: THREE.Clock;
+    timer: THREE.Timer;
     clickIx: number;
     uniforms: {
       uResolution: { value: THREE.Vector2 };
@@ -434,6 +434,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
         t.quad?.geometry.dispose();
         t.material.dispose();
         t.composer?.dispose();
+        t.timer.dispose();
         t.renderer.dispose();
         t.renderer.forceContextLoss();
         if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);
@@ -485,7 +486,8 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       const quadGeom = new THREE.PlaneGeometry(2, 2);
       const quad = new THREE.Mesh(quadGeom, material);
       scene.add(quad);
-      const clock = new THREE.Clock();
+      const timer = new THREE.Timer();
+      timer.connect(document);
       const setSize = () => {
         const w = container.clientWidth || 1;
         const h = container.clientHeight || 1;
@@ -594,7 +596,8 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
           return;
         }
         lastFrameTime = now;
-        uniforms.uTime.value = timeOffset + clock.getElapsedTime() * speedRef.current;
+        timer.update(now);
+        uniforms.uTime.value = timeOffset + timer.getElapsed() * speedRef.current;
         if (liquidEffect) {
           const liqEffect = liquidEffect as Effect & { uniforms: Map<string, THREE.Uniform> };
           const timeUniform = liqEffect.uniforms.get('uTime');
@@ -621,7 +624,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
         scene,
         camera,
         material,
-        clock,
+        timer,
         clickIx: 0,
         uniforms,
         resizeObserver: ro,
@@ -666,6 +669,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       t.quad?.geometry.dispose();
       t.material.dispose();
       t.composer?.dispose();
+      t.timer.dispose();
       t.renderer.dispose();
       t.renderer.forceContextLoss();
       if (t.renderer.domElement.parentElement === container) container.removeChild(t.renderer.domElement);

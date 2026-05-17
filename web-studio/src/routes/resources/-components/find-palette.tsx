@@ -6,7 +6,8 @@ import { cn } from '#/lib/utils'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 
 import { fileNameFromUri, normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
-import { useVikingFsList, useVikingFsStat } from '../-hooks/viking-fm'
+import { filterResourceSearchEntries, getResourceSearchSpec } from '../-lib/find-search'
+import { useVikingFsList, useVikingFsStat, useVikingFsTree } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
@@ -50,10 +51,6 @@ function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
-function fuzzyMatch(name: string, query: string): boolean {
-  return name.toLowerCase().includes(query.toLowerCase())
-}
-
 export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
   const { t } = useTranslation('resources')
   const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
@@ -70,6 +67,10 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
   const trimmedQuery = query.trim()
   const hasQuery = trimmedQuery.length > 0 && !scopeCommandUri && !isDirMode
   const isRoot = findTargetUri === 'viking://'
+  const searchSpec = useMemo(
+    () => getResourceSearchSpec(query, findTargetUri),
+    [query, findTargetUri],
+  )
 
   const scopeValidationQuery = useVikingFsList(
     scopeCommandUri || 'viking://',
@@ -80,19 +81,19 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess
   )
 
-  const dirListQuery = useVikingFsList(
-    findTargetUri,
-    { output: 'agent', showAllHidden: true, nodeLimit: 500, recursive: true },
-    hasQuery,
+  const treeQuery = useVikingFsTree(
+    searchSpec?.rootUri || 'viking://',
+    { output: 'agent', showAllHidden: true, nodeLimit: 2000, levelLimit: 100 },
+    hasQuery && Boolean(searchSpec),
   )
 
   const filteredEntries = useMemo(() => {
-    if (!hasQuery || !dirListQuery.data?.entries) return []
-    return dirListQuery.data.entries.filter((entry) => fuzzyMatch(entry.name, trimmedQuery))
-  }, [hasQuery, dirListQuery.data?.entries, trimmedQuery])
+    if (!hasQuery || !treeQuery.data?.nodes) return []
+    return filterResourceSearchEntries(treeQuery.data.nodes, searchSpec)
+  }, [hasQuery, treeQuery.data?.nodes, searchSpec])
 
   const hasResults = filteredEntries.length > 0
-  const activeEntry = filteredEntries[activeIndex] ?? null
+  const activeEntry = activeIndex >= 0 ? (filteredEntries[activeIndex] ?? null) : null
 
   const statQuery = useVikingFsStat(activeEntry?.uri)
   const previewEntry = useMemo(() => {
@@ -314,14 +315,14 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                       </p>
                     </div>
                   </div>
-                ) : dirListQuery.isLoading ? (
+                ) : treeQuery.isLoading ? (
                   <div className="flex flex-col items-center gap-3 py-12">
                     <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
                     <p className="text-xs text-muted-foreground/60">
                       {t('searchPalette.scopeState.validatingTitle')}
                     </p>
                   </div>
-                ) : dirListQuery.error ? (
+                ) : treeQuery.error ? (
                   <div className="px-4 py-6 text-center text-xs text-destructive">{t('searchPalette.error')}</div>
                 ) : !hasResults ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">

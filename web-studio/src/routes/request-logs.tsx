@@ -259,10 +259,15 @@ function RequestLogsRoute() {
                   <button
                     key={item}
                     type='button'
-                    onClick={() => setDraftFilters((current) => ({ ...current, logType: item }))}
+                    onClick={() => {
+                      const nextFilters = { ...draftFilters, logType: item }
+                      setDraftFilters(nextFilters)
+                      setFilters(nextFilters)
+                      setPage(1)
+                    }}
                     className={cn(
                       'h-8 whitespace-nowrap rounded-sm px-3 text-sm text-muted-foreground transition-colors hover:text-foreground',
-                      draftFilters.logType === item && 'bg-muted text-foreground shadow-xs',
+                      filters.logType === item && 'bg-muted text-foreground shadow-xs',
                     )}
                   >
                     {t(`filters.${item}`)}
