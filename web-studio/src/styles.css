@@ -164,6 +164,21 @@
 
 /* ---- FindPalette animations ---- */
 
+@keyframes home-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-home-panel-in {
+  animation: home-panel-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @keyframes palette-backdrop-in {
   from { opacity: 0; }
   to { opacity: 1; }

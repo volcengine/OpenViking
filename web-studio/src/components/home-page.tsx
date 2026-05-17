@@ -1,53 +1,139 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ComponentType, CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import HeatMap from '@uiw/react-heat-map'
-import { Area, AreaChart, CartesianGrid, Cell, Label, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
-import gsap from 'gsap'
-import { Brain, Coins, ChevronDown, Copy, Check, Database, ListTodo, Users } from 'lucide-react'
-
-import { Button } from '#/components/ui/button'
-import { Input } from '#/components/ui/input'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '#/components/ui/dialog'
+  Coins,
+  Database,
+  Search,
+  Users,
+} from 'lucide-react'
+
 import { Skeleton } from '#/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '#/components/ui/table'
 import { client } from '#/gen/ov-client/client.gen'
-import {
-  getDebugVectorCount,
-  getObserverSystem,
-  getSessions,
-  getStatsMemories,
-  getSystemStatus,
-  getTasks,
-} from '#/gen/ov-client/sdk.gen'
 import { getOvResult } from '#/lib/ov-client'
+import { cn } from '#/lib/utils'
 
-// ---------- helpers ----------
+type HomeT = (key: string, options?: Record<string, unknown>) => string
 
-async function fetchTokenStats(): Promise<unknown> {
-  try {
-    const response = await client.get({ url: '/api/v1/stats/tokens', responseType: 'json' })
-    return (response.data as Record<string, unknown>)?.result ?? null
-  } catch {
-    return null
-  }
+type ConsoleDashboardSummary = {
+  agent_overview?: AgentOverview
+  context_counts?: ContextCounts
+  enabled?: boolean
+  message?: string
+  today_retrievals?: RetrievalCounts
+  today_tokens?: TokenCounts
 }
+
+type ContextCounts = {
+  files?: number
+  memories?: number
+  skills?: number
+  total?: number
+}
+
+type TokenCounts = {
+  embedding_input?: number
+  total?: number
+  vlm_input?: number
+  vlm_output?: number
+}
+
+type RetrievalCounts = {
+  find?: number
+  search?: number
+  total?: number
+}
+
+type AgentOverview = {
+  items?: AgentVisit[]
+  total?: number
+}
+
+type AgentVisit = {
+  agent_id?: string
+  last_seen_at?: string
+}
+
+type ConsoleSeries<TItem> = {
+  bucket?: string
+  enabled?: boolean
+  end_date?: string
+  items?: TItem[]
+  message?: string
+  start_date?: string
+}
+
+type TokenSeriesItem = {
+  date?: string
+  embedding_input?: number
+  total?: number
+  vlm_input?: number
+  vlm_output?: number
+}
+
+type TokenTrendPayload = {
+  color?: string
+  dataKey?: string
+  name?: string
+  value?: number
+}
+
+type ContextCommitItem = {
+  add_resource?: number
+  add_skill?: number
+  date?: string
+  hour?: number
+  session_add_message?: number
+  session_commit?: number
+  total?: number
+}
+
+type HeatMapDayValue = {
+  count: number
+  date: string
+  details: Required<ContextCommitItem>
+}
+
+type CommitHeatmapStats = {
+  activeDays: number
+  peakCount: number
+  peakDate: string
+  recentDate: string
+}
+
+type CommitTooltip = {
+  item: HeatMapDayValue
+  x: number
+  y: number
+}
+
+const TOKEN_SERIES_DAYS = 14
+const COMMIT_SERIES_DAYS = 365
+
+const TOKEN_COLORS = {
+  embedding: 'oklch(0.5 0.11 252)',
+  input: 'oklch(0.57 0.13 232)',
+  output: 'oklch(0.62 0.12 188)',
+}
+
+const HOME_ACCENT_COLORS = {
+  icon: 'oklch(0.68 0.14 232)',
+  iconSoft: 'oklch(0.68 0.14 232 / 0.14)',
+}
+
+const HEATMAP_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const HEATMAP_WEEK_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
+const HEATMAP_COLOR_STOPS = [
+  'oklch(0.82 0.07 232)',
+  'oklch(0.7 0.1 232)',
+  'oklch(0.58 0.13 238)',
+  'oklch(0.46 0.13 245)',
+] as const
+const HEATMAP_EMPTY_COLOR = 'oklch(0.92 0 0)'
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -60,1261 +146,975 @@ function asArray(v: unknown): unknown[] {
 }
 
 function asNumber(v: unknown): number {
-  return typeof v === 'number' ? v : 0
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
 function asString(v: unknown): string {
   return typeof v === 'string' ? v : ''
 }
 
-function asStringArray(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+function formatNumber(value: unknown): string {
+  return asNumber(value).toLocaleString()
 }
 
-function truncate(s: string, len: number): string {
-  return s.length > len ? `${s.slice(0, len)}...` : s
-}
-
-// ---------- category colors ----------
-
-const CATEGORY_COLORS: Record<string, string> = {
-  profile: 'oklch(0.55 0.11 200)',
-  preferences: 'oklch(0.55 0.11 215)',
-  entities: 'oklch(0.55 0.11 230)',
-  events: 'oklch(0.55 0.11 243)',
-  cases: 'oklch(0.55 0.11 255)',
-  patterns: 'oklch(0.55 0.11 268)',
-  tools: 'oklch(0.55 0.11 280)',
-  skills: 'oklch(0.55 0.11 292)',
-}
-
-const CATEGORY_COLORS_DARK: Record<string, string> = {
-  profile: 'oklch(0.7 0.11 200)',
-  preferences: 'oklch(0.7 0.11 215)',
-  entities: 'oklch(0.7 0.11 230)',
-  events: 'oklch(0.7 0.11 243)',
-  cases: 'oklch(0.7 0.11 255)',
-  patterns: 'oklch(0.7 0.11 268)',
-  tools: 'oklch(0.7 0.11 280)',
-  skills: 'oklch(0.7 0.11 292)',
-}
-
-const CATEGORY_ORDER = ['profile', 'preferences', 'entities', 'events', 'cases', 'patterns', 'tools', 'skills']
-
-// ---------- contribution heatmap demo data ----------
-
-type HeatMapDayValue = {
-  count: number
-  date: string
-}
-
-const DEMO_HEATMAP_START_DATE = new Date('2025/05/11')
-const DEMO_HEATMAP_END_DATE = new Date('2026/05/09')
-const HEATMAP_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const HEATMAP_WEEK_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
-const HEATMAP_COLORS = {
-  0: 'var(--heatmap-empty)',
-  1: 'oklch(0.85 0.06 243)',
-  4: 'oklch(0.7 0.1 243)',
-  8: 'oklch(0.55 0.134 243)',
-  12: 'oklch(0.4 0.12 243)',
-}
-
-function formatHeatmapDate(date: Date): string {
+function formatDateKey(date: Date): string {
   const year = date.getFullYear()
   const month = `${date.getMonth() + 1}`.padStart(2, '0')
   const day = `${date.getDate()}`.padStart(2, '0')
-
-  return `${year}/${month}/${day}`
+  return `${year}-${month}-${day}`
 }
 
-function createDemoHeatmapData(): HeatMapDayValue[] {
-  const value: HeatMapDayValue[] = []
+function parseDateKey(value: string | undefined): Date {
+  const fallback = new Date()
+  if (!value) return fallback
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return fallback
+  return new Date(year, month - 1, day)
+}
 
-  for (
-    const day = new Date(DEMO_HEATMAP_START_DATE);
-    day <= DEMO_HEATMAP_END_DATE;
-    day.setDate(day.getDate() + 1)
-  ) {
-    const index = Math.floor((day.getTime() - DEMO_HEATMAP_START_DATE.getTime()) / 86_400_000)
-    const weekday = day.getDay()
-    const seasonalLift = day.getMonth() >= 0 && day.getMonth() <= 3 ? 2 : 0
-    const weekdayLift = weekday >= 1 && weekday <= 5 ? 1 : 0
-    const wave = (Math.sin(index / 9) + 1) * 2
-    const spike = index % 29 === 0 ? 8 : index % 17 === 0 ? 5 : 0
-    const quiet = weekday === 0 || weekday === 6 || index % 13 === 0
-    const count = quiet ? 0 : Math.round(wave + seasonalLift + weekdayLift + spike)
+function getLastDaysRange(days: number): { endDate: string; startDate: string } {
+  const end = new Date()
+  const start = new Date(end)
+  start.setDate(end.getDate() - days + 1)
+  return {
+    endDate: formatDateKey(end),
+    startDate: formatDateKey(start),
+  }
+}
 
-    value.push({
-      count,
-      date: formatHeatmapDate(day),
+function formatShortDate(value: string): string {
+  if (!value) return '--'
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' })
+}
+
+function formatTimestamp(value: string): string {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(undefined, {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: '2-digit',
+  })
+}
+
+function normalizeTokenSeries(items: unknown): Array<Required<TokenSeriesItem>> {
+  return asArray(items).map((raw) => {
+    const record = asRecord(raw)
+    const vlmInput = asNumber(record.vlm_input)
+    const vlmOutput = asNumber(record.vlm_output)
+    const embeddingInput = asNumber(record.embedding_input)
+    return {
+      date: asString(record.date),
+      embedding_input: embeddingInput,
+      total: asNumber(record.total) || vlmInput + vlmOutput + embeddingInput,
+      vlm_input: vlmInput,
+      vlm_output: vlmOutput,
+    }
+  })
+}
+
+function percentile(sortedValues: number[], ratio: number): number {
+  if (sortedValues.length === 0) return 0
+  const index = Math.ceil(sortedValues.length * ratio) - 1
+  return sortedValues[Math.max(0, Math.min(sortedValues.length - 1, index))]
+}
+
+function buildHeatmapPanelColors(items: HeatMapDayValue[]): Record<number, string> {
+  const nonZeroCounts = Array.from(new Set(
+    items
+      .map((item) => item.count)
+      .filter((count) => count > 0)
+      .sort((a, b) => a - b),
+  ))
+
+  if (nonZeroCounts.length === 0) {
+    return { 0: HEATMAP_EMPTY_COLOR }
+  }
+
+  const thresholds = Array.from(new Set([
+    Math.max(1, percentile(nonZeroCounts, 0.25)),
+    Math.max(1, percentile(nonZeroCounts, 0.5)),
+    Math.max(1, percentile(nonZeroCounts, 0.75)),
+    Math.max(1, percentile(nonZeroCounts, 0.9)),
+  ])).sort((a, b) => a - b)
+
+  return thresholds.reduce<Record<number, string>>(
+    (colors, threshold, index) => ({
+      ...colors,
+      [threshold]: HEATMAP_COLOR_STOPS[Math.min(index, HEATMAP_COLOR_STOPS.length - 1)],
+    }),
+    { 0: HEATMAP_EMPTY_COLOR },
+  )
+}
+
+function getHeatmapFillColor(count: number, panelColors: Record<number, string>): string {
+  if (count <= 0) return 'var(--heatmap-empty)'
+
+  const thresholds = Object.keys(panelColors)
+    .map(Number)
+    .filter((threshold) => threshold > 0)
+    .sort((a, b) => a - b)
+
+  const matched = thresholds.reduce<number | null>(
+    (current, threshold) => (count >= threshold ? threshold : current),
+    null,
+  )
+
+  return matched === null
+    ? HEATMAP_COLOR_STOPS[0]
+    : panelColors[matched] ?? HEATMAP_COLOR_STOPS[0]
+}
+
+function computeCommitHeatmapStats(items: HeatMapDayValue[]): CommitHeatmapStats {
+  return items.reduce<CommitHeatmapStats>((stats, item) => {
+    if (item.count <= 0) return stats
+
+    return {
+      activeDays: stats.activeDays + 1,
+      peakCount: item.count > stats.peakCount ? item.count : stats.peakCount,
+      peakDate: item.count > stats.peakCount ? item.date : stats.peakDate,
+      recentDate: item.date > stats.recentDate ? item.date : stats.recentDate,
+    }
+  }, {
+    activeDays: 0,
+    peakCount: 0,
+    peakDate: '',
+    recentDate: '',
+  })
+}
+
+function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
+  const rowsByDate = new Map<string, Required<ContextCommitItem>>()
+
+  for (const item of normalizeCommitItems(items)) {
+    if (!item.date) continue
+
+    const existing = rowsByDate.get(item.date) ?? {
+      add_resource: 0,
+      add_skill: 0,
+      date: item.date,
+      hour: 0,
+      session_add_message: 0,
+      session_commit: 0,
+      total: 0,
+    }
+
+    rowsByDate.set(item.date, {
+      add_resource: existing.add_resource + item.add_resource,
+      add_skill: existing.add_skill + item.add_skill,
+      date: item.date,
+      hour: 0,
+      session_add_message: existing.session_add_message + item.session_add_message,
+      session_commit: existing.session_commit + item.session_commit,
+      total: existing.total + item.total,
     })
   }
 
-  return value
+  return Array.from(rowsByDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((item) => ({
+      count: item.total,
+      date: item.date,
+      details: item,
+    }))
 }
 
-const DEMO_HEATMAP_DATA = createDemoHeatmapData()
-const DEMO_HEATMAP_TOTAL = DEMO_HEATMAP_DATA.reduce((total, item) => total + item.count, 0)
-
-function computeHeatmapStats(data: HeatMapDayValue[]) {
-  let busiestDay = data[0]
-  let activeDays = 0
-  let longestStreak = 0
-  let streak = 0
-
-  for (const d of data) {
-    if (d.count > 0) {
-      activeDays++
-      streak++
-      if (streak > longestStreak) longestStreak = streak
-      if (d.count > busiestDay.count) busiestDay = d
-    } else {
-      streak = 0
+function normalizeCommitItems(items: unknown): Array<Required<ContextCommitItem>> {
+  return asArray(items).map((raw) => {
+    const record = asRecord(raw)
+    const addResource = asNumber(record.add_resource)
+    const addSkill = asNumber(record.add_skill)
+    const sessionAddMessage = asNumber(record.session_add_message)
+    const sessionCommit = asNumber(record.session_commit)
+    return {
+      add_resource: addResource,
+      add_skill: addSkill,
+      date: asString(record.date),
+      hour: asNumber(record.hour),
+      session_add_message: sessionAddMessage,
+      session_commit: sessionCommit,
+      total: asNumber(record.total) || addResource + addSkill + sessionAddMessage + sessionCommit,
     }
-  }
-
-  let currentStreak = 0
-  for (let i = data.length - 1; i >= 0; i--) {
-    if (data[i].count > 0) currentStreak++
-    else break
-  }
-
-  return { busiestDay, activeDays, currentStreak, longestStreak }
+  })
 }
 
-const DEMO_HEATMAP_STATS = computeHeatmapStats(DEMO_HEATMAP_DATA)
-const HEATMAP_LEGEND_COLORS = Object.values(HEATMAP_COLORS)
-
-const OVERVIEW_RANGE_START = '2026-04-25'
-const OVERVIEW_RANGE_END = '2026-05-08'
-const TOKEN_TREND_DATA = [
-  { date: '04-25', input: 128000, output: 76000, vector: 42000 },
-  { date: '04-26', input: 106000, output: 63000, vector: 36000 },
-  { date: '04-27', input: 133000, output: 82000, vector: 50000 },
-  { date: '04-28', input: 138000, output: 78000, vector: 47000 },
-  { date: '04-29', input: 121000, output: 72000, vector: 45000 },
-  { date: '04-30', input: 108000, output: 64000, vector: 41000 },
-  { date: '05-01', input: 130000, output: 79000, vector: 44000 },
-  { date: '05-02', input: 114000, output: 68000, vector: 40000 },
-  { date: '05-03', input: 95000, output: 57000, vector: 35000 },
-  { date: '05-04', input: 151000, output: 88000, vector: 51000 },
-  { date: '05-05', input: 116000, output: 66000, vector: 43000 },
-  { date: '05-06', input: 126000, output: 74000, vector: 48000 },
-  { date: '05-07', input: 111000, output: 62000, vector: 39000 },
-  { date: '05-08', input: 129000, output: 77000, vector: 46000 },
-]
-const TOKEN_TREND_KEYS = [
-  { color: 'oklch(0.6 0.12 210)', dataKey: 'input', labelKey: 'tokenTrend.input' },
-  { color: 'oklch(0.5 0.134 243)', dataKey: 'output', labelKey: 'tokenTrend.output' },
-  { color: 'oklch(0.6 0.1 280)', dataKey: 'vector', labelKey: 'tokenTrend.vector' },
-] as const
-
-// ---------- status helpers ----------
-
-const STATUS_COLORS: Record<string, string> = {
-  completed: 'oklch(0.6 0.12 180)',
-  running: 'oklch(0.7 0.14 75)',
-  failed: 'oklch(0.55 0.2 15)',
-  pending: 'oklch(0.56 0.021 213.5)',
+function normalizeAgents(items: unknown): AgentVisit[] {
+  return asArray(items)
+    .map((raw) => {
+      const record = asRecord(raw)
+      return {
+        agent_id: asString(record.agent_id),
+        last_seen_at: asString(record.last_seen_at),
+      }
+    })
+    .filter((item) => item.agent_id)
 }
 
-function TaskStatusDot({ status }: { status: string }) {
+function isDisabledPayload(value: unknown): boolean {
+  return asRecord(value).enabled === false
+}
+
+function fetchConsoleDashboardSummary(): Promise<ConsoleDashboardSummary> {
+  return getOvResult<ConsoleDashboardSummary>(
+    client.get({ url: '/api/v1/console/dashboard/summary' }),
+  )
+}
+
+function fetchConsoleTokenSeries(): Promise<ConsoleSeries<TokenSeriesItem>> {
+  const range = getLastDaysRange(TOKEN_SERIES_DAYS)
+  return getOvResult<ConsoleSeries<TokenSeriesItem>>(
+    client.get({
+      query: {
+        bucket: 'day',
+        end_date: range.endDate,
+        start_date: range.startDate,
+      },
+      url: '/api/v1/console/tokens',
+    }),
+  )
+}
+
+function fetchConsoleContextCommits(): Promise<ConsoleSeries<ContextCommitItem>> {
+  const range = getLastDaysRange(COMMIT_SERIES_DAYS)
+  return getOvResult<ConsoleSeries<ContextCommitItem>>(
+    client.get({
+      query: {
+        bucket: '4h',
+        end_date: range.endDate,
+        start_date: range.startDate,
+      },
+      url: '/api/v1/console/context-commits',
+    }),
+  )
+}
+
+function Panel({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) {
   return (
-    <div className="flex items-center gap-2">
-      <span
-        className="inline-block size-2 rounded-full"
-        style={{ backgroundColor: STATUS_COLORS[status] ?? 'oklch(0.56 0.021 213.5)' }}
-      />
-      <span className="text-sm capitalize">{status}</span>
+    <section
+      className={cn(
+        'animate-home-panel-in rounded-2xl border border-border/70 bg-muted/80 p-6 shadow-sm transition-[background-color,border-color,box-shadow,transform] duration-200 ease-out hover:-translate-y-0.5 hover:border-border hover:bg-muted hover:shadow-md dark:border-white/10 dark:bg-white/[0.12] dark:hover:border-white/15 dark:hover:bg-white/[0.16]',
+        className,
+      )}
+    >
+      {children}
+    </section>
+  )
+}
+
+function SectionHeading({
+  action,
+  description,
+  title,
+}: {
+  action?: ReactNode
+  description?: string
+  title: string
+}) {
+  return (
+    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h2 className="text-lg font-semibold tracking-normal">{title}</h2>
+        {description ? (
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
+        ) : null}
+      </div>
+      {action}
     </div>
   )
 }
 
-// ---------- panel wrapper ----------
-
-function Panel({
-  children,
-  className = '',
+function DetailRow({
+  label,
+  value,
 }: {
-  children: React.ReactNode
-  className?: string
+  label: string
+  value: string
 }) {
   return (
-    <div className={`rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-md dark:bg-white/[0.12] dark:hover:bg-white/[0.16] ${className}`}>
+    <div className="flex min-h-8 items-center justify-between gap-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]">
+      <span className="min-w-0 truncate text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums text-[oklch(0.46_0.13_242)] dark:text-[oklch(0.74_0.12_232)]">{value}</span>
+    </div>
+  )
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-24 items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/45 px-4 text-center text-sm text-muted-foreground dark:bg-white/[0.04]">
       {children}
     </div>
   )
 }
 
-// ---------- detect dark mode (reactive) ----------
-
-function subscribeToTheme(callback: () => void) {
-  const observer = new MutationObserver(callback)
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['class', 'data-theme', 'style'],
-  })
-  return () => observer.disconnect()
+function parseDisplayNumber(value: string): number | null {
+  const normalized = value.replace(/,/g, '').trim()
+  if (!normalized) return null
+  const numeric = Number(normalized)
+  return Number.isFinite(numeric) ? numeric : null
 }
 
-function getIsDarkSnapshot() {
-  if (typeof document === 'undefined') return false
-  const el = document.documentElement
-  return el.classList.contains('dark') || el.getAttribute('data-theme') === 'dark'
+function easeOutCubic(value: number): number {
+  return 1 - Math.pow(1 - value, 3)
 }
 
-function useIsDark() {
-  return useSyncExternalStore(subscribeToTheme, getIsDarkSnapshot, () => false)
-}
+function MetricPanel({
+  children,
+  description,
+  icon: Icon,
+  isError,
+  isLoading,
+  title,
+  value,
+}: {
+  children?: ReactNode
+  description: string
+  icon: ComponentType<{ className?: string; style?: CSSProperties }>
+  isError?: boolean
+  isLoading?: boolean
+  title: string
+  value: string
+}) {
+  const valueRef = useRef<HTMLSpanElement>(null)
+  const previousValueRef = useRef<string | null>(null)
 
-// ---------- breathing dot ----------
+  useEffect(() => {
+    if (isLoading || isError) return
+    const el = valueRef.current
+    if (!el) return
 
-// inject breathing keyframes once
-void (() => {
-  if (typeof document === 'undefined') return
-  const id = 'breathing-dot-keyframes'
-  if (document.getElementById(id)) return
-  const style = document.createElement('style')
-  style.id = id
-  style.textContent = `
-    @keyframes breathing {
-      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--dot-color); }
-      50% { opacity: .65; box-shadow: 0 0 6px 2px var(--dot-color); }
+    const target = parseDisplayNumber(value)
+    if (target === null || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      el.textContent = value
+      previousValueRef.current = value
+      return
     }
-  `
-  document.head.appendChild(style)
-})()
 
-function BreathingDot({ color, size = 'size-2.5' }: { color: string; size?: string }) {
+    if (previousValueRef.current === value) {
+      el.textContent = value
+      return
+    }
+
+    const current = previousValueRef.current === null
+      ? 0
+      : parseDisplayNumber(previousValueRef.current) ?? target
+    previousValueRef.current = value
+
+    const startedAt = performance.now()
+    const duration = 700
+    let frame = 0
+
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const next = current + (target - current) * easeOutCubic(progress)
+      el.textContent = Math.round(next).toLocaleString()
+      if (progress < 1) {
+        frame = requestAnimationFrame(tick)
+      } else {
+        el.textContent = value
+      }
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [isError, isLoading, value])
+
   return (
-    <span
-      className={`inline-block ${size} rounded-full`}
-      style={{
-        backgroundColor: color,
-        ['--dot-color' as string]: color,
-        animation: 'breathing 2.4s ease-in-out infinite',
-      }}
-    />
+    <Panel className="flex min-h-[168px] flex-col p-4 sm:p-5">
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold tracking-normal text-[oklch(0.42_0.04_232)] dark:text-[oklch(0.8_0.03_232)]">{title}</h2>
+            <p className="sr-only">{description}</p>
+          </div>
+          <span
+            className="flex size-7 shrink-0 items-center justify-center rounded-full"
+            style={{ backgroundColor: HOME_ACCENT_COLORS.iconSoft }}
+          >
+            <Icon className="size-3.5" style={{ color: HOME_ACCENT_COLORS.icon }} />
+          </span>
+        </div>
+
+        {isLoading ? (
+          <Skeleton className="mt-4 h-10 w-24" />
+        ) : isError ? (
+          <p className="mt-4 text-sm text-destructive">{value}</p>
+        ) : (
+          <div className="mt-4 text-4xl font-bold leading-none tracking-normal tabular-nums text-foreground">
+            <span ref={valueRef}>{value}</span>
+          </div>
+        )}
+      </div>
+
+      {children ? <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(92px,1fr))] gap-2">{children}</div> : null}
+    </Panel>
   )
 }
 
-// ---------- sub-components ----------
-
-function StatCard({
-  title,
-  subtitle,
-  value,
-  isLoading,
+function ContextDataPanel({
+  data,
+  disabled,
   isError,
-  errorText,
-  accentColor,
-  icon: Icon,
+  isLoading,
+  t,
 }: {
-  title: string
-  subtitle?: string
-  value?: string | number
-  isLoading: boolean
+  data: ContextCounts | undefined
+  disabled: boolean
   isError: boolean
-  errorText: string
-  accentColor: string
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+  isLoading: boolean
+  t: HomeT
 }) {
-  const valueRef = useRef<HTMLSpanElement>(null)
-  const hasAnimated = useRef(false)
-
-  useEffect(() => {
-    if (isLoading || isError || hasAnimated.current) return
-    const el = valueRef.current
-    if (!el) return
-    const target = typeof value === 'number' ? value : Number(String(value).replace(/,/g, ''))
-    if (Number.isNaN(target)) return
-    hasAnimated.current = true
-    const obj = { val: 0 }
-    gsap.to(obj, {
-      val: target,
-      duration: 0.8,
-      ease: 'power2.out',
-      onUpdate: () => {
-        el.textContent = Math.round(obj.val).toLocaleString()
-      },
-    })
-  }, [isLoading, isError, value])
-
+  const total = asNumber(data?.total)
   return (
-    <div
-      className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-md dark:bg-white/[0.12] dark:hover:bg-white/[0.16]"
+    <MetricPanel
+      description={t('contextData.description')}
+      icon={Database}
+      isError={isError}
+      isLoading={isLoading}
+      title={t('contextData.title')}
+      value={isError ? t('requestFailed') : formatNumber(total)}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-sm tracking-wide text-muted-foreground">{title}</span>
-        <span
-          className="flex size-8 items-center justify-center rounded-full"
-          style={{ backgroundColor: `color-mix(in oklch, ${accentColor} 12%, transparent)` }}
-        >
-          <Icon className="size-4" style={{ color: accentColor }} />
-        </span>
-      </div>
-      {isLoading ? (
-        <Skeleton className="h-12 w-28" />
-      ) : isError ? (
-        <span className="text-sm text-destructive">{errorText}</span>
+      {disabled ? (
+        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
       ) : (
-        <div>
-          <span ref={valueRef} className="text-5xl font-bold tracking-tighter tabular-nums">
-            0
-          </span>
-          {subtitle && (
-            <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
-          )}
+        <>
+          <DetailRow label={t('contextData.files')} value={formatNumber(data?.files)} />
+          <DetailRow label={t('contextData.skills')} value={formatNumber(data?.skills)} />
+          <DetailRow label={t('contextData.memories')} value={formatNumber(data?.memories)} />
+        </>
+      )}
+    </MetricPanel>
+  )
+}
+
+function TodayTokensPanel({
+  data,
+  disabled,
+  isError,
+  isLoading,
+  t,
+}: {
+  data: TokenCounts | undefined
+  disabled: boolean
+  isError: boolean
+  isLoading: boolean
+  t: HomeT
+}) {
+  const total = asNumber(data?.total)
+  return (
+    <MetricPanel
+      description={t('todayTokens.description')}
+      icon={Coins}
+      isError={isError}
+      isLoading={isLoading}
+      title={t('todayTokens.title')}
+      value={isError ? t('requestFailed') : formatNumber(total)}
+    >
+      {disabled ? (
+        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+      ) : (
+        <>
+          <DetailRow label={t('todayTokens.vlmInput')} value={formatNumber(data?.vlm_input)} />
+          <DetailRow label={t('todayTokens.vlmOutput')} value={formatNumber(data?.vlm_output)} />
+          <DetailRow label={t('todayTokens.embeddingInput')} value={formatNumber(data?.embedding_input)} />
+        </>
+      )}
+    </MetricPanel>
+  )
+}
+
+function TodayRetrievalsPanel({
+  data,
+  disabled,
+  isError,
+  isLoading,
+  t,
+}: {
+  data: RetrievalCounts | undefined
+  disabled: boolean
+  isError: boolean
+  isLoading: boolean
+  t: HomeT
+}) {
+  const total = asNumber(data?.total)
+  return (
+    <MetricPanel
+      description={t('todayRetrievals.description')}
+      icon={Search}
+      isError={isError}
+      isLoading={isLoading}
+      title={t('todayRetrievals.title')}
+      value={isError ? t('requestFailed') : formatNumber(total)}
+    >
+      {disabled ? (
+        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+      ) : (
+        <>
+          <DetailRow label="find()" value={formatNumber(data?.find)} />
+          <DetailRow label="search()" value={formatNumber(data?.search)} />
+        </>
+      )}
+    </MetricPanel>
+  )
+}
+
+function AgentAccessPanel({
+  data,
+  disabled,
+  isError,
+  isLoading,
+  t,
+}: {
+  data: AgentOverview | undefined
+  disabled: boolean
+  isError: boolean
+  isLoading: boolean
+  t: HomeT
+}) {
+  const agents = normalizeAgents(data?.items)
+  const total = asNumber(data?.total)
+  return (
+    <MetricPanel
+      description={t('agentAccess.description')}
+      icon={Users}
+      isError={isError}
+      isLoading={isLoading}
+      title={t('agentAccess.title')}
+      value={isError ? t('requestFailed') : formatNumber(total)}
+    >
+      {disabled ? (
+        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
+      ) : agents.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{t('agentAccess.empty')}</p>
+      ) : (
+        <div className="grid gap-2">
+          {agents.slice(0, 3).map((agent) => (
+            <div
+              key={agent.agent_id}
+              className="flex min-h-8 items-center justify-between gap-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]"
+            >
+              <span className="min-w-0 truncate font-medium">{agent.agent_id}</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {formatTimestamp(agent.last_seen_at || '')}
+              </span>
+            </div>
+          ))}
         </div>
       )}
+    </MetricPanel>
+  )
+}
+
+function TokenTrendPanel({
+  data,
+  isError,
+  isLoading,
+  t,
+}: {
+  data: ConsoleSeries<TokenSeriesItem> | undefined
+  isError: boolean
+  isLoading: boolean
+  t: HomeT
+}) {
+  const items = normalizeTokenSeries(data?.items)
+  const disabled = isDisabledPayload(data)
+  const rangeLabel = data?.start_date && data.end_date
+    ? `${data.start_date} - ${data.end_date}`
+    : `${getLastDaysRange(TOKEN_SERIES_DAYS).startDate} - ${getLastDaysRange(TOKEN_SERIES_DAYS).endDate}`
+
+  return (
+    <Panel>
+      <SectionHeading
+        action={<span className="rounded-full border border-[oklch(0.68_0.12_232/0.2)] bg-background/70 px-3 py-1 text-xs tabular-nums text-muted-foreground shadow-xs dark:bg-white/[0.06]">{rangeLabel}</span>}
+        description={t('tokenTrend.description')}
+        title={t('tokenTrend.title')}
+      />
+
+      {isLoading ? (
+        <Skeleton className="h-72 w-full" />
+      ) : isError ? (
+        <EmptyState>{t('requestFailed')}</EmptyState>
+      ) : disabled ? (
+        <EmptyState>{t('usageDisabled')}</EmptyState>
+      ) : items.length === 0 ? (
+        <EmptyState>{t('tokenTrend.empty')}</EmptyState>
+      ) : (
+        <>
+          <div className="h-72 min-h-72 min-w-0 w-full">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              initialDimension={{ width: 720, height: 288 }}
+              minWidth={1}
+              minHeight={1}
+            >
+              <AreaChart data={items} margin={{ bottom: 0, left: 0, right: 12, top: 8 }}>
+                <defs>
+                  <linearGradient id="tokenTrendVlmInput" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="5%" stopColor={TOKEN_COLORS.input} stopOpacity={0.52} />
+                    <stop offset="95%" stopColor={TOKEN_COLORS.input} stopOpacity={0.14} />
+                  </linearGradient>
+                  <linearGradient id="tokenTrendVlmOutput" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="5%" stopColor={TOKEN_COLORS.output} stopOpacity={0.46} />
+                    <stop offset="95%" stopColor={TOKEN_COLORS.output} stopOpacity={0.11} />
+                  </linearGradient>
+                  <linearGradient id="tokenTrendEmbedding" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="5%" stopColor={TOKEN_COLORS.embedding} stopOpacity={0.36} />
+                    <stop offset="95%" stopColor={TOKEN_COLORS.embedding} stopOpacity={0.08} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="currentColor" strokeOpacity={0.08} vertical={false} />
+                <XAxis
+                  axisLine={false}
+                  className="text-muted-foreground"
+                  dataKey="date"
+                  tick={{ fill: 'currentColor', fontSize: 12 }}
+                  tickFormatter={formatShortDate}
+                  tickLine={false}
+                />
+                <YAxis
+                  axisLine={false}
+                  className="text-muted-foreground"
+                  tick={{ fill: 'currentColor', fontSize: 12 }}
+                  tickFormatter={(value) => Number(value).toLocaleString()}
+                  tickLine={false}
+                  width={64}
+                />
+                <Tooltip
+                  cursor={{ stroke: 'currentColor', strokeOpacity: 0.12 }}
+                  content={<TokenTrendTooltip t={t} />}
+                />
+                <Area dataKey="vlm_input" fill="url(#tokenTrendVlmInput)" name="vlm_input" stackId="tokens" stroke={TOKEN_COLORS.input} strokeWidth={2} type="monotone" />
+                <Area dataKey="vlm_output" fill="url(#tokenTrendVlmOutput)" name="vlm_output" stackId="tokens" stroke={TOKEN_COLORS.output} strokeWidth={2} type="monotone" />
+                <Area dataKey="embedding_input" fill="url(#tokenTrendEmbedding)" name="embedding_input" stackId="tokens" stroke={TOKEN_COLORS.embedding} strokeWidth={2} type="monotone" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-4 text-sm text-muted-foreground">
+            <LegendDot color={TOKEN_COLORS.input} label={t('todayTokens.vlmInput')} />
+            <LegendDot color={TOKEN_COLORS.output} label={t('todayTokens.vlmOutput')} />
+            <LegendDot color={TOKEN_COLORS.embedding} label={t('todayTokens.embeddingInput')} />
+          </div>
+        </>
+      )}
+    </Panel>
+  )
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function TokenTrendTooltip({
+  active,
+  label,
+  payload,
+  t,
+}: {
+  active?: boolean
+  label?: string | number
+  payload?: TokenTrendPayload[]
+  t: HomeT
+}) {
+  if (!active || !payload?.length) return null
+
+  const labelForKey = (key: string | undefined) => {
+    if (key === 'vlm_input') return t('todayTokens.vlmInput')
+    if (key === 'vlm_output') return t('todayTokens.vlmOutput')
+    return t('todayTokens.embeddingInput')
+  }
+
+  return (
+    <div className="min-w-56 rounded-xl border border-border/70 bg-popover/95 px-3.5 py-3 text-xs text-popover-foreground shadow-2xl shadow-black/10 ring-1 ring-foreground/5 backdrop-blur-md dark:shadow-black/35">
+      <div className="font-medium tabular-nums text-foreground">{String(label ?? '')}</div>
+      <div className="mt-3 space-y-2 border-t border-border/70 pt-3">
+        {payload.map((item) => (
+          <div key={item.dataKey ?? item.name} className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
+            <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+            <span className="min-w-0 truncate text-muted-foreground">{labelForKey(item.dataKey ?? item.name)}</span>
+            <span className="font-medium tabular-nums text-foreground">{formatNumber(item.value)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
-function ComponentHealthBar({
-  data,
-  sysData,
-  isLoading,
-  sysLoading,
-  isError,
-  error,
-  t,
-}: {
-  data: unknown
-  sysData: unknown
-  isLoading: boolean
-  sysLoading: boolean
-  isError: boolean
-  error: Error | null
-  t: (key: string, options?: Record<string, unknown>) => string
-}) {
-  const [selectedComponent, setSelectedComponent] = useState<{
-    name: string
-    payload: Record<string, unknown>
-  } | null>(null)
-  const [showDialogScrollbar, setShowDialogScrollbar] = useState(false)
-  const [statusExpanded, setStatusExpanded] = useState(true)
-  const [jsonExpanded, setJsonExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const dialogScrollRef = useRef<HTMLDivElement | null>(null)
-  const hideScrollbarTimerRef = useRef<number | null>(null)
-  const record = asRecord(data)
-  const sys = asRecord(sysData)
-  const components = { ...asRecord(record.components) }
-  const names = ['queue', 'vikingdb', 'models', 'lock', 'retrieval']
-  const systemHealthy = sys.initialized === true
-
-  const queueComponent = asRecord(components.queue)
-  if (Object.keys(queueComponent).length > 0) {
-    components.queue = {
-      ...queueComponent,
-      is_healthy: false,
-      has_errors: true,
-      status: 'Injected queue failure for homepage validation.\nQueue backlog is blocked by a synthetic downstream processing error.',
-      errors: [
-        'Injected queue failure for homepage validation.',
-        'Queue backlog is blocked by a synthetic downstream processing error.',
-      ],
-    }
-  }
-
-  const hasComponentIssues = names.some((name) => {
-    const comp = asRecord(components[name])
-    return comp.has_errors === true || comp.is_healthy !== true
-  })
-  const overallHealthy = record.is_healthy === true && !hasComponentIssues
-  const displaySystemHealthy = systemHealthy && !hasComponentIssues
-
-  const openComponentDetails = (name: string, component: Record<string, unknown>) => {
-    setSelectedComponent({
-      name,
-      payload: {
-        name,
-        is_healthy: component.is_healthy === true,
-        has_errors: component.has_errors === true,
-        status: asString(component.status),
-        errors: asStringArray(component.errors),
-      },
-    })
-  }
-
-  const copyErrors = async () => {
-    try {
-      const errors = asStringArray(selectedComponent?.payload.errors)
-      const status = asString(selectedComponent?.payload.status)
-      const text = [status, ...errors].filter(Boolean).join('\n\n')
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // clipboard API not available
-    }
-  }
-
-  useEffect(() => {
-    if (!selectedComponent) {
-      setShowDialogScrollbar(false)
-      if (hideScrollbarTimerRef.current !== null) {
-        window.clearTimeout(hideScrollbarTimerRef.current)
-        hideScrollbarTimerRef.current = null
-      }
-      return
-    }
-
-    const node = dialogScrollRef.current
-    if (!node) {
-      return
-    }
-
-    const handleScroll = () => {
-      setShowDialogScrollbar(true)
-      if (hideScrollbarTimerRef.current !== null) {
-        window.clearTimeout(hideScrollbarTimerRef.current)
-      }
-      hideScrollbarTimerRef.current = window.setTimeout(() => {
-        setShowDialogScrollbar(false)
-      }, 700)
-    }
-
-    node.addEventListener('scroll', handleScroll, { passive: true })
-    return () => {
-      node.removeEventListener('scroll', handleScroll)
-      if (hideScrollbarTimerRef.current !== null) {
-        window.clearTimeout(hideScrollbarTimerRef.current)
-        hideScrollbarTimerRef.current = null
-      }
-    }
-  }, [selectedComponent])
-
+function ContextCommitStat({ label, value }: { label: string; value: string }) {
   return (
-    <>
-      <Panel>
-        <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight">{t('systemHealth.title')}</h2>
-          {!isLoading && !sysLoading && !isError && (
-            <span
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
-              style={
-                overallHealthy && displaySystemHealthy
-                  ? { backgroundColor: 'oklch(0.6 0.12 180 / 0.15)', color: 'oklch(0.6 0.12 180)' }
-                  : { backgroundColor: 'oklch(0.55 0.2 15 / 0.15)', color: 'oklch(0.55 0.2 15)' }
-              }
-            >
-              {overallHealthy && displaySystemHealthy
-                ? (
-                  <>
-                    <span className="inline-block size-2 rounded-full" style={{ backgroundColor: 'oklch(0.6 0.12 180)' }} />
-                    {t('systemHealth.allOperational')}
-                  </>
-                )
-                : (
-                  <>
-                    <BreathingDot color="oklch(0.55 0.2 15)" size="size-2" />
-                    {t('systemHealth.nIssues', {
-                      count: names.filter((n) => {
-                        const c = asRecord(components[n])
-                        return c.has_errors === true || c.is_healthy !== true
-                      }).length,
-                    })}
-                  </>
-                )
-              }
-            </span>
-          )}
-        </div>
-        {isLoading || sysLoading ? (
-          <div className="space-y-3">
-            {names.map((n) => <Skeleton key={n} className="h-12 w-full" />)}
-          </div>
-        ) : isError ? (
-          <div className="space-y-1">
-            <span className="text-sm text-destructive">{t('requestFailed')}</span>
-            {error?.message && (
-              <pre className="max-h-24 overflow-auto rounded-lg bg-foreground/[0.03] p-3 text-xs text-muted-foreground">{error.message}</pre>
-            )}
-          </div>
-        ) : (
-          <div className="divide-y divide-foreground/5">
-            {/* Component rows */}
-            {names.map((name) => {
-              const comp = asRecord(components[name])
-              const healthy = comp.is_healthy === true
-              const hasIssues = comp.has_errors === true || !healthy
-              return (
-                <div
-                  key={name}
-                  className={`flex items-center justify-between px-3 py-3 ${hasIssues ? 'rounded-lg bg-destructive/5' : ''}`}
-                >
-                  <div className="flex items-center gap-3">
-                    {healthy
-                      ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: 'oklch(0.6 0.12 180)' }} />
-                      : <BreathingDot color="oklch(0.55 0.2 15)" />
-                    }
-                    <span className="text-sm font-medium capitalize">{name}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-muted-foreground">
-                      {healthy ? t('systemHealth.operational') : t('systemHealth.error')}
-                    </span>
-                    {hasIssues && (
-                      <button
-                        type="button"
-                        aria-label={`${t('systemHealth.viewErrorAria')} ${name}`}
-                        className="text-xs font-medium text-destructive transition hover:text-destructive/80"
-                        onClick={() => openComponentDetails(name, comp)}
-                      >
-                        {t('systemHealth.viewDetails')}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </Panel>
-
-      <Dialog open={selectedComponent !== null} onOpenChange={(open) => {
-        if (!open) {
-          setSelectedComponent(null)
-          setStatusExpanded(true)
-          setJsonExpanded(false)
-          setCopied(false)
-        }
-      }}>
-        <DialogContent className="max-h-[min(88vh,720px)] max-w-lg gap-0 overflow-hidden p-0">
-
-
-          <DialogHeader>
-            <div className="border-b border-border/60 px-6 pt-5 pb-4">
-              <DialogTitle>
-                {selectedComponent ? `${selectedComponent.name} ${t('systemHealth.dialogTitle')}` : t('systemHealth.dialogTitle')}
-              </DialogTitle>
-              <DialogDescription className="mt-1">
-                {t('systemHealth.dialogDescription')}
-              </DialogDescription>
-              {/* Status summary row */}
-              {selectedComponent && (
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-sm font-medium capitalize">{asString(selectedComponent.payload.name)}</span>
-                  <span
-                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                    style={
-                      selectedComponent.payload.is_healthy
-                        ? { backgroundColor: 'oklch(0.6 0.12 180 / 0.15)', color: 'oklch(0.6 0.12 180)' }
-                        : { backgroundColor: 'oklch(0.55 0.2 15 / 0.15)', color: 'oklch(0.55 0.2 15)' }
-                    }
-                  >
-                    {selectedComponent.payload.is_healthy ? t('systemHealth.healthy') : t('systemHealth.unhealthy')}
-                  </span>
-                </div>
-              )}
-            </div>
-          </DialogHeader>
-
-          <div
-            ref={dialogScrollRef}
-            className={[
-              'overflow-y-auto px-6 py-5',
-              'max-h-[calc(min(88vh,720px)-200px)]',
-              '[scrollbar-width:none]',
-              '[&::-webkit-scrollbar]:w-0',
-              showDialogScrollbar
-                ? '[scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border/80 [&::-webkit-scrollbar-track]:bg-transparent'
-                : '',
-            ].join(' ')}
-          >
-            <div className="space-y-4">
-              {/* Errors section */}
-              {asStringArray(selectedComponent?.payload.errors).length > 0 && (
-                <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('systemHealth.errors')}</div>
-                  <div className="space-y-2">
-                    {asStringArray(selectedComponent?.payload.errors).map((item, index) => (
-                      <div
-                        key={`${selectedComponent?.name}-error-${index}`}
-                        className="rounded-lg bg-destructive/5 px-4 py-2.5 text-sm leading-6 dark:bg-destructive/10"
-                      >
-                        <span className="whitespace-pre-wrap break-words">{item}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Status detail — collapsible */}
-              <div>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between text-xs font-medium uppercase tracking-wide text-muted-foreground"
-                  onClick={() => setStatusExpanded((v) => !v)}
-                >
-                  {t('systemHealth.statusDetail')}
-                  <ChevronDown className={`size-4 transition-transform duration-200 ${statusExpanded ? '' : '-rotate-90'}`} />
-                </button>
-                {statusExpanded && (
-                  <div className="mt-2 rounded-xl bg-muted/60 p-4 text-sm leading-6 text-muted-foreground dark:bg-white/[0.06]">
-                    <div className="whitespace-pre-wrap break-words">
-                      {asString(selectedComponent?.payload.status) || t('systemHealth.noDetails')}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Raw JSON — collapsed by default */}
-              <div>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between text-xs font-medium uppercase tracking-wide text-muted-foreground"
-                  onClick={() => setJsonExpanded((v) => !v)}
-                >
-                  {t('systemHealth.rawJson')}
-                  <ChevronDown className={`size-4 transition-transform duration-200 ${jsonExpanded ? '' : '-rotate-90'}`} />
-                </button>
-                {jsonExpanded && (
-                  <div className="mt-2 rounded-xl border border-border/40 bg-muted/60 p-4 dark:bg-white/[0.06]">
-                    <pre className="overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
-                      {JSON.stringify(selectedComponent?.payload ?? {}, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="border-t border-border/60 px-6 py-4">
-            <div className="flex w-full items-center justify-between">
-              <div>
-                {asStringArray(selectedComponent?.payload.errors).length > 0 && (
-                  <Button variant="outline" size="sm" onClick={copyErrors}>
-                    {copied
-                      ? <><Check className="mr-1.5 size-3.5" />{t('systemHealth.copied')}</>
-                      : <><Copy className="mr-1.5 size-3.5" />{t('systemHealth.copyError')}</>
-                    }
-                  </Button>
-                )}
-              </div>
-              <Button variant="outline" onClick={() => setSelectedComponent(null)}>
-                {t('systemHealth.close')}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    <div className="border-b border-border/60 py-2 last:border-b-0 sm:border-b-0 sm:border-r sm:px-4 sm:last:border-r-0 xl:border-b xl:border-r-0 xl:px-0 xl:last:border-b-0">
+      <div className="text-[11px] leading-none text-muted-foreground">{label}</div>
+      <div className="mt-1.5 text-lg font-semibold leading-none tabular-nums">{value}</div>
+    </div>
   )
 }
 
-function MemoryStatsCard({
+function ContextCommitsPanel({
   data,
-  isLoading,
   isError,
+  isLoading,
   t,
 }: {
-  data: unknown
-  isLoading: boolean
+  data: ConsoleSeries<ContextCommitItem> | undefined
   isError: boolean
-  t: (key: string) => string
+  isLoading: boolean
+  t: HomeT
 }) {
-  const isDark = useIsDark()
-  const record = asRecord(data)
-  const byCategory = asRecord(record.by_category)
-  const total = asNumber(record.total_memories)
-  const colors = isDark ? CATEGORY_COLORS_DARK : CATEGORY_COLORS
-
-  const chartData = CATEGORY_ORDER
-    .map((cat) => ({ name: cat, value: asNumber(byCategory[cat]) }))
-    .filter((d) => d.value > 0)
-
-  const hasData = chartData.length > 0
+  const [tooltip, setTooltip] = useState<CommitTooltip | null>(null)
+  const items = useMemo(() => normalizeCommitHeatmapData(data?.items), [data?.items])
+  const panelColors = useMemo(() => buildHeatmapPanelColors(items), [items])
+  const totalCommits = useMemo(() => items.reduce((total, item) => total + item.count, 0), [items])
+  const stats = useMemo(() => computeCommitHeatmapStats(items), [items])
+  const disabled = isDisabledPayload(data)
+  const rangeLabel = data?.start_date && data.end_date
+    ? `${data.start_date} - ${data.end_date}`
+    : `${getLastDaysRange(COMMIT_SERIES_DAYS).startDate} - ${getLastDaysRange(COMMIT_SERIES_DAYS).endDate}`
+  const range = getLastDaysRange(COMMIT_SERIES_DAYS)
+  const startDate = parseDateKey(data?.start_date ?? range.startDate)
+  const endDate = parseDateKey(data?.end_date ?? range.endDate)
+  const title = !isLoading && !isError && !disabled
+    ? totalCommits > 0
+      ? t('contextCommits.yearlyTotal', { count: formatNumber(totalCommits) })
+      : t('contextCommits.yearlyEmpty')
+    : t('contextCommits.title')
 
   return (
     <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('memoryStats.title')}</h2>
-      <p className="mb-5 text-sm text-muted-foreground">{t('memoryStats.subtitle')}</p>
+      <SectionHeading
+        action={<span className="pt-1 text-xs tabular-nums text-muted-foreground">{rangeLabel}</span>}
+        description={t('contextCommits.description')}
+        title={title}
+      />
+
       {isLoading ? (
-        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-72 w-full" />
       ) : isError ? (
-        <span className="text-sm text-destructive">{t('requestFailed')}</span>
+        <EmptyState>{t('requestFailed')}</EmptyState>
+      ) : disabled ? (
+        <EmptyState>{t('usageDisabled')}</EmptyState>
+      ) : items.length === 0 ? (
+        <EmptyState>{t('contextCommits.empty')}</EmptyState>
       ) : (
-        <div className="flex items-start gap-8">
-          {hasData && (
-            <PieChart width={180} height={180} className="shrink-0">
-              <Pie
-                data={chartData}
-                cx={90}
-                cy={90}
-                innerRadius={50}
-                outerRadius={80}
-                dataKey="value"
-                strokeWidth={3}
-                stroke={isDark ? 'oklch(0.26 0.005 243)' : 'oklch(1 0 0)'}
-              >
-                {chartData.map((entry) => (
-                  <Cell key={entry.name} fill={colors[entry.name] ?? 'oklch(0.56 0.021 213.5)'} />
-                ))}
-                <Label
-                  value={String(total)}
-                  position="center"
-                  fill={isDark ? 'oklch(0.985 0 0)' : 'oklch(0.148 0.004 228.8)'}
-                  className="text-3xl font-bold"
+        <>
+          <div className="grid gap-4 xl:grid-cols-[minmax(820px,auto)_minmax(180px,1fr)]">
+            <div className="min-w-0">
+              <div className="overflow-x-auto">
+                <HeatMap
+                  className="[--heatmap-empty:oklch(0.92_0_0)] text-muted-foreground dark:[--heatmap-empty:oklch(0.31_0_0)] [&_.w-heatmap-month]:fill-current [&_.w-heatmap-week]:fill-current"
+                  endDate={endDate}
+                  height={128}
+                  legendCellSize={0}
+                  monthLabels={HEATMAP_MONTH_LABELS}
+                  panelColors={panelColors}
+                  rectProps={{ rx: 2 }}
+                  rectRender={(props, item) => {
+                    const value = item as Partial<HeatMapDayValue>
+                    const heatmapItem = value.details ? value as HeatMapDayValue : null
+                    const count = asNumber(value.count)
+                    const fill = getHeatmapFillColor(count, panelColors)
+                    return (
+                      <rect
+                        {...props}
+                        fill={fill}
+                        onMouseEnter={(event) => {
+                          if (!heatmapItem) return
+                          const rect = (event.target as SVGRectElement).getBoundingClientRect()
+                          setTooltip({
+                            item: heatmapItem,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                          })
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
+                        style={{ ...props.style, cursor: heatmapItem ? 'pointer' : 'default', fill, transition: 'fill 0.15s, opacity 0.15s' }}
+                      />
+                    )
+                  }}
+                  rectSize={11}
+                  space={3}
+                  startDate={startDate}
+                  value={items}
+                  weekLabels={HEATMAP_WEEK_LABELS}
+                  width={820}
                 />
-              </Pie>
-            </PieChart>
-          )}
-          <div className="grid w-full gap-2.5 pt-1">
-            {CATEGORY_ORDER.map((cat) => {
-              const count = asNumber(byCategory[cat])
-              return (
-                <div key={cat} className="flex items-center gap-3 text-sm">
+              </div>
+
+              <div className="-mt-1 flex justify-end text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <span className="mr-0.5">{t('contextCommits.legend.none')}</span>
                   <span
-                    className="inline-block size-3 shrink-0 rounded-sm"
-                    style={{ backgroundColor: colors[cat] }}
+                    className="size-3 rounded-[2px]"
+                    style={{ backgroundColor: HEATMAP_EMPTY_COLOR }}
                   />
-                  <span className="font-medium">{t(`memoryStats.category.${cat}`)}</span>
-                  <span className="ml-auto tabular-nums text-muted-foreground">{count}</span>
+                  {HEATMAP_COLOR_STOPS.map((color, index) => (
+                    <span
+                      key={`${color}-${index}`}
+                      className="size-3 rounded-[2px]"
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                  <span className="ml-0.5">{t('contextCommits.legend.more')}</span>
                 </div>
-              )
-            })}
+              </div>
+            </div>
+
+            <div className="grid content-start border-t border-border/60 pt-3 sm:grid-cols-3 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-5">
+              <ContextCommitStat label={t('contextCommits.stats.activeDays')} value={formatNumber(stats.activeDays)} />
+              <ContextCommitStat label={t('contextCommits.stats.peakDay')} value={formatNumber(stats.peakCount)} />
+              <ContextCommitStat label={t('contextCommits.stats.recentDay')} value={stats.recentDate ? formatShortDate(stats.recentDate) : '--'} />
+            </div>
           </div>
-        </div>
+        </>
       )}
+
+      {tooltip && typeof document !== 'undefined'
+        ? createPortal(<CommitTooltipView item={tooltip.item} t={t} x={tooltip.x} y={tooltip.y} />, document.body)
+        : null}
     </Panel>
   )
 }
 
-function RecentTasksCard({
-  data,
-  isLoading,
-  isError,
+function CommitTooltipView({
+  item,
   t,
+  x,
+  y,
 }: {
-  data: unknown
-  isLoading: boolean
-  isError: boolean
-  t: (key: string) => string
+  item: HeatMapDayValue
+  t: HomeT
+  x: number
+  y: number
 }) {
-  const tasks = asArray(data).slice(0, 10)
-  const displayTasks = [
-    {
-      task_id: 'task-homepage-error-demo',
-      task_type: 'queue-recovery',
-      status: 'failed',
-    },
-    ...tasks,
-  ].slice(0, 10)
+  const details = item.details
+  const rows = [
+    { label: t('contextCommits.operations.addResource'), value: details.add_resource },
+    { label: t('contextCommits.operations.addSkill'), value: details.add_skill },
+    { label: t('contextCommits.operations.sessionAddMessage'), value: details.session_add_message },
+    { label: t('contextCommits.operations.sessionCommit'), value: details.session_commit },
+  ]
 
   return (
-    <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('recentTasks.title')}</h2>
-      <p className="mb-5 text-sm text-muted-foreground">{t('recentTasks.subtitle')}</p>
-      {isLoading ? (
-        <Skeleton className="h-40 w-full" />
-      ) : isError ? (
-        <span className="text-sm text-destructive">{t('requestFailed')}</span>
-      ) : displayTasks.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
-          <ListTodo className="size-8 opacity-40" />
-          <p className="text-sm">{t('recentTasks.empty')}</p>
+    <div
+      className="pointer-events-none fixed z-50 w-64 rounded-xl border border-border/70 bg-popover/95 px-3.5 py-3 text-xs text-popover-foreground shadow-2xl shadow-black/10 ring-1 ring-foreground/5 backdrop-blur-md dark:shadow-black/35"
+      style={{
+        left: x,
+        top: y - 12,
+        transform: 'translate(-50%, -100%)',
+      }}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="font-medium tabular-nums">{details.date}</div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">{t('contextCommits.tooltip.total')}</div>
         </div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow className="border-foreground/10 hover:bg-transparent">
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Task ID</TableHead>
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Type</TableHead>
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {displayTasks.map((t, i) => {
-              const task = asRecord(t)
-              return (
-                <TableRow key={asString(task.task_id) || i} className="border-foreground/5 transition-colors hover:bg-muted/40">
-                  <TableCell className="font-mono text-sm">{truncate(asString(task.task_id), 12)}</TableCell>
-                  <TableCell className="text-sm">{asString(task.task_type)}</TableCell>
-                  <TableCell><TaskStatusDot status={asString(task.status)} /></TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      )}
-    </Panel>
-  )
-}
-
-function ContributionHeatmapDemo({ t }: { t: (key: string) => string }) {
-  const [tooltipData, setTooltipData] = useState<{
-    x: number
-    y: number
-    date: string
-    count: number
-  } | null>(null)
-
-  return (
-    <Panel className="overflow-hidden">
-      <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-        <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-bold tabular-nums">{DEMO_HEATMAP_TOTAL.toLocaleString()}</span>
-          <span className="text-sm text-muted-foreground">{t('contributionHeatmap.inPastYear')}</span>
+        <div className="rounded-md bg-[oklch(0.68_0.12_232_/_0.14)] px-2 py-1 text-sm font-semibold tabular-nums text-[oklch(0.45_0.13_242)] dark:bg-[oklch(0.68_0.14_232_/_0.18)] dark:text-[oklch(0.76_0.14_232)]">
+          {details.total}
         </div>
-        <h2 className="text-sm font-medium text-muted-foreground">{t('contributionHeatmap.title')}</h2>
       </div>
 
-      <div className="overflow-x-auto pb-2 [--heatmap-empty:theme(colors.background)] [&_.w-heatmap-month]:fill-muted-foreground [&_.w-heatmap-week]:fill-muted-foreground [&_.w-heatmap-rect]:stroke-foreground/10">
-        <HeatMap
-          value={DEMO_HEATMAP_DATA}
-          startDate={DEMO_HEATMAP_START_DATE}
-          endDate={DEMO_HEATMAP_END_DATE}
-          monthLabels={HEATMAP_MONTH_LABELS}
-          weekLabels={HEATMAP_WEEK_LABELS}
-          panelColors={HEATMAP_COLORS}
-          rectSize={13}
-          legendCellSize={0}
-          space={3}
-          width={850}
-          rectProps={{
-            rx: 3,
-          }}
-          rectRender={(props, data) => {
-            const count = data.count ?? 0
-            return (
-              <rect
-                {...props}
-                style={{ ...props.style, cursor: 'pointer', transition: 'opacity 0.15s' }}
-                onMouseEnter={(e) => {
-                  const rect = (e.target as SVGRectElement).getBoundingClientRect()
-                  setTooltipData({
-                    x: rect.x + rect.width / 2,
-                    y: rect.y,
-                    date: data.date,
-                    count,
-                  })
-                }}
-                onMouseLeave={() => setTooltipData(null)}
-              />
-            )
-          }}
-        />
-      </div>
-
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            {t('contributionHeatmap.activeDays')}:{' '}
-            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.activeDays}</span>
-          </span>
-          <span>
-            {t('contributionHeatmap.longestStreak')}:{' '}
-            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.longestStreak} {t('contributionHeatmap.days')}</span>
-          </span>
-          <span>
-            {t('contributionHeatmap.currentStreak')}:{' '}
-            <span className="font-semibold tabular-nums text-foreground">{DEMO_HEATMAP_STATS.currentStreak} {t('contributionHeatmap.days')}</span>
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span>{t('contributionHeatmap.less')}</span>
-          {HEATMAP_LEGEND_COLORS.map((color, i) => (
+      <div className="mt-3 space-y-2 border-t border-border/70 pt-3">
+        {rows.map((row, index) => (
+          <div key={row.label} className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
             <span
-              key={i}
-              className={`inline-block size-[13px] rounded-[3px] ${i === 0 ? 'border border-foreground/10 bg-background' : ''}`}
-              style={i > 0 ? { backgroundColor: color } : undefined}
-            />
-          ))}
-          <span>{t('contributionHeatmap.more')}</span>
-        </div>
-      </div>
-
-      {tooltipData && createPortal(
-        <div
-          className="pointer-events-none fixed z-[100] rounded-lg bg-foreground px-3 py-2 text-xs text-background shadow-lg"
-          style={{
-            left: tooltipData.x,
-            top: tooltipData.y - 10,
-            transform: 'translate(-50%, -100%)',
-          }}
-        >
-          <div className="font-semibold tabular-nums">
-            {tooltipData.count === 0
-              ? t('contributionHeatmap.noActivity')
-              : `${tooltipData.count} ${tooltipData.count === 1 ? t('contributionHeatmap.oneCommit') : t('contributionHeatmap.nCommits')}`}
-          </div>
-          <div className="mt-0.5 opacity-70">
-            {new Date(tooltipData.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-          </div>
-          <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-foreground" />
-        </div>,
-        document.body
-      )}
-    </Panel>
-  )
-}
-
-function TimeRangeFilter({ t }: { t: (key: string) => string }) {
-  return (
-    <Panel className="flex flex-col gap-4 py-4 md:flex-row md:items-center md:justify-between">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <h2 className="text-base font-semibold tracking-tight">{t('timeFilter.title')}</h2>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{t('timeFilter.start')}</span>
-          <Input type="date" value={OVERVIEW_RANGE_START} readOnly className="w-40 bg-background/70 font-mono" />
-        </label>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{t('timeFilter.end')}</span>
-          <Input type="date" value={OVERVIEW_RANGE_END} readOnly className="w-40 bg-background/70 font-mono" />
-        </label>
-        <Button type="button" variant="outline" size="sm">{t('timeFilter.reset')}</Button>
-      </div>
-      <div className="text-sm font-medium tabular-nums text-muted-foreground">
-        {t('timeFilter.current')}: {OVERVIEW_RANGE_START} ~ {OVERVIEW_RANGE_END}
-      </div>
-    </Panel>
-  )
-}
-
-function TokenTrendCard({ t }: { t: (key: string) => string }) {
-  return (
-    <Panel>
-      <h2 className="mb-5 text-lg font-semibold tracking-tight">{t('tokenTrend.title')}</h2>
-      <div className="h-72 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={TOKEN_TREND_DATA} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id="tokenTrendInput" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="oklch(0.6 0.12 210)" stopOpacity={0.5} />
-                <stop offset="95%" stopColor="oklch(0.6 0.12 210)" stopOpacity={0.12} />
-              </linearGradient>
-              <linearGradient id="tokenTrendOutput" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="oklch(0.5 0.134 243)" stopOpacity={0.45} />
-                <stop offset="95%" stopColor="oklch(0.5 0.134 243)" stopOpacity={0.1} />
-              </linearGradient>
-              <linearGradient id="tokenTrendVector" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="oklch(0.6 0.1 280)" stopOpacity={0.38} />
-                <stop offset="95%" stopColor="oklch(0.6 0.1 280)" stopOpacity={0.08} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="currentColor" strokeOpacity={0.08} vertical={false} />
-            <XAxis
-              dataKey="date"
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: 'currentColor', fontSize: 12 }}
-              className="text-muted-foreground"
-            />
-            <Tooltip
-              cursor={{ stroke: 'currentColor', strokeOpacity: 0.12 }}
-              contentStyle={{
-                background: 'hsl(var(--popover))',
-                border: '1px solid hsl(var(--border))',
-                borderRadius: 12,
-                color: 'hsl(var(--popover-foreground))',
+              className="size-1.5 rounded-full"
+              style={{
+                backgroundColor: HEATMAP_COLOR_STOPS[Math.min(index, HEATMAP_COLOR_STOPS.length - 1)],
+                opacity: row.value > 0 ? 1 : 0.35,
               }}
-              formatter={(value, name) => [
-                Number(value).toLocaleString(),
-                t(TOKEN_TREND_KEYS.find((item) => item.dataKey === name)?.labelKey ?? 'tokenTrend.input'),
-              ]}
             />
-            <Area type="monotone" dataKey="input" stackId="tokens" stroke="oklch(0.6 0.12 210)" strokeWidth={2} fill="url(#tokenTrendInput)" />
-            <Area type="monotone" dataKey="output" stackId="tokens" stroke="oklch(0.5 0.134 243)" strokeWidth={2} fill="url(#tokenTrendOutput)" />
-            <Area type="monotone" dataKey="vector" stackId="tokens" stroke="oklch(0.6 0.1 280)" strokeWidth={2} fill="url(#tokenTrendVector)" />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="mt-4 flex flex-wrap gap-4">
-        {TOKEN_TREND_KEYS.map((item) => (
-          <div key={item.dataKey} className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-            <span>{t(item.labelKey)}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{row.label}</span>
+            <span className="font-medium tabular-nums">{formatNumber(row.value)}</span>
           </div>
         ))}
       </div>
-    </Panel>
+
+      <span className="absolute left-1/2 top-full size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-border/70 bg-popover/95" />
+    </div>
   )
 }
-
-const SESSION_STATUS_STYLES: Record<string, { bg: string; text: string; darkBg: string; darkText: string }> = {
-  active:    { bg: 'oklch(0.6 0.12 180 / 0.15)', text: 'oklch(0.6 0.12 180)', darkBg: 'oklch(0.7 0.12 180 / 0.25)', darkText: 'oklch(0.7 0.12 180)' },
-  committed: { bg: 'oklch(0.6 0.12 210 / 0.15)', text: 'oklch(0.6 0.12 210)', darkBg: 'oklch(0.7 0.13 210 / 0.25)', darkText: 'oklch(0.7 0.13 210)' },
-  archived:  { bg: 'oklch(0.56 0.021 213.5 / 0.15)', text: 'oklch(0.56 0.021 213.5)', darkBg: 'oklch(0.56 0.021 213.5 / 0.25)', darkText: 'oklch(0.708 0 0)' },
-  expired:   { bg: 'oklch(0.55 0.2 15 / 0.15)', text: 'oklch(0.55 0.2 15)', darkBg: 'oklch(0.65 0.2 15 / 0.25)', darkText: 'oklch(0.65 0.2 15)' },
-}
-
-function SessionsCard({
-  data,
-  isLoading,
-  isError,
-  t,
-}: {
-  data: unknown
-  isLoading: boolean
-  isError: boolean
-  t: (key: string) => string
-}) {
-  const isDark = useIsDark()
-  const sessions = asArray(data).slice(0, 10)
-
-  return (
-    <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('sessions.title')}</h2>
-      <p className="mb-5 text-sm text-muted-foreground">{t('sessions.subtitle')}</p>
-      {isLoading ? (
-        <Skeleton className="h-40 w-full" />
-      ) : isError ? (
-        <span className="text-sm text-destructive">{t('requestFailed')}</span>
-      ) : sessions.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
-          <Users className="size-8 opacity-40" />
-          <p className="text-sm">{t('sessions.empty')}</p>
-        </div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow className="border-foreground/10 hover:bg-transparent">
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Session ID</TableHead>
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</TableHead>
-              <TableHead className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sessions.map((s, i) => {
-              const session = asRecord(s)
-              return (
-                <TableRow key={asString(session.session_id) || i} className="border-foreground/5 transition-colors hover:bg-muted/40">
-                  <TableCell className="font-mono text-sm" title={asString(session.session_id)}>{truncate(asString(session.session_id), 8)}</TableCell>
-                  <TableCell>
-                    {(() => {
-                      const status = asString(session.status) || 'active'
-                      const style = SESSION_STATUS_STYLES[status] ?? SESSION_STATUS_STYLES.active!
-                      return (
-                        <span
-                          className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium"
-                          style={{
-                            backgroundColor: isDark ? style!.darkBg : style!.bg,
-                            color: isDark ? style!.darkText : style!.text,
-                          }}
-                        >
-                          {status}
-                        </span>
-                      )
-                    })()}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{asString(session.created_at).slice(0, 10)}</TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      )}
-    </Panel>
-  )
-}
-
-// ---------- onboarding ----------
-
-const ONBOARDING_KEY = 'ov-onboarding-seen'
-
-function WelcomeDialog() {
-  const { t } = useTranslation('home')
-  const navigate = useNavigate()
-  const [open, setOpen] = useState(() => {
-    try {
-      return !localStorage.getItem(ONBOARDING_KEY)
-    } catch {
-      return false
-    }
-  })
-
-  const dismiss = () => {
-    setOpen(false)
-    try {
-      localStorage.setItem(ONBOARDING_KEY, '1')
-    } catch { /* noop */ }
-  }
-
-  const handleCta = () => {
-    dismiss()
-    navigate({ to: '/resources', search: { upload: true } })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) dismiss() }}>
-      <DialogContent className="max-w-md gap-0 p-0">
-        <div className="flex flex-col items-center px-8 pt-10 pb-6 text-center">
-          <span
-            className="mb-6 flex size-16 items-center justify-center rounded-2xl"
-            style={{ backgroundColor: 'oklch(0.5 0.134 243 / 0.12)' }}
-          >
-            <Database className="size-8" style={{ color: 'oklch(0.5 0.134 243)' }} />
-          </span>
-          <h2 className="text-xl font-bold tracking-tight">{t('onboarding.title')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t('onboarding.subtitle')}</p>
-          <div className="mt-6 space-y-1">
-            <p className="text-base font-medium">{t('onboarding.sloganZh')}</p>
-            <p className="text-sm text-muted-foreground">{t('onboarding.sloganEn')}</p>
-          </div>
-        </div>
-        <div className="border-t px-8 py-5">
-          <Button className="w-full" size="lg" onClick={handleCta}>
-            {t('onboarding.cta')}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ---------- main ----------
 
 export function HomePage() {
   const { t } = useTranslation('home')
 
-  const systemStatus = useQuery({
-    queryKey: ['system-status'],
-    queryFn: () => getOvResult(getSystemStatus()),
+  const dashboard = useQuery({
+    queryFn: fetchConsoleDashboardSummary,
+    queryKey: ['console-dashboard-summary'],
+    refetchInterval: 30_000,
   })
 
-  const observerSystem = useQuery({
-    queryKey: ['observer-system'],
-    queryFn: () => getOvResult(getObserverSystem()),
+  const tokenSeries = useQuery({
+    queryFn: fetchConsoleTokenSeries,
+    queryKey: ['console-token-series', 'last-14-days'],
+    refetchInterval: 60_000,
   })
 
-  const memoryStats = useQuery({
-    queryKey: ['stats-memories'],
-    queryFn: () => getOvResult(getStatsMemories()),
+  const contextCommits = useQuery({
+    queryFn: fetchConsoleContextCommits,
+    queryKey: ['console-context-commits', 'last-365-days'],
+    refetchInterval: 60_000,
   })
 
-  const vectorCount = useQuery({
-    queryKey: ['debug-vector-count'],
-    queryFn: () => getOvResult(getDebugVectorCount()),
-  })
-
-  const tasks = useQuery({
-    queryKey: ['tasks'],
-    queryFn: () => getOvResult(getTasks()),
-  })
-
-  const sessions = useQuery({
-    queryKey: ['sessions'],
-    queryFn: () => getOvResult(getSessions()),
-  })
-
-  const tokenStats = useQuery({
-    queryKey: ['stats-tokens'],
-    queryFn: () => fetchTokenStats(),
-  })
-
-  const memRecord = asRecord(memoryStats.data)
-  const vecRecord = asRecord(vectorCount.data)
-  const tokenRecord = asRecord(tokenStats.data)
-
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const children = el.children
-    gsap.set(children, { opacity: 0, y: 30 })
-    gsap.to(children, {
-      opacity: 1,
-      y: 0,
-      duration: 0.5,
-      stagger: 0.1,
-      ease: 'power2.out',
-    })
-  }, [])
+  const summary = dashboard.data
+  const usageDisabled = isDisabledPayload(summary)
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-6 pb-8">
-      <WelcomeDialog />
-      {/* Row 1: Summary cards */}
+    <div className="flex flex-col gap-5 pb-8">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title={t('statCard.contextMagnitude')}
-          subtitle={t('statCard.contextMagnitudeSub')}
-          value={asNumber(vecRecord.count)}
-          isLoading={vectorCount.isLoading}
-          isError={vectorCount.isError}
-          errorText={t('requestFailed')}
-          accentColor="oklch(0.5 0.134 243)"
-          icon={Database}
+        <ContextDataPanel
+          data={summary?.context_counts}
+          disabled={usageDisabled}
+          isError={dashboard.isError}
+          isLoading={dashboard.isLoading}
+          t={t}
         />
-        <StatCard
-          title={t('statCard.tokenUsage')}
-          subtitle={t('statCard.tokenUsageSub')}
-          value={asNumber(tokenRecord.total_tokens)}
-          isLoading={tokenStats.isLoading}
-          isError={tokenStats.isError}
-          errorText={t('requestFailed')}
-          accentColor="oklch(0.5 0.134 243)"
-          icon={Coins}
+        <TodayTokensPanel
+          data={summary?.today_tokens}
+          disabled={usageDisabled}
+          isError={dashboard.isError}
+          isLoading={dashboard.isLoading}
+          t={t}
         />
-        <StatCard
-          title={t('statCard.retrievalCount')}
-          subtitle={t('statCard.retrievalCountSub')}
-          value={asNumber(memRecord.total_memories)}
-          isLoading={memoryStats.isLoading}
-          isError={memoryStats.isError}
-          errorText={t('requestFailed')}
-          accentColor="oklch(0.5 0.134 243)"
-          icon={Brain}
+        <TodayRetrievalsPanel
+          data={summary?.today_retrievals}
+          disabled={usageDisabled}
+          isError={dashboard.isError}
+          isLoading={dashboard.isLoading}
+          t={t}
         />
-        <StatCard
-          title={t('statCard.agentVisits')}
-          subtitle={t('statCard.agentVisitsSub')}
-          value={asArray(sessions.data).length}
-          isLoading={sessions.isLoading}
-          isError={sessions.isError}
-          errorText={t('requestFailed')}
-          accentColor="oklch(0.5 0.134 243)"
-          icon={Users}
+        <AgentAccessPanel
+          data={summary?.agent_overview}
+          disabled={usageDisabled}
+          isError={dashboard.isError}
+          isLoading={dashboard.isLoading}
+          t={t}
         />
       </div>
 
-      {/* Row 2: Time filter */}
-      <TimeRangeFilter t={t} />
-
-      {/* Row 3: Token trend */}
-      <TokenTrendCard t={t} />
-
-      {/* Row 4: Contribution heatmap demo */}
-      <ContributionHeatmapDemo t={t} />
-
-      {/* Row 5: System health */}
-      <ComponentHealthBar
-        data={observerSystem.data}
-        sysData={systemStatus.data}
-        isLoading={observerSystem.isLoading}
-        sysLoading={systemStatus.isLoading}
-        isError={observerSystem.isError}
-        error={observerSystem.error}
+      <TokenTrendPanel
+        data={tokenSeries.data}
+        isError={tokenSeries.isError}
+        isLoading={tokenSeries.isLoading}
         t={t}
       />
 
-      {/* Row 6: Memory stats + Tasks */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <MemoryStatsCard
-          data={memoryStats.data}
-          isLoading={memoryStats.isLoading}
-          isError={memoryStats.isError}
-          t={t}
-        />
-        <RecentTasksCard
-          data={tasks.data}
-          isLoading={tasks.isLoading}
-          isError={tasks.isError}
-          t={t}
-        />
-      </div>
-
-      {/* Row 7: Sessions */}
-      <SessionsCard
-        data={sessions.data}
-        isLoading={sessions.isLoading}
-        isError={sessions.isError}
+      <ContextCommitsPanel
+        data={contextCommits.data}
+        isError={contextCommits.isError}
+        isLoading={contextCommits.isLoading}
         t={t}
       />
     </div>
