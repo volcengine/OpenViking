@@ -510,13 +510,16 @@ function hideTooltip() {{
   tooltip.style.display = 'none';
 }}
 
-function focusNodeById(targetNodeId) {{
+function focusNodeById(targetNodeId, options = {{}}) {{
   if (!targetNodeId || !nodes.get(targetNodeId)) {{
     return;
   }}
-  const connectedNodeIds = network.getConnectedNodes(targetNodeId);
+  const shouldCenter = options.center === true;
   network.unselectAll();
   network.selectNodes([targetNodeId]);
+  if (shouldCenter) {{
+    network.focus(targetNodeId, {{ animation: {{ duration: 350, easingFunction: 'easeInOutQuad' }}, scale: network.getScale() }});
+  }}
   showNodeDetails(nodes.get(targetNodeId));
 }}
 
@@ -528,8 +531,10 @@ function showNodeDetails(node) {{
 
 function showEdgeDetails(edge) {{
   detailTitle.textContent = edge.link_type || 'relation';
-  detailMeta.textContent = `weight=${{edge.weight}}`;
-  detailContent.textContent = edge.description || '(no description)';
+  detailMeta.textContent = `${{edge.link_type}} · weight=${{edge.weight}}`;
+  const sourceUri = edge.from || edge.source || '';
+  const targetUri = edge.to || edge.target || '';
+  detailContent.innerHTML = renderMarkdown(`- from_uri: ${{escapeHtml(sourceUri)}}\n- to_uri: ${{escapeHtml(targetUri)}}\n\n${{escapeHtml(edge.description || '(no description)')}}`);
 }}
 
 function renderLegend() {{
@@ -622,7 +627,7 @@ detailContent.addEventListener('click', (event) => {{
   }}
   event.preventDefault();
   const targetNodeId = link.dataset.targetUri;
-  focusNodeById(targetNodeId);
+  focusNodeById(targetNodeId, {{ center: true }});
 }});
 
 network.once('stabilized', () => {{

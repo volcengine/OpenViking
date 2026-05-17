@@ -62,7 +62,7 @@ class WikiLink(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_link_type(cls, data: Any) -> Any:
+    def normalize_link_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
             raw_link_type = data.get("link_type")
             if raw_link_type is not None:
@@ -71,6 +71,13 @@ class WikiLink(BaseModel):
                     data["link_type"] = normalized
                 else:
                     data["link_type"] = LINK_TYPE_DEFAULT
+
+            raw_weight = data.get("weight")
+            if raw_weight is not None:
+                try:
+                    data["weight"] = min(1.0, max(0.0, float(raw_weight)))
+                except (TypeError, ValueError):
+                    data["weight"] = 0.5
         return data
 
     f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
@@ -91,7 +98,13 @@ class WikiLink(BaseModel):
             "Do not invent new link_type values unless absolutely necessary."
         ),
     )
-    weight: float = Field(1.0, description="Association weight 0~1")
+    weight: float = Field(
+        0.5,
+        description=(
+            "Relative ranking score from 0 to 1; use higher values for the best link "
+            "when multiple links compete for the same anchor or attention."
+        ),
+    )
     match_text: Annotated[
         Optional[str],
         WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
@@ -116,7 +129,7 @@ class StoredLink(BaseModel):
     from_uri: str
     to_uri: str
     link_type: str = LINK_TYPE_DEFAULT
-    weight: float = 1.0
+    weight: float = 0.5
     match_text: Optional[str] = None  # single word, must exist verbatim in conversation
     description: str = ""
     created_at: str = ""

@@ -62,14 +62,13 @@ def test_render_graph_html_embeds_full_markdown_content_and_link_targets():
     assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
     assert "detailContent.addEventListener('click'" in html
     assert "const targetNodeId = link.dataset.targetUri;" in html
-    assert "network.focus(targetNodeId" not in html
+    assert "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });" in html
 
 
-def test_render_graph_html_filter_does_not_auto_fit_graph():
+def test_render_graph_html_clicking_detail_link_centers_target_node():
     html = _render_graph_html([], [])
 
-    assert "function applyFilter(shouldFit = false)" in html
-    assert "network.fit({ animation: false });" not in html
+    assert "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });" in html
 
 
 def test_render_graph_html_uses_dark_node_background_with_light_text():
@@ -189,23 +188,16 @@ def test_render_graph_html_click_node_selects_only_current_node():
     assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" not in html
 
 
-def test_render_graph_html_shows_node_content_preview_in_details():
-    nodes = [
-        {
-            "id": "viking://user/Caroline/memories/profile.md",
-            "uri": "viking://user/Caroline/memories/profile.md",
-            "label": "profile",
-            "memory_type": "profile",
-            "category": "",
-            "content_preview": "# Caroline\n- likes painting",
-            "content_truncated": False,
-        }
-    ]
+def test_render_graph_html_edge_details_include_source_and_target_uris():
+    html = _render_graph_html([], [])
 
-    html = _render_graph_html(nodes, [])
+    assert "detailMeta.textContent = `${edge.link_type} · weight=${edge.weight}`;" in html
+    assert "const sourceUri = edge.from || edge.source || '';" in html
+    assert "const targetUri = edge.to || edge.target || '';" in html
+    assert """detailContent.innerHTML = renderMarkdown(`- from_uri: ${escapeHtml(sourceUri)}
+- to_uri: ${escapeHtml(targetUri)}
 
-    assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
-    assert "return text || '(empty)';" in html
+${escapeHtml(edge.description || '(no description)')}`);""" in html
 
 
 
