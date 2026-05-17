@@ -731,7 +731,7 @@ html {
 
 .zouk-message-context {
   margin-bottom: 8px;
-  padding: 8px 9px;
+  padding: 7px 9px;
   border: 1px solid color-mix(in oklab, var(--th-accent) 28%, var(--th-line));
   border-radius: 10px;
   background: color-mix(in oklab, var(--th-bg) 78%, transparent);
@@ -740,18 +740,15 @@ html {
   line-height: 1.45;
 }
 
-.zouk-message-context__label {
-  margin-bottom: 5px;
-  color: var(--th-accent);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
 .zouk-message-context__row {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   gap: 8px;
   color: var(--th-mute);
+}
+
+.zouk-message-context__row + .zouk-message-context__row {
+  margin-top: 4px;
 }
 
 .zouk-message-context__row strong {
@@ -785,20 +782,15 @@ html {
   line-height: 1.45;
 }
 
-.zouk-context-preview__chrome {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--th-accent);
-  letter-spacing: 0.08em;
-  margin-bottom: 5px;
-}
-
 .zouk-context-preview__row {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   gap: 8px;
   color: var(--th-mute);
+}
+
+.zouk-context-preview__row + .zouk-context-preview__row {
+  margin-top: 4px;
 }
 
 .zouk-context-preview__row strong {
@@ -1090,7 +1082,7 @@ html {
   }
 
   .zouk-context-preview__row {
-    grid-template-columns: 74px minmax(0, 1fr);
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 }
 

@@ -17,6 +17,31 @@ function compactText(text = '', limit = 900) {
   return String(text).trim().replace(/\s+/g, ' ').slice(0, limit);
 }
 
+function escapeContextText(text = '', limit = 900) {
+  return compactText(text, limit)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function unescapeContextText(text = '') {
+  return String(text)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function currentPostSelectionText() {
+  if (!browserAvailable()) return '';
+  const selection = window.getSelection?.();
+  const text = compactText(selection?.toString() || '');
+  if (!text || !selection?.rangeCount) return '';
+  const postBody = document.querySelector('.b-post__body');
+  if (!postBody || !selection.anchorNode || !selection.focusNode) return '';
+  if (!postBody.contains(selection.anchorNode) || !postBody.contains(selection.focusNode)) return '';
+  return text;
+}
+
 function createBrowserId() {
   if (browserAvailable() && window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -78,12 +103,12 @@ function mergeMessage(messages, incoming) {
 
 function buildInjectedContext(sourceUrl, selectedText) {
   const lines = [
-    '/* auto-injected context',
-    `site_url: ${sourceUrl}`,
+    '<zouk-context>',
+    `  <url>${escapeContextText(sourceUrl, 1600)}</url>`,
   ];
   const selection = compactText(selectedText);
-  if (selection) lines.push(`selected_text: ${JSON.stringify(selection)}`);
-  lines.push('*/');
+  if (selection) lines.push(`  <selected-text>${escapeContextText(selection)}</selected-text>`);
+  lines.push('</zouk-context>');
   return lines.join('\n');
 }
 
@@ -95,13 +120,32 @@ function messageWithInjectedContext(message, sourceUrl, selectedText, shouldInje
 
 function parseInjectedMessage(content) {
   const text = String(content || '');
-  const match = text.match(/^\/\* auto-injected context\n([\s\S]*?)\n\*\/\n*/i);
+  const xmlMatch = text.match(/^<zouk-context>\n?([\s\S]*?)\n?<\/zouk-context>\n*/i);
+  if (xmlMatch) {
+    const markup = xmlMatch[1];
+    const readTag = (tag) => {
+      const tagMatch = markup.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+      return tagMatch ? unescapeContextText(tagMatch[1].trim()) : '';
+    };
+    const context = [
+      { key: 'url', value: readTag('url') },
+      { key: 'selected text', value: readTag('selected-text') },
+    ].filter((item) => item.value);
+    return { context: context.length ? context : null, body: text.slice(xmlMatch[0].length).trimStart() };
+  }
+
+  const match = text.match(/^\/\*\s*(?:auto-injected context\s*\n)?([\s\S]*?)\n\*\/\n*/i);
   if (!match) return { context: null, body: text };
   const contextLines = match[1].split('\n').map((line) => line.trim()).filter(Boolean);
   const context = contextLines.map((line) => {
     const index = line.indexOf(':');
     if (index < 0) return { key: 'context', value: line };
-    const key = line.slice(0, index).trim();
+    const rawKey = line.slice(0, index).trim();
+    const key = rawKey === 'site_url'
+      ? 'url'
+      : rawKey === 'selected_text'
+        ? 'selected text'
+        : rawKey.replace(/_/g, ' ');
     let value = line.slice(index + 1).trim();
     if (value.startsWith('"') && value.endsWith('"')) {
       try {
@@ -138,20 +182,17 @@ function MessageIcon() {
 }
 
 function ContextPreview({ sourceUrl, selectedText }) {
+  const selection = compactText(selectedText, 180);
   return (
-    <div className="zouk-context-preview" aria-label="Auto injected context">
-      <div className="zouk-context-preview__chrome">
-        <span>/* auto-injected context</span>
-        <span>*/</span>
-      </div>
+    <div className="zouk-context-preview" aria-label="Injected context">
       <div className="zouk-context-preview__row">
-        <span>site_url</span>
+        <span>url</span>
         <strong>{sourceUrl}</strong>
       </div>
-      {compactText(selectedText) ? (
+      {selection ? (
         <div className="zouk-context-preview__row">
-          <span>selected_text</span>
-          <strong>{compactText(selectedText, 180)}</strong>
+          <span>selected text</span>
+          <strong>{selection}</strong>
         </div>
       ) : null}
     </div>
@@ -164,7 +205,6 @@ function MessageBody({ content }) {
     <>
       {parsed.context ? (
         <div className="zouk-message-context">
-          <div className="zouk-message-context__label">auto-injected context</div>
           {parsed.context.map((item) => (
             <div className="zouk-message-context__row" key={`${item.key}:${item.value}`}>
               <span>{item.key}</span>
@@ -230,7 +270,7 @@ export function ZoukInteractiveBlog({ route }) {
     setDragY(0);
     setOpen(true);
     setSelectionAction(null);
-    setSelectedText(compactText(nextSelectedText));
+    setSelectedText(compactText(nextSelectedText || currentPostSelectionText()));
     if (isDesktop) window.setTimeout(() => textareaRef.current?.focus(), 80);
   }, [isDesktop, rememberSource]);
 
@@ -388,13 +428,13 @@ export function ZoukInteractiveBlog({ route }) {
     if (!browserAvailable()) return undefined;
     const updateSelectionAction = () => {
       const selection = window.getSelection?.();
-      const text = selection?.toString().trim() || '';
-      const postBody = document.querySelector('.b-post__body');
-      if (!text || !selection?.rangeCount || !postBody) {
+      const text = currentPostSelectionText();
+      if (!text || !selection?.rangeCount) {
         setSelectionAction(null);
         return;
       }
-      if (!postBody.contains(selection.anchorNode) || !postBody.contains(selection.focusNode)) {
+      if (panelVisible && !contextInjected) setSelectedText(text);
+      if (!isDesktop) {
         setSelectionAction(null);
         return;
       }
@@ -420,7 +460,7 @@ export function ZoukInteractiveBlog({ route }) {
       document.removeEventListener('selectionchange', schedule);
       document.removeEventListener('touchend', schedule);
     };
-  }, [route?.name, route?.slug]);
+  }, [contextInjected, isDesktop, panelVisible, route?.name, route?.slug]);
 
   useEffect(() => {
     setSelectedText('');
