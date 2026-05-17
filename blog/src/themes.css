@@ -460,3 +460,455 @@ html[lang="zh"] :is(.b-hero__title, .b-post__title, .b-card__title, .b-post__nav
   text-wrap: wrap;
   word-break: keep-all;
 }
+
+/* ===========================================================
+   ZOUK INTERACTIVE BLOG
+   =========================================================== */
+.zouk-reader-launcher,
+.zouk-selection-action,
+.zouk-reader-panel button {
+  font-family: var(--th-font-mono);
+}
+
+.zouk-reader-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--th-line);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--th-bg-2) 92%, transparent);
+  color: var(--th-ink);
+  box-shadow: var(--th-shadow);
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.zouk-reader-launcher:hover {
+  border-color: var(--th-accent);
+}
+
+.zouk-reader-launcher svg,
+.zouk-selection-action svg,
+.zouk-reader-panel svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.zouk-selection-action {
+  position: fixed;
+  z-index: 85;
+  transform: translate(-50%, -100%);
+  border: 1px solid var(--th-line);
+  border-radius: 999px;
+  background: var(--th-ink);
+  color: var(--th-bg);
+  box-shadow: var(--th-shadow);
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.zouk-reader-panel {
+  position: fixed;
+  z-index: 90;
+  right: 24px;
+  top: 88px;
+  bottom: 24px;
+  width: min(420px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--th-line);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--th-bg) 94%, var(--th-bg-2));
+  box-shadow: 0 18px 60px color-mix(in oklab, #000 28%, transparent);
+  color: var(--th-ink);
+  line-height: 1.4;
+}
+
+.zouk-reader-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--th-line);
+  background: color-mix(in oklab, var(--th-bg-2) 64%, transparent);
+}
+
+.zouk-reader-head div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.zouk-reader-head span {
+  color: var(--th-ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.zouk-reader-head strong {
+  color: var(--th-mute);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.zouk-reader-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--th-mute);
+  cursor: pointer;
+}
+
+.zouk-reader-close:hover {
+  color: var(--th-ink);
+  border-color: var(--th-line);
+}
+
+.zouk-reader-drag {
+  display: none;
+}
+
+.zouk-reader-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.zouk-reader-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--th-mute);
+  text-align: center;
+  font-family: var(--th-font-mono);
+  font-size: 12px;
+}
+
+.zouk-reader-empty button,
+.zouk-reader-error button {
+  border: 1px solid var(--th-line);
+  border-radius: 999px;
+  background: var(--th-bg-2);
+  color: var(--th-ink);
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.zouk-reader-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.zouk-reader-message.is-mine {
+  align-items: flex-end;
+}
+
+.zouk-reader-sender {
+  max-width: 80%;
+  color: var(--th-mute);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zouk-reader-bubble {
+  max-width: 88%;
+  padding: 10px 12px;
+  border: 1px solid var(--th-line);
+  border-radius: 13px;
+  background: var(--th-bg-2);
+  color: var(--th-ink);
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.zouk-reader-message.is-mine .zouk-reader-bubble {
+  border-color: color-mix(in oklab, var(--th-accent) 42%, var(--th-line));
+  background: color-mix(in oklab, var(--th-accent) 16%, var(--th-bg-2));
+}
+
+.zouk-message-context {
+  margin-bottom: 8px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in oklab, var(--th-accent) 28%, var(--th-line));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--th-bg) 78%, transparent);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.zouk-message-context__label {
+  margin-bottom: 5px;
+  color: var(--th-accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.zouk-message-context__row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  color: var(--th-mute);
+}
+
+.zouk-message-context__row strong {
+  min-width: 0;
+  color: var(--th-ink);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.zouk-message-text {
+  line-height: 1.45;
+}
+
+.zouk-reader-composer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--th-line);
+  background: color-mix(in oklab, var(--th-bg) 90%, transparent);
+}
+
+.zouk-context-preview {
+  border: 1px solid color-mix(in oklab, var(--th-accent) 24%, var(--th-line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--th-bg-2) 72%, transparent);
+  padding: 8px 10px;
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.zouk-context-preview__chrome {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--th-accent);
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+}
+
+.zouk-context-preview__row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  color: var(--th-mute);
+}
+
+.zouk-context-preview__row strong {
+  min-width: 0;
+  color: var(--th-ink);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zouk-reader-input-shell {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 48px;
+  border: 1px solid var(--th-line);
+  border-radius: 999px;
+  background: var(--th-bg-2);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.zouk-reader-input-shell:focus-within {
+  border-color: color-mix(in oklab, var(--th-accent) 65%, var(--th-line));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--th-accent) 18%, transparent);
+}
+
+.zouk-reader-input-shell textarea {
+  width: 100%;
+  min-height: 44px;
+  max-height: 132px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--th-ink);
+  padding: 12px 56px 11px 17px;
+  font: 16px/1.35 var(--th-font-body);
+  letter-spacing: 0;
+  overflow-y: auto;
+}
+
+.zouk-reader-input-shell textarea::placeholder {
+  color: var(--th-mute);
+}
+
+.zouk-reader-send {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--th-accent-2) 80%, var(--th-ink));
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.zouk-reader-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.zouk-reader-send:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.zouk-reader-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--th-warn);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+@media (max-width: 899px) {
+  .zouk-reader-launcher {
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding: 0 14px;
+  }
+
+  .zouk-reader-panel {
+    --zouk-blog-drag: 0px;
+    --zouk-blog-sheet-top: calc(var(--zouk-blog-vv-top, 0px) + var(--zouk-blog-vv-height, 100svh) - var(--zouk-blog-sheet-height, 50svh));
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: auto;
+    width: 100%;
+    height: var(--zouk-blog-sheet-height, 50svh);
+    max-height: var(--zouk-blog-sheet-height, 50svh);
+    min-height: 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: 22px 22px 0 0;
+    transform: translate3d(0, calc(var(--zouk-blog-sheet-top) + var(--zouk-blog-drag)), 0);
+    transition: transform 180ms cubic-bezier(.2,.8,.2,1);
+    animation: zoukBlogSheetEnter 210ms cubic-bezier(.2,.8,.2,1);
+    will-change: transform, height;
+  }
+
+  .zouk-reader-panel.is-closing {
+    transform: translate3d(0, calc(var(--zouk-blog-vv-top, 0px) + var(--zouk-blog-vv-height, 100svh) + 24px), 0);
+  }
+
+  .zouk-reader-panel.is-dragging {
+    transition: none;
+  }
+
+  .zouk-reader-drag {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    padding: 9px 0 2px;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .zouk-reader-handle {
+    width: 42px;
+    height: 5px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--th-mute) 58%, transparent);
+  }
+
+  .zouk-reader-head {
+    display: none;
+  }
+
+  .zouk-reader-messages {
+    padding: 8px 10px 10px;
+  }
+
+  .zouk-reader-bubble {
+    max-width: 92%;
+    font-size: 13px;
+  }
+
+  .zouk-reader-composer {
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .zouk-context-preview {
+    max-height: 84px;
+    overflow: hidden;
+  }
+
+  .zouk-context-preview__row {
+    grid-template-columns: 74px minmax(0, 1fr);
+  }
+}
+
+@keyframes zoukBlogSheetEnter {
+  from {
+    transform: translate3d(0, calc(var(--zouk-blog-vv-top, 0px) + var(--zouk-blog-vv-height, 100svh) + 24px), 0);
+  }
+  to {
+    transform: translate3d(0, calc(var(--zouk-blog-sheet-top) + var(--zouk-blog-drag, 0px)), 0);
+  }
+}

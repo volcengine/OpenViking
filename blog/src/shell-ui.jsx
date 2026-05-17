@@ -8,6 +8,7 @@ import {
   useSiteRouter, useShellStrings, makeFormatDate, applyTheme, getInitialTheme, isDark,
   buildPath, postPath, estimateReadingMinutes,
 } from './shell-core';
+import { ZoukInteractiveBlog } from './zouk-embed';
 
 /* ---------- topbar ---------- */
 
@@ -343,6 +344,7 @@ export function BlogShell({ router, lang, theme, onLang = () => {}, onToggleThem
         ? <IndexView lang={lang} t={t} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} />
         : <PostView slug={router.route.slug} lang={lang} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} t={t} />}
       <Footer S={S} />
+      <ZoukInteractiveBlog route={router.route} />
     </div>
   );
 }
