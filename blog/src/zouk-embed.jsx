@@ -115,6 +115,11 @@ function parseInjectedMessage(content) {
   return { context, body: text.slice(match[0].length).trimStart() };
 }
 
+function avatarLabel(name) {
+  const clean = String(name || 'z').replace(/^@/, '').trim();
+  return (clean[0] || 'z').toUpperCase();
+}
+
 function SendIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -334,6 +339,13 @@ export function ZoukInteractiveBlog({ route }) {
   }, []);
 
   useEffect(() => {
+    if (!browserAvailable()) return undefined;
+    const root = document.documentElement;
+    root.classList.toggle('zouk-reader-open-desktop', panelVisible && isDesktop);
+    return () => root.classList.remove('zouk-reader-open-desktop');
+  }, [isDesktop, panelVisible]);
+
+  useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [visibleMessages.length, panelVisible]);
@@ -533,7 +545,8 @@ export function ZoukInteractiveBlog({ route }) {
           </div>
 
           <div className="zouk-reader-head">
-            <div>
+            <div className="zouk-reader-profile-mark" aria-hidden="true">Z</div>
+            <div className="zouk-reader-head-text">
               <span>Message #{CONFIG.channel}</span>
               <strong>{status === 'connected' || status === 'sending' ? 'Connected' : status === 'connecting' ? 'Connecting' : 'Zouk'}</strong>
             </div>
@@ -556,10 +569,21 @@ export function ZoukInteractiveBlog({ route }) {
               const mine = message.senderName === userName;
               return (
                 <article key={message.id} className={`zouk-reader-message${mine ? ' is-mine' : ''}`}>
-                  {!mine ? <div className="zouk-reader-sender">{message.senderName}</div> : null}
-                  <div className="zouk-reader-bubble">
-                    <MessageBody content={message.content} />
-                  </div>
+                  {!mine ? (
+                    <div className="zouk-reader-message-profile">
+                      <div className="zouk-reader-avatar" aria-hidden="true">{avatarLabel(message.senderName)}</div>
+                      <div className="zouk-reader-bubble-column">
+                        <div className="zouk-reader-sender">{message.senderName}</div>
+                        <div className="zouk-reader-bubble">
+                          <MessageBody content={message.content} />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="zouk-reader-bubble">
+                      <MessageBody content={message.content} />
+                    </div>
+                  )}
                 </article>
               );
             })}
