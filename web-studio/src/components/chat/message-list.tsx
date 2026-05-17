@@ -73,7 +73,7 @@ function TypingIndicator() {
 function BotAvatar() {
   return (
     <div className="flex size-7 shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden">
-      <img src="/ov-logo.png" alt="OpenViking" className="size-7" />
+      <img src="/openviking-icon.png" alt="OpenViking" className="size-7" />
     </div>
   )
 }
