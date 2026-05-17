@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const CONFIG = {
   serverUrl: (import.meta.env.VITE_ZOUK_SERVER_URL || 'https://zouk.zaynjarvis.com').replace(/\/+$/, ''),
@@ -181,6 +182,15 @@ function MessageIcon() {
   );
 }
 
+function MessagesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M17 12a4 4 0 0 1-4 4H7l-4 3V8a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4Z" />
+      <path d="M9 16v1a3 3 0 0 0 3 3h5l4 2V11a3 3 0 0 0-3-3h-1" />
+    </svg>
+  );
+}
+
 function ContextPreview({ sourceUrl, selectedText }) {
   const selection = compactText(selectedText, 180);
   return (
@@ -235,6 +245,7 @@ export function ZoukInteractiveBlog({ route }) {
   const [sourceUrl, setSourceUrl] = useState(currentSourceUrl);
   const [contextInjected, setContextInjected] = useState(false);
   const [selectionAction, setSelectionAction] = useState(null);
+  const [headerSlot, setHeaderSlot] = useState(null);
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const wsRef = useRef(null);
@@ -286,6 +297,11 @@ export function ZoukInteractiveBlog({ route }) {
       closeTimerRef.current = null;
     }, 190);
   }, []);
+
+  const toggleChat = useCallback(() => {
+    if (panelVisible) closeChat();
+    else openChat();
+  }, [closeChat, openChat, panelVisible]);
 
   const loadHistory = useCallback(async (nextToken = token) => {
     if (!nextToken) return;
@@ -359,6 +375,12 @@ export function ZoukInteractiveBlog({ route }) {
       if (wsRef.current === ws) wsRef.current = null;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!browserAvailable()) return undefined;
+    setHeaderSlot(document.getElementById('zouk-reader-header-slot'));
+    return undefined;
+  }, []);
 
   useEffect(() => {
     if (!browserAvailable()) return undefined;
@@ -539,6 +561,18 @@ export function ZoukInteractiveBlog({ route }) {
     sendMessage();
   };
 
+  const launcher = (
+    <button
+      type="button"
+      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}`}
+      aria-label={panelVisible ? 'Close blog chat' : 'Open blog chat'}
+      aria-pressed={panelVisible}
+      onClick={toggleChat}
+    >
+      <MessagesIcon />
+    </button>
+  );
+
   return (
     <>
       {selectionAction && !open ? (
@@ -553,12 +587,7 @@ export function ZoukInteractiveBlog({ route }) {
         </button>
       ) : null}
 
-      {!panelVisible ? (
-        <button type="button" className="zouk-reader-launcher" onClick={() => openChat()}>
-          <MessageIcon />
-          <span>Ask Zouk</span>
-        </button>
-      ) : null}
+      {headerSlot ? createPortal(launcher, headerSlot) : null}
 
       {panelVisible ? (
         <aside
