@@ -1,12 +1,21 @@
 import * as React from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ActivityIcon, Clock3Icon, EraserIcon, RefreshCwIcon, SearchIcon, ServerCrashIcon, Upload } from 'lucide-react'
+import { createFileRoute } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+import { ActivityIcon, BarChart3Icon, RefreshCwIcon, RotateCcwIcon, SearchIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import { Input } from '#/components/ui/input'
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '#/components/ui/pagination'
 import {
   Table,
   TableBody,
@@ -15,28 +24,118 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { clearRequestLogs, getRequestLogSnapshot, subscribeRequestLogs } from '#/lib/request-logs'
-import type { RequestLogEntry, RequestLogStatus } from '#/lib/request-logs'
+import { client } from '#/gen/ov-client/client.gen'
+import { getOvResult } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 
 export const Route = createFileRoute('/request-logs')({
   component: RequestLogsRoute,
 })
 
-type StatusFilter = 'all' | RequestLogStatus
+type LogTypeFilter = 'all' | 'error'
 
-const STATUS_FILTERS: StatusFilter[] = ['all', 'pending', 'success', 'error']
-
-function useRequestLogs() {
-  return React.useSyncExternalStore(subscribeRequestLogs, getRequestLogSnapshot, getRequestLogSnapshot)
+type AuditLogItem = {
+  account_id?: string | null
+  agent_id?: string | null
+  api_type?: string
+  created_at?: string
+  duration_ms?: number
+  method?: string
+  request_id?: string | null
+  route?: string
+  status_code?: number
+  user_id?: string | null
 }
 
-function formatTime(value: string): string {
+type AuditLogResponse = {
+  enabled?: boolean
+  items?: AuditLogItem[]
+  message?: string
+  page?: number
+  page_size?: number
+  success_rate?: number
+  total?: number
+}
+
+type RequestLogStatus = 'success' | 'error'
+
+type AuditFilters = {
+  apiType: string
+  logType: LogTypeFilter
+  requestId: string
+  statusCode: string
+}
+
+const DEFAULT_FILTERS: AuditFilters = {
+  apiType: '',
+  logType: 'all',
+  requestId: '',
+  statusCode: '',
+}
+
+const LOG_TYPE_FILTERS: LogTypeFilter[] = ['all', 'error']
+const PAGE_SIZE = 10
+
+function buildAuditQuery(filters: AuditFilters, page: number): Record<string, string | number> {
+  const query: Record<string, string | number> = {
+    page,
+    page_size: PAGE_SIZE,
+  }
+
+  const requestId = filters.requestId.trim()
+  const statusCode = filters.statusCode.trim()
+  const apiType = filters.apiType.trim()
+
+  if (requestId) {
+    query.request_id = requestId
+  }
+
+  if (apiType) {
+    query.api_type = apiType
+  }
+
+  if (statusCode) {
+    query.status = statusCode
+  } else if (filters.logType === 'error') {
+    query.status = 'error'
+  }
+
+  return query
+}
+
+function isZeroResultCombination(filters: AuditFilters): boolean {
+  if (filters.logType !== 'error') return false
+  const rawStatusCode = filters.statusCode.trim()
+  if (!rawStatusCode) return false
+  const statusCode = Number(rawStatusCode)
+  return Number.isFinite(statusCode) && statusCode < 400
+}
+
+function fetchAuditLogs(filters: AuditFilters, page: number): Promise<AuditLogResponse> {
+  return getOvResult<AuditLogResponse>(
+    client.get({
+      query: buildAuditQuery(filters, page),
+      url: '/api/v1/console/audit',
+    }),
+  )
+}
+
+function normalizeStatus(statusCode?: number): RequestLogStatus {
+  return statusCode !== undefined && statusCode >= 200 && statusCode < 400 ? 'success' : 'error'
+}
+
+function formatTime(value?: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).format(new Date(value))
+  }).format(date)
 }
 
 function formatDuration(value?: number): string {
@@ -45,17 +144,18 @@ function formatDuration(value?: number): string {
   }
 
   if (value < 1000) {
-    return `${value} ms`
+    return `${Math.round(value)} ms`
   }
 
   return `${(value / 1000).toFixed(2)} s`
 }
 
-function getStatusTone(status: RequestLogStatus, statusCode?: number): string {
-  if (status === 'pending') {
-    return 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-  }
+function formatPercent(value?: number): string {
+  if (value === undefined) return '-'
+  return `${Math.round(value * 100)}%`
+}
 
+function getStatusTone(status: RequestLogStatus, statusCode?: number): string {
   if (status === 'error' || (statusCode && statusCode >= 400)) {
     return 'border-destructive/20 bg-destructive/10 text-destructive'
   }
@@ -81,136 +181,179 @@ function methodTone(method: string): string {
 
 function RequestLogsRoute() {
   const { t } = useTranslation('requestLogs')
-  const navigate = useNavigate()
-  const logs = useRequestLogs()
-  const [query, setQuery] = React.useState('')
-  const [status, setStatus] = React.useState<StatusFilter>('all')
+  const [draftFilters, setDraftFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
+  const [filters, setFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
+  const [page, setPage] = React.useState(1)
+  const zeroResult = isZeroResultCombination(filters)
 
-  const filteredLogs = React.useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
+  const audit = useQuery({
+    enabled: !zeroResult,
+    queryFn: () => fetchAuditLogs(filters, page),
+    queryKey: ['console-audit-logs', filters, page],
+    refetchInterval: 30_000,
+  })
 
-    return logs.filter((log) => {
-      const matchesStatus = status === 'all' || log.status === status
-      const matchesQuery = !normalizedQuery
-        || log.path.toLowerCase().includes(normalizedQuery)
-        || log.method.toLowerCase().includes(normalizedQuery)
-        || String(log.statusCode ?? '').includes(normalizedQuery)
+  const logs = zeroResult ? [] : audit.data?.items ?? []
+  const disabled = audit.data?.enabled === false
+  const total = zeroResult ? 0 : audit.data?.total ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-      return matchesStatus && matchesQuery
-    })
-  }, [logs, query, status])
+  const handleSearch = () => {
+    setFilters({ ...draftFilters })
+    setPage(1)
+  }
 
-  const totals = React.useMemo(() => {
-    return logs.reduce(
-      (acc, log) => {
-        acc.total += 1
-        acc[log.status] += 1
-        if (log.durationMs !== undefined) {
-          acc.durationCount += 1
-          acc.durationTotal += log.durationMs
-        }
-        return acc
-      },
-      { durationCount: 0, durationTotal: 0, error: 0, pending: 0, success: 0, total: 0 },
-    )
-  }, [logs])
+  const handleReset = () => {
+    setDraftFilters(DEFAULT_FILTERS)
+    setFilters(DEFAULT_FILTERS)
+    setPage(1)
+  }
 
-  const averageDuration = totals.durationCount > 0
-    ? Math.round(totals.durationTotal / totals.durationCount)
-    : undefined
+  const handleRefresh = () => {
+    if (zeroResult) return
+    audit.refetch()
+  }
 
   return (
     <div className='flex w-full min-w-0 flex-col gap-5'>
-      <div className='flex justify-end'>
-        <Button variant='outline' onClick={clearRequestLogs} disabled={logs.length === 0}>
-          <EraserIcon />
-          {t('clear')}
-        </Button>
-      </div>
-
-      <div className='grid gap-3 md:grid-cols-4'>
-        <MetricCard label={t('metrics.total')} value={totals.total} icon={<ActivityIcon className='size-4' />} />
-        <MetricCard label={t('metrics.pending')} value={totals.pending} icon={<RefreshCwIcon className='size-4' />} />
-        <MetricCard label={t('metrics.errors')} value={totals.error} icon={<ServerCrashIcon className='size-4' />} />
-        <MetricCard label={t('metrics.average')} value={formatDuration(averageDuration)} icon={<Clock3Icon className='size-4' />} />
+      <div className='grid gap-3 md:grid-cols-2'>
+        <MetricCard label={t('metrics.total')} value={total} icon={<ActivityIcon className='size-4' />} />
+        <MetricCard label={t('metrics.successRate')} value={formatPercent(zeroResult ? 0 : audit.data?.success_rate)} icon={<BarChart3Icon className='size-4' />} />
       </div>
 
       <Card className='overflow-hidden'>
         <CardHeader className='gap-4 border-b bg-muted/20'>
-          <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-            <CardTitle className='text-base'>{t('table.title')}</CardTitle>
-            <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
-              <div className='relative w-full sm:w-72'>
+          <div className='grid min-w-0 grid-cols-[9rem_minmax(0,1fr)] items-center gap-3'>
+            <CardTitle className='text-base leading-tight whitespace-nowrap'>{t('table.title')}</CardTitle>
+            <form
+              className='grid min-w-0 grid-cols-[minmax(12rem,1fr)_6.5rem_9rem_auto_auto_auto_auto] items-center gap-2'
+              onSubmit={(event) => {
+                event.preventDefault()
+                handleSearch()
+              }}
+            >
+              <div className='relative min-w-0'>
                 <SearchIcon className='pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
                 <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={t('searchPlaceholder')}
+                  value={draftFilters.requestId}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, requestId: event.target.value }))}
+                  placeholder={t('filters.requestIdPlaceholder')}
                   className='pl-8'
                 />
               </div>
+              <Input
+                value={draftFilters.statusCode}
+                onChange={(event) => setDraftFilters((current) => ({ ...current, statusCode: event.target.value.replace(/\D/g, '').slice(0, 3) }))}
+                placeholder={t('filters.statusCodePlaceholder')}
+                className='w-full'
+                inputMode='numeric'
+              />
+              <Input
+                value={draftFilters.apiType}
+                onChange={(event) => setDraftFilters((current) => ({ ...current, apiType: event.target.value }))}
+                placeholder={t('filters.apiTypePlaceholder')}
+                className='w-full'
+              />
               <div className='flex rounded-md border bg-background p-0.5'>
-                {STATUS_FILTERS.map((item) => (
+                {LOG_TYPE_FILTERS.map((item) => (
                   <button
                     key={item}
                     type='button'
-                    onClick={() => setStatus(item)}
+                    onClick={() => setDraftFilters((current) => ({ ...current, logType: item }))}
                     className={cn(
-                      'h-8 rounded-sm px-3 text-sm text-muted-foreground transition-colors hover:text-foreground',
-                      status === item && 'bg-muted text-foreground shadow-xs',
+                      'h-8 whitespace-nowrap rounded-sm px-3 text-sm text-muted-foreground transition-colors hover:text-foreground',
+                      draftFilters.logType === item && 'bg-muted text-foreground shadow-xs',
                     )}
                   >
                     {t(`filters.${item}`)}
                   </button>
                 ))}
               </div>
-            </div>
+              <Button type='submit' disabled={audit.isFetching}>
+                <SearchIcon />
+                {t('query')}
+              </Button>
+              <Button type='button' variant='outline' onClick={handleReset} disabled={audit.isFetching}>
+                <RotateCcwIcon />
+                {t('reset')}
+              </Button>
+              <Button type='button' variant='outline' onClick={handleRefresh} disabled={audit.isFetching || zeroResult}>
+                <RefreshCwIcon className={cn(audit.isFetching && 'animate-spin')} />
+                {t('refresh')}
+              </Button>
+            </form>
           </div>
         </CardHeader>
         <CardContent className='p-0'>
-          {filteredLogs.length === 0 ? (
+          {audit.isLoading && !zeroResult ? (
+            <div className='flex min-h-72 items-center justify-center text-sm text-muted-foreground'>
+              {t('loading')}
+            </div>
+          ) : audit.isError ? (
+            <EmptyLogsState title={t('error.title')} description={t('error.description')} />
+          ) : disabled ? (
+            <EmptyLogsState title={t('disabled.title')} description={audit.data?.message || t('disabled.description')} />
+          ) : logs.length === 0 ? (
             <div className='flex min-h-72 flex-col items-center justify-center gap-3 px-6 text-center'>
               <div className='flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground'>
                 <ActivityIcon className='size-5' />
               </div>
               <div>
-                <p className='font-medium'>{logs.length === 0 ? t('empty.title') : t('empty.filteredTitle')}</p>
-                <p className='mt-1 text-sm text-muted-foreground'>
-                  {logs.length === 0 ? t('empty.description') : t('empty.filteredDescription')}
-                </p>
+                <p className='font-medium'>{t('empty.title')}</p>
+                <p className='mt-1 text-sm text-muted-foreground'>{t('empty.description')}</p>
               </div>
-              {logs.length === 0 && (
-                <Button
-                  size='sm'
-                  className='mt-1 gap-1.5'
-                  onClick={() => navigate({ to: '/resources', search: { upload: true } })}
-                >
-                  <Upload className='size-4' />
-                  {t('empty.upload')}
-                </Button>
-              )}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className='bg-muted/20 hover:bg-muted/20'>
-                  <TableHead>{t('table.time')}</TableHead>
-                  <TableHead>{t('table.method')}</TableHead>
-                  <TableHead>{t('table.path')}</TableHead>
-                  <TableHead>{t('table.status')}</TableHead>
-                  <TableHead className='text-right'>{t('table.duration')}</TableHead>
-                  <TableHead>{t('table.requestId')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs.map((log) => (
-                  <RequestLogRow key={log.id} log={log} />
-                ))}
-              </TableBody>
-            </Table>
+            <>
+              <div className='overflow-x-auto'>
+                <Table>
+                  <TableHeader>
+                    <TableRow className='bg-muted/20 hover:bg-muted/20'>
+                      <TableHead>{t('table.time')}</TableHead>
+                      <TableHead>{t('table.apiType')}</TableHead>
+                      <TableHead>{t('table.method')}</TableHead>
+                      <TableHead>{t('table.path')}</TableHead>
+                      <TableHead>{t('table.status')}</TableHead>
+                      <TableHead className='text-right'>{t('table.duration')}</TableHead>
+                      <TableHead>{t('table.requestId')}</TableHead>
+                      <TableHead>{t('table.accountId')}</TableHead>
+                      <TableHead>{t('table.userId')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {logs.map((log, index) => (
+                      <RequestLogRow
+                        key={`${log.request_id ?? 'request'}-${log.created_at ?? index}`}
+                        log={log}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <RequestLogPagination
+                page={page}
+                pageCount={pageCount}
+                total={total}
+                onPageChange={setPage}
+              />
+            </>
           )}
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function EmptyLogsState({ description, title }: { description: string; title: string }) {
+  return (
+    <div className='flex min-h-72 flex-col items-center justify-center gap-3 px-6 text-center'>
+      <div className='flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground'>
+        <ActivityIcon className='size-5' />
+      </div>
+      <div>
+        <p className='font-medium'>{title}</p>
+        <p className='mt-1 text-sm text-muted-foreground'>{description}</p>
+      </div>
     </div>
   )
 }
@@ -231,32 +374,108 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
   )
 }
 
-function RequestLogRow({ log }: { log: RequestLogEntry }) {
+function RequestLogRow({ log }: { log: AuditLogItem }) {
   const { t } = useTranslation('requestLogs')
+  const status = normalizeStatus(log.status_code)
+  const method = log.method ?? '-'
+  const isSlow = (log.duration_ms ?? 0) > 1000
 
   return (
     <TableRow>
-      <TableCell className='text-muted-foreground tabular-nums'>{formatTime(log.startedAt)}</TableCell>
+      <TableCell className='text-muted-foreground tabular-nums'>{formatTime(log.created_at)}</TableCell>
+      <TableCell className='max-w-40 truncate font-mono text-xs text-muted-foreground'>{log.api_type || '-'}</TableCell>
       <TableCell>
-        <span className={cn('font-mono text-xs font-semibold', methodTone(log.method))}>{log.method}</span>
+        <span className={cn('font-mono text-xs font-semibold', methodTone(method))}>{method}</span>
       </TableCell>
       <TableCell className='max-w-[34rem]'>
-        <div className='truncate font-mono text-xs text-foreground'>{log.path || '/'}</div>
-        {log.errorMessage ? (
-          <div className='mt-1 truncate text-xs text-destructive'>{log.errorMessage}</div>
-        ) : null}
+        <div className='truncate font-mono text-xs text-foreground'>{log.route || '/'}</div>
       </TableCell>
       <TableCell>
-        <Badge variant='outline' className={cn('font-mono text-xs', getStatusTone(log.status, log.statusCode))}>
-          {log.statusCode ?? t(`status.${log.status}`)}
+        <Badge variant='outline' className={cn('font-mono text-xs', getStatusTone(status, log.status_code))}>
+          {log.status_code ?? t(`status.${status}`)}
         </Badge>
       </TableCell>
-      <TableCell className='text-right font-mono text-xs tabular-nums text-muted-foreground'>
-        {formatDuration(log.durationMs)}
+      <TableCell className={cn('text-right font-mono text-xs tabular-nums text-muted-foreground', isSlow && 'font-semibold text-amber-600 dark:text-amber-300')}>
+        {formatDuration(log.duration_ms)}
       </TableCell>
       <TableCell className='max-w-44 truncate font-mono text-xs text-muted-foreground'>
-        {log.requestId || '-'}
+        {log.request_id || '-'}
+      </TableCell>
+      <TableCell className='max-w-36 truncate font-mono text-xs text-muted-foreground'>
+        {log.account_id || '-'}
+      </TableCell>
+      <TableCell className='max-w-36 truncate font-mono text-xs text-muted-foreground'>
+        {log.user_id || '-'}
       </TableCell>
     </TableRow>
+  )
+}
+
+function RequestLogPagination({
+  onPageChange,
+  page,
+  pageCount,
+  total,
+}: {
+  onPageChange: (page: number) => void
+  page: number
+  pageCount: number
+  total: number
+}) {
+  const { t } = useTranslation('requestLogs')
+  const pages = React.useMemo(() => {
+    const start = Math.max(1, page - 2)
+    const end = Math.min(pageCount, start + 4)
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+  }, [page, pageCount])
+
+  return (
+    <div className='flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+      <p className='text-sm text-muted-foreground'>
+        {t('pagination.summary', { page, pageCount, total })}
+      </p>
+      <Pagination className='mx-0 w-auto justify-start sm:justify-end'>
+        <PaginationContent>
+          <PaginationItem>
+            <PaginationPrevious
+              href='#'
+              text={t('pagination.previous')}
+              aria-disabled={page <= 1}
+              className={cn(page <= 1 && 'pointer-events-none opacity-50')}
+              onClick={(event) => {
+                event.preventDefault()
+                if (page > 1) onPageChange(page - 1)
+              }}
+            />
+          </PaginationItem>
+          {pages.map((item) => (
+            <PaginationItem key={item}>
+              <PaginationLink
+                href='#'
+                isActive={item === page}
+                onClick={(event) => {
+                  event.preventDefault()
+                  onPageChange(item)
+                }}
+              >
+                {item}
+              </PaginationLink>
+            </PaginationItem>
+          ))}
+          <PaginationItem>
+            <PaginationNext
+              href='#'
+              text={t('pagination.next')}
+              aria-disabled={page >= pageCount}
+              className={cn(page >= pageCount && 'pointer-events-none opacity-50')}
+              onClick={(event) => {
+                event.preventDefault()
+                if (page < pageCount) onPageChange(page + 1)
+              }}
+            />
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
+    </div>
   )
 }
