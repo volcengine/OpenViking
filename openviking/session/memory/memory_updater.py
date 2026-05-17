@@ -660,7 +660,7 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
                 mf = MemoryFileUtils.read(content, uri=uri)
-                abstract = mf.content
+                abstract = mf.plain_content()
 
                 # Build embedding text from only searchable fields
                 embedding_parts = []

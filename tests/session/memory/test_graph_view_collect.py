@@ -15,6 +15,34 @@ def _file_entry(uri: str, rel_path: str) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_collect_graph_data_preserves_markdown_links_in_content_full():
+    content = """2023-08-22 (Tuesday) ChatLog:\n[Calvin]: I scored a deal with [Frank Ocean](../../../../entities/personal/calvin.md)!\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"events\", \"links\": [{\"to_uri\": \"viking://user/Calvin/memories/entities/personal/calvin.md\", \"link_type\": \"related_to\", \"match_text\": \"Frank\"}]}\n-->"""
+
+    mock_fs = MagicMock()
+    mock_fs.tree = AsyncMock(
+        return_value=[
+            _file_entry(
+                "viking://user/Calvin/memories/events/2023/08/22/collab_with_frank_ocean.md",
+                "events/2023/08/22/collab_with_frank_ocean.md",
+            )
+        ]
+    )
+    mock_fs.read_file = AsyncMock(return_value=content)
+
+    graph = MemoryGraph(viking_fs=mock_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+    nodes, edges = await graph._collect_graph_data(["viking://user/Calvin/memories"], ctx)
+
+    assert len(nodes) == 1
+    assert (
+        nodes[0]["content_full"]
+        == "2023-08-22 (Tuesday) ChatLog:\n[Calvin]: I scored a deal with [Frank Ocean](../../../../entities/personal/calvin.md)!"
+    )
+    assert edges == []
+
+
+@pytest.mark.asyncio
 async def test_collect_graph_data_includes_root_level_profile_markdown():
     content = """# Caroline\n- likes painting\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"profile\", \"links\": []}\n-->"""
 

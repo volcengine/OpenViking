@@ -383,6 +383,14 @@ class TestRoundTrip:
         stripped = LinkRenderer.strip_links(rendered)
         assert stripped == original
 
+    def test_memory_file_plain_content_strips_markdown_links(self):
+        memory_file = MemoryFile(
+            uri="viking://user/Calvin/memories/events/2023/08/22/collab_with_frank_ocean.md",
+            content="Worked with [Frank Ocean](../../../../entities/personal/calvin.md).",
+        )
+
+        assert memory_file.plain_content() == "Worked with Frank Ocean."
+
     def test_memory_file_utils_write_renders_chinese_links(self):
         memory_file = MemoryFile(
             uri="viking://user/Caroline/memories/profile.md",

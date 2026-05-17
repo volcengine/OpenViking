@@ -538,3 +538,28 @@ Content"""
         assert parsed["memory_type"] == "preferences"
         assert parsed["topic"] == "code_style"
         assert parsed["content"] == "Prefers concise responses."
+
+    def test_read_preserves_markdown_links_in_content(self):
+        raw_content = """2023-08-22 ChatLog\n\n[Calvin]: Worked with [Frank Ocean](../../../../entities/personal/calvin.md).\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"events\", \"links\": [{\"to_uri\": \"viking://user/Calvin/memories/entities/personal/calvin.md\", \"link_type\": \"related_to\", \"match_text\": \"Frank\"}]}\n-->"""
+
+        memory_file = MemoryFileUtils.read(
+            raw_content,
+            uri="viking://user/Calvin/memories/events/2023/08/22/collab_with_frank_ocean.md",
+        )
+
+        assert "[Frank Ocean](../../../../entities/personal/calvin.md)" in memory_file.content
+
+    def test_memory_file_plain_content_strips_markdown_links(self):
+        memory_file = MemoryFile(
+            uri="viking://user/Calvin/memories/events/2023/08/22/collab_with_frank_ocean.md",
+            content="Worked with [Frank Ocean](../../../../entities/personal/calvin.md).",
+            links=[
+                {
+                    "to_uri": "viking://user/Calvin/memories/entities/personal/calvin.md",
+                    "link_type": "related_to",
+                    "match_text": "Frank",
+                }
+            ],
+        )
+
+        assert memory_file.plain_content() == "Worked with Frank Ocean."

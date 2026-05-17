@@ -80,9 +80,8 @@ class MemoryFileUtils:
 
     @staticmethod
     def read(raw_content: str, uri: Optional[str] = None) -> MemoryFile:
-        """Parse a memory file, strip rendered links, return a MemoryFile."""
+        """Parse a memory file and return a MemoryFile with markdown links preserved."""
         parsed = parse_memory_file_with_fields(raw_content)
-        parsed["content"] = LinkRenderer.strip_links(parsed.get("content", ""))
         parsed = _deserialize_datetime(parsed)
         return MemoryFile.from_parsed(uri=uri, parsed=parsed)
 

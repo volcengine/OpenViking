@@ -199,6 +199,11 @@ class MemoryFile(BaseModel):
     memory_type: Optional[str] = None
     extra_fields: Dict[str, Any] = {}
 
+    def plain_content(self) -> str:
+        from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+        return LinkRenderer.strip_links(self.content)
+
     @classmethod
     def from_parsed(cls, uri: Optional[str] = None, parsed: Dict[str, Any] = None) -> "MemoryFile":
         """Build from parse_memory_file_with_fields result."""
