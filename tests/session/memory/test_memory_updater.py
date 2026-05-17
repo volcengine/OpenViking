@@ -443,16 +443,22 @@ Goodbye"""
         assert "Goodbye" in result.content
 
     @pytest.mark.asyncio
-    async def test_apply_edit_with_simple_string_replacement(self):
-        """Test _apply_edit with simple string full replacement."""
+    async def test_apply_edit_with_stripped_search_content_against_linked_storage(self):
+        """Patch content should match the stripped read-tool view, not raw markdown links."""
         updater = self._make_updater_with_registry()
 
-        # Original content
-        original_content = "Old content"
-        original_mf = MemoryFile(content=original_content, extra_fields={"name": "test"})
-        original_full_content = MemoryFileUtils.write(original_mf)
+        uri = "viking://test/test.md"
+        original_full_content = (
+            "# [John](entities/fitness/beginner-yoga.md)\n"
+            "- [爱好](entities/hobbies/reading.md)：游戏开发、音乐演奏、公益活动\n\n"
+            "<!-- MEMORY_FIELDS\n"
+            '{"memory_type": "test", "name": "test", "links": ['
+            '{"from_uri": "viking://test/test.md", "to_uri": "viking://test/entities/fitness/beginner-yoga.md", "match_text": "John"}, '
+            '{"from_uri": "viking://test/test.md", "to_uri": "viking://test/entities/hobbies/reading.md", "match_text": "爱好"}'
+            "]}\n"
+            "-->"
+        )
 
-        # Mock VikingFS
         mock_viking_fs = MagicMock()
         mock_viking_fs.read_file = AsyncMock(return_value=original_full_content)
         written_content = None
@@ -464,24 +470,27 @@ Goodbye"""
         mock_viking_fs.write_file = mock_write_file
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
-        # Simple string replacement
-        new_content = "Completely new content"
-
-        # Mock request context
-        mock_ctx = MagicMock()
-
-        # Apply edit
-        op = ResolvedOperation(
-            memory_fields={"content": new_content},
-            memory_type="test",
-            uris=["viking://test/test.md"],
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="# John\n- 爱好：游戏开发、音乐演奏、公益活动",
+                    replace="# John\n- 爱好：游戏开发、音乐演奏、公益活动\n- 近期动态：加入志愿者队伍",
+                )
+            ]
         )
+
+        mock_ctx = MagicMock()
+        op = ResolvedOperation(
+            memory_fields={"content": patch},
+            memory_type="test",
+            uris=[uri],
+        )
+
         await updater._apply_upsert(op, mock_ctx)
 
-        # Verify
         assert written_content is not None
         result = MemoryFileUtils.read(written_content)
-        assert result.content == new_content
+        assert "近期动态：加入志愿者队伍" in result.plain_content()
 
 
 class TestConsecutivePatchesSameURI:

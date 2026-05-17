@@ -450,7 +450,7 @@ class MemoryUpdater:
                         current_value = None
                     else:
                         if field.name == "content":
-                            current_value = old_content.content
+                            current_value = old_content.plain_content()
                         else:
                             current_value = old_content.extra_fields.get(field.name)
                     # Use merge_op to process field value

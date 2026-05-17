@@ -186,10 +186,9 @@ class MemoryReadTool(MemoryTool):
                 if page_id is not None:
                     llm_result["page_id"] = page_id
             # Add 1-based line numbers to content for LLM readability & link extraction
-            raw_content = mf.content
-            if raw_content:
-                stripped_content = LinkRenderer.strip_links(raw_content)
-                lines = stripped_content.split("\n")
+            plain_content = mf.plain_content()
+            if plain_content:
+                lines = plain_content.split("\n")
                 numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))
                 llm_result["content"] = numbered
             return llm_result
