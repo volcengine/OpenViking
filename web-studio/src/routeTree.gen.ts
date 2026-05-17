@@ -9,34 +9,29 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as RetrievalRouteImport } from './routes/retrieval'
 import { Route as RequestLogsRouteImport } from './routes/request-logs'
-import { Route as HomeRouteImport } from './routes/home'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
+import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as OperationsRouteRouteImport } from './routes/operations/route'
+import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
 
-const RetrievalRoute = RetrievalRouteImport.update({
-  id: '/retrieval',
-  path: '/retrieval',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const RequestLogsRoute = RequestLogsRouteImport.update({
   id: '/request-logs',
   path: '/request-logs',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HomeRoute = HomeRouteImport.update({
-  id: '/home',
-  path: '/home',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SessionsRouteRoute = SessionsRouteRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RetrievalRouteRoute = RetrievalRouteRouteImport.update({
+  id: '/retrieval',
+  path: '/retrieval',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
@@ -47,6 +42,11 @@ const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
 const OperationsRouteRoute = OperationsRouteRouteImport.update({
   id: '/operations',
   path: '/operations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HomeRouteRoute = HomeRouteRouteImport.update({
+  id: '/home',
+  path: '/home',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -67,33 +67,33 @@ const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
+  '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
-  '/home': typeof HomeRoute
   '/request-logs': typeof RequestLogsRoute
-  '/retrieval': typeof RetrievalRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
-  '/home': typeof HomeRoute
+  '/retrieval': typeof RetrievalRouteRoute
   '/request-logs': typeof RequestLogsRoute
-  '/retrieval': typeof RetrievalRoute
   '/resources': typeof ResourcesIndexRoute
   '/sessions': typeof SessionsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
+  '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
-  '/home': typeof HomeRoute
   '/request-logs': typeof RequestLogsRoute
-  '/retrieval': typeof RetrievalRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -101,55 +101,48 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/home'
     | '/operations'
     | '/resources'
-    | '/sessions'
-    | '/home'
-    | '/request-logs'
     | '/retrieval'
+    | '/sessions'
+    | '/request-logs'
     | '/resources/'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/operations'
     | '/home'
-    | '/request-logs'
+    | '/operations'
     | '/retrieval'
+    | '/request-logs'
     | '/resources'
     | '/sessions'
   id:
     | '__root__'
     | '/'
+    | '/home'
     | '/operations'
     | '/resources'
-    | '/sessions'
-    | '/home'
-    | '/request-logs'
     | '/retrieval'
+    | '/sessions'
+    | '/request-logs'
     | '/resources/'
     | '/sessions/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  HomeRouteRoute: typeof HomeRouteRoute
   OperationsRouteRoute: typeof OperationsRouteRoute
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
+  RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
-  HomeRoute: typeof HomeRoute
   RequestLogsRoute: typeof RequestLogsRoute
-  RetrievalRoute: typeof RetrievalRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/retrieval': {
-      id: '/retrieval'
-      path: '/retrieval'
-      fullPath: '/retrieval'
-      preLoaderRoute: typeof RetrievalRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/request-logs': {
       id: '/request-logs'
       path: '/request-logs'
@@ -157,18 +150,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RequestLogsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/home': {
-      id: '/home'
-      path: '/home'
-      fullPath: '/home'
-      preLoaderRoute: typeof HomeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/sessions': {
       id: '/sessions'
       path: '/sessions'
       fullPath: '/sessions'
       preLoaderRoute: typeof SessionsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/retrieval': {
+      id: '/retrieval'
+      path: '/retrieval'
+      fullPath: '/retrieval'
+      preLoaderRoute: typeof RetrievalRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/resources': {
@@ -183,6 +176,13 @@ declare module '@tanstack/react-router' {
       path: '/operations'
       fullPath: '/operations'
       preLoaderRoute: typeof OperationsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/home': {
+      id: '/home'
+      path: '/home'
+      fullPath: '/home'
+      preLoaderRoute: typeof HomeRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -235,12 +235,12 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  HomeRouteRoute: HomeRouteRoute,
   OperationsRouteRoute: OperationsRouteRoute,
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
+  RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
-  HomeRoute: HomeRoute,
   RequestLogsRoute: RequestLogsRoute,
-  RetrievalRoute: RetrievalRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

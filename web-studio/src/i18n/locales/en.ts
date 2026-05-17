@@ -177,6 +177,8 @@ const en = {
     requestFailed: 'Request failed',
     todayRetrievals: {
       description: 'Shows successful semantic retrieval calls for find() and search() today. Resets at midnight.',
+      find: 'find()',
+      search: 'search()',
       title: 'Retrievals Today',
     },
     todayTokens: {
