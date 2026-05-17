@@ -1856,7 +1856,11 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           })
           await flushPendingMessages(sessionId, mapping, config)
 
-          if (mapping.capturedMessages.size > 0 || mapping.commitInFlight) {
+          if (
+            mapping.capturedMessages.size > 0 ||
+            mapping.pendingMessages.size > 0 ||
+            mapping.commitInFlight
+          ) {
             mapping.pendingCleanup = true
             if (!mapping.commitInFlight) {
               await startBackgroundCommit(mapping, sessionId, config)
