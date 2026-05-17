@@ -9,7 +9,6 @@ import logging
 import time
 from typing import Any
 
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import NotFoundError
@@ -43,8 +42,8 @@ class ContextInventoryProvider:
             return dict(counts)
 
     async def _read_counts(self, ctx: RequestContext) -> dict[str, int]:
-        user_root = canonical_user_root(ctx)
-        agent_root = canonical_agent_root(ctx)
+        user_root = f"viking://user/{ctx.user.user_space_name()}"
+        agent_root = f"viking://agent/{ctx.user.agent_space_name()}"
 
         files, skills, user_memories, agent_memories = await asyncio.gather(
             self._stat_count("viking://resources", ctx=ctx),

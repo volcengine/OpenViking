@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -9,10 +10,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601
+from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -203,15 +206,29 @@ class VLMBase(ABC):
             # Telemetry must never break model inference.
             pass
 
-        # Record the VLM call in Prometheus metrics (if enabled).
         try:
-            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+            from openviking.metrics.datasources import VLMEventDataSource
+            from openviking.observability.context import get_root_observability_context
 
-            prom = get_prometheus_observer()
-            if prom is not None:
-                prom.record_vlm_call(duration_seconds)
-        except Exception:
-            pass
+            root_context = get_root_observability_context()
+            VLMEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=float(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=root_context.account_id if root_context is not None else None,
+            )
+        except Exception as e:
+            # Metrics must never break model inference.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage

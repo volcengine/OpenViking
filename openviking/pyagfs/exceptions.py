@@ -31,3 +31,9 @@ class AGFSNotSupportedError(AGFSClientError):
     """Operation not supported by the server or filesystem (HTTP 501)"""
 
     pass
+
+
+class AGFSNotFoundError(AGFSClientError):
+    """File or directory not found"""
+
+    pass

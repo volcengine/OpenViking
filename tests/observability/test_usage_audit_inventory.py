@@ -27,11 +27,12 @@ class FakeFSService:
 
     async def stat(self, uri, *, ctx):
         self.calls.append((uri, ctx))
+        agent_root = f"viking://agent/{ctx.user.agent_space_name()}"
         return {
             "viking://resources": {"count": 2},
-            "viking://agent/agent-1/skills": {"count": 3},
+            f"{agent_root}/skills": {"count": 3},
             "viking://user/user-1/memories": {"count": 5},
-            "viking://agent/agent-1/memories": {"count": 7},
+            f"{agent_root}/memories": {"count": 7},
         }[uri]
 
 
@@ -55,14 +56,15 @@ async def test_context_inventory_counts_from_stat():
     ctx = _ctx()
 
     counts = await provider.get_counts(ctx)
+    agent_root = f"viking://agent/{ctx.user.agent_space_name()}"
 
     assert counts == {"files": 2, "skills": 3, "memories": 12, "total": 17}
     assert len(fs.calls) == 4
     assert {uri for uri, call_ctx in fs.calls if call_ctx is ctx} == {
         "viking://resources",
-        "viking://agent/agent-1/skills",
+        f"{agent_root}/skills",
         "viking://user/user-1/memories",
-        "viking://agent/agent-1/memories",
+        f"{agent_root}/memories",
     }
 
 
