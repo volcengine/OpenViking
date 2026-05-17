@@ -381,10 +381,12 @@ const network = new vis.Network(
           values.shadowSize = 28;
           values.shadowX = 0;
           values.shadowY = 0;
+          values.color = {{ background: '#f8fafc', border: values.color.border }};
         }},
         label(values) {{
           values.size = Math.max(values.size || 12, 18);
           values.bold = true;
+          values.font = {{ ...(values.font || {{}}), color: '#0f172a' }};
         }},
       }},
     }},

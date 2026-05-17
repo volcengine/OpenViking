@@ -181,11 +181,13 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
     assert "hidden: false" in html
 
 
-def test_render_graph_html_click_node_selects_only_current_node():
+
+
+def test_render_graph_html_inverts_selected_node_colors():
     html = _render_graph_html([], [])
 
-    assert "network.selectNodes([targetNodeId]);" in html
-    assert "network.selectNodes([targetNodeId, ...connectedNodeIds]);" not in html
+    assert "values.color = { background: '#f8fafc', border: values.color.border };" in html
+    assert "values.font = { ...(values.font || {}), color: '#0f172a' };" in html
 
 
 def test_render_graph_html_edge_details_include_source_and_target_uris():
