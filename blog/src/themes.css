@@ -517,16 +517,23 @@ html {
   position: fixed;
   z-index: 85;
   transform: translate(-50%, -100%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--th-line);
   border-radius: 999px;
   background: var(--th-ink);
   color: var(--th-bg);
   box-shadow: var(--th-shadow);
   cursor: pointer;
-  padding: 8px 12px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  padding: 0;
+}
+
+.zouk-selection-action svg {
+  width: 15px;
+  height: 15px;
 }
 
 .zouk-reader-panel {
@@ -619,6 +626,10 @@ html {
 }
 
 .zouk-reader-drag {
+  display: none;
+}
+
+.zouk-reader-edge-toggle {
   display: none;
 }
 
@@ -883,24 +894,89 @@ html {
     bottom: 32px;
     width: calc(var(--zouk-reader-rail) - clamp(38px, 4vw, 58px));
     max-width: 428px;
+    overflow: visible;
     border: 0;
     border-radius: 0;
     background: transparent;
     box-shadow: none;
   }
 
+  .zouk-reader-launcher {
+    top: clamp(112px, 20vh, 180px);
+    right: 0;
+    bottom: auto;
+    width: 28px;
+    height: 156px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--th-mute);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .zouk-reader-launcher span,
+  .zouk-reader-launcher svg {
+    display: none;
+  }
+
+  .zouk-reader-launcher::before,
+  .zouk-reader-edge-toggle::before {
+    content: "";
+    display: block;
+    width: 2px;
+    height: 108px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--th-mute) 44%, transparent);
+    transition: background 150ms ease, opacity 150ms ease, transform 150ms ease;
+    opacity: 0.56;
+  }
+
+  .zouk-reader-launcher:hover::before,
+  .zouk-reader-edge-toggle:hover::before,
+  .zouk-reader-launcher:focus-visible::before,
+  .zouk-reader-edge-toggle:focus-visible::before {
+    background: color-mix(in oklab, var(--th-accent) 68%, var(--th-mute));
+    opacity: 0.9;
+    transform: scaleY(1.08);
+  }
+
+  .zouk-reader-edge-toggle {
+    position: absolute;
+    z-index: 3;
+    left: -24px;
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+
   .zouk-reader-head {
-    padding: 0 0 16px;
+    justify-content: flex-start;
+    padding: 0 0 14px;
     border: 0;
     background: transparent;
   }
 
-  .zouk-reader-close {
-    opacity: 0.45;
+  .zouk-reader-head-text {
+    display: none;
   }
 
-  .zouk-reader-close:hover {
-    background: color-mix(in oklab, var(--th-bg-2) 55%, transparent);
+  .zouk-reader-profile-mark {
+    width: 30px;
+    height: 30px;
+    background: color-mix(in oklab, var(--th-bg-2) 66%, transparent);
+    color: var(--th-mute);
   }
 
   .zouk-reader-messages {
@@ -1007,6 +1083,10 @@ html {
   .zouk-context-preview {
     max-height: 84px;
     overflow: hidden;
+  }
+
+  .zouk-reader-edge-toggle {
+    display: none;
   }
 
   .zouk-context-preview__row {

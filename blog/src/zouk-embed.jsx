@@ -137,15 +137,6 @@ function MessageIcon() {
   );
 }
 
-function CloseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="m18 6-12 12" />
-      <path d="m6 6 12 12" />
-    </svg>
-  );
-}
-
 function ContextPreview({ sourceUrl, selectedText }) {
   return (
     <div className="zouk-context-preview" aria-label="Auto injected context">
@@ -514,10 +505,11 @@ export function ZoukInteractiveBlog({ route }) {
         <button
           type="button"
           className="zouk-selection-action"
+          aria-label="Chat about selected text"
           style={{ top: selectionAction.top, left: selectionAction.left }}
           onClick={() => openChat(selectionAction.text)}
         >
-          Ask Zouk
+          <MessageIcon />
         </button>
       ) : null}
 
@@ -534,6 +526,13 @@ export function ZoukInteractiveBlog({ route }) {
           style={!isDesktop ? { '--zouk-blog-drag': `${dragY}px` } : undefined}
           aria-label="Zouk blog chat"
         >
+          <button
+            type="button"
+            className="zouk-reader-edge-toggle"
+            aria-label="Close chat"
+            onClick={closeChat}
+          />
+
           <div
             className="zouk-reader-drag"
             onPointerDown={startDrag}
@@ -550,9 +549,6 @@ export function ZoukInteractiveBlog({ route }) {
               <span>Message #{CONFIG.channel}</span>
               <strong>{status === 'connected' || status === 'sending' ? 'Connected' : status === 'connecting' ? 'Connecting' : 'Zouk'}</strong>
             </div>
-            <button type="button" className="zouk-reader-close" aria-label="Close chat" onClick={closeChat}>
-              <CloseIcon />
-            </button>
           </div>
 
           <div className="zouk-reader-messages" ref={scrollRef}>
