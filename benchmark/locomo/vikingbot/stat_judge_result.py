@@ -5,6 +5,8 @@ import json
 import os
 import sys
 
+csv.field_size_limit(sys.maxsize)
+
 
 def _extract_engine(argv: list[str]) -> tuple[str, list[str]]:
     engine = "vikingbot"

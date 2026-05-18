@@ -258,7 +258,7 @@ def run_vikingbot_chat(
     sample_id: str | None = None,
     question_id: str | None = None,
     memory_users: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
+) -> tuple[str, dict, float, int, list, str, str]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
     if sample_id:
@@ -313,12 +313,24 @@ def run_vikingbot_chat(
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
+            relevant_memories = resp_json.get("relevant_memories", "")
+            debug_trace = json.dumps(resp_json.get("debug_trace", {}), ensure_ascii=False)
         except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+            relevant_memories = ""
+            debug_trace = ""
+        return (
+            response,
+            token_usage,
+            time_cost,
+            iteration,
+            tools_used_names,
+            relevant_memories,
+            debug_trace,
+        )
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -326,6 +338,8 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            "",
+            "",
         )
     except subprocess.TimeoutExpired:
         return (
@@ -334,6 +348,8 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            "",
+            "",
         )
 
 
@@ -498,6 +514,8 @@ def main(argv: list[str] | None = None):
         "time_cost",
         "iteration",
         "tools_used_names",
+        "relevant_memories",
+        "debug_trace",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -528,7 +546,15 @@ def main(argv: list[str] | None = None):
         if speakers:
             print(f"  [memory users: {speakers}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
+        (
+            response,
+            token_usage,
+            time_cost,
+            iteration,
+            tools_used_names,
+            relevant_memories,
+            debug_trace,
+        ) = run_vikingbot_chat(
             question,
             question_time,
             sample_id,
@@ -552,6 +578,8 @@ def main(argv: list[str] | None = None):
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "relevant_memories": relevant_memories,
+            "debug_trace": debug_trace,
         }
 
         # 线程安全的结果收集

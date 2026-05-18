@@ -10,6 +10,24 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
+csv.field_size_limit(sys.maxsize)
+
+try:
+    from benchmark.locomo.openviking.locomo_prompts import (
+        JUDGE_SYSTEM_PROMPT,
+        get_judge_prompt,
+        get_judge_prompt_with_evidence,
+        preprocess_answer,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "openviking"))
+    from locomo_prompts import (  # type: ignore
+        JUDGE_SYSTEM_PROMPT,
+        get_judge_prompt,
+        get_judge_prompt_with_evidence,
+        preprocess_answer,
+    )
+
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
@@ -101,6 +119,74 @@ async def grade_answer(
         return False, f"[API ERROR] {str(e)}"
 
 
+async def grade_answer_locomo(
+    llm_client,
+    model: str,
+    category: int,
+    question: str,
+    gold_answer: str,
+    response: str,
+    evidence_text: str = "",
+) -> tuple[bool, str]:
+    processed_answer = preprocess_answer(category, gold_answer)
+    if evidence_text:
+        accuracy_prompt = get_judge_prompt_with_evidence(
+            category,
+            question,
+            processed_answer,
+            response,
+            evidence_text,
+        )
+    else:
+        accuracy_prompt = get_judge_prompt(
+            category,
+            question,
+            processed_answer,
+            response,
+        )
+
+    try:
+        resp = await llm_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": accuracy_prompt},
+            ],
+            temperature=0,
+            timeout=60,
+        )
+        content = resp.choices[0].message.content.strip()
+        start_idx = content.find("{")
+        end_idx = content.rfind("}")
+        if start_idx != -1 and end_idx != -1:
+            json_str = content[start_idx : end_idx + 1].strip()
+            result = json.loads(json_str)
+            is_correct = result.get("label", "WRONG").strip().upper() == "CORRECT"
+            reasoning = result.get("reasoning", "")
+            return is_correct, reasoning
+        return False, f"[PARSE ERROR] Invalid response: {content}"
+    except Exception as e:
+        return False, f"[API ERROR] {str(e)}"
+
+
+def _parse_evidence_text(raw: str) -> str:
+    if not raw:
+        return ""
+    raw = raw.strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+    if isinstance(parsed, list):
+        return "\n".join(str(item) for item in parsed if str(item).strip())
+    if isinstance(parsed, str):
+        return parsed
+    return ""
+
+
 def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     """加载待评分的回答，返回所有行和表头"""
     if not os.path.exists(input_path):
@@ -148,6 +234,11 @@ async def main(argv: list[str] | None = None):
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"
     )
+    parser.add_argument(
+        "--locomo-judge-prompt",
+        action="store_true",
+        help="Use LoCoMo-specific judge prompt. Default uses the original vikingbot judge prompt.",
+    )
     args = parser.parse_args(cleaned_argv)
 
     if not args.token:
@@ -161,7 +252,11 @@ async def main(argv: list[str] | None = None):
 
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
+    ungraded = [
+        i
+        for i, row in enumerate(rows)
+        if not row.get("result") and str(row.get("category", "")).strip() != "5"
+    ]
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:
@@ -188,7 +283,26 @@ async def main(argv: list[str] | None = None):
             gold = row["answer"]
             response = row["response"]
             print(f"Grading {idx + 1}/{total}: {question[:60]}...")
-            is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
+            if args.locomo_judge_prompt:
+                category = int(str(row.get("category", "0") or "0"))
+                evidence_text = _parse_evidence_text(row.get("evidence_text", ""))
+                is_correct, reasoning = await grade_answer_locomo(
+                    client,
+                    args.model,
+                    category,
+                    question,
+                    gold,
+                    response,
+                    evidence_text,
+                )
+            else:
+                is_correct, reasoning = await grade_answer(
+                    client,
+                    args.model,
+                    question,
+                    gold,
+                    response,
+                )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
             await save_results()
