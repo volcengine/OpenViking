@@ -46,7 +46,7 @@ class MemoryIsolationHandler:
             return
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:
-            msg.role_id = None
+            msg.role_id = self.ctx.resolve_role_id(msg.role, msg.role_id) if self.ctx else None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
