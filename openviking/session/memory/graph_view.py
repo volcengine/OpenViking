@@ -373,7 +373,10 @@ const network = new vis.Network(
         label: {{ enabled: true, min: 11, max: 20 }},
       }},
       chosen: {{
-        node(values) {{
+        node(values, id, selected) {{
+          if (!selected) {{
+            return;
+          }}
           values.borderWidth = 4;
           values.size = Math.max(values.size || 18, 34);
           values.shadow = true;
@@ -383,9 +386,12 @@ const network = new vis.Network(
           values.shadowY = 0;
           values.color = {{ background: '#f8fafc', border: values.color.border }};
         }},
-        label(values) {{
+        label(values, id, selected) {{
           values.size = Math.max(values.size || 12, 18);
           values.bold = true;
+          if (!selected) {{
+            return;
+          }}
           values.color = '#0f172a';
         }},
       }},

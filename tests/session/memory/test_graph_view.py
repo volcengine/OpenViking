@@ -199,7 +199,12 @@ def test_render_graph_html_inverts_selected_node_colors():
 
     assert '"highlight": {"background": "#f8fafc", "border": "#fd79a8"}' in html
     assert '"font": {"color": "#f8fafc", "size": 12}' in html
+    assert "node(values, id, selected) {" in html
+    assert "if (!selected) {" in html
+    assert "return;" in html
     assert "values.color = { background: '#f8fafc', border: values.color.border };" in html
+    assert "label(values, id, selected) {" in html
+    assert "if (!selected) {" in html
     assert "values.color = '#0f172a';" in html
 
 
