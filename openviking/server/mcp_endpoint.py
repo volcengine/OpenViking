@@ -355,10 +355,31 @@ _LOCAL_FILE_HINT = (
     '       {"url": "https://your-host", "api_key": "your-key"}'
 )
 
+_WATCH_REQUIRES_TO_HINT = (
+    "watch_interval > 0 requires `to` to be specified (the stable target URI to refresh into). "
+    "Pick a deterministic URI under viking://resources/. For example:\n"
+    "  - https://github.com/<org>/<repo>  -> to='viking://resources/<org>/<repo>'\n"
+    "  - https://example.com/docs/api     -> to='viking://resources/example.com/docs/api'\n"
+    "Tip: call add_resource without watch_interval first, observe the returned URI, "
+    "then call again with watch_interval=<minutes> and to=<that URI>."
+)
+
 
 @mcp.tool()
-async def add_resource(path: str, description: str = "") -> str:
-    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files."""
+async def add_resource(
+    path: str,
+    description: str = "",
+    watch_interval: float = 0,
+    to: str = "",
+) -> str:
+    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files.
+
+    Args:
+        path: Remote URL (http(s):// or git URL).
+        description: Optional human-readable reason for adding the resource.
+        watch_interval: Auto-refresh cadence in minutes. 0 (default) = no watch. >0 = periodically re-fetch the resource at that cadence (full re-ingest each time). Prefer >=1440 (24h) unless the source genuinely changes faster — every refresh re-embeds the entire resource. Requires `to`.
+        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking"). Required when watch_interval > 0. Leave empty for one-shot adds — the system will auto-derive a URI from the source.
+    """
     from openviking.server.local_input_guard import require_remote_resource_source
 
     service = get_service()
@@ -367,19 +388,27 @@ async def add_resource(path: str, description: str = "") -> str:
         path = require_remote_resource_source(path)
     except PermissionDeniedError:
         return f"Error: {_LOCAL_FILE_HINT}"
+    if watch_interval > 0 and not to:
+        return f"Error: {_WATCH_REQUIRES_TO_HINT}"
     try:
         result = await service.resources.add_resource(
             path=path,
             ctx=ctx,
+            to=to or None,
             reason=description,
             wait=False,
+            watch_interval=watch_interval,
             enforce_public_remote_targets=True,
         )
         root_uri = result.get("root_uri", "")
+        if watch_interval > 0:
+            watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
+        else:
+            watch_suffix = ""
         return (
-            f"Resource added: {root_uri}"
+            f"Resource added: {root_uri}{watch_suffix}"
             if root_uri
-            else "Resource added (processing in background)."
+            else f"Resource added (processing in background){watch_suffix}."
         )
     except Exception as e:
         return f"Error adding resource: {e}"
