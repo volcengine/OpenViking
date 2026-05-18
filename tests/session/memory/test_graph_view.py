@@ -1,7 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import py_compile
+import warnings
+from pathlib import Path
+
 from openviking.session.memory.graph_view import _render_graph_html
+
+
+def test_graph_view_module_compiles_without_escape_warnings():
+    path = Path(__file__).resolve().parents[3] / "openviking" / "session" / "memory" / "graph_view.py"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SyntaxWarning)
+        py_compile.compile(str(path), doraise=True)
 
 
 def test_render_graph_html_supports_relative_markdown_links():
@@ -140,7 +151,8 @@ def test_render_graph_html_embeds_vis_network_load_guard():
 def test_render_graph_html_keeps_newline_escape_in_split_call():
     html = _render_graph_html([], [])
 
-    assert "const lines = html.split('\\n');" in html
+    split_snippet = "const lines = html.split('\\\\n');"
+    assert split_snippet in html
     assert "const lines = html.split('\n');" not in html
 
 

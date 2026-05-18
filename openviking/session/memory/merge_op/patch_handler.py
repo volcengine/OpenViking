@@ -876,84 +876,8 @@ class MultiSearchReplaceDiffStrategy:
 
 
 # ============================================================================
-# MemoryPatchHandler
+# Structured patch application
 # ============================================================================
-
-
-class MemoryPatchHandler:
-    """Handler for applying patches to memory content."""
-
-    # Patch format markers
-    SEARCH_MARKER = "<<<<<<< SEARCH"
-    SPLIT_MARKER = "======="
-    REPLACE_MARKER = ">>>>>>> REPLACE"
-    LINE_NUMBER_PREFIX = ":start_line:"
-
-    def __init__(self, fuzzy_threshold: float = 1.0, buffer_lines: int = 40):
-        """
-        Initialize the patch handler.
-
-        Args:
-            fuzzy_threshold: Similarity threshold for fuzzy matching (0.0 to 1.0, default 1.0 = exact match)
-            buffer_lines: Number of extra context lines to search (default 40)
-        """
-        self._strategy = MultiSearchReplaceDiffStrategy(
-            fuzzy_threshold=fuzzy_threshold, buffer_lines=buffer_lines
-        )
-
-    def apply_content_patch(self, original_content: str, patch: str) -> str:
-        """
-        Apply SEARCH/REPLACE format patch to content.
-
-        Patch format:
-            <<<<<<< SEARCH
-            :start_line:10
-            -------
-            Original content
-            =======
-            New content
-            >>>>>>> REPLACE
-
-        Supports multiple SEARCH/REPLACE blocks in a single patch.
-
-        Args:
-            original_content: Original content string
-            patch: Patch string in SEARCH/REPLACE format
-
-        Returns:
-            Updated content
-
-        Raises:
-            PatchParseError: If patch format is invalid
-        """
-        if not patch or not patch.strip():
-            return original_content
-
-        # First validate marker sequencing - raise PatchParseError for invalid patches
-        valid_seq = validate_marker_sequencing(patch)
-        if not valid_seq["success"]:
-            raise PatchParseError(valid_seq["error"])
-
-        result = self._strategy.apply_diff(original_content, patch)
-
-        if result.success:
-            return result.content if result.content is not None else original_content
-        else:
-            error_msg = result.error or "Unknown error"
-            logger.warning(
-                f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}"
-            )
-            raise PatchParseError(f"Patch application failed: {error_msg}")
-
-    def _extract_replace_content(self, patch: str) -> str:
-        """Extract replace content from patch for fallback append."""
-        try:
-            matches = self._strategy._parse_diff_blocks(patch)
-            if matches:
-                return matches[-1].get("replaceContent", "")
-        except Exception:
-            pass
-        return patch
 
 
 def apply_str_patch(original_content: str, patch: StrPatch) -> str:

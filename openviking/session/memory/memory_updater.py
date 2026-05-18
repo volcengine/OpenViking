@@ -452,7 +452,17 @@ class MemoryUpdater:
                             current_value = old_content.extra_fields.get(field.name)
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
-                    new_value = merge_op.apply(current_value, patch_value)
+                    try:
+                        new_value = merge_op.apply(current_value, patch_value)
+                    except Exception as e:
+                        tracer.info(
+                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
+                        )
+                        if current_value is None:
+                            metadata.pop(field.name, None)
+                        else:
+                            metadata[field.name] = current_value
+                        continue
                     metadata[field.name] = new_value
 
             # Preserve system-managed metadata from the old file that is not

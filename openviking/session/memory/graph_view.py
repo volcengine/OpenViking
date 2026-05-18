@@ -262,7 +262,7 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
     edges_json = _script_safe_json(vis_edges)
     type_colors_json = _script_safe_json(TYPE_COLORS)
 
-    return f"""<!DOCTYPE html>
+    return fr"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
