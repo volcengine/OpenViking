@@ -108,7 +108,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 ### add_resource
 
-Add a resource to the knowledge base. Supports local files/directories, URLs, and other sources.
+Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`.
 
 #### 1. API Implementation Overview
 
@@ -136,8 +136,8 @@ This endpoint is the core entry point for resource management, supporting adding
 |-----------|------|----------|---------|-------------|
 | path | string | No | - | Remote resource URL (HTTP/HTTPS/Git). Mutually exclusive with `temp_file_id` |
 | temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
-| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` and `parent_auto_create` |
-| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` and `parent_auto_create` |
+| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
+| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
 | reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
@@ -153,12 +153,13 @@ This endpoint is the core entry point for resource management, supporting adding
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
-- `to`, `parent`, and `parent_auto_create` cannot be specified together
+- `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - `watch_interval` only takes effect when `to` is provided
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
 
