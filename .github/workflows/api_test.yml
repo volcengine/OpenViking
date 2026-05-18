@@ -522,8 +522,8 @@ jobs:
           export OPENVIKING_ACCOUNT="test-account"
           export OPENVIKING_USER="test-user"
 
-          echo "Running CLI compatibility tests..."
-          uv run python -m pytest test_cli_compatibility.py -v -n 4 --tb=short -m cli_remote || true
+          echo "Running CLI compatibility tests (serial)..."
+          uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote || true
         continue-on-error: true
 
       - name: Run CLI Integration Tests (Unix)
@@ -542,7 +542,7 @@ jobs:
           export OPENVIKING_ACCOUNT="test-account"
           export OPENVIKING_USER="test-user"
 
-          echo "Running CLI integration tests..."
+          echo "Running CLI integration tests (serial to avoid resource conflicts)..."
           uv run python -m pytest \
             test_cli_filesystem.py \
             test_cli_content.py \
@@ -553,7 +553,7 @@ jobs:
             test_cli_system.py \
             test_cli_skills.py \
             test_cli_observer.py \
-            -v -n 4 --tb=short -m cli_remote \
+            -v --tb=short -m cli_remote \
             --html=cli-test-report.html --self-contained-html
         continue-on-error: true
 
