@@ -1,11 +1,11 @@
 ---
 name: ov_dream
-description: Use when the user explicitly types `ov dream` or `ov recall <query>` and the request should be routed to the local OpenViking sync/recall CLI instead of handled as normal chat.
+description: Use when the user explicitly types `ov dream` or `ov recall <query>` and the request should be routed to the OpenViking sync/recall CLI instead of handled as normal chat.
 ---
 
 # OV Dream
 
-Use this skill only for manual OpenViking validation without occupying the OpenClaw `contextEngine` slot.
+Use this skill for manual OpenViking sync and recall without occupying the OpenClaw `contextEngine` slot.
 
 ## When To Use
 
@@ -19,12 +19,32 @@ Do not treat those messages as normal conversation. They are explicit operator c
 ## Commands
 
 - `ov dream`
-  Manual sync. Read the active OpenClaw session, upload new `user` and `assistant` messages to OpenViking, then commit when new messages exist.
+  Manual sync. Read OpenClaw's `sessions.json`, sync eligible chat transcripts to OpenViking, then commit each session when new messages exist.
 
 - `ov recall <query>`
-  Manual recall. Search OpenViking memories under `viking://user/memories`.
+  Manual recall. Search OpenViking under the default user root URI, `viking://user/default`.
 
-## Mode 3: Recall
+## Sync Behavior
+
+Trigger when the user message is exactly `ov dream`.
+
+Execution flow:
+
+1. Run:
+
+   ```bash
+   python3 scripts/dream.py dream
+   ```
+
+2. Return the sync summary.
+
+The sync command reads OpenClaw session metadata from `~/.openclaw/agents/main/sessions/sessions.json` when available. It syncs chat-like session keys such as `agent:main:main`, `:direct:`, `:channel:`, `:group:`, and `:room:`.
+
+It must not sync explicitly non-chat sessions, including keys containing `:cron:`, `:heartbeat`, `:subagent:`, `:acp:`, or `:hook:`.
+
+Each source session keeps an independent sync cursor in `~/.openclaw/memory/ov_dream_sync.json`.
+
+## Recall Behavior
 
 Trigger when the user message starts with `ov recall `.
 
@@ -61,4 +81,5 @@ Rules:
 - This skill is manual-only in the first version.
 - It does not auto-inject recall into prompts.
 - It does not replace the OpenViking context-engine plugin.
-- For OpenViking serverless, configure `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, and `OPENVIKING_AGENT_ID`; the CLI will use Bearer auth and the serverless session message format automatically.
+- Disk-based sync is for recently recorded chat transcripts. It is not a precise "currently running sessions" detector.
+- For OpenViking serverless, configure `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_AGENT_ID`, and optionally `OPENVIKING_AUTH_MODE=serverless`. The CLI will use Bearer auth and the serverless session message format automatically.

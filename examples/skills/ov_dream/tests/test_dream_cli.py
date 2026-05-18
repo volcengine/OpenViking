@@ -41,13 +41,40 @@ def test_normalize_raw_ov_recall_phrase() -> None:
     assert dream._normalize_ov_command(["ov recall 小明的信息"]) == ["recall", "小明的信息"]
 
 
-def test_recall_expands_user_memories_alias_to_explicit_user_space(monkeypatch) -> None:
+def test_recall_expands_default_user_root_to_explicit_user_space(monkeypatch) -> None:
     monkeypatch.setenv("OPENVIKING_USER", "default")
     client = dream.OpenVikingClient(base_url="http://127.0.0.1:1933")
 
+    assert client._resolve_target_uri("viking://user/default") == "viking://user/default"
+    assert client._resolve_target_uri("viking://user/default/") == "viking://user/default"
     assert client._resolve_target_uri("viking://user/memories") == "viking://user/default/memories/"
     assert client._resolve_target_uri("viking://user/memories/") == "viking://user/default/memories/"
     assert client._resolve_target_uri("viking://user/default/memories/") == "viking://user/default/memories/"
+
+
+def test_recall_default_target_uri_is_user_root() -> None:
+    calls = []
+
+    class RecordingClient(dream.OpenVikingClient):
+        def _request(self, method, path, payload=None):
+            calls.append((method, path, payload))
+            return {"memories": []}
+
+    client = RecordingClient(base_url=dream.SERVERLESS_BASE_URL, api_key="test-key", agent_id="test-agent")
+
+    client.recall("hello")
+
+    assert calls == [
+        (
+            "POST",
+            "/api/v1/search/find",
+            {
+                "query": "hello",
+                "limit": 5,
+                "target_uri": "viking://user/default",
+            },
+        )
+    ]
 
 
 def test_serverless_headers_use_bearer_and_agent_id() -> None:
