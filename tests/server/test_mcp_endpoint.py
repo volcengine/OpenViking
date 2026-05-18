@@ -20,10 +20,12 @@ from openviking.server.mcp_endpoint import (
     _get_ctx,
     _mcp_ctx,
     add_resource,
+    cancel_watch,
     forget,
     glob,
     grep,
     health,
+    list_watches,
     read,
     remember,
     search,
@@ -321,6 +323,61 @@ async def test_add_resource_rejects_bare_filename_with_cli_hint(service):
     result = await add_resource(path="some_local_file.md")
     assert "error" in result.lower()
     assert "ov add-resource" in result
+
+
+async def test_add_resource_watch_requires_to(service):
+    """watch_interval > 0 without `to` returns hint about deterministic URI."""
+    result = await add_resource(
+        path="https://example.com/foo",
+        watch_interval=1440,
+    )
+    assert "error" in result.lower()
+    assert "watch_interval > 0 requires `to`" in result
+
+
+# ---------------------------------------------------------------------------
+# list_watches / cancel_watch tools
+# ---------------------------------------------------------------------------
+
+
+async def _seed_watch(service, to_uri="viking://resources/test/foo"):
+    wm = service.watch_scheduler.watch_manager
+    return await wm.create_task(
+        path="https://example.com/foo",
+        account_id=DEFAULT_CTX.account_id,
+        user_id=DEFAULT_CTX.user.user_id,
+        agent_id=DEFAULT_CTX.user.agent_id,
+        original_role="root",
+        to_uri=to_uri,
+        watch_interval=1440.0,
+    )
+
+
+async def test_list_watches_empty(service):
+    result = await list_watches()
+    assert "no watch" in result.lower()
+
+
+async def test_list_watches_with_seed(service):
+    task = await _seed_watch(service, to_uri="viking://resources/test/list")
+    result = await list_watches()
+    assert task.to_uri in result
+    assert "active" in result.lower()
+    assert "1440" in result
+
+
+async def test_cancel_watch_by_uri(service):
+    task = await _seed_watch(service, to_uri="viking://resources/test/cancel")
+    result = await cancel_watch(to_uri=task.to_uri)
+    assert "cancelled" in result.lower()
+    # Verify it's actually gone
+    follow_up = await list_watches()
+    assert task.to_uri not in follow_up
+
+
+async def test_cancel_watch_not_found(service):
+    result = await cancel_watch(to_uri="viking://resources/never/existed")
+    assert "no watch task found" in result.lower()
 
 
 # ---------------------------------------------------------------------------

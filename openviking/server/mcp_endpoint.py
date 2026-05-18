@@ -414,6 +414,91 @@ async def add_resource(
         return f"Error adding resource: {e}"
 
 
+# -- watch management ------------------------------------------------------
+# MCP exposes the minimum closure: list + cancel. Pause/resume/trigger/
+# set-interval are intentionally NOT exposed — they're either low-value for
+# agents or invite unwanted autonomous decisions. Power users should reach
+# for the REST API or `ov watch` CLI for those operations.
+
+
+@mcp.tool()
+async def list_watches() -> str:
+    """List watch tasks (auto-refresh subscriptions) visible to the current agent.
+
+    Each line shows: target URI, refresh interval (minutes), active/paused status,
+    and the next scheduled execution time. Returns "No watch tasks." when empty.
+    """
+    from openviking.resource import watch_manager as _wm_mod
+
+    service = get_service()
+    ctx = _get_ctx()
+    scheduler = getattr(service, "watch_scheduler", None)
+    if scheduler is None or not scheduler.is_running:
+        return "Error: Watch scheduler not running"
+    wm = scheduler.watch_manager
+    if wm is None:
+        return "Error: Watch scheduler not running"
+    try:
+        tasks = await wm.get_all_tasks(
+            ctx.account_id,
+            ctx.user.user_id,
+            ctx.role.value,
+            active_only=False,
+            agent_id=ctx.user.agent_id,
+        )
+    except _wm_mod.PermissionDeniedError as e:
+        return f"Permission denied: {e}"
+    if not tasks:
+        return "No watch tasks."
+    lines = []
+    for t in tasks:
+        status = "active" if t.is_active else "paused"
+        nxt = t.next_execution_time.isoformat() if t.next_execution_time else "n/a"
+        lines.append(
+            f"- {t.to_uri or '(no uri)'}  interval={t.watch_interval:g}m  {status}  next={nxt}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def cancel_watch(to_uri: str) -> str:
+    """Cancel (delete) a watch task by its target URI.
+
+    The URI must match the watch task's `to` value (e.g. "viking://resources/volcengine/OpenViking").
+    To change the cadence or pause temporarily, cancel and re-add with a new watch_interval.
+    """
+    from openviking.resource import watch_manager as _wm_mod
+
+    service = get_service()
+    ctx = _get_ctx()
+    scheduler = getattr(service, "watch_scheduler", None)
+    if scheduler is None or not scheduler.is_running:
+        return "Error: Watch scheduler not running"
+    wm = scheduler.watch_manager
+    if wm is None:
+        return "Error: Watch scheduler not running"
+    task = await wm.get_task_by_uri(
+        to_uri,
+        ctx.account_id,
+        ctx.user.user_id,
+        ctx.role.value,
+        ctx.user.agent_id,
+    )
+    if task is None:
+        return f"No watch task found for {to_uri}"
+    try:
+        ok = await wm.delete_task(
+            task.task_id,
+            ctx.account_id,
+            ctx.user.user_id,
+            ctx.role.value,
+            ctx.user.agent_id,
+        )
+    except _wm_mod.PermissionDeniedError:
+        return f"Permission denied for {to_uri}"
+    return f"Watch cancelled: {to_uri}" if ok else f"Failed to cancel: {to_uri}"
+
+
 # -- grep ------------------------------------------------------------------
 
 
