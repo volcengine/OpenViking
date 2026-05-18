@@ -19,17 +19,22 @@ fn encode_path(path: &str, normalize_encoding_chars: &str) -> String {
     }
 
     let target_chars: Vec<char> = normalize_encoding_chars.chars().collect();
-    let is_target = |ch: char| ch != '/' && ch.is_ascii() && (ch == ' ' || target_chars.contains(&ch));
-
-    if !path.chars().any(&is_target) {
+    if !path
+        .chars()
+        .any(|ch| ch != '/' && ch.is_ascii() && target_chars.contains(&ch))
+    {
         return path.to_string();
     }
 
-    let extra = path.chars().filter(|&ch| is_target(ch)).count() * 2;
+    let extra = path
+        .chars()
+        .filter(|ch| *ch != '/' && ch.is_ascii() && target_chars.contains(ch))
+        .count()
+        * 2;
     let mut encoded = String::with_capacity(path.len() + extra);
 
     for ch in path.chars() {
-        if ch == '/' || !ch.is_ascii() || (ch != ' ' && !target_chars.contains(&ch)) {
+        if ch == '/' || !ch.is_ascii() || !target_chars.contains(&ch) {
             encoded.push(ch);
         } else {
             push_encoded_byte(&mut encoded, ch as u8);

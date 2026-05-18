@@ -342,7 +342,7 @@ impl S3FileSystem {
                 let result = Arc::clone(&result);
                 let matched_count = Arc::clone(&matched_count);
                 async move {
-                    let done = matched_count.load(Ordering::Relaxed);
+                    let done = matched_count.load(Ordering::Acquire);
                     if done >= limit {
                         return Ok(());
                     }
@@ -360,7 +360,7 @@ impl S3FileSystem {
                         r.matches.push(m);
                         r.count += 1;
                     }
-                    matched_count.store(r.count, Ordering::Relaxed);
+                    matched_count.store(r.count, Ordering::Release);
 
                     Ok::<_, Error>(())
                 }
