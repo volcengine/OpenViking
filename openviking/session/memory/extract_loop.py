@@ -192,20 +192,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         await self._mark_cache_breakpoint(messages)
 
-        # Initialize PageIdMap for link resolution (only when links are enabled)
-        if self._link_enabled:
-            self._page_id_map = PageIdMap()
-            # Inject PageIdMap into context provider so it can annotate read results
-            self.context_provider.set_page_id_map(self._page_id_map)
+        self._page_id_map = PageIdMap()
+        self.context_provider.set_page_id_map(self._page_id_map)
 
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
 
-        # Register prefetched files in PageIdMap (only when links are enabled)
-        if self._link_enabled:
-            for uri in self.context_provider.read_file_contents:
-                self._page_id_map.get_page_id(uri)
+        for uri in self.context_provider.read_file_contents:
+            self._page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
             iteration += 1

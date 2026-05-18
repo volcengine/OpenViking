@@ -450,8 +450,8 @@ def parse_json_with_stability(
         # First try direct model validation
         return model_class.model_validate(parsed_data, strict=False), None
     except Exception as e:
-        logger.info(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
-        logger.info(f"content={content}")
+        tracer.info(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
+        tracer.info(f"content={content}")
         # Fallback: Apply value fault tolerance to each field individually
         try:
             field_types = get_type_hints(model_class)

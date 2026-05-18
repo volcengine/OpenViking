@@ -159,8 +159,14 @@ class TestFinalOperationsHydration:
 
             final_operations, _ = await loop.run()
 
+        context_provider.set_page_id_map.assert_called_once()
+        assert loop._page_id_map is not None
+        assert loop._page_id_map.resolve(1) == old_file.uri
+
         op = final_operations.upsert_operations[0]
+        assert op.page_id == 1
         assert op.old_memory_file_content is old_file
+        assert final_operations.resolved_links == []
         logged_messages = [call.args[0] for call in mock_tracer_info.call_args_list]
         final_log = next(message for message in logged_messages if message.startswith("final_operations="))
         assert '"old_memory_file_content":null' not in final_log

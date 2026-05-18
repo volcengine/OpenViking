@@ -109,22 +109,24 @@ class SchemaModelGenerator:
                 Field(..., description="Agent ID to distinguish which agent's memory to write"),
             )
 
-        # Add page_id field for link resolution when link_enabled globally
         from openviking_cli.utils.config import get_openviking_config
         config = get_openviking_config()
         link_enabled = config.memory.link_enabled if config.memory else False
         if link_enabled:
-            field_definitions["page_id"] = (
-                Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
-                Field(
-                    None,
-                    description=(
-                        "Page ID for link reference. REQUIRED for every item. "
-                        "Choose page_id first. For existing items: use the page_id shown in read results. "
-                        "For NEW items: assign a unique page_id >= 100."
-                    ),
-                ),
+            page_id_description = (
+                "Page ID for edit and link reference. REQUIRED for every item. "
+                "Choose page_id first. For existing items: use the page_id shown in read results. "
+                "For NEW items: assign a unique page_id >= 100."
             )
+        else:
+            page_id_description = (
+                "Page ID for edit reference. For existing items, use the page_id shown in read results "
+                "so the write operation targets that page."
+            )
+        field_definitions["page_id"] = (
+            Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
+            Field(None, description=page_id_description),
+        )
 
         # Add business fields from schema
         for field in memory_type.fields:
