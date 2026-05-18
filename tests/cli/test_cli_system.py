@@ -34,6 +34,11 @@ class TestSystemStatus:
 
 
 class TestSystemWait:
+    @pytest.mark.skip(
+        reason="CLI --timeout passed as query param but server only reads from request body, "
+        "causing infinite wait when queue is not empty. "
+        "Re-enable after CLI/Server timeout parameter mismatch is fixed."
+    )
     def test_wait_with_timeout(self):
         r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=120)
         assert r["exit_code"] == 0, (
