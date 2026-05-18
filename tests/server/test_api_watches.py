@@ -3,6 +3,8 @@
 
 """Tests for watch management endpoints (RFC #2104)."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -83,11 +85,15 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.json()["result"]["is_active"] is False
     assert resp.json()["result"]["next_execution_time"] is None
 
-    # POST trigger — monkeypatch scheduler so we don't actually run a fetch
+    # POST trigger — monkeypatch scheduler so we don't actually run a fetch.
+    # Class-level setattr means the function is bound as a method, so the
+    # fake must accept `self` (the WatchScheduler instance) as first arg.
     triggered = []
+    schedule_started = asyncio.Event()
 
-    async def fake_schedule(task_id):
+    async def fake_schedule(_self, task_id):
         triggered.append(task_id)
+        schedule_started.set()
         return True
 
     monkeypatch.setattr(
@@ -98,6 +104,8 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.status_code == 200
     body = resp.json()
     assert body["result"]["scheduled"] is True
+    # Trigger is fire-and-forget — wait briefly for the background task to run.
+    await asyncio.wait_for(schedule_started.wait(), timeout=2.0)
     assert triggered == [task.task_id]
 
     # DELETE
@@ -192,9 +200,11 @@ async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypa
     task = await _seed(watch_manager, to_uri="viking://resources/test/trig")
 
     triggered = []
+    schedule_started = asyncio.Event()
 
-    async def fake_schedule(self, task_id):
+    async def fake_schedule(_self, task_id):
         triggered.append(task_id)
+        schedule_started.set()
         return True
 
     monkeypatch.setattr(
@@ -203,6 +213,7 @@ async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypa
     )
     resp = await client.post("/api/v1/watches/trigger", params={"to_uri": task.to_uri})
     assert resp.status_code == 200
+    await asyncio.wait_for(schedule_started.wait(), timeout=2.0)
     assert triggered == [task.task_id]
 
 

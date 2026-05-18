@@ -8,6 +8,7 @@ single-resource endpoint accepts either path parameter ``{task_id}`` or
 query parameter ``?to_uri=``. Cross-key conflict returns 400.
 """
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
@@ -93,6 +94,13 @@ async def _resolve_task(
         task = await wm.get_task(task_id, account_id, user_id, role, agent_id)
     else:
         task = await wm.get_task_by_uri(to_uri, account_id, user_id, role, agent_id)
+    # `wm.get_task*` return None for both "task does not exist" and "task
+    # exists but the caller fails the permission check" (watch_manager.py
+    # `_check_permission`). Collapsing both into 404 is deliberate: it avoids
+    # leaking the existence of another tenant's task to an unauthorized
+    # caller. The trade-off is that callers see 404 instead of 403 on a
+    # cross-tenant access attempt, which matches the security-first stance
+    # used elsewhere in OpenViking.
     if task is None:
         raise NotFoundError(task_id or to_uri or "", "watch_task")
     if task_id and to_uri and task.to_uri != to_uri:
@@ -140,8 +148,12 @@ async def get_watch(
     task_id: str = Path(..., description="Watch task ID"),
     to_uri: Optional[str] = Query(
         None,
-        description="Optional. When supplied together with {task_id} the two must "
-        "refer to the same task, otherwise 400. Use it as a cross-key sanity check.",
+        description=(
+            "Optional cross-key sanity check. If supplied, must equal the "
+            "task's current `to_uri`; otherwise the request is rejected with "
+            "400. Useful when the caller has both pieces of information and "
+            "wants to guard against acting on a stale task_id."
+        ),
     ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -188,7 +200,17 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
 @router.patch("/watches/{task_id}")
 async def patch_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
-    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
+    to_uri: Optional[str] = Query(
+        None,
+        description=(
+            "Optional cross-key sanity check. If supplied, must equal the "
+            "task's current `to_uri`; otherwise the request is rejected with "
+            "400. Useful when the caller has both pieces of information and "
+            "wants to guard against acting on a stale task_id — but a wrong "
+            "value here will block DELETE/PATCH/trigger on an otherwise valid "
+            "task, so omit it unless the cross-check is desired."
+        ),
+    ),
     body: UpdateWatchRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -226,7 +248,17 @@ async def _delete_impl(target: WatchTask, ctx: RequestContext):
 @router.delete("/watches/{task_id}")
 async def delete_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
-    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
+    to_uri: Optional[str] = Query(
+        None,
+        description=(
+            "Optional cross-key sanity check. If supplied, must equal the "
+            "task's current `to_uri`; otherwise the request is rejected with "
+            "400. Useful when the caller has both pieces of information and "
+            "wants to guard against acting on a stale task_id — but a wrong "
+            "value here will block DELETE/PATCH/trigger on an otherwise valid "
+            "task, so omit it unless the cross-check is desired."
+        ),
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete a watch task by ID."""
@@ -245,24 +277,44 @@ async def delete_watch_by_uri(
 
 
 async def _trigger_impl(target: WatchTask):
+    """Dispatch a scheduling request without waiting for execution.
+
+    `WatchScheduler.schedule_task` awaits `_execute_task` inline, which runs
+    the full re-ingest (re-fetch + re-parse + re-embed) and can take many
+    seconds. We don't want HTTP requests blocked for that long, so the call
+    is fired off via `asyncio.create_task` and the response returns
+    immediately with ``scheduled=true``. Actual success/failure is observable
+    via subsequent `GET /watches/{task_id}` (last_execution_time updates).
+    """
     scheduler = _scheduler()
-    ok = await scheduler.schedule_task(target.task_id)
+    asyncio.create_task(scheduler.schedule_task(target.task_id))
     return Response(
         status="ok",
-        result={"task_id": target.task_id, "to_uri": target.to_uri, "scheduled": ok},
+        result={"task_id": target.task_id, "to_uri": target.to_uri, "scheduled": True},
     )
 
 
 @router.post("/watches/{task_id}/trigger")
 async def trigger_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
-    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
+    to_uri: Optional[str] = Query(
+        None,
+        description=(
+            "Optional cross-key sanity check. If supplied, must equal the "
+            "task's current `to_uri`; otherwise the request is rejected with "
+            "400. Useful when the caller has both pieces of information and "
+            "wants to guard against acting on a stale task_id — but a wrong "
+            "value here will block DELETE/PATCH/trigger on an otherwise valid "
+            "task, so omit it unless the cross-check is desired."
+        ),
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Immediately schedule the watch task for execution.
+    """Immediately schedule the watch task for execution (fire-and-forget).
 
-    Returns ``scheduled=false`` if the task is already running or unknown to
-    the scheduler. Does not wait for completion.
+    Dispatches the scheduling request asynchronously and returns right away;
+    the actual re-fetch runs in the background. Poll
+    ``GET /watches/{task_id}.last_execution_time`` to confirm completion.
     """
     task = await _resolve_task(task_id, to_uri, _ctx)
     return await _trigger_impl(task)
@@ -273,6 +325,6 @@ async def trigger_watch_by_uri(
     to_uri: str = Query(..., description="Target URI of the watch task"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Trigger by to_uri."""
+    """Trigger by to_uri (fire-and-forget; see by-id variant for semantics)."""
     task = await _resolve_task(None, to_uri, _ctx)
     return await _trigger_impl(task)

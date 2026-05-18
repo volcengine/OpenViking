@@ -433,8 +433,6 @@ async def list_watches() -> str:
     Each line shows: target URI, refresh interval (minutes), active/paused status,
     and the next scheduled execution time. Returns "No watch tasks." when empty.
     """
-    from openviking.resource import watch_manager as _wm_mod
-
     service = get_service()
     ctx = _get_ctx()
     scheduler = getattr(service, "watch_scheduler", None)
@@ -443,16 +441,16 @@ async def list_watches() -> str:
     wm = scheduler.watch_manager
     if wm is None:
         return "Error: Watch scheduler not running"
-    try:
-        tasks = await wm.get_all_tasks(
-            ctx.account_id,
-            ctx.user.user_id,
-            ctx.role.value,
-            active_only=False,
-            agent_id=ctx.user.agent_id,
-        )
-    except _wm_mod.PermissionDeniedError as e:
-        return f"Permission denied: {e}"
+    # get_all_tasks does not raise PermissionDeniedError — it silently filters
+    # tasks the caller cannot see (watch_manager.py:596-624), so we just
+    # accept the filtered list.
+    tasks = await wm.get_all_tasks(
+        ctx.account_id,
+        ctx.user.user_id,
+        ctx.role.value,
+        active_only=False,
+        agent_id=ctx.user.agent_id,
+    )
     if not tasks:
         return "No watch tasks."
     lines = []
@@ -492,10 +490,13 @@ async def cancel_watch(to_uri: str) -> str:
     if task is None:
         return f"No watch task found for {to_uri}"
     try:
-        # ok=False here means the task was removed between our lookup and delete
-        # (concurrent cancel). Treat as success — the post-condition the caller
-        # wanted ("no watch on this URI") holds either way.
-        await wm.delete_task(
+        # Return value (bool) is intentionally ignored: delete_task returns
+        # False only when the task was removed between our lookup and the
+        # delete call (a concurrent cancel from another caller). In that case
+        # the post-condition the caller wanted ("no watch on this URI") still
+        # holds, so we report the same success message either way. Permission
+        # errors still surface via the explicit except below.
+        _ = await wm.delete_task(
             task.task_id,
             ctx.account_id,
             ctx.user.user_id,
