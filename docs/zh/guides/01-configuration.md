@@ -216,12 +216,13 @@ openviking-server doctor
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"`、`"dashscope"` 或 `"gemini"` |
+| `provider` | str | `"openai"`、`"azure"`、`"volcengine"`、`"vikingdb"`、`"jina"`、`"ollama"`、`"gemini"`、`"voyage"`、`"dashscope"`、`"minimax"`、`"cohere"`、`"litellm"` 或 `"local"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
 | `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
 | `batch_size` | int | 批量请求大小 |
+| `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
 
 `embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -258,13 +259,57 @@ openviking-server doctor
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
+- `azure`: Azure OpenAI Embedding API
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `ollama`: Ollama 本地 OpenAI 兼容 Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `cohere`: Cohere Embedding API
 - `gemini`: Google Gemini Embedding API（仅文本；需安装 `google-genai>=1.0.0`）
 - `dashscope`: DashScope（阿里通义）Embedding API
+- `litellm`: LiteLLM Embedding API
+- `local`: 本地 GGUF embedding 模型
+
+**OpenAI 兼容 provider 的 JSON float embedding 示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_key": "your-api-key",
+      "api_base": "https://your-openai-compatible-endpoint/v1",
+      "model": "text-embedding-3-large",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+`encoding_format` 是可选字段，只会传给 `provider: "openai"` 和 `provider: "azure"`。留空时使用 OpenAI Python SDK 默认行为；如果 OpenAI 兼容上游网关无法正确反序列化 base64 embedding payload，可设置为 `"float"`。
+
+**Azure OpenAI provider 的 JSON float embedding 示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "azure",
+      "api_key": "your-azure-api-key",
+      "api_base": "https://your-resource-name.openai.azure.com",
+      "api_version": "2025-01-01-preview",
+      "model": "your-embedding-deployment-name",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+对于 Azure OpenAI，`model` 必须填写 Azure 中配置的 embedding deployment name。
 
 **minimax provider 配置示例:**
 
@@ -1263,7 +1308,8 @@ openviking add-resource ./docs --exclude "*.tmp"
       "api_key": "string",
       "model": "string",
       "dimension": 1024,
-      "input": "multimodal"
+      "input": "multimodal",
+      "encoding_format": "float|base64"
     }
   },
   "vlm": {

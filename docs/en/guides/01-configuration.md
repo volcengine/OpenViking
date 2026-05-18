@@ -214,7 +214,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` uses only summary. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, `"dashscope"`, or `"gemini"` |
+| `provider` | str | `"openai"`, `"azure"`, `"volcengine"`, `"vikingdb"`, `"jina"`, `"ollama"`, `"gemini"`, `"voyage"`, `"dashscope"`, `"minimax"`, `"cohere"`, `"litellm"`, or `"local"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -257,12 +257,57 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 
 **Supported providers:**
 - `openai`: OpenAI Embedding API
+- `azure`: Azure OpenAI Embedding API
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `ollama`: Ollama local OpenAI-compatible Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `cohere`: Cohere Embedding API
 - `gemini`: Google Gemini Embedding API (text-only; requires `google-genai>=1.0.0`)
+- `dashscope`: DashScope (Alibaba Tongyi) Embedding API
+- `litellm`: LiteLLM Embedding API
+- `local`: Local GGUF embedding models
+
+**OpenAI-compatible provider example with JSON float embeddings:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_key": "your-api-key",
+      "api_base": "https://your-openai-compatible-endpoint/v1",
+      "model": "text-embedding-3-large",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+`encoding_format` is optional and is only forwarded for `provider: "openai"` and `provider: "azure"`. Leave it unset for the OpenAI Python SDK default. Set it to `"float"` when an OpenAI-compatible upstream gateway cannot deserialize base64 embedding payloads correctly.
+
+**Azure OpenAI provider example with JSON float embeddings:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "azure",
+      "api_key": "your-azure-api-key",
+      "api_base": "https://your-resource-name.openai.azure.com",
+      "api_version": "2025-01-01-preview",
+      "model": "your-embedding-deployment-name",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+For Azure OpenAI, `model` must be the embedding deployment name configured in Azure.
 
 **minimax provider example:**
 
@@ -1290,7 +1335,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "api_key": "string",
       "model": "string",
       "dimension": 1024,
-      "input": "multimodal"
+      "input": "multimodal",
+      "encoding_format": "float|base64"
     }
   },
   "vlm": {
