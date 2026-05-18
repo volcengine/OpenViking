@@ -32,6 +32,51 @@ def test_recall_expands_user_memories_alias_to_explicit_user_space(monkeypatch) 
     assert client._resolve_target_uri("viking://user/default/memories/") == "viking://user/default/memories/"
 
 
+def test_serverless_headers_use_bearer_and_agent_id() -> None:
+    client = dream.OpenVikingClient(
+        base_url=dream.SERVERLESS_BASE_URL,
+        api_key="test-key",
+        agent_id="test-agent",
+    )
+
+    assert client.auth_mode == "serverless"
+    assert client._headers()["Authorization"] == "Bearer test-key"
+    assert client._headers()["X-OpenViking-Agent"] == "test-agent"
+    assert "X-API-Key" not in client._headers()
+    assert "X-OpenViking-User" not in client._headers()
+
+
+def test_serverless_session_api_uses_parts_and_telemetry_payload() -> None:
+    calls = []
+
+    class RecordingClient(dream.OpenVikingClient):
+        def _request(self, method, path, payload=None):
+            calls.append((method, path, payload))
+            if path == "/api/v1/sessions":
+                return {"session_id": "ov-session"}
+            return {}
+
+    client = RecordingClient(
+        base_url=dream.SERVERLESS_BASE_URL,
+        api_key="test-key",
+        agent_id="test-agent",
+    )
+
+    assert client._sync_session_id("source-session") == "ov-session"
+    client.add_session_message("ov-session", "user", "hello")
+    client.commit_session("ov-session")
+
+    assert calls == [
+        ("POST", "/api/v1/sessions", {}),
+        (
+            "POST",
+            "/api/v1/sessions/ov-session/messages",
+            {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+        ),
+        ("POST", "/api/v1/sessions/ov-session/commit", {"telemetry": False}),
+    ]
+
+
 def test_get_active_session_prefers_sessions_index(tmp_path: Path) -> None:
     openclaw_root = tmp_path / ".openclaw"
     sessions_root = openclaw_root / "agents" / "main" / "sessions"

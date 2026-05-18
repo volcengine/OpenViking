@@ -61,3 +61,4 @@ Rules:
 - This skill is manual-only in the first version.
 - It does not auto-inject recall into prompts.
 - It does not replace the OpenViking context-engine plugin.
+- For OpenViking serverless, configure `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, and `OPENVIKING_AGENT_ID`; the CLI will use Bearer auth and the serverless session message format automatically.
