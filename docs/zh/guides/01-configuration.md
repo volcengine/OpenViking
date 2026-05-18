@@ -551,7 +551,8 @@ openviking-server doctor
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key |
+| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
@@ -585,8 +586,14 @@ openviking-server doctor
 - `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
 - `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
+- `litellm`：LiteLLM VLM API，支持 `bedrock/`、`sagemaker/`、`vertex_ai/`、`azure/` 等显式 LiteLLM 路由
 
 对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+
+对于 `litellm`，当底层路由使用环境变量或 provider 原生凭据时可以省略
+`api_key`，例如 Bedrock/SageMaker 的 AWS IAM/IRSA，或 Vertex AI 的
+ADC/service-account 凭据。Azure 路由仍会正常使用 `api_key`。如果明确要使用
+LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=true`。
 
 **自定义 HTTP Headers**
 

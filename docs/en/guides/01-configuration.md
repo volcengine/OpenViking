@@ -580,7 +580,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available |
+| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available, and optional for `litellm` routes that use provider-native credentials |
+| `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
@@ -614,8 +615,15 @@ If VLM is not configured, L0/L1 will be generated from content directly (less se
 - `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
 - `kimi`: Kimi Coding subscription endpoint with built-in provider defaults
 - `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
+- `litellm`: LiteLLM VLM API, including explicit LiteLLM routes such as `bedrock/`, `sagemaker/`, `vertex_ai/`, and `azure/`
 
 For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
+
+For `litellm`, `api_key` can be omitted when the underlying route authenticates through
+environment or provider-native credentials, such as AWS IAM/IRSA for Bedrock and
+SageMaker or ADC/service-account credentials for Vertex AI. Azure routes still use
+`api_key` normally. If you intentionally use LiteLLM's Bedrock bearer-token API-key
+auth, set `forward_api_key` to `true`.
 
 **Custom HTTP Headers**
 
