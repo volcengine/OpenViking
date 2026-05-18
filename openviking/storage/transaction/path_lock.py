@@ -315,14 +315,6 @@ class PathLockEngine:
                             return entry_path
                     continue
                 if not entry.get("isDir", False):
-                    # File-level point locks are stored as ".<filename>.ovlock"
-                    if name.endswith(FILE_LOCK_SUFFIX):
-                        file_lock_path = f"{path.rstrip('/')}/{name}"
-                        token = self._read_token(file_lock_path)
-                        if token is not None:
-                            owner_id, _, _ = _parse_fencing_token(token)
-                            if owner_id != exclude_owner_id:
-                                return file_lock_path
                     continue
                 subdir = entry_path
                 subdir_lock = self._get_lock_path(subdir)
@@ -379,7 +371,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[POINT] Still waiting for lock on: {path} "
+                        f"[EXACT] Still waiting for lock on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -418,7 +410,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[POINT] Still waiting for ancestor SUBTREE lock: {ancestor_conflict} "
+                        f"[EXACT] Still waiting for ancestor TREE lock: {ancestor_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -471,7 +463,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[POINT] Still waiting after conflict check on: {path} "
+                        f"[EXACT] Still waiting after conflict check on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -485,7 +477,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[POINT] Still waiting for lock ownership verification: {path} "
+                        f"[EXACT] Still waiting for lock ownership verification: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -530,7 +522,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[SUBTREE] Still waiting for lock on: {path} "
+                        f"[TREE] Still waiting for lock on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -552,7 +544,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[SUBTREE] Still waiting for ancestor SUBTREE lock: {ancestor_conflict} "
+                        f"[TREE] Still waiting for ancestor TREE lock: {ancestor_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -583,7 +575,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[SUBTREE] Still waiting for descendant lock: {desc_conflict} "
+                        f"[TREE] Still waiting for descendant lock: {desc_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -625,7 +617,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[SUBTREE] Still waiting after conflict check on: {path} "
+                        f"[TREE] Still waiting after conflict check on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL
@@ -639,7 +631,7 @@ class PathLockEngine:
                 now = asyncio.get_running_loop().time()
                 if timeout is None and now >= next_wait_log_at:
                     logger.info(
-                        f"[SUBTREE] Still waiting for lock ownership verification: {path} "
+                        f"[TREE] Still waiting for lock ownership verification: {path} "
                         f"(waited={now - wait_start:.1f}s)"
                     )
                     next_wait_log_at = now + _WAIT_LOG_INTERVAL

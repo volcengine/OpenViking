@@ -732,8 +732,7 @@ class SessionCompressorV2:
         so the caller can apply inherited trajectories only to the superseding experience,
         not to every experience written in the same batch.
         """
-        from openviking.session.memory.dataclass import MemoryFile
-        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         inheritance_map: Dict[str, List[str]] = {}
 
@@ -766,15 +765,13 @@ class SessionCompressorV2:
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
-                parsed = parse_memory_file_with_fields(raw)
-                operations.delete_file_contents.append(
-                    MemoryFile.from_parsed(uri=old_uri, parsed=parsed)
-                )
+                old_mf = MemoryFileUtils.read(raw, uri=old_uri)
+                operations.delete_file_contents.append(old_mf)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
                 # Map inherited source_trajectories to the new (superseding) URI only.
                 if new_uri:
-                    existing = parsed.get("source_trajectories", [])
+                    existing = old_mf.extra_fields.get("source_trajectories", [])
                     if isinstance(existing, list):
                         inherited = list(existing)
                     elif isinstance(existing, str) and existing.strip():
