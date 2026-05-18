@@ -75,12 +75,15 @@ async def _resolve_task(
 ) -> WatchTask:
     """Return the task identified by either task_id (path) or to_uri (query).
 
+    When both keys are given they must refer to the same task — this enables
+    callers to double-key cross-validate. Rejection happens only when the
+    two keys disagree, not just because both are present.
+
     Raises:
-        InvalidArgumentError: both keys supplied, or neither supplied.
+        InvalidArgumentError: neither key supplied, or both supplied but they
+            resolve to different tasks.
         NotFoundError: no task matches (or caller lacks visibility).
     """
-    if task_id and to_uri:
-        raise InvalidArgumentError("Specify either path {task_id} or query ?to_uri=, not both")
     if not task_id and not to_uri:
         raise InvalidArgumentError("Either {task_id} or ?to_uri= is required")
 
@@ -92,6 +95,10 @@ async def _resolve_task(
         task = await wm.get_task_by_uri(to_uri, account_id, user_id, role, agent_id)
     if task is None:
         raise NotFoundError(task_id or to_uri or "", "watch_task")
+    if task_id and to_uri and task.to_uri != to_uri:
+        raise InvalidArgumentError(
+            f"task_id {task_id} maps to to_uri={task.to_uri!r}, not {to_uri!r}"
+        )
     return task
 
 
@@ -131,14 +138,32 @@ async def list_or_get_watch(
 @router.get("/watches/{task_id}")
 async def get_watch(
     task_id: str = Path(..., description="Watch task ID"),
+    to_uri: Optional[str] = Query(
+        None,
+        description="Optional. When supplied together with {task_id} the two must "
+        "refer to the same task, otherwise 400. Use it as a cross-key sanity check.",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get a single watch task by ID."""
-    task = await _resolve_task(task_id, None, _ctx)
+    task = await _resolve_task(task_id, to_uri, _ctx)
     return Response(status="ok", result=task.to_dict())
 
 
 async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestContext):
+    """Forward to WatchManager.update_task.
+
+    Exception translation: `watch_manager.PermissionDeniedError` is a plain
+    Exception (not an OpenVikingError) so the global handler would not turn it
+    into a 403 — we translate it explicitly. Any other watch_manager exception
+    that already inherits from OpenVikingError (e.g. ConflictError) bubbles
+    untouched and the global handler maps it to the right HTTP status.
+
+    `ValueError` from update_task is currently only used for "task not found"
+    after the inner lock acquires, which is a race window past the
+    `_resolve_task` pre-check (e.g. another caller deleted the task). We map
+    it to 404 to stay consistent with the pre-check behavior.
+    """
     wm = _wm()
     account_id, user_id, role, agent_id = _identity(ctx)
     try:
@@ -156,21 +181,19 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
     except ValueError as e:
-        msg = str(e)
-        if "not found" in msg.lower():
-            raise NotFoundError(target.task_id, "watch_task") from e
-        raise InvalidArgumentError(msg) from e
+        raise NotFoundError(target.task_id, "watch_task") from e
     return Response(status="ok", result=updated.to_dict())
 
 
 @router.patch("/watches/{task_id}")
 async def patch_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
+    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
     body: UpdateWatchRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Partial update by task_id. Fields left null are preserved."""
-    task = await _resolve_task(task_id, None, _ctx)
+    task = await _resolve_task(task_id, to_uri, _ctx)
     return await _patch_impl(task, body, _ctx)
 
 
@@ -203,10 +226,11 @@ async def _delete_impl(target: WatchTask, ctx: RequestContext):
 @router.delete("/watches/{task_id}")
 async def delete_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
+    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete a watch task by ID."""
-    task = await _resolve_task(task_id, None, _ctx)
+    task = await _resolve_task(task_id, to_uri, _ctx)
     return await _delete_impl(task, _ctx)
 
 
@@ -232,6 +256,7 @@ async def _trigger_impl(target: WatchTask):
 @router.post("/watches/{task_id}/trigger")
 async def trigger_watch_by_id(
     task_id: str = Path(..., description="Watch task ID"),
+    to_uri: Optional[str] = Query(None, description="Optional cross-key check; see GET."),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Immediately schedule the watch task for execution.
@@ -239,7 +264,7 @@ async def trigger_watch_by_id(
     Returns ``scheduled=false`` if the task is already running or unknown to
     the scheduler. Does not wait for completion.
     """
-    task = await _resolve_task(task_id, None, _ctx)
+    task = await _resolve_task(task_id, to_uri, _ctx)
     return await _trigger_impl(task)
 
 

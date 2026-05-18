@@ -388,6 +388,11 @@ async def add_resource(
         path = require_remote_resource_source(path)
     except PermissionDeniedError:
         return f"Error: {_LOCAL_FILE_HINT}"
+    if watch_interval < 0:
+        return (
+            "Error: watch_interval must be >= 0. Use 0 for one-shot add (no watch); "
+            "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
+        )
     if watch_interval > 0 and not to:
         return f"Error: {_WATCH_REQUIRES_TO_HINT}"
     try:
@@ -487,7 +492,10 @@ async def cancel_watch(to_uri: str) -> str:
     if task is None:
         return f"No watch task found for {to_uri}"
     try:
-        ok = await wm.delete_task(
+        # ok=False here means the task was removed between our lookup and delete
+        # (concurrent cancel). Treat as success — the post-condition the caller
+        # wanted ("no watch on this URI") holds either way.
+        await wm.delete_task(
             task.task_id,
             ctx.account_id,
             ctx.user.user_id,
@@ -496,7 +504,7 @@ async def cancel_watch(to_uri: str) -> str:
         )
     except _wm_mod.PermissionDeniedError:
         return f"Permission denied for {to_uri}"
-    return f"Watch cancelled: {to_uri}" if ok else f"Failed to cancel: {to_uri}"
+    return f"Watch cancelled: {to_uri}"
 
 
 # -- grep ------------------------------------------------------------------

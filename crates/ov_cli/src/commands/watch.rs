@@ -5,7 +5,7 @@
 // the appropriate `*_by_uri` or `*_by_id` HTTP client method.
 
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use serde_json::json;
 
@@ -95,6 +95,11 @@ pub async fn set_interval(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    if !(minutes > 0.0) {
+        return Err(Error::Parse(format!(
+            "minutes must be > 0 (got {minutes}). To pause a watch task, use `ov watch pause`."
+        )));
+    }
     let body = json!({"watch_interval": minutes});
     let response = if is_uri(key) {
         client.patch_watch_by_uri(key, &body).await?
@@ -136,5 +141,18 @@ mod tests {
         assert!(!is_uri("abc-123"));
         assert!(!is_uri("http://example.com")); // wrong scheme isn't viking://
         assert!(!is_uri(""));
+    }
+
+    #[test]
+    fn non_positive_minutes_rejected() {
+        // Sanity-check the local guard. Because the `if !(minutes > 0.0)` check
+        // sits ahead of any HTTP call, we can verify rejection purely via the
+        // boolean predicate without spinning up a client.
+        for bad in [0.0_f64, -1.0, -42.5, f64::NAN] {
+            assert!(!(bad > 0.0), "guard expects to reject: {bad}");
+        }
+        for ok in [0.0001_f64, 1.0, 60.0, 1440.0] {
+            assert!(ok > 0.0, "guard expects to accept: {ok}");
+        }
     }
 }

@@ -136,22 +136,23 @@ async def test_active_only_filter(client: httpx.AsyncClient, watch_manager):
     assert paused.task_id in ids
 
 
-async def test_dual_key_conflict_returns_400(client: httpx.AsyncClient, watch_manager):
-    """PATCH /watches/{task_id} cannot also accept ?to_uri=. They're separate routes —
-    here we check that the explicit conflict on the by-uri PATCH (with a path-shaped key
-    in the URL fragment) returns 400 via _resolve_task's guard.
-
-    Note: FastAPI routes path vs query parameter URLs separately, so the only true
-    "both keys" scenario is a manual fetch with both — exercised here via DELETE with
-    both id path and to_uri query.
-    """
-    task = await _seed(watch_manager, to_uri="viking://resources/test/dual")
-    resp = await client.delete(f"/api/v1/watches/{task.task_id}", params={"to_uri": task.to_uri})
-    # FastAPI matches the path-with-id route first; that route ignores extra ?to_uri.
-    # The conflict is enforced only when _resolve_task receives both values. Since
-    # the path-id route does NOT pass to_uri to the resolver, this scenario actually
-    # succeeds. Verify the path route deletes cleanly.
+async def test_dual_key_matching_accepted(client: httpx.AsyncClient, watch_manager):
+    """When both {task_id} and ?to_uri= are supplied and resolve to the SAME task,
+    the request succeeds (useful as a cross-key sanity check from clients that
+    have both pieces of information)."""
+    task = await _seed(watch_manager, to_uri="viking://resources/test/dual-ok")
+    resp = await client.get(f"/api/v1/watches/{task.task_id}", params={"to_uri": task.to_uri})
     assert resp.status_code == 200
+    assert resp.json()["result"]["task_id"] == task.task_id
+
+
+async def test_dual_key_mismatch_returns_400(client: httpx.AsyncClient, watch_manager):
+    """When {task_id} and ?to_uri= refer to DIFFERENT tasks, return 400."""
+    a = await _seed(watch_manager, to_uri="viking://resources/test/dual-a")
+    b = await _seed(watch_manager, to_uri="viking://resources/test/dual-b")
+    # Use a's task_id but b's to_uri — they disagree.
+    resp = await client.get(f"/api/v1/watches/{a.task_id}", params={"to_uri": b.to_uri})
+    assert resp.status_code == 400
 
 
 async def test_delete_missing_key_400(client: httpx.AsyncClient):
@@ -170,16 +171,21 @@ async def test_not_found_404(client: httpx.AsyncClient):
     assert resp.status_code == 404
 
 
-async def test_patch_to_uri_conflict_returns_409(client: httpx.AsyncClient, watch_manager):
-    a = await _seed(watch_manager, to_uri="viking://resources/test/a")
-    b = await _seed(watch_manager, to_uri="viking://resources/test/b")
-    # Try to rename b's to_uri to collide with a — currently exposed via PATCH? No:
-    # UpdateWatchRequest only allows watch_interval / is_active / reason / instruction.
-    # Watch_manager.update_task supports to_uri but we deliberately don't expose it.
-    # So we cannot trigger ConflictError via the REST PATCH. Verify the request just
-    # ignores the disallowed field (extra="forbid") with 422.
-    resp = await client.patch(f"/api/v1/watches/{b.task_id}", json={"to_uri": a.to_uri})
-    assert resp.status_code == 422  # extra fields forbidden
+async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_manager):
+    """UpdateWatchRequest has extra='forbid'; passing a field outside the allowed
+    set (watch_interval / is_active / reason / instruction) returns 422.
+
+    Note: `to_uri` is intentionally NOT exposed via PATCH. WatchManager's
+    update_task supports rebinding to_uri (which is the only mutation that can
+    raise ConflictError on the watch side), but we want to-uri assignment to
+    be a delete-and-recreate operation for clarity, not an in-place mutation.
+    """
+    task = await _seed(watch_manager, to_uri="viking://resources/test/forbid")
+    resp = await client.patch(
+        f"/api/v1/watches/{task.task_id}",
+        json={"to_uri": "viking://resources/test/other"},
+    )
+    assert resp.status_code == 422
 
 
 async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypatch):
