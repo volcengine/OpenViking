@@ -494,6 +494,8 @@ def judge_answer(
             temperature=0,
             timeout=60,
         )
+        if not resp.choices or resp.choices[0].message is None:
+            raise ValueError("LLM returned empty or filtered response")
         content = resp.choices[0].message.content.strip()
         start, end = content.find("{"), content.rfind("}")
         if start != -1 and end != -1:
