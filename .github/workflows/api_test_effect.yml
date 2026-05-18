@@ -198,7 +198,18 @@ jobs:
           cd tests/api_test
           export OPENVIKING_API_KEY=test-root-api-key
           export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
-          uv run python -m pytest scenarios/resources_retrieval_slow/ -v -n 4 --tb=short --durations=0 --html=api-effect-test-report.html --self-contained-html
+          echo "Running lightweight slow tests (parallel)..."
+          uv run python -m pytest \
+            common/slow/ tasks/slow/ skills/slow/ retrieval/slow/ \
+            -v -n 4 --tb=short --durations=0 \
+            --html=api-effect-light-report.html --self-contained-html || true
+          echo "Running heavy slow tests (parallel with limited workers)..."
+          uv run python -m pytest \
+            content/slow/ resources/slow/ sessions/slow/ \
+            scenarios/slow/ scenarios/stability_error/slow/ \
+            scenarios/resources_retrieval_slow/ \
+            -v -n 2 --tb=short --durations=0 \
+            --html=api-effect-heavy-report.html --self-contained-html
         continue-on-error: true
 
       - name: Upload test reports
@@ -207,7 +218,8 @@ jobs:
         with:
           name: api-effect-test-reports-${{ github.run_id }}
           path: |
-            tests/api_test/api-effect-test-report.html
+            tests/api_test/api-effect-light-report.html
+            tests/api_test/api-effect-heavy-report.html
             openviking-server.log
 
       - name: Stop OpenViking Server

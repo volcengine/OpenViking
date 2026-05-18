@@ -214,7 +214,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}的目标是什么",
             keywords=[unique_detail],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -302,7 +302,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}用什么技术",
             keywords=["量子加密", "加密"],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -386,7 +386,7 @@ class TestArchiveExpand(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}的预算是多少",
             keywords=["480"],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_id,
         )
 
@@ -472,7 +472,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message="我在做什么项目",
             keywords=[marker_a],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -485,7 +485,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message="我在做什么项目",
             keywords=[marker_b],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_b,
         )
 

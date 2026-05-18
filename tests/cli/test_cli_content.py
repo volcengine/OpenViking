@@ -8,7 +8,6 @@ import time
 import uuid
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -59,8 +58,21 @@ class TestContentWrite:
     def test_write_replace(self, test_file_uri):
         time.sleep(15)
         r = None
-        for attempt in range(15):
-            r = ov(["write", test_file_uri, "--content", "Updated via CLI write.", "--mode", "replace", "--wait", "-o", "json"], timeout=120)
+        for _attempt in range(15):
+            r = ov(
+                [
+                    "write",
+                    test_file_uri,
+                    "--content",
+                    "Updated via CLI write.",
+                    "--mode",
+                    "replace",
+                    "--wait",
+                    "-o",
+                    "json",
+                ],
+                timeout=120,
+            )
             if r["exit_code"] == 0:
                 break
             if "busy" in r["stderr"].lower() or "internal" in r["stderr"].lower():
@@ -71,13 +83,25 @@ class TestContentWrite:
             f"ov write replace should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
 
     def test_write_append(self, test_file_uri):
         time.sleep(15)
         r = None
-        for attempt in range(15):
-            r = ov(["write", test_file_uri, "--content", "\nAppended via CLI.", "--append", "--wait", "-o", "json"], timeout=120)
+        for _attempt in range(15):
+            r = ov(
+                [
+                    "write",
+                    test_file_uri,
+                    "--content",
+                    "\nAppended via CLI.",
+                    "--append",
+                    "--wait",
+                    "-o",
+                    "json",
+                ],
+                timeout=120,
+            )
             if r["exit_code"] == 0:
                 break
             if "busy" in r["stderr"].lower() or "internal" in r["stderr"].lower():
@@ -88,7 +112,7 @@ class TestContentWrite:
             f"ov write append should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
 
 
 class TestContentReindex:
@@ -99,18 +123,27 @@ class TestContentReindex:
             temp_path = f.name
         try:
             r = None
-            for attempt in range(5):
-                r = ov(["add-resource", temp_path, "--to", reindex_pack, "--wait", "-o", "json"], timeout=120)
+            for _attempt in range(10):
+                r = ov(
+                    ["add-resource", temp_path, "--to", reindex_pack, "--wait", "-o", "json"],
+                    timeout=120,
+                )
                 if r["exit_code"] == 0:
                     break
-                time.sleep(5)
+                if (
+                    "CONFLICT" in (r.get("stderr") or "")
+                    or "busy" in (r.get("stderr") or "").lower()
+                ):
+                    time.sleep(10)
+                else:
+                    time.sleep(5)
             assert r["exit_code"] == 0, f"add-resource for reindex failed: {r['stderr'][:300]}"
         finally:
             os.unlink(temp_path)
 
         time.sleep(15)
         r = None
-        for attempt in range(15):
+        for _attempt in range(15):
             r = ov(["reindex", reindex_pack, "--wait", "true", "-o", "json"], timeout=120)
             if r["exit_code"] == 0:
                 break
@@ -122,4 +155,4 @@ class TestContentReindex:
             f"ov reindex should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"

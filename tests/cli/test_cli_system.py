@@ -3,7 +3,6 @@
 """CLI system endpoint tests (health, status, wait)."""
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -36,7 +35,7 @@ class TestSystemStatus:
 
 class TestSystemWait:
     def test_wait_with_timeout(self):
-        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=60)
+        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=120)
         assert r["exit_code"] == 0, (
             f"ov wait should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )

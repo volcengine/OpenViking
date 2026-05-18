@@ -8,7 +8,6 @@ import time
 import uuid
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -34,7 +33,7 @@ class TestFsLs:
             f"ov ls viking://resources should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
 
     def test_ls_simple(self):
         r = ov(["ls", "viking://resources", "-s", "-o", "json"])
@@ -56,7 +55,7 @@ class TestFsTree:
             f"ov tree should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
         assert "result" in data, "'result' field should exist"
 
 
@@ -71,7 +70,9 @@ class TestFsStat:
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
         assert "result" in data, "'result' field should exist"
         result = data["result"]
-        assert "isDir" in result, f"'isDir' should exist in stat result, got keys: {list(result.keys())}"
+        assert "isDir" in result, (
+            f"'isDir' should exist in stat result, got keys: {list(result.keys())}"
+        )
         assert result["isDir"] is True, "root should be a directory"
 
     def test_stat_file(self, test_file_uri):
@@ -80,7 +81,7 @@ class TestFsStat:
             f"ov stat on file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
         result = data["result"]
         assert result.get("isDir") is False, "file stat should have isDir=false"
 
@@ -112,7 +113,7 @@ class TestFsRm:
         ov(["mkdir", sub_dir, "-o", "json"])
         time.sleep(2)
         r = None
-        for attempt in range(5):
+        for _attempt in range(5):
             r = ov(["rm", sub_dir, "-r", "-o", "json"])
             if r["exit_code"] == 0:
                 break
@@ -138,7 +139,7 @@ class TestFsMv:
             os.unlink(temp_path)
         time.sleep(15)
         r = None
-        for attempt in range(20):
+        for _attempt in range(20):
             r = ov(["mv", src_uri, dst_uri, "-o", "json"])
             if r["exit_code"] == 0:
                 break
