@@ -168,11 +168,18 @@ class ExtractLoop:
         schema_str = json.dumps(json_schema, ensure_ascii=False)
 
         messages = []
+        page_id_rules = """
+## Page ID Rules
+- Every memory item you create or edit MUST include "page_id".
+- For existing items, use the page_id shown in read/search results.
+- For new items, assign a unique page_id >= 100.
+- When editing an existing item, reuse its existing page_id.
+"""
         link_rules = ""
         if self._link_enabled:
             link_rules = """
 ## Link Rules
-- Every item you create or edit MUST have a "page_id" field so other items can link to it.
+- Link fields `f` and `t` must reference these page_id values.
 - Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
 """
         messages.append(
@@ -180,6 +187,7 @@ class ExtractLoop:
                 "role": "system",
                 "content": f"""
 {self.context_provider.instruction()}
+{page_id_rules}
 {link_rules}
 ## Output Format
 The final output of the model must strictly follow the JSON Schema format shown below:

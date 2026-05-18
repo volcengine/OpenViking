@@ -219,9 +219,36 @@ class TestSchemaModelGenerator:
         assert "page_id" in field_names
         assert field_names.index("page_id") < field_names.index("field1")
 
-        description = model.model_fields["page_id"].description
-        assert "Page ID for edit reference" in description
-        assert "links" not in description.lower()
+        page_id_field = model.model_fields["page_id"]
+        assert page_id_field.is_required()
+        assert page_id_field.description == "Temporary page_id for identifying the target memory item."
+        assert model.model_validate({"page_id": 1, "field1": "value"}).page_id == 1
+        with pytest.raises(ValueError):
+            model.model_validate({"field1": "value"})
+
+    def test_page_id_schema_is_required_and_short_when_links_enabled(self, registry_with_sample):
+        from unittest.mock import patch
+
+        generator = SchemaModelGenerator(registry_with_sample)
+        with patch(
+            "openviking_cli.utils.config.get_openviking_config"
+        ) as mock_get_openviking_config:
+            mock_get_openviking_config.return_value = type(
+                "Config",
+                (),
+                {"memory": type("MemoryCfg", (), {"link_enabled": True})()},
+            )()
+            model = generator.create_flat_data_model(registry_with_sample.get("test_type"))
+
+        page_id_field = model.model_fields["page_id"]
+        assert page_id_field.is_required()
+        assert page_id_field.description == "Temporary page_id for identifying the target memory item."
+
+        schema = model.model_json_schema()
+        assert "page_id" in schema["required"]
+        assert schema["properties"]["page_id"]["description"] == (
+            "Temporary page_id for identifying the target memory item."
+        )
 
     def test_links_field_is_not_emitted_when_links_disabled(self, registry_with_sample):
         from unittest.mock import patch

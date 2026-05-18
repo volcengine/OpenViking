@@ -109,23 +109,12 @@ class SchemaModelGenerator:
                 Field(..., description="Agent ID to distinguish which agent's memory to write"),
             )
 
-        from openviking_cli.utils.config import get_openviking_config
-        config = get_openviking_config()
-        link_enabled = config.memory.link_enabled if config.memory else False
-        if link_enabled:
-            page_id_description = (
-                "Page ID for edit and link reference. REQUIRED for every item. "
-                "Choose page_id first. For existing items: use the page_id shown in read results. "
-                "For NEW items: assign a unique page_id >= 100."
-            )
-        else:
-            page_id_description = (
-                "Page ID for edit reference. For existing items, use the page_id shown in read results "
-                "so the write operation targets that page."
-            )
         field_definitions["page_id"] = (
-            Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
-            Field(None, description=page_id_description),
+            Annotated[int, WithJsonSchema({"type": "integer"})],
+            Field(
+                ...,
+                description="Temporary page_id for identifying the target memory item.",
+            ),
         )
 
         # Add business fields from schema
