@@ -204,9 +204,10 @@ template: |
 
   # Three-Level Structure
 
-  Each memory contains three levels, each serving a purpose:
+  Each memory contains three levels. **Keep all levels concise — memories are sticky notes, not essays.**
 
-  **abstract (L0)**: Index layer, plain text one-liner
+  **abstract (L0)**: Index layer, plain text one-liner. **Target: 1 sentence, ~50-80 characters.**
+  - This is the PRIMARY retrieval key — it MUST be specific enough to distinguish this memory from others.
   - Merge types (preferences/entities/profile/patterns): `[Merge key]: [Description]`
     - preferences: `Python code style: No type hints, concise and direct`
     - entities: `OpenViking project: AI Agent long-term memory management system`
@@ -216,13 +217,16 @@ template: |
     - events: `Decided to refactor memory system: Simplify to 5 categories`
     - cases: `Band not recognized → Request member/album/style details`
 
-  **overview (L1)**: Structured summary layer, organized with Markdown headings
+  **overview (L1)**: Structured summary layer, organized with Markdown headings. **Target: 3-5 bullet points.**
   - preferences: `## Preference Domain` / `## Specific Preferences`
   - entities: `## Basic Info` / `## Core Attributes`
   - events: `## Decision Content` / `## Reason` / `## Result`
   - cases: `## Problem` / `## Solution`
 
-  **content (L2)**: Detailed expansion layer, free Markdown, includes background, timeline, complete narrative
+  **content (L2)**: Core facts layer. **Target: 2-4 sentences with all essential specifics.**
+  - Capture ONLY the facts that would be lost if this memory were deleted.
+  - Include: names, versions, numbers, configurations, error messages, solutions.
+  - Exclude: background narratives, general explanations, elaboration of obvious points.
 
   # Few-shot Examples
 

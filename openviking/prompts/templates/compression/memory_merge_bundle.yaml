@@ -1,8 +1,8 @@
 metadata:
   id: "compression.memory_merge_bundle"
   name: "Memory Merge Bundle"
-  description: "Merge memory and return L0/L1/L2 in one structured response"
-  version: "1.0.0"
+  description: "Merge memory and return L0/L1/L2 in one structured response, with facet guard and length limits"
+  version: "2.0.0"
   language: "en"
   category: "compression"
 
@@ -46,7 +46,7 @@ variables:
     default: "auto"
 
 template: |
-  You are merging one existing memory with one new memory update.
+  You are deciding whether to merge two memories of the same category, or skip (keep them separate).
 
   Category: {{ category }}
   Target Output Language: {{ output_language }}
@@ -61,26 +61,62 @@ template: |
   - Overview (L1): {{ new_overview }}
   - Content (L2): {{ new_content }}
 
-  Requirements:
-  - Merge into a single coherent memory.
-  - Keep non-conflicting details from existing memory.
-  - Update conflicting details to reflect the newer fact.
-  - Output language must be {{ output_language }}.
-  - Return JSON only.
+  ## Step 1: Facet coherence check
 
-  Output JSON schema:
+  Before merging, determine whether the two memories describe the SAME specific facet/topic.
+
+  Same facet examples (should merge):
+  - "Python code style: no type hints" + "Python code style: concise comments" → same facet (Python code style)
+  - "OpenViking project: memory extraction" + "OpenViking project: added dedup" → same facet (OpenViking project)
+
+  Different facet examples (should skip):
+  - "Python code style: no type hints" + "Food preference: likes apples" → different facets
+  - "Server 192.168.2.75: runs agent-helper" + "OpenViking project: memory extraction" → different facets
+  - "Git commit style: zh-CN verbs" + "Exit code semantics: 0/1/2" → different facets
+
+  If the two memories cover DIFFERENT facets, you MUST output decision "skip".
+  Do NOT merge unrelated information just because they share the same category.
+
+  ## Step 2: Merge (only if same facet)
+
+  If merging:
+  - When facts conflict, keep the NEWER version only.
+  - Condense to essential facts. Do NOT accumulate every historical detail.
+  - The merged memory should read as a clean, up-to-date snapshot — not a changelog.
+
+  ## Hard length limits
+
+  - `abstract`: ≤ 80 characters
+  - `overview`: ≤ 200 characters
+  - `content`: ≤ 300 characters
+
+  If the merged result would exceed these limits, aggressively summarize.
+  Drop older, less important details first. Preserve specific values (names, numbers, versions) over narrative.
+
+  ## Output
+
+  Return JSON only. Two possible decisions:
+
+  When merging:
   {
     "decision": "merge",
-    "abstract": "one-line L0 summary",
-    "overview": "structured markdown L1 summary",
-    "content": "full merged L2 content",
+    "abstract": "one-line L0 (≤80 chars)",
+    "overview": "structured L1 (≤200 chars)",
+    "content": "condensed L2 (≤300 chars)",
     "reason": "short reason"
+  }
+
+  When skipping (different facets):
+  {
+    "decision": "skip",
+    "reason": "short reason why these are different facets"
   }
 
   Constraints:
   - `abstract` must be concise and specific.
-  - `overview` and `content` must be non-empty.
+  - `overview` and `content` must be non-empty when decision is "merge".
   - Do not output any text outside JSON.
+  - Output language must be {{ output_language }}.
 
 llm_config:
   temperature: 0.0
