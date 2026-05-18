@@ -503,6 +503,23 @@ html {
   background: color-mix(in oklab, var(--th-ink) 10%, var(--th-bg-2));
 }
 
+.zouk-reader-launcher.has-live::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--th-bg-2);
+  border-radius: 999px;
+  background: #36a269;
+}
+
+.zouk-reader-launcher.has-working::after {
+  background: #d89a2f;
+  animation: zoukStatusPulse 1.45s ease-in-out infinite;
+}
+
 .zouk-reader-launcher svg,
 .zouk-selection-action svg,
 .zouk-reader-panel svg {
@@ -557,6 +574,7 @@ html {
 }
 
 .zouk-reader-avatar {
+  position: relative;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -566,6 +584,45 @@ html {
   color: var(--th-accent);
   font-family: var(--th-font-mono);
   font-weight: 500;
+}
+
+.zouk-reader-avatar-dot {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--th-bg);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--th-mute) 58%, transparent);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.zouk-reader-avatar-dot.is-online {
+  background: #36a269;
+}
+
+.zouk-reader-avatar-dot.is-working {
+  background: #d89a2f;
+  animation: zoukStatusPulse 1.45s ease-in-out infinite;
+}
+
+.zouk-reader-avatar-dot.is-error {
+  background: #d65353;
+}
+
+.zouk-reader-avatar.is-compact {
+  width: 22px;
+  height: 22px;
+  margin-top: 0;
+  font-size: 9px;
+}
+
+.zouk-reader-avatar.is-compact .zouk-reader-avatar-dot {
+  width: 7px;
+  height: 7px;
+  border-width: 1px;
 }
 
 .zouk-reader-drag {
@@ -584,6 +641,71 @@ html {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.zouk-live-agents {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px 2px;
+  overflow-x: auto;
+  color: var(--th-mute);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  scrollbar-width: none;
+}
+
+.zouk-live-agents::-webkit-scrollbar {
+  display: none;
+}
+
+.zouk-live-agents__label {
+  flex: 0 0 auto;
+  color: color-mix(in oklab, var(--th-mute) 72%, transparent);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.zouk-live-agent {
+  min-width: 0;
+  max-width: min(270px, 76vw);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.zouk-live-agent__name,
+.zouk-live-agent__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zouk-live-agent__name {
+  max-width: 108px;
+  color: var(--th-ink);
+}
+
+.zouk-live-agent__detail {
+  max-width: 138px;
+  color: color-mix(in oklab, var(--th-mute) 88%, transparent);
+}
+
+.zouk-live-agent.is-working .zouk-live-agent__detail {
+  color: color-mix(in oklab, #d89a2f 66%, var(--th-ink));
+}
+
+.zouk-live-agent.is-error .zouk-live-agent__detail {
+  color: #d65353;
+}
+
+.zouk-live-agent-more {
+  flex: 0 0 auto;
+  color: var(--th-mute);
 }
 
 .zouk-reader-empty {
@@ -639,6 +761,10 @@ html {
   overflow: hidden;
   background: var(--th-bg-2);
   color: transparent;
+}
+
+.zouk-reader-avatar.has-image.has-status {
+  overflow: visible;
 }
 
 .zouk-reader-avatar img {
@@ -899,6 +1025,10 @@ html {
     gap: 16px;
   }
 
+  .zouk-live-agents {
+    padding: 0 0 12px;
+  }
+
   .zouk-reader-bubble {
     border: 0;
     background: color-mix(in oklab, var(--th-bg-2) 74%, transparent);
@@ -1009,6 +1139,18 @@ html {
 
   .zouk-context-preview__row {
     grid-template-columns: 88px minmax(0, 1fr);
+  }
+}
+
+@keyframes zoukStatusPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.72);
+    opacity: 0.55;
   }
 }
 

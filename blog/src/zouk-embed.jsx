@@ -122,6 +122,107 @@ function normalizeMessage(message) {
   };
 }
 
+function senderKey(value = '') {
+  return String(value || '').replace(/^@/, '').trim().toLowerCase();
+}
+
+function normalizeAgentActivity(value = '') {
+  const activity = String(value || '').trim().toLowerCase();
+  return ['thinking', 'working', 'online', 'offline', 'error'].includes(activity)
+    ? activity
+    : '';
+}
+
+function normalizeAgent(agent) {
+  if (!agent?.id) return null;
+  return {
+    id: String(agent.id),
+    name: String(agent.name || agent.id),
+    displayName: String(agent.displayName || agent.display_name || agent.name || agent.id),
+    avatarUrl: normalizeAvatarUrl(
+      agent.picture
+        || agent.avatarUrl
+        || agent.avatar_url
+        || agent.gravatarUrl
+        || agent.gravatar_url
+        || '',
+    ),
+    status: String(agent.status || 'inactive'),
+    activity: normalizeAgentActivity(agent.activity),
+    activityDetail: String(agent.activityDetail || agent.activity_detail || '').trim(),
+    channels: Array.isArray(agent.channels) ? agent.channels : [],
+  };
+}
+
+function agentSortWeight(agent) {
+  const activity = agent?.activity;
+  if (activity === 'working') return 0;
+  if (activity === 'thinking') return 1;
+  if (activity === 'error') return 2;
+  if (activity === 'online') return 3;
+  return 4;
+}
+
+function sortAgents(agents) {
+  return [...agents].sort((a, b) => {
+    const weight = agentSortWeight(a) - agentSortWeight(b);
+    if (weight) return weight;
+    return (a.displayName || a.name).localeCompare(b.displayName || b.name);
+  });
+}
+
+function mergeAgents(current, incoming) {
+  const next = new Map(current.map((agent) => [agent.id, agent]));
+  const list = Array.isArray(incoming) ? incoming : [incoming];
+  list.forEach((raw) => {
+    const agent = normalizeAgent(raw);
+    if (!agent) return;
+    const previous = next.get(agent.id);
+    next.set(agent.id, {
+      ...previous,
+      ...agent,
+      activity: agent.activity || previous?.activity || '',
+      activityDetail: agent.activityDetail || previous?.activityDetail || '',
+      channels: agent.channels.length ? agent.channels : previous?.channels || [],
+    });
+  });
+  return sortAgents(Array.from(next.values()));
+}
+
+function updateAgentStatus(agents, packet) {
+  if (!packet?.agentId) return agents;
+  if (packet.status === 'deleted') return agents.filter((agent) => agent.id !== packet.agentId);
+  return sortAgents(agents.map((agent) => (
+    agent.id === packet.agentId ? { ...agent, status: String(packet.status || agent.status) } : agent
+  )));
+}
+
+function updateAgentActivity(agents, packet) {
+  if (!packet?.agentId) return agents;
+  return sortAgents(agents.map((agent) => (
+    agent.id === packet.agentId
+      ? {
+        ...agent,
+        activity: normalizeAgentActivity(packet.activity) || agent.activity,
+        activityDetail: String(packet.detail || '').trim() || agent.activityDetail,
+      }
+      : agent
+  )));
+}
+
+function agentDotStatus(agent) {
+  if (!agent || agent.status !== 'active') return 'offline';
+  if (agent.activity === 'working' || agent.activity === 'thinking') return 'working';
+  if (agent.activity === 'error') return 'error';
+  if (agent.activity === 'online') return 'online';
+  return 'offline';
+}
+
+function agentIsLive(agent) {
+  if (!agent || agent.status !== 'active') return false;
+  return agent.activity === 'working' || agent.activity === 'thinking' || agent.activity === 'error';
+}
+
 function isSystemMessage(message) {
   return message?.senderType === 'system' || message?.senderName === 'system';
 }
@@ -193,14 +294,19 @@ function avatarLabel(name) {
   return (clean[0] || 'z').toUpperCase();
 }
 
-function Avatar({ name, src }) {
+function Avatar({ name, src, status = '', compact = false }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageSrc = !imageFailed ? normalizeAvatarUrl(src) : '';
+  const dotStatus = ['working', 'online', 'offline', 'error'].includes(status) ? status : '';
   return (
-    <div className={`zouk-reader-avatar${imageSrc ? ' has-image' : ''}`} aria-hidden="true">
+    <div
+      className={`zouk-reader-avatar${imageSrc ? ' has-image' : ''}${dotStatus ? ' has-status' : ''}${compact ? ' is-compact' : ''}`}
+      aria-hidden="true"
+    >
       {imageSrc ? (
         <img src={imageSrc} alt="" loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
       ) : avatarLabel(name)}
+      {dotStatus ? <span className={`zouk-reader-avatar-dot is-${dotStatus}`} /> : null}
     </div>
   );
 }
@@ -270,6 +376,30 @@ function MessageBody({ content }) {
   );
 }
 
+function LiveAgents({ agents }) {
+  if (!agents.length) return null;
+  const visible = agents.slice(0, 4);
+  const extra = agents.length - visible.length;
+  return (
+    <div className="zouk-live-agents" aria-label="Live Zouk agents">
+      <span className="zouk-live-agents__label">LIVE</span>
+      {visible.map((agent) => {
+        const label = agent.displayName || agent.name;
+        const detail = agent.activityDetail || agent.activity || 'working';
+        const dotStatus = agentDotStatus(agent);
+        return (
+          <div className={`zouk-live-agent is-${dotStatus}`} key={agent.id} title={`${label} · ${detail}`}>
+            <Avatar name={label} src={agent.avatarUrl} status={dotStatus} compact />
+            <span className="zouk-live-agent__name">{label}</span>
+            <span className="zouk-live-agent__detail">{detail}</span>
+          </div>
+        );
+      })}
+      {extra > 0 ? <span className="zouk-live-agent-more">+{extra}</span> : null}
+    </div>
+  );
+}
+
 export function ZoukInteractiveBlog({ route }) {
   const [browserId] = useState(getBrowserId);
   const [open, setOpen] = useState(false);
@@ -282,6 +412,7 @@ export function ZoukInteractiveBlog({ route }) {
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   const [messages, setMessages] = useState([]);
+  const [agents, setAgents] = useState([]);
   const [composer, setComposer] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [sourceUrl, setSourceUrl] = useState(currentSourceUrl);
@@ -311,6 +442,21 @@ export function ZoukInteractiveBlog({ route }) {
     () => messages.filter((message) => !isSystemMessage(message)),
     [messages],
   );
+  const agentsBySender = useMemo(() => {
+    const next = new Map();
+    agents.forEach((agent) => {
+      [agent.name, agent.displayName, agent.id].forEach((key) => {
+        const normalized = senderKey(key);
+        if (normalized && !next.has(normalized)) next.set(normalized, agent);
+      });
+    });
+    return next;
+  }, [agents]);
+  const liveAgents = useMemo(
+    () => agents.filter(agentIsLive),
+    [agents],
+  );
+  const hasWorkingAgent = liveAgents.some((agent) => agentDotStatus(agent) === 'working');
 
   const rememberSource = useCallback(() => {
     const next = currentSourceUrl();
@@ -408,6 +554,22 @@ export function ZoukInteractiveBlog({ route }) {
       try {
         const packet = JSON.parse(event.data);
         if (packet.type === 'ping') return;
+        if (packet.type === 'init') {
+          setAgents(mergeAgents([], packet.agents || []));
+          return;
+        }
+        if (packet.type === 'agent_started' && packet.agent) {
+          setAgents((prev) => mergeAgents(prev, packet.agent));
+          return;
+        }
+        if (packet.type === 'agent_status') {
+          setAgents((prev) => updateAgentStatus(prev, packet));
+          return;
+        }
+        if (packet.type === 'agent_activity') {
+          setAgents((prev) => updateAgentActivity(prev, packet));
+          return;
+        }
         if ((packet.type === 'message' || packet.type === 'new_message') && packet.message) {
           const next = normalizeMessage(packet.message);
           if (next?.channelName === CONFIG.channel) setMessages((prev) => mergeMessage(prev, next));
@@ -619,7 +781,7 @@ export function ZoukInteractiveBlog({ route }) {
   const launcher = (
     <button
       type="button"
-      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}`}
+      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}${liveAgents.length ? ' has-live' : ''}${hasWorkingAgent ? ' has-working' : ''}`}
       aria-label={panelVisible ? 'Close blog chat' : 'Open blog chat'}
       aria-pressed={panelVisible}
       onClick={toggleChat}
@@ -667,6 +829,8 @@ export function ZoukInteractiveBlog({ route }) {
             <div className="zouk-reader-handle" />
           </div>
 
+          <LiveAgents agents={liveAgents} />
+
           <div className="zouk-reader-messages" ref={scrollRef}>
             {status === 'connecting' && !visibleMessages.length ? (
               <div className="zouk-reader-empty">Connecting to Zouk...</div>
@@ -679,11 +843,16 @@ export function ZoukInteractiveBlog({ route }) {
             ) : null}
             {visibleMessages.map((message) => {
               const mine = message.senderName === userName;
+              const messageAgent = !mine ? agentsBySender.get(senderKey(message.senderName)) : null;
               return (
                 <article key={message.id} className={`zouk-reader-message${mine ? ' is-mine' : ''}`}>
                   {!mine ? (
                     <div className="zouk-reader-message-profile">
-                      <Avatar name={message.senderName} src={message.avatarUrl} />
+                      <Avatar
+                        name={message.senderName}
+                        src={message.avatarUrl || messageAgent?.avatarUrl}
+                        status={messageAgent ? agentDotStatus(messageAgent) : ''}
+                      />
                       <div className="zouk-reader-bubble-column">
                         <div className="zouk-reader-sender">{message.senderName}</div>
                         <div className="zouk-reader-bubble">
