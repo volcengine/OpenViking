@@ -820,6 +820,64 @@ ov observer retrieval
 
 ---
 
+### observer.filesystem
+
+#### 1. API Implementation Overview
+
+Get filesystem operation metrics.
+
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_filesystem` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.filesystem` - Core implementation
+- `openviking/storage/observers/filesystem_observer.py` - Filesystem observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/filesystem
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/filesystem \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
+
+```python
+print(client.observer.filesystem)
+```
+
+**CLI**
+
+```bash
+ov observer filesystem
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "filesystem",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "..."
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### observer.system
 
 #### 1. API Implementation Overview

@@ -329,6 +329,12 @@ async def vectorize_directory_meta(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
                         exc_info=True,
                     )
+    except Exception as e:
+        logger.error(
+            f"Failed to vectorize directory metadata for {uri}: {e}",
+            exc_info=True,
+        )
+        raise
     finally:
         await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
 

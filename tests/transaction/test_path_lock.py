@@ -7,13 +7,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
+    EXACT_LOCK_FILE_PREFIX,
     LOCK_FILE_NAME,
-    LOCK_TYPE_POINT,
-    LOCK_TYPE_SUBTREE,
-    PathLock,
+    LOCK_TYPE_EXACT,
+    LOCK_TYPE_TREE,
+    PathLockEngine,
     _make_fencing_token,
     _parse_fencing_token,
 )
+
+
+def _single_lock_path(handle: LockHandle) -> str:
+    assert len(handle.locks) == 1
+    return handle.locks[0]
 
 
 class TestFencingToken:
@@ -22,28 +28,35 @@ class TestFencingToken:
         tx_id, ts, lock_type = _parse_fencing_token(token)
         assert tx_id == "tx-123"
         assert ts > 0
-        assert lock_type == LOCK_TYPE_POINT
+        assert lock_type == LOCK_TYPE_EXACT
 
-    def test_make_parse_subtree_roundtrip(self):
-        token = _make_fencing_token("tx-456", LOCK_TYPE_SUBTREE)
+    def test_make_parse_tree_roundtrip(self):
+        token = _make_fencing_token("tx-456", LOCK_TYPE_TREE)
         tx_id, ts, lock_type = _parse_fencing_token(token)
         assert tx_id == "tx-456"
         assert ts > 0
-        assert lock_type == LOCK_TYPE_SUBTREE
+        assert lock_type == LOCK_TYPE_TREE
 
-    def test_parse_legacy_format_two_part(self):
-        """Legacy two-part token "{tx_id}:{ts}" defaults to POINT."""
+    def test_parse_previous_tree_tokens(self):
+        for previous_type in ("P", "S"):
+            tx_id, ts, lock_type = _parse_fencing_token(f"tx-old:123:{previous_type}")
+            assert tx_id == "tx-old"
+            assert ts == 123
+            assert lock_type == LOCK_TYPE_TREE
+
+    def test_parse_untyped_token_defaults_to_stale_exact(self):
+        """Untyped tokens are treated as stale EXACT locks."""
         tx_id, ts, lock_type = _parse_fencing_token("tx-old:1234567890")
-        assert tx_id == "tx-old"
-        assert ts == 1234567890
-        assert lock_type == LOCK_TYPE_POINT
+        assert tx_id == "tx-old:1234567890"
+        assert ts == 0
+        assert lock_type == LOCK_TYPE_EXACT
 
-    def test_parse_legacy_format_plain(self):
-        """Plain tx_id (no colon) defaults to ts=0, lock_type=POINT."""
+    def test_parse_plain_token_defaults_to_exact(self):
+        """Plain tx_id (no colon) defaults to ts=0, lock_type=EXACT."""
         tx_id, ts, lock_type = _parse_fencing_token("tx-bare")
         assert tx_id == "tx-bare"
         assert ts == 0
-        assert lock_type == LOCK_TYPE_POINT
+        assert lock_type == LOCK_TYPE_EXACT
 
     def test_tokens_are_unique(self):
         t1 = _make_fencing_token("tx-1")
@@ -56,20 +69,20 @@ class TestPathLockStale:
     def test_is_lock_stale_no_file(self):
         agfs = MagicMock()
         agfs.read.side_effect = Exception("not found")
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock") is True
 
-    def test_is_lock_stale_legacy_token(self):
+    def test_is_lock_stale_for_plain_token(self):
         agfs = MagicMock()
         agfs.read.return_value = b"tx-old-format"
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock") is True
 
     def test_is_lock_stale_recent_token(self):
         agfs = MagicMock()
         token = _make_fencing_token("tx-1")
         agfs.read.return_value = token.encode("utf-8")
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock", expire_seconds=300.0) is False
 
 
@@ -88,40 +101,40 @@ class TestPathLockIsLocked:
 
     def test_is_locked_no_lock(self):
         agfs = self._agfs_with_locks({})
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_locked("/local/u/foo") is False
 
-    def test_is_locked_self_point_lock(self):
-        token = _make_fencing_token("tx-1", LOCK_TYPE_POINT)
+    def test_is_locked_self_exact_lock(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_EXACT)
         agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": token.encode("utf-8")})
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_locked("/local/u/foo") is True
 
-    def test_is_locked_ancestor_subtree_lock(self):
-        token = _make_fencing_token("tx-1", LOCK_TYPE_SUBTREE)
+    def test_is_locked_ancestor_tree_lock(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
         agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_locked("/local/u/foo/bar") is True
 
-    def test_is_locked_ancestor_point_lock_does_not_propagate(self):
-        """An ancestor POINT lock must not affect descendants -- POINT locks only the path itself."""
-        token = _make_fencing_token("tx-1", LOCK_TYPE_POINT)
+    def test_is_locked_ancestor_exact_lock_does_not_propagate(self):
+        """An ancestor EXACT lock must not affect descendants -- EXACT locks only the path itself."""
+        token = _make_fencing_token("tx-1", LOCK_TYPE_EXACT)
         agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         assert lock.is_locked("/local/u/foo/bar") is False
 
     def test_is_locked_ignores_stale_by_default(self):
         old_ts = time.time_ns() - int(600 * 1e9)  # 600s ago
-        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_POINT}".encode("utf-8")
+        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_EXACT}".encode("utf-8")
         agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": stale})
-        lock = PathLock(agfs, lock_expire=300.0)
+        lock = PathLockEngine(agfs, lock_expire=300.0)
         assert lock.is_locked("/local/u/foo") is False
 
     def test_is_locked_can_include_stale(self):
         old_ts = time.time_ns() - int(600 * 1e9)
-        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_POINT}".encode("utf-8")
+        stale = f"tx-dead:{old_ts}:{LOCK_TYPE_EXACT}".encode("utf-8")
         agfs = self._agfs_with_locks({"/local/u/foo/.path.ovlock": stale})
-        lock = PathLock(agfs, lock_expire=300.0)
+        lock = PathLockEngine(agfs, lock_expire=300.0)
         assert lock.is_locked("/local/u/foo", ignore_stale=False) is True
 
 
@@ -133,9 +146,9 @@ class TestPathLockOwnership:
         failed_path = "/locks/failed/.path.ovlock"
 
         tokens = {
-            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
-            lost_path: _make_fencing_token("tx-2", LOCK_TYPE_SUBTREE),
-            failed_path: _make_fencing_token("tx-1", LOCK_TYPE_SUBTREE),
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_EXACT),
+            lost_path: _make_fencing_token("tx-2", LOCK_TYPE_TREE),
+            failed_path: _make_fencing_token("tx-1", LOCK_TYPE_TREE),
         }
         agfs = MagicMock()
 
@@ -152,7 +165,7 @@ class TestPathLockOwnership:
         agfs.read.side_effect = read_side_effect
         agfs.write.side_effect = write_side_effect
 
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         tx = LockHandle(id="tx-1")
         for lock_path in [owned_path, lost_path, missing_path, failed_path]:
             tx.add_lock(lock_path)
@@ -168,13 +181,13 @@ class TestPathLockOwnership:
         replaced_path = "/locks/replaced/.path.ovlock"
 
         tokens = {
-            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
-            replaced_path: _make_fencing_token("tx-2", LOCK_TYPE_POINT),
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_EXACT),
+            replaced_path: _make_fencing_token("tx-2", LOCK_TYPE_EXACT),
         }
         agfs = MagicMock()
         agfs.read.side_effect = lambda lock_path: tokens[lock_path].encode("utf-8")
 
-        lock = PathLock(agfs)
+        lock = PathLockEngine(agfs)
         lock._remove_lock_file = AsyncMock(return_value=True)
         tx = LockHandle(id="tx-1")
         tx.add_lock(owned_path)
@@ -189,50 +202,111 @@ class TestPathLockOwnership:
 class TestPathLockBehavior:
     """Behavioral tests using real AGFS backend."""
 
-    async def test_acquire_point_creates_lock_file(self, agfs_client, test_dir):
-        lock = PathLock(agfs_client)
-        tx = LockHandle(id="tx-point-1")
+    async def test_acquire_exact_path_creates_lock_file(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-exact-1")
 
-        ok = await lock.acquire_point(test_dir, tx, timeout=3.0)
+        ok = await lock.acquire_exact_path(test_dir, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = _single_lock_path(tx)
+        assert lock_path == f"{test_dir}/{LOCK_FILE_NAME}"
+        content = agfs_client.cat(lock_path)
+        token = content.decode("utf-8") if isinstance(content, bytes) else content
+        assert ":E" in token
+        assert "tx-exact-1" in token
+
+        await lock.release(tx)
+
+    async def test_acquire_tree_creates_lock_file(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-1")
+
+        ok = await lock.acquire_tree(test_dir, tx, timeout=3.0)
         assert ok is True
 
         lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
         content = agfs_client.cat(lock_path)
         token = content.decode("utf-8") if isinstance(content, bytes) else content
-        assert ":P" in token
-        assert "tx-point-1" in token
+        assert ":T" in token
+        assert "tx-tree-1" in token
 
         await lock.release(tx)
 
-    async def test_acquire_subtree_creates_lock_file(self, agfs_client, test_dir):
-        lock = PathLock(agfs_client)
-        tx = LockHandle(id="tx-subtree-1")
+    async def test_acquire_tree_creates_missing_directory_after_conflict_check(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-missing")
+        target = f"{test_dir}/new-resource"
 
-        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        ok = await lock.acquire_tree(target, tx, timeout=3.0)
         assert ok is True
-
-        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
-        content = agfs_client.cat(lock_path)
-        token = content.decode("utf-8") if isinstance(content, bytes) else content
-        assert ":S" in token
-        assert "tx-subtree-1" in token
+        assert _single_lock_path(tx) == f"{target}/{LOCK_FILE_NAME}"
+        assert agfs_client.stat(target).get("isDir") is True
 
         await lock.release(tx)
 
-    async def test_acquire_point_dir_not_found(self, agfs_client):
-        lock = PathLock(agfs_client)
+    async def test_tree_blocked_by_ancestor_tree_does_not_create_missing_directory(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-tree")
+        target = f"{test_dir}/blocked-resource"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+        assert await lock.acquire_tree(target, child, timeout=0.0) is False
+
+        try:
+            agfs_client.stat(target)
+            raise AssertionError("missing TreeLock target should not be created on conflict")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(parent)
+
+    async def test_acquire_exact_path_allows_missing_target(self, agfs_client):
+        lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-no-dir")
 
-        ok = await lock.acquire_point("/local/nonexistent-path-xyz", tx, timeout=0.5)
-        assert ok is False
-        assert len(tx.locks) == 0
+        ok = await lock.acquire_exact_path("/local/nonexistent-path-xyz", tx, timeout=0.5)
+        assert ok is True
+        assert len(tx.locks) == 1
+        assert tx.locks[0].rsplit("/", 1)[-1].startswith(EXACT_LOCK_FILE_PREFIX)
+
+        await lock.release(tx)
+
+    async def test_exact_blocked_by_ancestor_tree_does_not_create_missing_parent(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-exact")
+        missing_parent = f"{test_dir}/blocked-dir"
+        target = f"{missing_parent}/file.md"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+        assert await lock.acquire_exact_path(target, child, timeout=0.0) is False
+
+        try:
+            agfs_client.stat(missing_parent)
+            raise AssertionError("missing exact-lock parent should not be created on conflict")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(parent)
 
     async def test_release_removes_lock_file(self, agfs_client, test_dir):
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-release-1")
 
-        await lock.acquire_point(test_dir, tx, timeout=3.0)
-        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
+        await lock.acquire_exact_path(test_dir, tx, timeout=3.0)
+        lock_path = _single_lock_path(tx)
 
         await lock.release(tx)
 
@@ -246,58 +320,58 @@ class TestPathLockBehavior:
             pass  # Expected: file not found
 
     async def test_sequential_acquire_works(self, agfs_client, test_dir):
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
 
         tx1 = LockHandle(id="tx-seq-1")
-        ok1 = await lock.acquire_point(test_dir, tx1, timeout=3.0)
+        ok1 = await lock.acquire_exact_path(test_dir, tx1, timeout=3.0)
         assert ok1 is True
 
         await lock.release(tx1)
 
         tx2 = LockHandle(id="tx-seq-2")
-        ok2 = await lock.acquire_point(test_dir, tx2, timeout=3.0)
+        ok2 = await lock.acquire_exact_path(test_dir, tx2, timeout=3.0)
         assert ok2 is True
 
         await lock.release(tx2)
 
-    async def test_point_blocked_by_ancestor_subtree(self, agfs_client, test_dir):
-        """POINT on child blocked while ancestor holds SUBTREE lock."""
+    async def test_exact_blocked_by_ancestor_tree(self, agfs_client, test_dir):
+        """EXACT on child blocked while ancestor holds TreeLock."""
         import uuid as _uuid
 
         child = f"{test_dir}/child-{_uuid.uuid4().hex}"
         agfs_client.mkdir(child)
 
-        lock = PathLock(agfs_client)
-        tx_parent = LockHandle(id="tx-parent-subtree")
-        ok = await lock.acquire_subtree(test_dir, tx_parent, timeout=3.0)
+        lock = PathLockEngine(agfs_client)
+        tx_parent = LockHandle(id="tx-parent-tree")
+        ok = await lock.acquire_tree(test_dir, tx_parent, timeout=3.0)
         assert ok is True
 
-        tx_child = LockHandle(id="tx-child-point")
-        blocked = await lock.acquire_point(child, tx_child, timeout=0.5)
+        tx_child = LockHandle(id="tx-child-exact")
+        blocked = await lock.acquire_exact_path(child, tx_child, timeout=0.5)
         assert blocked is False
 
         await lock.release(tx_parent)
 
-    async def test_subtree_blocked_by_descendant_point(self, agfs_client, test_dir):
-        """SUBTREE on parent blocked while descendant holds POINT lock."""
+    async def test_tree_blocked_by_descendant_exact(self, agfs_client, test_dir):
+        """TreeLock on parent blocked while descendant holds ExactPathLock."""
         import uuid as _uuid
 
         child = f"{test_dir}/child-{_uuid.uuid4().hex}"
         agfs_client.mkdir(child)
 
-        lock = PathLock(agfs_client)
-        tx_child = LockHandle(id="tx-desc-point")
-        ok = await lock.acquire_point(child, tx_child, timeout=3.0)
+        lock = PathLockEngine(agfs_client)
+        tx_child = LockHandle(id="tx-desc-exact")
+        ok = await lock.acquire_exact_path(child, tx_child, timeout=3.0)
         assert ok is True
 
-        tx_parent = LockHandle(id="tx-parent-sub")
-        blocked = await lock.acquire_subtree(test_dir, tx_parent, timeout=0.5)
+        tx_parent = LockHandle(id="tx-parent-tree")
+        blocked = await lock.acquire_tree(test_dir, tx_parent, timeout=0.5)
         assert blocked is False
 
         await lock.release(tx_child)
 
-    async def test_acquire_mv_creates_subtree_locks(self, agfs_client, test_dir):
-        """acquire_mv puts SUBTREE on both src and dst."""
+    async def test_acquire_mv_creates_tree_and_exact_locks(self, agfs_client, test_dir):
+        """Directory move locks the source tree and exact destination path."""
         import uuid as _uuid
 
         src = f"{test_dir}/src-{_uuid.uuid4().hex}"
@@ -305,7 +379,7 @@ class TestPathLockBehavior:
         agfs_client.mkdir(src)
         agfs_client.mkdir(dst)
 
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-mv-1")
         ok = await lock.acquire_mv(src, dst, tx, timeout=3.0)
         assert ok is True
@@ -316,7 +390,7 @@ class TestPathLockBehavior:
             if isinstance(src_token_bytes, bytes)
             else src_token_bytes
         )
-        assert ":S" in src_token
+        assert ":T" in src_token
 
         dst_token_bytes = agfs_client.cat(f"{dst}/{LOCK_FILE_NAME}")
         dst_token = (
@@ -324,12 +398,12 @@ class TestPathLockBehavior:
             if isinstance(dst_token_bytes, bytes)
             else dst_token_bytes
         )
-        assert ":S" in dst_token
+        assert ":E" in dst_token
 
         await lock.release(tx)
 
-    async def test_point_does_not_block_sibling_point(self, agfs_client, test_dir):
-        """POINT locks on different directories do not conflict."""
+    async def test_exact_does_not_block_sibling_exact(self, agfs_client, test_dir):
+        """EXACT locks on different directories do not conflict."""
         import uuid as _uuid
 
         dir_a = f"{test_dir}/sibling-a-{_uuid.uuid4().hex}"
@@ -337,12 +411,12 @@ class TestPathLockBehavior:
         agfs_client.mkdir(dir_a)
         agfs_client.mkdir(dir_b)
 
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
         tx_a = LockHandle(id="tx-sib-a")
         tx_b = LockHandle(id="tx-sib-b")
 
-        ok_a = await lock.acquire_point(dir_a, tx_a, timeout=3.0)
-        ok_b = await lock.acquire_point(dir_b, tx_b, timeout=3.0)
+        ok_a = await lock.acquire_exact_path(dir_a, tx_a, timeout=3.0)
+        ok_b = await lock.acquire_exact_path(dir_b, tx_b, timeout=3.0)
 
         assert ok_a is True
         assert ok_b is True
@@ -357,17 +431,17 @@ class TestPathLockBehavior:
         target = f"{test_dir}/stale-{_uuid.uuid4().hex}"
         agfs_client.mkdir(target)
 
-        lock_path = f"{target}/{LOCK_FILE_NAME}"
+        lock = PathLockEngine(agfs_client, lock_expire=300.0)
+        lock_path = lock._get_exact_lock_path(target)
 
         # Write a lock file with a very old timestamp (simulate crashed process)
         old_ts = time.time_ns() - int(600 * 1e9)  # 600 seconds ago
-        stale_token = f"tx-dead:{old_ts}:{LOCK_TYPE_POINT}"
+        stale_token = f"tx-dead:{old_ts}:{LOCK_TYPE_EXACT}"
         agfs_client.write(lock_path, stale_token.encode("utf-8"))
 
         # New transaction should succeed by auto-removing the stale lock
-        lock = PathLock(agfs_client, lock_expire=300.0)
         tx = LockHandle(id="tx-new-owner")
-        ok = await lock.acquire_point(target, tx, timeout=2.0)
+        ok = await lock.acquire_exact_path(target, tx, timeout=2.0)
         assert ok is True
 
         # Verify new lock is owned by our transaction
@@ -377,22 +451,22 @@ class TestPathLockBehavior:
 
         await lock.release(tx)
 
-    async def test_stale_subtree_ancestor_auto_removed(self, agfs_client, test_dir):
-        """A stale SUBTREE lock on ancestor is auto-removed when child acquires POINT."""
+    async def test_stale_tree_ancestor_auto_removed(self, agfs_client, test_dir):
+        """A stale TreeLock on ancestor is auto-removed when child acquires ExactPathLock."""
         import uuid as _uuid
 
         child = f"{test_dir}/child-stale-{_uuid.uuid4().hex}"
         agfs_client.mkdir(child)
 
-        # Write stale SUBTREE lock on parent
+        # Write stale TreeLock on parent
         parent_lock = f"{test_dir}/{LOCK_FILE_NAME}"
         old_ts = time.time_ns() - int(600 * 1e9)
-        stale_token = f"tx-dead-parent:{old_ts}:{LOCK_TYPE_SUBTREE}"
+        stale_token = f"tx-dead-parent:{old_ts}:{LOCK_TYPE_TREE}"
         agfs_client.write(parent_lock, stale_token.encode("utf-8"))
 
-        lock = PathLock(agfs_client, lock_expire=300.0)
+        lock = PathLockEngine(agfs_client, lock_expire=300.0)
         tx = LockHandle(id="tx-child-new")
-        ok = await lock.acquire_point(child, tx, timeout=2.0)
+        ok = await lock.acquire_exact_path(child, tx, timeout=2.0)
         assert ok is True
 
         await lock.release(tx)
@@ -402,22 +476,22 @@ class TestPathLockBehavior:
         except Exception:
             pass
 
-    async def test_point_same_path_no_wait_fails_immediately(self, agfs_client, test_dir):
+    async def test_exact_same_path_no_wait_fails_immediately(self, agfs_client, test_dir):
         """With timeout=0, a conflicting lock fails immediately."""
         import uuid as _uuid
 
         target = f"{test_dir}/nowait-{_uuid.uuid4().hex}"
         agfs_client.mkdir(target)
 
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
         tx1 = LockHandle(id="tx-hold")
-        ok1 = await lock.acquire_point(target, tx1, timeout=3.0)
+        ok1 = await lock.acquire_exact_path(target, tx1, timeout=3.0)
         assert ok1 is True
 
         # Second acquire with timeout=0 should fail immediately
         tx2 = LockHandle(id="tx-blocked")
         t0 = time.monotonic()
-        ok2 = await lock.acquire_point(target, tx2, timeout=0.0)
+        ok2 = await lock.acquire_exact_path(target, tx2, timeout=0.0)
         elapsed = time.monotonic() - t0
 
         assert ok2 is False
@@ -425,52 +499,52 @@ class TestPathLockBehavior:
 
         await lock.release(tx1)
 
-    async def test_subtree_same_path_mutual_exclusion(self, agfs_client, test_dir):
-        """Two SUBTREE locks on the same path: second one blocked until first releases."""
+    async def test_tree_same_path_mutual_exclusion(self, agfs_client, test_dir):
+        """Two TreeLocks on the same path: second one blocked until first releases."""
         import uuid as _uuid
 
-        target = f"{test_dir}/sub-excl-{_uuid.uuid4().hex}"
+        target = f"{test_dir}/tree-excl-{_uuid.uuid4().hex}"
         agfs_client.mkdir(target)
 
-        lock = PathLock(agfs_client)
-        tx1 = LockHandle(id="tx-sub1")
-        ok1 = await lock.acquire_subtree(target, tx1, timeout=3.0)
+        lock = PathLockEngine(agfs_client)
+        tx1 = LockHandle(id="tx-tree1")
+        ok1 = await lock.acquire_tree(target, tx1, timeout=3.0)
         assert ok1 is True
 
-        tx2 = LockHandle(id="tx-sub2")
-        ok2 = await lock.acquire_subtree(target, tx2, timeout=0.5)
+        tx2 = LockHandle(id="tx-tree2")
+        ok2 = await lock.acquire_tree(target, tx2, timeout=0.5)
         assert ok2 is False
 
         await lock.release(tx1)
 
         # Now tx2 should succeed
-        ok2_retry = await lock.acquire_subtree(target, tx2, timeout=3.0)
+        ok2_retry = await lock.acquire_tree(target, tx2, timeout=3.0)
         assert ok2_retry is True
         await lock.release(tx2)
 
-    async def test_point_reuses_same_owner_subtree_lock_on_same_path(self, agfs_client, test_dir):
-        lock = PathLock(agfs_client)
+    async def test_exact_reuses_same_owner_tree_lock_on_same_path(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-reentrant-same-path")
 
-        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        ok = await lock.acquire_tree(test_dir, tx, timeout=3.0)
         assert ok is True
 
         lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
         before = agfs_client.cat(lock_path)
         before_token = before.decode("utf-8") if isinstance(before, bytes) else before
-        assert ":S" in before_token
+        assert ":T" in before_token
 
-        ok_reuse = await lock.acquire_point(test_dir, tx, timeout=0.5)
+        ok_reuse = await lock.acquire_exact_path(test_dir, tx, timeout=0.5)
         assert ok_reuse is True
 
         after = agfs_client.cat(lock_path)
         after_token = after.decode("utf-8") if isinstance(after, bytes) else after
         assert after_token == before_token
-        assert ":S" in after_token
+        assert ":T" in after_token
 
         await lock.release(tx)
 
-    async def test_point_under_same_owner_subtree_does_not_create_child_lock(
+    async def test_exact_under_same_owner_tree_does_not_create_child_lock(
         self, agfs_client, test_dir
     ):
         import uuid as _uuid
@@ -478,19 +552,19 @@ class TestPathLockBehavior:
         child = f"{test_dir}/child-reentrant-{_uuid.uuid4().hex}"
         agfs_client.mkdir(child)
 
-        lock = PathLock(agfs_client)
+        lock = PathLockEngine(agfs_client)
         tx = LockHandle(id="tx-reentrant-child")
 
-        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        ok = await lock.acquire_tree(test_dir, tx, timeout=3.0)
         assert ok is True
 
-        ok_child = await lock.acquire_point(child, tx, timeout=0.5)
+        ok_child = await lock.acquire_exact_path(child, tx, timeout=0.5)
         assert ok_child is True
 
-        child_lock_path = f"{child}/{LOCK_FILE_NAME}"
+        child_lock_path = lock._get_exact_lock_path(child)
         try:
             agfs_client.stat(child_lock_path)
-            raise AssertionError("child lock should not be created when ancestor subtree is owned")
+            raise AssertionError("child lock should not be created when ancestor tree is owned")
         except AssertionError:
             raise
         except Exception:

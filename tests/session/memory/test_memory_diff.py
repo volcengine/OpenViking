@@ -7,8 +7,6 @@ Verifies that memory_diff.json is correctly written to the archive directory
 containing adds, updates, and deletes.
 """
 
-import json
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

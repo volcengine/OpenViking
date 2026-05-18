@@ -103,3 +103,30 @@ def test_langfuse_client_records_outcome_without_generation_metadata_attribute()
     assert client._client.scores[0]["observation_id"] == "obs-456"
     assert client._client.scores[0]["metadata"]["reask_within_10m"] is True
     assert client._client.flush_calls == 1
+
+
+def test_langfuse_client_merges_generation_metadata_into_tracked_generation():
+    client = LangfuseClient.__new__(LangfuseClient)
+    client.enabled = True
+    client._client = _FakeClient()
+    client._observations_by_response_id = {}
+    client._metadata_by_response_id = {}
+    client._trace_context_by_response_id = {}
+
+    generation = _FakeGeneration(metadata={"response_id": "resp-789"})
+    client.register_generation(
+        "resp-789",
+        generation,
+        metadata={"response_id": "resp-789", "has_tools": False},
+    )
+
+    merged = client.update_generation_metadata(
+        "resp-789",
+        {"channel": "cli__default", "tool_count": 0},
+    )
+
+    assert merged["response_id"] == "resp-789"
+    assert merged["has_tools"] is False
+    assert merged["channel"] == "cli__default"
+    assert merged["tool_count"] == 0
+    assert generation.metadata == merged

@@ -318,7 +318,7 @@ class TempUploadStore:
             ctx=internal_ctx,
         )
         handle = get_lock_manager().create_handle()
-        acquired = await get_lock_manager().acquire_subtree(handle, lock_path, timeout=0.0)
+        acquired = await get_lock_manager().acquire_tree(handle, lock_path, timeout=0.0)
         if not acquired:
             raise PermissionDeniedError("Temporary upload is being consumed.")
 

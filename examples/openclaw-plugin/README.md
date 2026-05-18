@@ -1,4 +1,4 @@
-# @openclaw/openviking — OpenViking OpenClaw Plugin
+# @openviking/openclaw-plugin — OpenViking OpenClaw Plugin
 
 OpenClaw context-engine plugin for OpenViking remote memory, context database, RAG and semantic retrieval.
 
@@ -7,29 +7,29 @@ OpenClaw context-engine plugin for OpenViking remote memory, context database, R
 This page is for the **OpenClaw plugin package**:
 
 ```
-@openclaw/openviking
+@openviking/openclaw-plugin
 ```
 
 **Do NOT** install the plugin with `clawhub install openviking` — that installs the `openviking` AgentSkill (under `skills/openviking`), which is a different thing.
 
-For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openclaw/openviking`.
+For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openviking/openclaw-plugin`.
 
 ## Install (Natural Language)
 
 Ask your agent:
 
-> Install the OpenClaw plugin @openclaw/openviking for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
+> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
 
 Or in Chinese:
 
-> 帮我安装 OpenViking 远程记忆插件 @openclaw/openviking。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
+> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
 
 The agent will automatically run install → setup → restart → verify. No manual steps needed.
 
 ## Install (Command Line)
 
 ```bash
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
 openclaw openviking status --json
@@ -39,7 +39,7 @@ The `setup` command automatically activates the context-engine slot and validate
 
 ## Search Keywords
 
-@openclaw/openviking, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
+@openviking/openclaw-plugin, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
 
 ## Documentation
 

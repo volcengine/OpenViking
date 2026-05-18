@@ -80,8 +80,11 @@ If your deployment protects `/metrics` at the gateway layer, configure the scrap
 - `/metrics` returns Prometheus text, not the standard OpenViking `{status, result, time}` JSON response format.
 - Analytics-oriented statistics such as memory health, staleness, or session extraction should remain under `/api/v1/stats/*`, not `/metrics`.
 - For human-readable component snapshots, prefer `/api/v1/observer/*`.
+- `/metrics` also includes VikingBot feedback observability metrics derived from scrape-time aggregation of persisted session data; see the Metrics concept documentation for the feedback metric families and examples.
 
 ## Related Documentation
 
+- [Metrics](../concepts/12-metrics.md) - Metric families, labels, feedback metrics, and PromQL examples
+- [VikingBot Feedback Observability Design](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
 - [System and Monitoring](07-system.md) - Health checks, system status, and Observer APIs
 - [API Overview](01-overview.md) - Shared conventions for all API endpoints

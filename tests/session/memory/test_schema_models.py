@@ -179,6 +179,27 @@ class TestSchemaModelGenerator:
         assert "created_at" in model.model_fields
         assert "updated_at" in model.model_fields
 
+    def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
+        """page_id should appear before mutable fields so the model anchors target page first."""
+        from unittest.mock import patch
+
+        generator = SchemaModelGenerator(registry_with_sample)
+        with patch(
+            "openviking_cli.utils.config.get_openviking_config"
+        ) as mock_get_openviking_config:
+            mock_get_openviking_config.return_value = type(
+                "Config",
+                (),
+                {"memory": type("MemoryCfg", (), {"link_enabled": True})()},
+            )()
+            model = generator.create_flat_data_model(registry_with_sample.get("test_type"))
+
+        field_names = list(model.model_fields.keys())
+
+        assert "page_id" in field_names
+        assert "field1" in field_names
+        assert field_names.index("page_id") < field_names.index("field1")
+
     def test_generate_all_models(self, real_registry):
         """Test generating models for all real schemas."""
         generator = SchemaModelGenerator(real_registry)

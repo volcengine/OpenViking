@@ -35,17 +35,17 @@ class TestPatchOp:
     def test_get_output_schema_type_int(self):
         """Int field with patch should return int."""
         op = PatchOp(FieldType.INT64)
-        assert op.get_output_schema_type(FieldType.INT64) == int
+        assert op.get_output_schema_type(FieldType.INT64) is int
 
     def test_get_output_schema_type_float(self):
         """Float field with patch should return float."""
         op = PatchOp(FieldType.FLOAT32)
-        assert op.get_output_schema_type(FieldType.FLOAT32) == float
+        assert op.get_output_schema_type(FieldType.FLOAT32) is float
 
     def test_get_output_schema_type_bool(self):
         """Bool field with patch should return bool."""
         op = PatchOp(FieldType.BOOL)
-        assert op.get_output_schema_type(FieldType.BOOL) == bool
+        assert op.get_output_schema_type(FieldType.BOOL) is bool
 
     def test_get_output_schema_description_string(self):
         """String field description should mention PATCH."""
@@ -84,8 +84,8 @@ class TestSumOp:
     def test_get_output_schema_type(self):
         """SumOp should return appropriate numeric types."""
         op = SumOp()
-        assert op.get_output_schema_type(FieldType.INT64) == int
-        assert op.get_output_schema_type(FieldType.FLOAT32) == float
+        assert op.get_output_schema_type(FieldType.INT64) is int
+        assert op.get_output_schema_type(FieldType.FLOAT32) is float
 
     def test_get_output_schema_description(self):
         """Description should have 'add for' format."""
@@ -125,8 +125,8 @@ class TestImmutableOp:
     def test_get_output_schema_type(self):
         """ImmutableOp should return base types."""
         op = ImmutableOp()
-        assert op.get_output_schema_type(FieldType.STRING) == str
-        assert op.get_output_schema_type(FieldType.INT64) == int
+        assert op.get_output_schema_type(FieldType.STRING) is str
+        assert op.get_output_schema_type(FieldType.INT64) is int
 
     def test_get_output_schema_description(self):
         """Description should mention immutable."""
@@ -199,8 +199,10 @@ class TestSearchReplaceBlock:
         assert description is not None
         assert "page_id" in description
         assert "read result" in description
-        assert "other memory" in description
+        assert "another memory or page" in description
         assert "exact" in description
+        assert "Choose page_id first" in description
+        assert "Never use SEARCH text" in description
 
 
 class TestStrPatch:
@@ -237,9 +239,7 @@ class TestApplyStrPatch:
     def test_simple_replace(self):
         """Simple replace."""
         original = "hello world"
-        patch = StrPatch(
-            blocks=[SearchReplaceBlock(search="hello world", replace="hello there")]
-        )
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="hello world", replace="hello there")])
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"

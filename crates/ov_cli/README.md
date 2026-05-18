@@ -4,10 +4,10 @@ Command-line interface for [OpenViking](https://github.com/volcengine/OpenViking
 
 ## Installation
 
-### Quick Install (Linux/macOS)
+### Install from npm (macOS/Linux/Windows)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+npm i -g @openviking/cli
 ```
 
 ### From Source

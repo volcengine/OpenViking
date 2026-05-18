@@ -11,25 +11,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    ResolvedOperation,
     ResolvedOperations,
-    ResolvedOperation, StoredLink,
+    StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
-from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import flat_model_to_dict
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.session.memory.utils.uri import supplement_operation_uris, render_template
+from openviking.session.memory.utils.uri import render_template, supplement_operation_uris
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -303,7 +301,6 @@ class MemoryUpdater:
         extract_context: ExtractContext = None,
         isolation_handler: MemoryIsolationHandler = None,
     ) -> MemoryUpdateResult:
-
         result = MemoryUpdateResult()
         viking_fs = self._get_viking_fs()
 
@@ -397,7 +394,7 @@ class MemoryUpdater:
 
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
-        dirs = dict()
+        dirs = {}
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
                 dir_path = "/".join(uri_str.split("/")[:-1])
@@ -612,7 +609,7 @@ class MemoryUpdater:
 
         # Delete from VikingFS
         # VikingFS automatically handles vector index cleanup
-        # Pass transaction_handle so rm() reuses the compressor's subtree lock
+        # Pass transaction_handle so rm() reuses the compressor's tree lock
         # instead of trying to acquire a new lock (which would conflict).
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx, lock_handle=self._transaction_handle)
@@ -717,10 +714,16 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
-                    if enqueued and embedding_msg.telemetry_id:
+                    if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id
+                        )
+                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    if not enqueued and embedding_msg.telemetry_id:
+                        request_wait_tracker.mark_embedding_failed(
+                            embedding_msg.telemetry_id,
+                            embedding_msg.id,
+                            "embedding enqueue returned false",
                         )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 

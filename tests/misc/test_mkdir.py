@@ -48,7 +48,7 @@ class TestMkdir:
         """mkdir(exist_ok=True) should return early if directory exists."""
         fs = _make_viking_fs()
         fs._ensure_parent_dirs = AsyncMock()
-        fs.stat = AsyncMock(return_value={"type": "directory"})
+        fs.stat = AsyncMock(return_value={"isDir": True})
 
         await fs.mkdir("viking://resources/existing_dir", exist_ok=True)
 

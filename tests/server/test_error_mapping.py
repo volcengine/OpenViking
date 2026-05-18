@@ -5,6 +5,7 @@
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
 from openviking.server.error_mapping import map_exception
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import FailedPreconditionError, InvalidURIError, NotFoundError
 
 
@@ -139,3 +140,40 @@ def test_bare_model_api_key_required_maps_to_failed_precondition():
 
     assert isinstance(mapped, FailedPreconditionError)
     assert mapped.code == "FAILED_PRECONDITION"
+
+
+def test_resource_busy_maps_to_structured_conflict():
+    mapped = map_exception(
+        ResourceBusyError(
+            "Reexact is busy: viking://resources/docs/a.md",
+            uri="viking://resources/docs/a.md",
+            conflict_type="path_busy",
+            retryable=True,
+        ),
+        resource="viking://resources/docs",
+    )
+
+    assert mapped is not None
+    assert mapped.code == "CONFLICT"
+    assert mapped.details == {
+        "resource": "viking://resources/docs/a.md",
+        "uri": "viking://resources/docs/a.md",
+        "conflict_type": "path_busy",
+        "retryable": True,
+    }
+
+
+def test_lock_acquisition_maps_to_structured_conflict():
+    mapped = map_exception(
+        LockAcquisitionError("Failed to acquire exact lock"),
+        resource="viking://resources/docs/a.md",
+    )
+
+    assert mapped is not None
+    assert mapped.code == "CONFLICT"
+    assert mapped.details == {
+        "resource": "viking://resources/docs/a.md",
+        "uri": "viking://resources/docs/a.md",
+        "conflict_type": "path_busy",
+        "retryable": True,
+    }

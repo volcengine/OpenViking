@@ -109,6 +109,23 @@ class SchemaModelGenerator:
                 Field(..., description="Agent ID to distinguish which agent's memory to write"),
             )
 
+        # Add page_id field for link resolution when link_enabled globally
+        from openviking_cli.utils.config import get_openviking_config
+        config = get_openviking_config()
+        link_enabled = config.memory.link_enabled if config.memory else False
+        if link_enabled:
+            field_definitions["page_id"] = (
+                Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
+                Field(
+                    None,
+                    description=(
+                        "Page ID for link reference. REQUIRED for every item. "
+                        "Choose page_id first. For existing items: use the page_id shown in read results. "
+                        "For NEW items: assign a unique page_id >= 100."
+                    ),
+                ),
+            )
+
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
@@ -130,23 +147,6 @@ class SchemaModelGenerator:
                     Optional[union_type],
                     Field(None, description=desc),
                 )
-
-        # Add page_id field for link resolution when link_enabled globally
-        from openviking_cli.utils.config import get_openviking_config
-        config = get_openviking_config()
-        link_enabled = config.memory.link_enabled if config.memory else False
-        if link_enabled:
-            field_definitions["page_id"] = (
-                Annotated[Optional[int], WithJsonSchema({"type": "integer"})],
-                Field(
-                    None,
-                    description=(
-                        "Page ID for link reference. REQUIRED for every item. "
-                        "For existing items: use the page_id shown in read results (e.g., [page_id: 1]). "
-                        "For NEW items: assign a unique page_id >= 100."
-                    ),
-                ),
-            )
         # Create the model
         model = create_model(
             model_name,
@@ -267,9 +267,7 @@ class SchemaModelGenerator:
         # Only expose delete_uris when at least one schema supports it.
         # add_only schemas (e.g. trajectories) never delete existing records,
         # so excluding this field prevents the LLM from hallucinating fake URIs.
-        has_deletable_schema = any(
-            mt.operation_mode != "add_only" for mt in enabled_memory_types
-        )
+        has_deletable_schema = any(mt.operation_mode != "add_only" for mt in enabled_memory_types)
         if has_deletable_schema:
             field_definitions["delete_uris"] = (
                 List[str],

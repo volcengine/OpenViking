@@ -12,6 +12,45 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::error::{Error, Result};
 
+fn parse_ignore_dirs(ignore_dirs: Option<&str>) -> Vec<String> {
+    ignore_dirs
+        .map(|s| {
+            s.split(',')
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn ignore_dirs_filter<'a>(
+    root: &'a Path,
+    ignore_list: &'a [String],
+) -> impl Fn(&walkdir::DirEntry) -> bool + 'a {
+    move |e: &walkdir::DirEntry| {
+        if e.path() == root {
+            return true;
+        }
+        if e.file_type().is_dir() && !ignore_list.is_empty() {
+            let name = e.file_name().to_str().unwrap_or("");
+            for pattern in ignore_list.iter() {
+                if pattern.contains('/') {
+                    let normalized = pattern.trim_start_matches("./").trim_end_matches('/');
+                    if let Ok(rel) = e.path().strip_prefix(root) {
+                        let rel_str = rel.to_str().unwrap_or("").replace('\\', "/");
+                        if rel_str == normalized {
+                            return false;
+                        }
+                    }
+                } else if pattern == name {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
 pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     let error_code = json
         .get("error")
@@ -389,7 +428,7 @@ impl<'a> FileUploader<'a> {
         self
     }
 
-    pub fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
+    pub fn zip_directory(&self, dir_path: &Path, ignore_dirs: Option<&str>) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
             return Err(Error::Network(format!(
                 "Path {} is not a directory",
@@ -397,6 +436,7 @@ impl<'a> FileUploader<'a> {
             )));
         }
 
+        let ignore_list = parse_ignore_dirs(ignore_dirs);
         let temp_file = Builder::new().suffix(".zip").tempfile()?;
         let file = File::create(temp_file.path())?;
         let mut zip = zip::ZipWriter::new(file);
@@ -404,7 +444,11 @@ impl<'a> FileUploader<'a> {
             FileOptions::default().compression_method(CompressionMethod::Deflated);
 
         let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir
+            .into_iter()
+            .filter_entry(ignore_dirs_filter(dir_path, &ignore_list))
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
@@ -425,6 +469,7 @@ impl<'a> FileUploader<'a> {
         &self,
         dir_path: &Path,
         verbose: bool,
+        ignore_dirs: Option<&str>,
     ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
             return Err(Error::Network(format!(
@@ -433,6 +478,7 @@ impl<'a> FileUploader<'a> {
             )));
         }
 
+        let ignore_list = parse_ignore_dirs(ignore_dirs);
         let temp_file = Builder::new().suffix(".zip").tempfile()?;
         let file = File::create(temp_file.path())?;
         let mut zip = zip::ZipWriter::new(file);
@@ -442,7 +488,11 @@ impl<'a> FileUploader<'a> {
         let mut total_size = 0u64;
         let mut total_files = 0u64;
         let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir
+            .into_iter()
+            .filter_entry(ignore_dirs_filter(dir_path, &ignore_list))
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.is_file() {
                 if let Ok(meta) = std::fs::metadata(path) {
@@ -469,7 +519,11 @@ impl<'a> FileUploader<'a> {
         };
 
         let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir
+            .into_iter()
+            .filter_entry(ignore_dirs_filter(dir_path, &ignore_list))
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);

@@ -50,6 +50,266 @@ async def test_find_with_target_uri(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
+async def test_find_with_level_passes_to_service(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "level": [0, 2]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] == [0, 2]
+
+
+async def test_find_without_level_passes_none(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] is None
+
+
+async def test_find_level_filters_l2_only(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 10, "level": [2]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") == 2
+
+
+async def test_find_level_filters_l0_only(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 10, "level": [0]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") == 0
+
+
+async def test_find_level_filters_mixed_l0_l2(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 10, "level": [0, 2]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") in (0, 2)
+
+
+async def test_find_level_filters_l0_l1(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 10, "level": [0, 1]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") in (0, 1)
+
+
+async def test_find_level_with_no_matching_results(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 10, "level": [5]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert result.get("total", 0) == 0
+
+
+async def test_search_with_level_passes_to_service(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_search(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "level": [0, 2]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] == [0, 2]
+
+
+async def test_search_without_level_passes_none(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_search(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] is None
+
+
+async def test_search_level_filters_l2_only(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 10, "level": [2]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") == 2
+
+
+async def test_search_level_filters_l0_only(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 10, "level": [0]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") == 0
+
+
+async def test_search_level_filters_mixed_l0_l2(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 10, "level": [0, 2]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") in (0, 2)
+
+
+async def test_search_level_filters_l0_l1(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 10, "level": [0, 1]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    for key in ("memories", "resources", "skills"):
+        for item in result.get(key, []):
+            assert item.get("level") in (0, 1)
+
+
+async def test_search_level_with_no_matching_results(client_with_resource):
+    client, uri = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 10, "level": [5]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert result.get("total", 0) == 0
+
+
+async def test_find_with_level_string_input(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "level": "0,2"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] == [0, 2]
+
+
+async def test_find_with_level_int_input(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, level=None, **kwargs):
+        captured["level"] = level
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "level": 2},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["level"] == [2]
+
+
 async def test_find_with_inaccessible_target_uri_returns_permission_denied(
     client: httpx.AsyncClient, app
 ):

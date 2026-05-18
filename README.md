@@ -80,7 +80,7 @@ pip install openviking --upgrade --force-reinstall
 #### Rust CLI (Optional)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+npm i -g @openviking/cli
 ```
 
 Or build from source:

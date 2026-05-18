@@ -40,6 +40,53 @@ def test_create_default_collector_manager_registers_expected_collectors_in_order
     ]
 
 
+def test_create_default_collector_manager_registers_feedback_collector_when_bot_path_configured():
+    class _MetricsConfig:
+        bot_data_path = "/tmp/bot"
+
+    class _ObservabilityConfig:
+        metrics = _MetricsConfig()
+
+    class _Config:
+        observability = _ObservabilityConfig()
+
+    manager = bootstrap.create_default_collector_manager(app=None, service=None, config=_Config())
+
+    names = [type(c).__name__ for c in manager._collectors]
+    assert names == [
+        "QueueCollector",
+        "TaskTrackerCollector",
+        "FeedbackCollector",
+        "ObserverHealthCollector",
+        "ObserverStateCollector",
+        "LockCollector",
+        "VikingDBCollector",
+        "ModelUsageCollector",
+        "ServiceProbeCollector",
+        "StorageProbeCollector",
+        "RetrievalBackendProbeCollector",
+        "ModelProviderProbeCollector",
+        "AsyncSystemProbeCollector",
+        "EncryptionProbeCollector",
+    ]
+
+
+def test_create_default_collector_manager_skips_feedback_collector_without_bot_path():
+    class _MetricsConfig:
+        bot_data_path = None
+
+    class _ObservabilityConfig:
+        metrics = _MetricsConfig()
+
+    class _Config:
+        observability = _ObservabilityConfig()
+
+    manager = bootstrap.create_default_collector_manager(app=None, service=None, config=_Config())
+
+    names = [type(c).__name__ for c in manager._collectors]
+    assert "FeedbackCollector" not in names
+
+
 def test_create_default_collector_manager_propagates_construction_failures(monkeypatch):
     def _boom():
         raise RuntimeError("cannot init datasource")

@@ -117,8 +117,6 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         code hosting URL
     """
     all_domains = _get_all_domains()
-    host = _extract_host(url)
-
     # Handle git@ SSH URLs: git@host:org/repo.git
     if url.startswith("git@"):
         if ":" not in url[4:]:
@@ -155,7 +153,9 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         if azure_repo_parts is None:
             azure_repo_parts = _extract_azure_devops_ssh_repo_parts(path_parts)
         if azure_repo_parts:
-            return "/".join(_sanitize_segment(part.removesuffix(".git")) for part in azure_repo_parts)
+            return "/".join(
+                _sanitize_segment(part.removesuffix(".git")) for part in azure_repo_parts
+            )
         return None
 
     # For code hosting URLs with org/repo structure

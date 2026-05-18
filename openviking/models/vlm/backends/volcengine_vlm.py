@@ -310,6 +310,7 @@ class VolcEngineVLM(OpenAIVLM):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion via Chat Completions API."""
@@ -334,7 +335,7 @@ class VolcEngineVLM(OpenAIVLM):
         kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_client()
         t0 = time.perf_counter()
@@ -352,6 +353,7 @@ class VolcEngineVLM(OpenAIVLM):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously via Chat Completions API."""
@@ -376,7 +378,7 @@ class VolcEngineVLM(OpenAIVLM):
         kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_async_client()
         t0 = time.perf_counter()

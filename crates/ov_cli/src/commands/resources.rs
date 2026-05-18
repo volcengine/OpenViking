@@ -58,10 +58,14 @@ pub async fn add_skill(
     data: &str,
     wait: bool,
     timeout: Option<f64>,
+    show_progress: bool,
+    verbose: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.add_skill(data, wait, timeout).await?;
+    let result = client
+        .add_skill(data, wait, timeout, show_progress, verbose)
+        .await?;
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Skill is being processed in the background.");

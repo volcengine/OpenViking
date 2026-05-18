@@ -7,8 +7,7 @@ URI generation and validation utilities.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Set
 
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -65,9 +64,6 @@ def render_template(
     # 渲染模板
     jinja_template = env.from_string(template)
     return jinja_template.render(**template_vars).strip()
-
-
-
 
 
 def generate_uri(
@@ -139,9 +135,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
     return True
 
 
-
-
-
 def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     """
     Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
@@ -205,10 +198,6 @@ def is_uri_allowed(
     return False
 
 
-
-from openviking.session.memory.utils.model import model_to_dict
-
-
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
     """
     Extract URI-friendly fields from a flat model, ignoring patch objects.
@@ -230,9 +219,6 @@ def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> 
         if name in schema_field_names and isinstance(value, (str, int, float, bool)):
             uri_fields[name] = value
     return uri_fields
-
-
-
 
 
 def supplement_operation_uris(

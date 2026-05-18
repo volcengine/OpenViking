@@ -13,10 +13,9 @@ source_trajectories as grounding material.
 import jinja2
 from typing import Any, Dict, List, Optional
 
-from openviking.core.namespace import to_user_space, to_agent_space
-from openviking.server.identity import RequestContext
+from openviking.core.namespace import to_agent_space, to_user_space
+from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )

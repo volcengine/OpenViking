@@ -284,7 +284,7 @@ class LiteLLMProvider(LLMProvider):
 
                 response_id = get_current_response_id()
                 if response_id:
-                    self.langfuse.update_generation_metadata(
+                    update_kwargs["metadata"] = self.langfuse.update_generation_metadata(
                         response_id,
                         update_kwargs.get("metadata", {}),
                     )

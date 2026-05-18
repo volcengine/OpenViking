@@ -302,7 +302,7 @@ For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
 | `GET /health` | No | Liveness probe — returns `{"status": "ok"}` immediately |
-| `GET /ready` | No | Readiness probe — checks AGFS, VectorDB, APIKeyManager |
+| `GET /ready` | No | Readiness probe — checks AGFS, VectorDB, APIKeyManager, Embedding, Ollama |
 
 ```bash
 # Liveness
@@ -310,7 +310,7 @@ curl http://localhost:1933/health
 
 # Readiness
 curl http://localhost:1933/ready
-# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok"}}
+# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok", "embedding": "ok", "ollama": "ok"}}
 ```
 
 Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.

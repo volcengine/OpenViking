@@ -8,12 +8,13 @@ L0/L1/L2 content and URI structure.
 
 v5.0 Architecture:
 1. Parser: parse + create directory structure in temp VikingFS
-2. TreeBuilder: move to AGFS + enqueue to SemanticQueue + create Resources
-3. SemanticProcessor: async generate L0/L1 + vectorize
+2. TreeBuilder: build final URI metadata and keep temp references
+3. ResourceProcessor: source commit from temp to final VikingFS path
+4. SemanticProcessor: async generate L0/L1 + vectorize
 
 IMPORTANT (v5.0 Architecture):
 - Parser creates directory structure directly, no LLM calls
-- TreeBuilder moves files and enqueues to SemanticQueue
+- TreeBuilder does not move files; source commit is handled after URI metadata is built
 - SemanticProcessor handles all semantic generation asynchronously
 - Temporary directory approach eliminates memory pressure and enables concurrency
 - Resource objects are lightweight (no content fields)
@@ -40,18 +41,20 @@ class TreeBuilder:
 
     New v5.0 Architecture:
     - Parser creates directory structure in temp VikingFS (no LLM calls)
-    - TreeBuilder moves to AGFS + enqueues to SemanticQueue + creates Resources
+    - TreeBuilder builds final URI metadata while preserving temp URIs
+    - ResourceProcessor commits temp content to the final source path
     - SemanticProcessor handles semantic generation asynchronously
 
     Process flow:
     1. Parser creates directory structure with files in temp VikingFS
-    2. TreeBuilder.finalize_from_temp() moves to AGFS, enqueues to SemanticQueue, creates Resources
-    3. SemanticProcessor generates .abstract.md and .overview.md asynchronously
-    4. SemanticProcessor directly vectorizes and inserts to collection
+    2. TreeBuilder.finalize_from_temp() returns final URI and temp URI metadata
+    3. ResourceProcessor performs source commit with short path locks
+    4. SemanticProcessor generates .abstract.md and .overview.md asynchronously
+    5. SemanticProcessor directly vectorizes and inserts to collection
 
     Key changes from v4.0:
     - Semantic generation moved from Parser to SemanticQueue
-    - TreeBuilder enqueues directories for async processing
+    - ResourceProcessor enqueues directories for async processing
     - Direct vectorization in SemanticProcessor (no EmbeddingQueue)
     """
 
@@ -75,31 +78,6 @@ class TreeBuilder:
         # Agent scope
         return "viking://agent"
 
-    async def _resolve_unique_uri(self, uri: str, max_attempts: int = 100) -> str:
-        """Return a URI that does not collide with an existing resource.
-
-        If *uri* is free, return it unchanged.  Otherwise append ``_1``,
-        ``_2``, ... until a free name is found.
-        """
-        viking_fs = get_viking_fs()
-
-        async def _exists(u: str) -> bool:
-            try:
-                await viking_fs.stat(u)
-                return True
-            except Exception:
-                return False
-
-        if not await _exists(uri):
-            return uri
-
-        for i in range(1, max_attempts + 1):
-            candidate = f"{uri}_{i}"
-            if not await _exists(candidate):
-                return candidate
-
-        raise FileExistsError(f"Cannot resolve unique name for {uri} after {max_attempts} attempts")
-
     # ============================================================================
     # v5.0 Methods (temporary directory + SemanticQueue architecture)
     # ============================================================================
@@ -116,10 +94,10 @@ class TreeBuilder:
         create_parent: bool = False,
     ) -> "BuildingTree":
         """
-        Finalize processing by moving from temp to AGFS.
+        Finalize URI metadata for a temp parse result.
 
         Args:
-            to_uri: Exact target URI (must not exist)
+            to_uri: Exact target URI, or resources root to import under
             parent_uri: Target parent URI (must exist unless create_parent is True)
             create_parent: Whether to automatically create parent directory if it doesn't exist
         """
@@ -172,6 +150,8 @@ class TreeBuilder:
         else:
             effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
             if effective_parent_uri:
+                effective_parent_uri = effective_parent_uri.rstrip("/")
+            if effective_parent_uri:
                 # Parent URI must exist and be a directory, or create it if requested
                 try:
                     # First check if parent exists
@@ -202,26 +182,16 @@ class TreeBuilder:
                 base_uri = effective_parent_uri
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
-        if to_uri and not use_to_as_parent:
-            final_uri = candidate_uri
-        elif use_to_as_parent:
-            # Treat an explicit resources root target as "import under this
-            # directory" while preserving the child URI so downstream logic can
-            # incrementally update viking://resources/<child> when it exists.
-            final_uri = candidate_uri
-        else:
-            final_uri = await self._resolve_unique_uri(candidate_uri)
-
         tree = BuildingTree(
             source_path=source_path,
             source_format=source_format,
         )
-        tree._root_uri = final_uri
+        tree._root_uri = candidate_uri
         if not to_uri or use_to_as_parent:
             tree._candidate_uri = candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)
+        root_context = Context(uri=candidate_uri, temp_uri=temp_doc_uri)
         tree.add_context(root_context)
 
         return tree

@@ -44,6 +44,9 @@ class RootSpanAttributes:
     url_path: Optional[str] = None
     """Raw request path for debugging. This may be high-cardinality."""
 
+    url_query: Optional[str] = None
+    """Raw query string (without leading '?'). May contain secrets — handle accordingly."""
+
     url_scheme: Optional[str] = None
     """URL scheme, such as `http` or `https`."""
 
@@ -78,6 +81,8 @@ class RootSpanAttributes:
             attrs["http.status_code"] = self.http_status_code
         if self.url_path is not None:
             attrs["url.path"] = self.url_path
+        if self.url_query is not None and self.url_query != "":
+            attrs["url.query"] = self.url_query
         if self.url_scheme is not None:
             attrs["url.scheme"] = self.url_scheme
         if self.http_host is not None:
@@ -290,6 +295,7 @@ def create_root_span_attributes(
     http_route: str,
     request_id: str,
     url_path: Optional[str] = None,
+    url_query: Optional[str] = None,
     url_scheme: Optional[str] = None,
     http_host: Optional[str] = None,
     source_type: Optional[str] = None,
@@ -301,6 +307,7 @@ def create_root_span_attributes(
         http_route=http_route,
         request_id=request_id,
         url_path=url_path,
+        url_query=url_query,
         url_scheme=url_scheme,
         http_host=http_host,
         source_type=source_type,

@@ -61,6 +61,7 @@ def evaluate_response_outcome(
     ]
     latest_feedback = relevant_feedback[-1] if relevant_feedback else None
     feedback_type = latest_feedback.get("feedback_type") if latest_feedback else None
+    feedback_score = _parse_feedback_score(latest_feedback) if latest_feedback else None
 
     reask_within_10m = False
     first_user_after_response = user_messages[0] if user_messages else None
@@ -73,10 +74,14 @@ def evaluate_response_outcome(
     resolved_in_one_turn = not user_messages
     follow_up_without_feedback = bool(user_messages) and not relevant_feedback
 
-    if feedback_type == "thumb_down":
+    if feedback_type == "thumb_down" or (
+        feedback_type == "rating" and feedback_score is not None and feedback_score < 0
+    ):
         outcome_label = "negative_feedback"
         resolved_in_one_turn = False
-    elif feedback_type == "thumb_up":
+    elif feedback_type == "thumb_up" or (
+        feedback_type == "rating" and feedback_score is not None and feedback_score > 0
+    ):
         outcome_label = "positive_feedback"
         resolved_in_one_turn = True
         reask_within_10m = False
@@ -105,6 +110,7 @@ def evaluate_response_outcome(
         evaluated_at=evaluated_at,
         evidence={
             "feedback_type": feedback_type,
+            "feedback_score": feedback_score,
             "user_follow_up_count": len(user_messages),
             "assistant_index": assistant_index,
         },
@@ -142,3 +148,12 @@ def _parse_timestamp(message: dict[str, Any]) -> Optional[datetime]:
         return datetime.fromisoformat(timestamp)
     except ValueError:
         return None
+
+
+def _parse_feedback_score(feedback_event: dict[str, Any]) -> Optional[float]:
+    score = feedback_event.get("feedback_score")
+    if isinstance(score, bool) or score is None:
+        return None
+    if isinstance(score, (int, float)):
+        return float(score)
+    return None

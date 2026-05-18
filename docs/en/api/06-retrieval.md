@@ -56,8 +56,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
-| limit | int | No | 10 | Maximum number of results |
-| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
+| node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -274,8 +273,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
-| limit | int | No | 10 | Maximum number of results |
-| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
+| node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -453,7 +451,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of nodes to search |
+| node_limit | int | No | None | Maximum number of results |
 | level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 #### 3. Usage Examples

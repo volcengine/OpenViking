@@ -12,6 +12,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
@@ -170,15 +171,16 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
         previous_content: Optional[str] = None
         content_written = False
-        lock_transferred = False
+        semantic_enqueued = False
+        lock_released = False
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
@@ -191,10 +193,12 @@ class ContentWriteCoordinator:
                 changed_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
+                lifecycle_lock_handle_id="",
                 change_type="added" if mode == "create" else "modified",
             )
-            lock_transferred = True
+            semantic_enqueued = True
+            await lock_manager.release(handle)
+            lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -210,7 +214,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
             )
         except Exception:
-            if not lock_transferred and content_written:
+            if not semantic_enqueued and content_written:
                 await self._rollback_direct_write(
                     uri=uri,
                     previous_content=previous_content,
@@ -218,7 +222,7 @@ class ContentWriteCoordinator:
                     ctx=ctx,
                     lock_handle=handle,
                 )
-            if not lock_transferred:
+            if not lock_released:
                 await lock_manager.release(handle)
             raise
         finally:
@@ -385,11 +389,27 @@ class ContentWriteCoordinator:
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+            coalesce_key=(
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    agent_id=ctx.user.agent_id,
+                )
+                if context_type in {"resource", "skill"}
+                else ""
+            ),
             changes={change_type: [changed_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _enqueue_memory_refresh(
         self,
@@ -412,11 +432,23 @@ class ContentWriteCoordinator:
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+            coalesce_key=build_semantic_coalesce_key(
+                context_type="memory",
+                uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                agent_id=ctx.user.agent_id,
+            ),
             changes={"modified": [modified_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
@@ -500,13 +532,13 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
-        lock_transferred = False
+        released = False
         try:
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
@@ -516,9 +548,10 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 modified_uri=uri,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
+                lifecycle_lock_handle_id="",
             )
-            lock_transferred = True
+            await lock_manager.release(handle)
+            released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -534,7 +567,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
             )
         except Exception:
-            if not lock_transferred:
+            if not released:
                 await lock_manager.release(handle)
             raise
         finally:

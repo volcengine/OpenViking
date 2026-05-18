@@ -148,6 +148,8 @@ class SyncOpenViking:
         """Add resource to OpenViking (resources scope only)
 
         Args:
+            to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
+            parent: Target parent URI for automatic child naming.
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
             **kwargs: Extra options forwarded to the parser chain, e.g.
@@ -196,6 +198,7 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -211,6 +214,7 @@ class SyncOpenViking:
                 since=since,
                 until=until,
                 time_field=time_field,
+                level=level,
             )
         )
 
@@ -225,6 +229,7 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -238,6 +243,7 @@ class SyncOpenViking:
                 since,
                 until,
                 time_field,
+                level,
             )
         )
 

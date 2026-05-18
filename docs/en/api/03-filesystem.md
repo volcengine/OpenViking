@@ -277,8 +277,7 @@ List directory contents.
 | output | str | No | `agent` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
 
 **Entry Structure**
 
@@ -362,8 +361,7 @@ Get directory tree structure.
 | output | str | No | `agent` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
@@ -497,7 +495,7 @@ openviking stat viking://resources/my-project/docs
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock — either the path itself has a valid `.path.ovlock`, or any ancestor directory holds a SUBTREE lock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
 
 The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
@@ -704,7 +702,7 @@ Search content by pattern.
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of nodes to search |
+| node_limit | int | No | None | Maximum number of results |
 | level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
@@ -776,7 +774,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
+| node_limit | int | No | None | Maximum number of results |
 
 **Python SDK (Embedded / HTTP)**
 

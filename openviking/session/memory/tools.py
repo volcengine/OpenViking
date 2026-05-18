@@ -8,12 +8,10 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
