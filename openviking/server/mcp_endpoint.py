@@ -420,10 +420,11 @@ async def add_resource(
 
 
 # -- watch management ------------------------------------------------------
-# MCP exposes the minimum closure: list + cancel. Pause/resume/trigger/
-# set-interval are intentionally NOT exposed — they're either low-value for
-# agents or invite unwanted autonomous decisions. Power users should reach
-# for the REST API or `ov watch` CLI for those operations.
+# MCP exposes the minimum closure: list + cancel. Pause/resume/trigger and
+# the unified `update` verb are intentionally NOT exposed — they're either
+# low-value for agents or invite unwanted autonomous decisions. Power users
+# should reach for the REST API or the `ov task watch *` CLI (`pause`,
+# `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
 @mcp.tool()

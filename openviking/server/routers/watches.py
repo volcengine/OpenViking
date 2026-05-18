@@ -12,7 +12,7 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from openviking.resource import watch_manager as wm_mod
 from openviking.resource.watch_manager import WatchManager, WatchTask
@@ -52,6 +52,22 @@ class UpdateWatchRequest(BaseModel):
     is_active: Optional[bool] = None
     reason: Optional[str] = None
     instruction: Optional[str] = None
+
+    @field_validator("watch_interval")
+    @classmethod
+    def _interval_must_be_positive(cls, value: Optional[float]) -> Optional[float]:
+        # `None` means "leave unchanged" — only validate when the caller
+        # actually supplied a value. Mirrors the CLI/MCP boundary checks so
+        # the three control planes agree on "non-positive is invalid".
+        # Without this, PATCH would persist `watch_interval <= 0`, which then
+        # makes a later `is_active=true` resume fail inside update_task with
+        # ValueError and surface as 404.
+        if value is not None and value <= 0:
+            raise ValueError(
+                "watch_interval must be > 0 (use is_active=false to pause "
+                "without losing the cadence)"
+            )
+        return value
 
 
 def _wm() -> WatchManager:

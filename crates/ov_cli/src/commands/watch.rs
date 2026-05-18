@@ -40,11 +40,12 @@ fn classify_key(key: &str) -> Result<KeyKind> {
     Ok(KeyKind::TaskId)
 }
 
-/// Validate `ov watch set-interval` minutes. Rejects 0, negatives, and NaN.
+/// Validate the `--interval` value of `ov task watch update`. Rejects 0,
+/// negatives, and NaN.
 fn validate_interval_minutes(minutes: f64) -> Result<()> {
     if !(minutes > 0.0) {
         return Err(Error::Parse(format!(
-            "minutes must be > 0 (got {minutes}). To pause a watch task, use `ov watch pause`."
+            "minutes must be > 0 (got {minutes}). To pause a watch task, use `ov task watch pause`."
         )));
     }
     Ok(())

@@ -179,6 +179,26 @@ async def test_not_found_404(client: httpx.AsyncClient):
     assert resp.status_code == 404
 
 
+async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClient, watch_manager):
+    """REST PATCH must reject `watch_interval <= 0` at the request boundary.
+
+    Without the field_validator, a negative or zero value would be forwarded
+    to WatchManager.update_task, which deactivates the task and stores the
+    bad cadence. A later resume (`is_active=true`) then fails inside
+    update_task with ValueError → 404, misleading callers about the root
+    cause. Reject upfront with 422 instead, matching CLI/MCP semantics.
+    """
+    task = await _seed(watch_manager, to_uri="viking://resources/test/nonpos")
+    for bad in [-1, 0, -42.5]:
+        resp = await client.patch(
+            f"/api/v1/watches/{task.task_id}",
+            json={"watch_interval": bad},
+        )
+        assert resp.status_code == 422, (
+            f"watch_interval={bad} should be 422, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+
 async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_manager):
     """UpdateWatchRequest has extra='forbid'; passing a field outside the allowed
     set (watch_interval / is_active / reason / instruction) returns 422.
