@@ -119,15 +119,49 @@ pub async fn resume(
     Ok(())
 }
 
-pub async fn set_interval(
+/// Build the PATCH body for `ov task watch update`. Validates each field and
+/// guards against the no-op case (caller passed no flags). Exposed as a
+/// standalone helper so the validation paths can be unit-tested without an
+/// HTTP client.
+fn build_update_body(
+    interval: Option<f64>,
+    active: Option<bool>,
+    reason: Option<&str>,
+    instruction: Option<&str>,
+) -> Result<serde_json::Value> {
+    let mut body = serde_json::Map::new();
+    if let Some(i) = interval {
+        validate_interval_minutes(i)?;
+        body.insert("watch_interval".into(), json!(i));
+    }
+    if let Some(a) = active {
+        body.insert("is_active".into(), json!(a));
+    }
+    if let Some(r) = reason {
+        body.insert("reason".into(), json!(r));
+    }
+    if let Some(ins) = instruction {
+        body.insert("instruction".into(), json!(ins));
+    }
+    if body.is_empty() {
+        return Err(Error::Parse(
+            "At least one of --interval, --active, --reason, --instruction is required".into(),
+        ));
+    }
+    Ok(serde_json::Value::Object(body))
+}
+
+pub async fn update(
     client: &HttpClient,
     key: &str,
-    minutes: f64,
+    interval: Option<f64>,
+    active: Option<bool>,
+    reason: Option<String>,
+    instruction: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    validate_interval_minutes(minutes)?;
-    let body = json!({"watch_interval": minutes});
+    let body = build_update_body(interval, active, reason.as_deref(), instruction.as_deref())?;
     let response = match classify_key(key)? {
         KeyKind::Uri => client.patch_watch_by_uri(key, &body).await?,
         KeyKind::TaskId => client.patch_watch_by_id(key, &body).await?,
@@ -152,7 +186,7 @@ pub async fn trigger(
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyKind, classify_key, validate_interval_minutes};
+    use super::{KeyKind, build_update_body, classify_key, validate_interval_minutes};
     use crate::error::Error;
 
     #[test]
@@ -209,6 +243,45 @@ mod tests {
                 Error::Parse(msg) => assert!(msg.contains("minutes must be > 0"), "got: {msg}"),
                 other => panic!("expected Parse error, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn update_body_requires_at_least_one_flag() {
+        let err = build_update_body(None, None, None, None).expect_err("should reject");
+        match err {
+            Error::Parse(msg) => assert!(msg.contains("At least one"), "got: {msg}"),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_body_includes_each_field_when_set() {
+        let body = build_update_body(Some(120.0), Some(false), Some("r"), Some("i")).unwrap();
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["watch_interval"], 120.0);
+        assert_eq!(obj["is_active"], false);
+        assert_eq!(obj["reason"], "r");
+        assert_eq!(obj["instruction"], "i");
+        assert_eq!(obj.len(), 4);
+    }
+
+    #[test]
+    fn update_body_omits_unset_fields() {
+        // Only --active=true given — only is_active should appear in the body
+        let body = build_update_body(None, Some(true), None, None).unwrap();
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["is_active"], true);
+        assert_eq!(obj.len(), 1);
+        assert!(!obj.contains_key("watch_interval"));
+    }
+
+    #[test]
+    fn update_body_validates_interval() {
+        let err = build_update_body(Some(0.0), None, None, None).expect_err("should reject");
+        match err {
+            Error::Parse(msg) => assert!(msg.contains("minutes must be > 0"), "got: {msg}"),
+            other => panic!("expected Parse error, got {other:?}"),
         }
     }
 }
