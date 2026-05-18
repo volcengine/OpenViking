@@ -705,6 +705,104 @@ function cleanupOrphanedMessageBuffers(now: number): void {
   }
 }
 
+function hasUnsavedSessionWork(mapping: SessionMapping): boolean {
+  return mapping.capturedMessages.size > 0 ||
+    mapping.pendingMessages.size > 0 ||
+    mapping.commitInFlight === true
+}
+
+function inferAssistantRoleForPendingMessages(
+  opencodeSessionId: string,
+  mapping: SessionMapping,
+  reason: string,
+): number {
+  const inferredMessageIds: string[] = []
+
+  for (const [messageId, content] of mapping.pendingMessages.entries()) {
+    if (mapping.messageRoles.has(messageId) || !content.trim()) {
+      continue
+    }
+
+    // On session.error, assistant text parts can arrive before finish=stop records the role.
+    mapping.messageRoles.set(messageId, "assistant")
+    inferredMessageIds.push(messageId)
+  }
+
+  if (inferredMessageIds.length > 0) {
+    debouncedSaveSessionMap()
+    log("INFO", "message", "Inferred assistant role for pending messages", {
+      session_id: opencodeSessionId,
+      reason,
+      count: inferredMessageIds.length,
+      message_ids: inferredMessageIds,
+    })
+  }
+
+  return inferredMessageIds.length
+}
+
+async function completePendingCleanup(
+  mapping: SessionMapping,
+  opencodeSessionId: string,
+  config: OpenVikingConfig,
+  reason: string,
+  startFollowUpCommit: boolean,
+): Promise<void> {
+  if (!mapping.pendingCleanup) {
+    return
+  }
+
+  if (mapping.capturedMessages.size > 0) {
+    if (startFollowUpCommit) {
+      log("INFO", "session", "Starting follow-up commit before session cleanup", {
+        openviking_session: mapping.ovSessionId,
+        opencode_session: opencodeSessionId,
+        reason,
+        captured_messages_count: mapping.capturedMessages.size,
+      })
+
+      const commitStart = await startBackgroundCommit(mapping, opencodeSessionId, config)
+      if (!commitStart) {
+        log("ERROR", "session", "Deferring session cleanup because follow-up commit could not start", {
+          openviking_session: mapping.ovSessionId,
+          opencode_session: opencodeSessionId,
+          reason,
+          captured_messages_count: mapping.capturedMessages.size,
+        })
+      }
+    } else {
+      log("INFO", "session", "Deferring session cleanup because captured messages still need commit", {
+        openviking_session: mapping.ovSessionId,
+        opencode_session: opencodeSessionId,
+        reason,
+        captured_messages_count: mapping.capturedMessages.size,
+      })
+      debouncedSaveSessionMap()
+    }
+    return
+  }
+
+  if (mapping.pendingMessages.size > 0) {
+    log("INFO", "session", "Deferring session cleanup because pending messages remain", {
+      openviking_session: mapping.ovSessionId,
+      opencode_session: opencodeSessionId,
+      reason,
+      pending_messages_count: mapping.pendingMessages.size,
+    })
+    debouncedSaveSessionMap()
+    return
+  }
+
+  sessionMap.delete(opencodeSessionId)
+  sessionMessageBuffer.delete(opencodeSessionId)
+  await saveSessionMap()
+  log("INFO", "session", "Cleaned up session mapping after pending cleanup", {
+    openviking_session: mapping.ovSessionId,
+    opencode_session: opencodeSessionId,
+    reason,
+  })
+}
+
 function getAutoCommitIntervalMinutes(config: OpenVikingConfig): number {
   const configured = Number(config.autoCommit?.intervalMinutes ?? DEFAULT_CONFIG.autoCommit?.intervalMinutes ?? 10)
   if (!Number.isFinite(configured)) {
@@ -877,15 +975,13 @@ async function finalizeCommitSuccess(
 
   await flushPendingMessages(opencodeSessionId, mapping, config)
 
-  if (mapping.pendingCleanup) {
-    sessionMap.delete(opencodeSessionId)
-    sessionMessageBuffer.delete(opencodeSessionId)
-    await saveSessionMap()
-    log("INFO", "session", "Cleaned up session mapping after commit completion", {
-      openviking_session: mapping.ovSessionId,
-      opencode_session: opencodeSessionId,
-    })
-  }
+  await completePendingCleanup(
+    mapping,
+    opencodeSessionId,
+    config,
+    "commit completion",
+    true,
+  )
 }
 
 async function runSynchronousCommit(
@@ -1142,15 +1238,13 @@ async function pollCommitTaskOnce(
     clearCommitState(mapping)
     debouncedSaveSessionMap()
 
-    if (mapping.pendingCleanup) {
-      sessionMap.delete(opencodeSessionId)
-      sessionMessageBuffer.delete(opencodeSessionId)
-      await saveSessionMap()
-      log("INFO", "session", "Cleaned up session mapping after failed commit", {
-        openviking_session: mapping.ovSessionId,
-        opencode_session: opencodeSessionId,
-      })
-    }
+    await completePendingCleanup(
+      mapping,
+      opencodeSessionId,
+      config,
+      "failed commit",
+      false,
+    )
 
     return task.status
   } catch (error: unknown) {
@@ -1854,13 +1948,10 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             openviking_session: mapping.ovSessionId,
             session_info: safeStringify(event.properties?.info)
           })
+          inferAssistantRoleForPendingMessages(sessionId, mapping, "session.error")
           await flushPendingMessages(sessionId, mapping, config)
 
-          if (
-            mapping.capturedMessages.size > 0 ||
-            mapping.pendingMessages.size > 0 ||
-            mapping.commitInFlight
-          ) {
+          if (hasUnsavedSessionWork(mapping)) {
             mapping.pendingCleanup = true
             if (!mapping.commitInFlight) {
               await startBackgroundCommit(mapping, sessionId, config)
