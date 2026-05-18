@@ -29,6 +29,14 @@ from openviking_cli.exceptions import (
 
 router = APIRouter(prefix="/api/v1", tags=["watches"])
 
+# Strong refs for in-flight fire-and-forget trigger tasks. Python asyncio
+# only keeps weak references to tasks created via asyncio.create_task, so a
+# task without an external strong reference can be garbage-collected
+# mid-execution and silently aborted. We hold each task here until it
+# completes and discard via done_callback. See
+# https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
+_BACKGROUND_TRIGGER_TASKS: set[asyncio.Task] = set()
+
 
 class UpdateWatchRequest(BaseModel):
     """Partial-update body for PATCH /watches.
@@ -126,13 +134,15 @@ async def list_or_get_watch(
     """List watch tasks, or look one up by ``to_uri``.
 
     Without ``to_uri`` returns ``{tasks: [...], total: N}``. With ``to_uri``
-    returns the single matching task object (404 if missing).
+    returns the single matching task object (404 if missing). When both
+    ``to_uri`` and ``active_only=true`` are supplied, a paused task at that
+    URI still 404s — the active-only filter stays consistent in both modes.
     """
     wm = _wm()
     account_id, user_id, role, agent_id = _identity(_ctx)
     if to_uri:
         task = await wm.get_task_by_uri(to_uri, account_id, user_id, role, agent_id)
-        if task is None:
+        if task is None or (active_only and not task.is_active):
             raise NotFoundError(to_uri, "watch_task")
         return Response(status="ok", result=task.to_dict())
     tasks = await wm.get_all_tasks(
@@ -287,7 +297,9 @@ async def _trigger_impl(target: WatchTask):
     via subsequent `GET /watches/{task_id}` (last_execution_time updates).
     """
     scheduler = _scheduler()
-    asyncio.create_task(scheduler.schedule_task(target.task_id))
+    task = asyncio.create_task(scheduler.schedule_task(target.task_id))
+    _BACKGROUND_TRIGGER_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TRIGGER_TASKS.discard)
     return Response(
         status="ok",
         result={"task_id": target.task_id, "to_uri": target.to_uri, "scheduled": True},

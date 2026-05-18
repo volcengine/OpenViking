@@ -335,6 +335,22 @@ async def test_add_resource_watch_requires_to(service):
     assert "watch_interval > 0 requires `to`" in result
 
 
+async def test_add_resource_rejects_negative_watch_interval(service):
+    """watch_interval < 0 is rejected at the MCP boundary, even when `to` is given.
+
+    Without this guard, a negative value would bypass the `> 0 requires to`
+    check (passing the `> 0` comparison as false) and be forwarded into
+    the service layer with undefined semantics.
+    """
+    result = await add_resource(
+        path="https://example.com/foo",
+        watch_interval=-1,
+        to="viking://resources/test/neg",
+    )
+    assert "error" in result.lower()
+    assert "watch_interval must be >= 0" in result
+
+
 # ---------------------------------------------------------------------------
 # list_watches / cancel_watch tools
 # ---------------------------------------------------------------------------
