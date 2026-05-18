@@ -91,14 +91,12 @@ def test_serverless_headers_use_bearer_and_agent_id() -> None:
     assert "X-OpenViking-User" not in client._headers()
 
 
-def test_serverless_session_api_uses_parts_and_telemetry_payload() -> None:
+def test_serverless_sync_reuses_source_session_id_and_uses_parts_payload() -> None:
     calls = []
 
     class RecordingClient(dream.OpenVikingClient):
         def _request(self, method, path, payload=None):
             calls.append((method, path, payload))
-            if path == "/api/v1/sessions":
-                return {"session_id": "ov-session"}
             return {}
 
     client = RecordingClient(
@@ -107,18 +105,16 @@ def test_serverless_session_api_uses_parts_and_telemetry_payload() -> None:
         agent_id="test-agent",
     )
 
-    assert client._sync_session_id("source-session") == "ov-session"
-    client.add_session_message("ov-session", "user", "hello")
-    client.commit_session("ov-session")
+    client.add_session_message("source-session", "user", "hello")
+    client.commit_session("source-session")
 
     assert calls == [
-        ("POST", "/api/v1/sessions", {}),
         (
             "POST",
-            "/api/v1/sessions/ov-session/messages",
+            "/api/v1/sessions/source-session/messages",
             {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
         ),
-        ("POST", "/api/v1/sessions/ov-session/commit", {"telemetry": False}),
+        ("POST", "/api/v1/sessions/source-session/commit", {"telemetry": False}),
     ]
 
 
@@ -154,6 +150,32 @@ def test_get_active_session_prefers_sessions_index(tmp_path: Path) -> None:
 
     assert session is not None
     assert session.session_id == "indexed"
+
+
+def test_get_active_sessions_does_not_fallback_to_raw_jsonl(tmp_path: Path) -> None:
+    openclaw_root = tmp_path / ".openclaw"
+    sessions_root = openclaw_root / "agents" / "main" / "sessions"
+    sessions_root.mkdir(parents=True)
+
+    cron_session = sessions_root / "cron.jsonl"
+    _write_session(cron_session, "cron")
+    latest_unindexed = sessions_root / "latest.jsonl"
+    _write_session(latest_unindexed, "latest")
+
+    (sessions_root / "sessions.json").write_text(
+        json.dumps(
+            {
+                "agent:main:cron:daily": {
+                    "sessionId": "cron",
+                    "sessionFile": str(cron_session),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert dream.get_active_sessions(openclaw_root) == []
+    assert dream.get_active_session(openclaw_root) is None
 
 
 def test_is_chat_session_key_filters_non_chat_openclaw_sessions() -> None:
@@ -246,9 +268,6 @@ def test_sync_active_session_syncs_chat_sessions_with_independent_cursors(tmp_pa
         def __init__(self) -> None:
             self.messages = []
             self.commits = []
-
-        def _sync_session_id(self, source_session_id):
-            return source_session_id
 
         def add_session_message(self, session_id, role, content):
             self.messages.append((session_id, role, content))

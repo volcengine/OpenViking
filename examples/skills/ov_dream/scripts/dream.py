@@ -114,18 +114,6 @@ class OpenVikingClient:
             raise RuntimeError(message)
         return body.get("result", body)
 
-    def create_session(self) -> str:
-        result = self._request("POST", "/api/v1/sessions", {})
-        session_id = result.get("session_id")
-        if not isinstance(session_id, str) or not session_id:
-            raise RuntimeError("Create session response missing session_id.")
-        return session_id
-
-    def _sync_session_id(self, source_session_id: str) -> str:
-        if self.auth_mode == "serverless":
-            return self.create_session()
-        return source_session_id
-
     def add_session_message(self, session_id: str, role: str, content: str) -> dict[str, Any]:
         if self.auth_mode == "serverless":
             payload = {
@@ -186,6 +174,7 @@ def get_session_file_path(sessions_root: Path, session: Session) -> Path:
 
 
 def is_chat_session_key(key: str) -> bool:
+    # OpenClaw session keys include cron/subagent/tool routes; only chat routes should be synced.
     blocked = (":cron:", ":heartbeat", ":subagent:", ":acp:", ":hook:")
     if not key.startswith("agent:main:"):
         return False
@@ -275,30 +264,12 @@ def get_active_sessions(openclaw_root: Path) -> list[Session]:
     if not sessions_root.exists():
         return []
 
-    indexed = _get_indexed_chat_sessions(sessions_root)
-    if indexed:
-        return indexed
-
-    files = [
-        path
-        for path in sessions_root.glob("*.jsonl")
-        if ".reset." not in path.name and ".checkpoint." not in path.name
-    ]
-    if not files:
-        return []
-
-    latest = max(files, key=lambda path: path.stat().st_mtime)
-    session = _session_from_file(latest)
-    return [session] if session is not None else []
+    # Only trust OpenClaw's session index; raw jsonl fallback can accidentally sync cron/subagent transcripts.
+    return _get_indexed_chat_sessions(sessions_root)
 
 
 def get_active_session(openclaw_root: Path) -> Session | None:
     sessions = get_active_sessions(openclaw_root)
-    return sessions[0] if sessions else None
-
-
-def _get_indexed_active_session(sessions_root: Path) -> Session | None:
-    sessions = _get_indexed_chat_sessions(sessions_root)
     return sessions[0] if sessions else None
 
 
@@ -345,6 +316,7 @@ def sync_session(
     if not isinstance(session_state, dict):
         session_state = {}
 
+    # Cursor is tracked per source session so cron syncs only upload newly appended messages.
     last_synced_timestamp = session_state.get("last_synced_timestamp")
     messages = [
         message
@@ -356,11 +328,8 @@ def sync_session(
     synced_count = 0
     committed = False
     now = _utc_now_iso()
-    openviking_session_id = None
-    if messages:
-        openviking_session_id = client._sync_session_id(session.session_id)
     for message in messages:
-        client.add_session_message(openviking_session_id or session.session_id, message.role, message.content)
+        client.add_session_message(session.session_id, message.role, message.content)
         synced_count += 1
 
     session_state["last_status"] = "ok"
@@ -369,11 +338,9 @@ def sync_session(
     session_state["committed"] = False
     session_state["session_key"] = session.session_key
     session_state["session_file"] = session.session_file
-    if openviking_session_id is not None:
-        session_state["openviking_session_id"] = openviking_session_id
 
     if synced_count:
-        client.commit_session(openviking_session_id or session.session_id, wait=True)
+        client.commit_session(session.session_id, wait=True)
         committed = True
         session_state["committed"] = True
         session_state["last_commit_at"] = now
@@ -384,7 +351,6 @@ def sync_session(
     return {
         "session_key": session.session_key,
         "session_id": session.session_id,
-        "openviking_session_id": session_state.get("openviking_session_id"),
         "synced_count": synced_count,
         "committed": committed,
         "last_synced_timestamp": last_synced_timestamp,
@@ -486,10 +452,9 @@ def _print_sync_summary(summary: dict[str, Any]) -> None:
         return
 
     print(
-        "session_key={session_key} session_id={session_id} openviking_session_id={openviking_session_id} synced_count={synced_count} committed={committed} last_synced_timestamp={last_synced_timestamp}".format(
+        "session_key={session_key} session_id={session_id} synced_count={synced_count} committed={committed} last_synced_timestamp={last_synced_timestamp}".format(
             session_key=summary.get("session_key", ""),
             session_id=summary.get("session_id", ""),
-            openviking_session_id=summary.get("openviking_session_id") or "",
             synced_count=summary.get("synced_count", 0),
             committed=str(summary.get("committed", False)).lower(),
             last_synced_timestamp=summary.get("last_synced_timestamp", ""),
