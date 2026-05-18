@@ -62,6 +62,13 @@ class TestPatchOp:
         assert "SEARCH" in desc
         assert "target file" in desc
 
+    def test_get_output_schema_description_string_mentions_contiguous_multiline_search(self):
+        """String patch description should forbid joining non-adjacent lines."""
+        op = PatchOp(FieldType.STRING)
+        desc = op.get_output_schema_description("test content")
+        assert "Multi-line SEARCH must be contiguous" in desc
+        assert "split non-adjacent edits into separate blocks" in desc
+
     def test_get_output_schema_description_other(self):
         """Non-string field description should mention replace."""
         op = PatchOp(FieldType.INT64)
@@ -203,6 +210,13 @@ class TestSearchReplaceBlock:
         assert "exact" in description
         assert "Choose page_id first" in description
         assert "Never use SEARCH text" in description
+
+    def test_search_description_mentions_contiguous_multiline_search(self):
+        """SEARCH description should require contiguous multi-line matches."""
+        description = SearchReplaceBlock.model_fields["search"].description
+        assert description is not None
+        assert "Multi-line SEARCH must be contiguous" in description
+        assert "split non-adjacent edits into separate blocks" in description
 
 
 class TestStrPatch:

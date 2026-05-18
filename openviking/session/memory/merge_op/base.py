@@ -55,7 +55,7 @@ class SearchReplaceBlock(BaseModel):
 
     search: str = Field(
         ...,
-        description="The text to replace. Use the smallest unique fragment - usually 2-4 adjacent lines is sufficient. Only include the exact lines that need to change, never the entire section. Preserve the exact indentation from the original. Must be unique in the file. Choose page_id first. SEARCH must be copied exactly from the read result of the file bound to that page_id. Never use SEARCH text from another memory or page.",
+        description="The text to replace. Use the smallest unique fragment - usually 2-4 adjacent lines is sufficient. Only include the exact lines that need to change, never the entire section. Preserve the exact indentation from the original. Must be unique in the file. Choose page_id first. SEARCH must be copied exactly from the read result of the file bound to that page_id. Never use SEARCH text from another memory or page. Multi-line SEARCH must be contiguous; split non-adjacent edits into separate blocks.",
     )
     replace: str = Field(
         ...,

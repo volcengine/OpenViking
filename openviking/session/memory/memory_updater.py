@@ -408,7 +408,6 @@ class MemoryUpdater:
             )
 
         for dir, memory_type in dirs.items():
-            tracer.info(f"[apply_operations] Generating overview for {memory_type} at {dir}")
             await self.generate_overview(memory_type, dir, ctx, extract_context)
 
         return result
@@ -793,13 +792,11 @@ class MemoryUpdater:
             overview_path = f"{directory.rstrip('/')}/.overview.md"
             try:
                 await viking_fs.delete_file(overview_path, ctx=ctx)
-                tracer.info(f"[generate_overview] Removed orphaned overview: {overview_path}")
             except Exception:
                 pass
             # Try to delete empty directory
             try:
                 await viking_fs.delete_file(directory, ctx=ctx)
-                tracer.info(f"[generate_overview] Removed empty directory: {directory}")
             except Exception:
                 pass
             return
@@ -846,6 +843,5 @@ class MemoryUpdater:
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
-            tracer.info(f"[generate_overview] Generated overview: {overview_path}")
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
