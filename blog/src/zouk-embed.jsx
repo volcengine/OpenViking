@@ -97,6 +97,7 @@ function normalizeAvatarUrl(value = '') {
 
 function normalizeMessage(message) {
   if (!message) return null;
+  const rawReplies = Array.isArray(message.replies) ? message.replies : [];
   const avatarUrl = normalizeAvatarUrl(
     message.senderPicture
       || message.sender_picture
@@ -118,6 +119,12 @@ function normalizeMessage(message) {
     senderType: message.senderType || message.sender_type || 'human',
     createdAt: message.createdAt || message.timestamp || new Date().toISOString(),
     channelName: message.channelName || message.channel_name || '',
+    channelType: message.channelType || message.channel_type || 'channel',
+    parentChannelName: message.parentChannelName || message.parent_channel_name || '',
+    parentMessageId: message.parentMessageId || message.parent_message_id || '',
+    threadId: message.threadId || message.thread_id || '',
+    replyCount: Number(message.replyCount ?? message.reply_count ?? rawReplies.length) || 0,
+    replies: rawReplies.map(normalizeMessage).filter(Boolean),
     avatarUrl,
   };
 }
@@ -233,6 +240,49 @@ function mergeMessage(messages, incoming) {
   return [...messages, incoming].slice(-120);
 }
 
+function mergeThreadReply(messages, reply) {
+  if (!reply?.id || isSystemMessage(reply)) return messages;
+  const threadId = reply.threadId || reply.channelName || '';
+  const parentId = reply.parentMessageId || '';
+  return messages.map((message) => {
+    const matchesParent = parentId
+      ? message.id === parentId
+      : String(message.id || '').slice(0, 8) === threadId;
+    if (!matchesParent) return message;
+    const replies = Array.isArray(message.replies) ? message.replies : [];
+    if (replies.some((item) => item.id === reply.id)) return message;
+    const nextReplies = [...replies, reply].slice(-3);
+    return {
+      ...message,
+      replies: nextReplies,
+      replyCount: Math.max((message.replyCount || 0) + 1, nextReplies.length),
+    };
+  });
+}
+
+function threadTargetForMessage(message) {
+  return `#${CONFIG.channel}:${String(message?.id || '').slice(0, 8)}`;
+}
+
+function threadStateKeyForReply(reply, states = {}) {
+  if (reply.parentMessageId) return reply.parentMessageId;
+  const threadId = reply.threadId || reply.channelName || '';
+  return Object.keys(states).find((key) => key.slice(0, 8) === threadId) || '';
+}
+
+function mergeThreadStateReply(states, reply) {
+  const key = threadStateKeyForReply(reply, states);
+  const current = key ? states[key] : null;
+  if (!current?.messages || current.messages.some((item) => item.id === reply.id)) return states;
+  return {
+    ...states,
+    [key]: {
+      ...current,
+      messages: [...current.messages, reply],
+    },
+  };
+}
+
 function buildInjectedContext(sourceUrl, referencedText, includeUrl) {
   const lines = ['<zouk-context>'];
   if (includeUrl) lines.push(`  <url>${escapeContextText(sourceUrl, 1600)}</url>`);
@@ -246,6 +296,22 @@ function messageWithInjectedContext(message, sourceUrl, referencedText, includeU
   const trimmed = message.trim();
   if (!shouldInject) return trimmed;
   return `${buildInjectedContext(sourceUrl, referencedText, includeUrl)}\n\n${trimmed}`;
+}
+
+function isComposingInput(event) {
+  const nativeEvent = event?.nativeEvent || event || {};
+  return Boolean(
+    event?.isComposing
+      || nativeEvent.isComposing
+      || event?.keyCode === 229
+      || nativeEvent.keyCode === 229
+      || event?.which === 229
+      || nativeEvent.which === 229,
+  );
+}
+
+function shouldSubmitOnEnter(event) {
+  return event.key === 'Enter' && !event.shiftKey && !isComposingInput(event);
 }
 
 function parseInjectedMessage(content) {
@@ -294,13 +360,14 @@ function avatarLabel(name) {
   return (clean[0] || 'z').toUpperCase();
 }
 
-function Avatar({ name, src, status = '', compact = false }) {
+function Avatar({ name, src, status = '', compact = false, kind = 'human' }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageSrc = !imageFailed ? normalizeAvatarUrl(src) : '';
   const dotStatus = ['working', 'online', 'offline', 'error'].includes(status) ? status : '';
+  const avatarKind = kind === 'agent' ? 'agent' : 'human';
   return (
     <div
-      className={`zouk-reader-avatar${imageSrc ? ' has-image' : ''}${dotStatus ? ' has-status' : ''}${compact ? ' is-compact' : ''}`}
+      className={`zouk-reader-avatar is-${avatarKind}${imageSrc ? ' has-image' : ''}${dotStatus ? ' has-status' : ''}${compact ? ' is-compact' : ''}`}
       aria-hidden="true"
     >
       {imageSrc ? (
@@ -308,15 +375,6 @@ function Avatar({ name, src, status = '', compact = false }) {
       ) : avatarLabel(name)}
       {dotStatus ? <span className={`zouk-reader-avatar-dot is-${dotStatus}`} /> : null}
     </div>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 19V5" />
-      <path d="m5 12 7-7 7 7" />
-    </svg>
   );
 }
 
@@ -376,6 +434,63 @@ function MessageBody({ content }) {
   );
 }
 
+function ThreadBlock({ message, state, agentsBySender, onToggle }) {
+  const replyCount = message.replyCount || message.replies?.length || 0;
+  if (!replyCount) return null;
+  const expanded = Boolean(state?.open);
+  const replies = expanded ? (state?.messages || message.replies || []) : (message.replies || []).slice(-1);
+  const label = replyCount === 1 ? '1 reply' : `${replyCount} replies`;
+  return (
+    <div className={`zouk-reader-thread${expanded ? ' is-expanded' : ''}`}>
+      <button
+        type="button"
+        className="zouk-reader-thread__toggle"
+        onClick={() => onToggle(message)}
+        aria-expanded={expanded}
+      >
+        <span>{expanded ? 'Hide thread' : label}</span>
+        <span aria-hidden="true">{expanded ? '-' : '+'}</span>
+      </button>
+      {expanded ? (
+        <div className="zouk-reader-thread__body">
+          {state?.loading ? <div className="zouk-reader-thread__state">Loading thread...</div> : null}
+          {state?.error ? <div className="zouk-reader-thread__state is-error">{state.error}</div> : null}
+          {!state?.loading && !state?.error && replies.map((reply) => {
+            const replyAgent = agentsBySender.get(senderKey(reply.senderName));
+            const avatarKind = replyAgent || reply.senderType === 'agent' ? 'agent' : 'human';
+            return (
+              <div className="zouk-reader-thread__reply" key={reply.id}>
+                <Avatar
+                  name={reply.senderName}
+                  src={reply.avatarUrl || replyAgent?.avatarUrl}
+                  status={replyAgent ? agentDotStatus(replyAgent) : ''}
+                  compact
+                  kind={avatarKind}
+                />
+                <div className="zouk-reader-thread__reply-main">
+                  <div className="zouk-reader-sender">{reply.senderName}</div>
+                  <div className="zouk-reader-thread__reply-text">
+                    <MessageBody content={reply.content} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : replies.length ? (
+        <button
+          type="button"
+          className="zouk-reader-thread__preview"
+          onClick={() => onToggle(message)}
+        >
+          <span>{replies[0].senderName}</span>
+          <strong>{replies[0].content}</strong>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function LiveAgents({ agents }) {
   if (!agents.length) return null;
   const visible = agents.slice(0, 4);
@@ -389,7 +504,7 @@ function LiveAgents({ agents }) {
         const dotStatus = agentDotStatus(agent);
         return (
           <div className={`zouk-live-agent is-${dotStatus}`} key={agent.id} title={`${label} · ${detail}`}>
-            <Avatar name={label} src={agent.avatarUrl} status={dotStatus} compact />
+            <Avatar name={label} src={agent.avatarUrl} status={dotStatus} compact kind="agent" />
             <span className="zouk-live-agent__name">{label}</span>
             <span className="zouk-live-agent__detail">{detail}</span>
           </div>
@@ -414,6 +529,7 @@ export function ZoukInteractiveBlog({ route }) {
   const [messages, setMessages] = useState([]);
   const [agents, setAgents] = useState([]);
   const [composer, setComposer] = useState('');
+  const [threadStates, setThreadStates] = useState({});
   const [selectedText, setSelectedText] = useState('');
   const [sourceUrl, setSourceUrl] = useState(currentSourceUrl);
   const [lastContextUrl, setLastContextUrl] = useState('');
@@ -572,6 +688,11 @@ export function ZoukInteractiveBlog({ route }) {
         }
         if ((packet.type === 'message' || packet.type === 'new_message') && packet.message) {
           const next = normalizeMessage(packet.message);
+          if (next?.channelType === 'thread' && next.parentChannelName === CONFIG.channel) {
+            setMessages((prev) => mergeThreadReply(prev, next));
+            setThreadStates((prev) => mergeThreadStateReply(prev, next));
+            return;
+          }
           if (next?.channelName === CONFIG.channel) setMessages((prev) => mergeMessage(prev, next));
         }
       } catch {
@@ -773,6 +894,66 @@ export function ZoukInteractiveBlog({ route }) {
     }
   }, [authHeaders, composer, lastContextUrl, rememberSource, selectedText, status, target, token]);
 
+  const loadThreadMessages = useCallback(async (parentMessage) => {
+    const parentId = parentMessage?.id;
+    if (!parentId) return;
+    if (!token) {
+      setThreadStates((prev) => ({
+        ...prev,
+        [parentId]: { ...(prev[parentId] || {}), open: true, loading: false, error: 'Connect before loading thread.' },
+      }));
+      return;
+    }
+    setThreadStates((prev) => ({
+      ...prev,
+      [parentId]: { ...(prev[parentId] || {}), open: true, loading: true, error: '' },
+    }));
+    try {
+      const res = await fetch(`${CONFIG.serverUrl}/api/messages`, {
+        headers: {
+          ...authHeaders,
+          'X-Channel': threadTargetForMessage(parentMessage),
+          'X-Limit': '100',
+        },
+        cache: 'no-store',
+      });
+      const body = await parseJsonResponse(res);
+      const threadMessages = (body.messages || []).map(normalizeMessage).filter(Boolean);
+      setThreadStates((prev) => ({
+        ...prev,
+        [parentId]: { ...(prev[parentId] || {}), open: true, loading: false, error: '', messages: threadMessages },
+      }));
+    } catch (err) {
+      setThreadStates((prev) => ({
+        ...prev,
+        [parentId]: {
+          ...(prev[parentId] || {}),
+          open: true,
+          loading: false,
+          error: err instanceof Error ? err.message : 'Failed to load thread.',
+        },
+      }));
+    }
+  }, [authHeaders, token]);
+
+  const toggleThread = useCallback((parentMessage) => {
+    const parentId = parentMessage?.id;
+    if (!parentId) return;
+    const current = threadStates[parentId];
+    if (current?.open) {
+      setThreadStates((prev) => ({
+        ...prev,
+        [parentId]: { ...prev[parentId], open: false },
+      }));
+      return;
+    }
+    setThreadStates((prev) => ({
+      ...prev,
+      [parentId]: { ...(prev[parentId] || {}), open: true, loading: !prev[parentId]?.messages, error: '' },
+    }));
+    if (!current?.messages) loadThreadMessages(parentMessage);
+  }, [loadThreadMessages, threadStates]);
+
   const onSubmit = (event) => {
     event.preventDefault();
     sendMessage();
@@ -844,6 +1025,7 @@ export function ZoukInteractiveBlog({ route }) {
             {visibleMessages.map((message) => {
               const mine = message.senderName === userName;
               const messageAgent = !mine ? agentsBySender.get(senderKey(message.senderName)) : null;
+              const avatarKind = messageAgent || message.senderType === 'agent' ? 'agent' : 'human';
               return (
                 <article key={message.id} className={`zouk-reader-message${mine ? ' is-mine' : ''}`}>
                   {!mine ? (
@@ -852,18 +1034,33 @@ export function ZoukInteractiveBlog({ route }) {
                         name={message.senderName}
                         src={message.avatarUrl || messageAgent?.avatarUrl}
                         status={messageAgent ? agentDotStatus(messageAgent) : ''}
+                        kind={avatarKind}
                       />
                       <div className="zouk-reader-bubble-column">
                         <div className="zouk-reader-sender">{message.senderName}</div>
                         <div className="zouk-reader-bubble">
                           <MessageBody content={message.content} />
                         </div>
+                        <ThreadBlock
+                          message={message}
+                          state={threadStates[message.id]}
+                          agentsBySender={agentsBySender}
+                          onToggle={toggleThread}
+                        />
                       </div>
                     </div>
                   ) : (
-                    <div className="zouk-reader-bubble">
-                      <MessageBody content={message.content} />
-                    </div>
+                    <>
+                      <div className="zouk-reader-bubble">
+                        <MessageBody content={message.content} />
+                      </div>
+                      <ThreadBlock
+                        message={message}
+                        state={threadStates[message.id]}
+                        agentsBySender={agentsBySender}
+                        onToggle={toggleThread}
+                      />
+                    </>
                   )}
                 </article>
               );
@@ -883,20 +1080,12 @@ export function ZoukInteractiveBlog({ route }) {
                 placeholder={`Message #${CONFIG.channel}`}
                 onChange={(event) => setComposer(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) {
+                  if (shouldSubmitOnEnter(event)) {
                     event.preventDefault();
                     sendMessage();
                   }
                 }}
               />
-              <button
-                type="submit"
-                className="zouk-reader-send"
-                disabled={!composer.trim() || !token || status === 'sending'}
-                aria-label="Send message"
-              >
-                <SendIcon />
-              </button>
             </div>
             {error && visibleMessages.length ? (
               <div className="zouk-reader-error">

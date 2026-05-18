@@ -579,11 +579,19 @@ html {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: 50%;
   background: color-mix(in oklab, var(--th-accent) 16%, var(--th-bg-2));
   color: var(--th-accent);
   font-family: var(--th-font-mono);
   font-weight: 500;
+}
+
+.zouk-reader-avatar.is-agent {
+  border-radius: 6px 6px 6px 0;
+}
+
+.zouk-reader-avatar.is-human {
+  border-radius: 50%;
 }
 
 .zouk-reader-avatar-dot {
@@ -812,6 +820,108 @@ html {
   background: color-mix(in oklab, var(--th-accent) 16%, var(--th-bg-2));
 }
 
+.zouk-reader-thread {
+  align-self: flex-start;
+  max-width: 100%;
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in oklab, var(--th-accent) 34%, var(--th-line));
+}
+
+.zouk-reader-message.is-mine > .zouk-reader-thread {
+  align-self: flex-end;
+}
+
+.zouk-reader-thread__toggle,
+.zouk-reader-thread__preview {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--th-line);
+  background: transparent;
+  color: var(--th-mute);
+  cursor: pointer;
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.zouk-reader-thread__toggle {
+  gap: 7px;
+  padding: 3px 8px;
+  border-radius: 12px;
+}
+
+.zouk-reader-thread__toggle:hover,
+.zouk-reader-thread__preview:hover {
+  color: var(--th-ink);
+  border-color: color-mix(in oklab, var(--th-accent) 42%, var(--th-line));
+}
+
+.zouk-reader-thread__preview {
+  gap: 6px;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border-color: transparent;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.zouk-reader-thread__preview span {
+  flex: 0 0 auto;
+  color: var(--th-ink);
+}
+
+.zouk-reader-thread__preview strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.zouk-reader-thread__body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.zouk-reader-thread__reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.zouk-reader-thread__reply .zouk-reader-avatar {
+  margin-top: 2px;
+}
+
+.zouk-reader-thread__reply-main {
+  min-width: 0;
+}
+
+.zouk-reader-thread__reply-text {
+  margin-top: 2px;
+  padding: 7px 9px;
+  border: 1px solid var(--th-line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--th-bg-2) 66%, transparent);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.zouk-reader-thread__state {
+  color: var(--th-mute);
+  font-family: var(--th-font-mono);
+  font-size: 10px;
+}
+
+.zouk-reader-thread__state.is-error {
+  color: var(--th-warn);
+}
+
 .zouk-message-context {
   margin-bottom: 8px;
   padding: 7px 9px;
@@ -886,12 +996,14 @@ html {
 }
 
 .zouk-reader-input-shell {
+  --zouk-reader-input-min-height: 48px;
+  --zouk-reader-input-radius: calc(var(--zouk-reader-input-min-height) / 2);
   position: relative;
   display: flex;
   align-items: flex-end;
-  min-height: 48px;
+  min-height: var(--zouk-reader-input-min-height);
   border: 1px solid var(--th-line);
-  border-radius: 999px;
+  border-radius: var(--zouk-reader-input-radius);
   background: var(--th-bg-2);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -910,7 +1022,7 @@ html {
   resize: none;
   background: transparent;
   color: var(--th-ink);
-  padding: 12px 56px 11px 17px;
+  padding: 12px 17px 11px;
   font: 16px/1.35 var(--th-font-body);
   letter-spacing: 0;
   overflow-y: auto;
@@ -918,32 +1030,6 @@ html {
 
 .zouk-reader-input-shell textarea::placeholder {
   color: var(--th-mute);
-}
-
-.zouk-reader-send {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--th-accent-2) 80%, var(--th-ink));
-  color: #fff;
-  cursor: pointer;
-  transition: opacity 0.15s, transform 0.15s;
-}
-
-.zouk-reader-send:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.zouk-reader-send:disabled {
-  cursor: default;
-  opacity: 0.38;
 }
 
 .zouk-reader-error {
