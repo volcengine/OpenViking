@@ -1044,9 +1044,17 @@ html {
 }
 
 @media (min-width: 900px) {
-  html.zouk-reader-open-desktop .b-shell {
+  .b-shell__main,
+  .b-footer {
+    transition: padding-right 220ms ease;
+  }
+
+  html.zouk-reader-open-desktop .b-shell__main {
     padding-right: var(--zouk-reader-rail);
-    transition: padding-right 180ms ease;
+  }
+
+  html.zouk-reader-open-desktop .b-footer {
+    padding-right: calc(24px + var(--zouk-reader-rail));
   }
 
   .zouk-reader-panel {
@@ -1062,7 +1070,7 @@ html {
     box-shadow: none;
     opacity: 1;
     transform: translate3d(0, 0, 0);
-    transition: opacity 180ms ease, transform 180ms ease;
+    transition: opacity 220ms ease, transform 220ms ease;
   }
 
   .zouk-reader-panel.is-closing {

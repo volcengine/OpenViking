@@ -9,6 +9,7 @@ const CONFIG = {
 };
 
 const BROWSER_ID_KEY = 'openviking.zouk.browserId';
+const CLOSE_ANIMATION_MS = 220;
 
 function browserAvailable() {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -602,7 +603,7 @@ export function ZoukInteractiveBlog({ route }) {
       setOpen(false);
       setClosing(false);
       closeTimerRef.current = null;
-    }, 190);
+    }, CLOSE_ANIMATION_MS);
   }, []);
 
   const toggleChat = useCallback(() => {
@@ -723,9 +724,9 @@ export function ZoukInteractiveBlog({ route }) {
   useEffect(() => {
     if (!browserAvailable()) return undefined;
     const root = document.documentElement;
-    root.classList.toggle('zouk-reader-open-desktop', panelVisible && isDesktop);
+    root.classList.toggle('zouk-reader-open-desktop', open && !closing && isDesktop);
     return () => root.classList.remove('zouk-reader-open-desktop');
-  }, [isDesktop, panelVisible]);
+  }, [closing, isDesktop, open]);
 
   useEffect(() => {
     const node = scrollRef.current;
