@@ -506,8 +506,8 @@ html {
 .zouk-reader-launcher.has-live::after {
   content: "";
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  right: 3px;
+  bottom: 3px;
   width: 7px;
   height: 7px;
   border: 1.5px solid var(--th-bg-2);
@@ -556,6 +556,8 @@ html {
 }
 
 .zouk-reader-panel {
+  --zouk-reader-field-radius: 12px;
+  --zouk-context-label-width: 76px;
   position: fixed;
   z-index: 90;
   right: 24px;
@@ -596,8 +598,8 @@ html {
 
 .zouk-reader-avatar-dot {
   position: absolute;
-  right: 1px;
-  bottom: 1px;
+  right: 0;
+  bottom: 0;
   width: 8px;
   height: 8px;
   border: 1.5px solid var(--th-bg);
@@ -926,7 +928,7 @@ html {
   margin-bottom: 8px;
   padding: 7px 9px;
   border: 1px solid color-mix(in oklab, var(--th-accent) 28%, var(--th-line));
-  border-radius: 10px;
+  border-radius: var(--zouk-reader-field-radius);
   background: color-mix(in oklab, var(--th-bg) 78%, transparent);
   font-family: var(--th-font-mono);
   font-size: 10px;
@@ -935,13 +937,17 @@ html {
 
 .zouk-message-context__row {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: var(--zouk-context-label-width) minmax(0, 1fr);
   gap: 8px;
   color: var(--th-mute);
 }
 
 .zouk-message-context__row + .zouk-message-context__row {
   margin-top: 4px;
+}
+
+.zouk-message-context__row span {
+  white-space: nowrap;
 }
 
 .zouk-message-context__row strong {
@@ -959,15 +965,15 @@ html {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  gap: 6px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--th-line);
   background: color-mix(in oklab, var(--th-bg) 90%, transparent);
 }
 
 .zouk-context-preview {
   border: 1px solid color-mix(in oklab, var(--th-accent) 24%, var(--th-line));
-  border-radius: 12px;
+  border-radius: var(--zouk-reader-field-radius);
   background: color-mix(in oklab, var(--th-bg-2) 72%, transparent);
   padding: 8px 10px;
   font-family: var(--th-font-mono);
@@ -977,13 +983,17 @@ html {
 
 .zouk-context-preview__row {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: var(--zouk-context-label-width) minmax(0, 1fr);
   gap: 8px;
   color: var(--th-mute);
 }
 
 .zouk-context-preview__row + .zouk-context-preview__row {
   margin-top: 4px;
+}
+
+.zouk-context-preview__row span {
+  white-space: nowrap;
 }
 
 .zouk-context-preview__row strong {
@@ -996,14 +1006,13 @@ html {
 }
 
 .zouk-reader-input-shell {
-  --zouk-reader-input-min-height: 48px;
-  --zouk-reader-input-radius: calc(var(--zouk-reader-input-min-height) / 2);
+  --zouk-reader-input-min-height: 44px;
   position: relative;
   display: flex;
   align-items: flex-end;
   min-height: var(--zouk-reader-input-min-height);
   border: 1px solid var(--th-line);
-  border-radius: var(--zouk-reader-input-radius);
+  border-radius: var(--zouk-reader-field-radius);
   background: var(--th-bg-2);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -1015,14 +1024,14 @@ html {
 
 .zouk-reader-input-shell textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 42px;
   max-height: 132px;
   border: 0;
   outline: 0;
   resize: none;
   background: transparent;
   color: var(--th-ink);
-  padding: 12px 17px 11px;
+  padding: 10px 14px 9px;
   font: 16px/1.35 var(--th-font-body);
   letter-spacing: 0;
   overflow-y: auto;
@@ -1134,7 +1143,7 @@ html {
   }
 
   .zouk-reader-composer {
-    padding: 8px 0 0;
+    padding: 6px 0 0;
     border: 0;
     background: transparent;
   }
@@ -1219,7 +1228,7 @@ html {
   }
 
   .zouk-reader-composer {
-    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
   }
 
   .zouk-context-preview {
@@ -1229,10 +1238,6 @@ html {
 
   .zouk-reader-edge-toggle {
     display: none;
-  }
-
-  .zouk-context-preview__row {
-    grid-template-columns: 88px minmax(0, 1fr);
   }
 }
 
