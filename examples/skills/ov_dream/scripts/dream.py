@@ -29,6 +29,8 @@ class Session:
     session_id: str
     cwd: str
     created_at: str
+    session_key: str = ""
+    session_file: str = ""
 
 
 class OpenVikingClient:
@@ -172,13 +174,105 @@ def get_session_path(sessions_root: Path, session_id: str) -> Path:
     return sessions_root / f"{session_id}.jsonl"
 
 
-def get_active_session(openclaw_root: Path) -> Session | None:
-    sessions_root = openclaw_root / "agents" / "main" / "sessions"
-    if not sessions_root.exists():
+def get_session_file_path(sessions_root: Path, session: Session) -> Path:
+    if not session.session_file:
+        return get_session_path(sessions_root, session.session_id)
+    path = Path(session.session_file)
+    return path if path.is_absolute() else sessions_root / path
+
+
+def is_chat_session_key(key: str) -> bool:
+    blocked = (":cron:", ":heartbeat", ":subagent:", ":acp:", ":hook:")
+    if not key.startswith("agent:main:"):
+        return False
+    if any(part in key for part in blocked):
+        return False
+    return key.endswith(":main") or any(
+        marker in key
+        for marker in (
+            ":direct:",
+            ":channel:",
+            ":group:",
+            ":room:",
+        )
+    )
+
+
+def _session_from_file(path: Path, session_key: str = "") -> Session | None:
+    if not path.exists():
+        return None
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return None
+    try:
+        first = json.loads(lines[0])
+    except json.JSONDecodeError:
+        return None
+    session_id = first.get("id")
+    if not isinstance(session_id, str) or not session_id:
+        session_id = path.stem
+    return Session(
+        session_id=session_id,
+        cwd=first.get("cwd", ""),
+        created_at=first.get("timestamp", ""),
+        session_key=session_key,
+        session_file=str(path),
+    )
+
+
+def _session_from_index_entry(sessions_root: Path, session_key: str, entry: Any) -> Session | None:
+    if not isinstance(entry, dict):
         return None
 
-    indexed = _get_indexed_active_session(sessions_root)
-    if indexed is not None:
+    session_id = entry.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+
+    session_file = entry.get("sessionFile")
+    if isinstance(session_file, str) and session_file:
+        raw_path = Path(session_file)
+        path = raw_path if raw_path.is_absolute() else sessions_root / raw_path
+    else:
+        path = get_session_path(sessions_root, session_id)
+    session = _session_from_file(path, session_key=session_key)
+    if session is None:
+        return None
+    if session.session_id != session_id:
+        session.session_id = session_id
+    return session
+
+
+def _get_indexed_chat_sessions(sessions_root: Path) -> list[Session]:
+    index_path = sessions_root / "sessions.json"
+    if not index_path.exists():
+        return []
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(index, dict):
+        return []
+
+    sessions: list[Session] = []
+    seen: set[str] = set()
+    for session_key, entry in sorted(index.items()):
+        if not isinstance(session_key, str) or not is_chat_session_key(session_key):
+            continue
+        session = _session_from_index_entry(sessions_root, session_key, entry)
+        if session is None or session.session_id in seen:
+            continue
+        seen.add(session.session_id)
+        sessions.append(session)
+    return sessions
+
+
+def get_active_sessions(openclaw_root: Path) -> list[Session]:
+    sessions_root = openclaw_root / "agents" / "main" / "sessions"
+    if not sessions_root.exists():
+        return []
+
+    indexed = _get_indexed_chat_sessions(sessions_root)
+    if indexed:
         return indexed
 
     files = [
@@ -187,60 +281,25 @@ def get_active_session(openclaw_root: Path) -> Session | None:
         if ".reset." not in path.name and ".checkpoint." not in path.name
     ]
     if not files:
-        return None
+        return []
 
     latest = max(files, key=lambda path: path.stat().st_mtime)
-    lines = latest.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return None
-    first = json.loads(lines[0])
-    return Session(
-        session_id=first["id"],
-        cwd=first.get("cwd", ""),
-        created_at=first.get("timestamp", ""),
-    )
+    session = _session_from_file(latest)
+    return [session] if session is not None else []
+
+
+def get_active_session(openclaw_root: Path) -> Session | None:
+    sessions = get_active_sessions(openclaw_root)
+    return sessions[0] if sessions else None
 
 
 def _get_indexed_active_session(sessions_root: Path) -> Session | None:
-    index_path = sessions_root / "sessions.json"
-    if not index_path.exists():
-        return None
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(index, dict):
-        return None
-
-    active = index.get("agent:main:main")
-    if not isinstance(active, dict):
-        return None
-
-    session_id = active.get("sessionId")
-    if not isinstance(session_id, str) or not session_id:
-        return None
-
-    session_file = active.get("sessionFile")
-    path = Path(session_file) if isinstance(session_file, str) and session_file else get_session_path(sessions_root, session_id)
-    if not path.exists():
-        return None
-
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return None
-    try:
-        first = json.loads(lines[0])
-    except json.JSONDecodeError:
-        return None
-    return Session(
-        session_id=session_id,
-        cwd=first.get("cwd", ""),
-        created_at=first.get("timestamp", ""),
-    )
+    sessions = _get_indexed_chat_sessions(sessions_root)
+    return sessions[0] if sessions else None
 
 
-def parse_messages(sessions_root: Path, session_id: str, after_timestamp: str | None) -> Iterable[Message]:
-    path = get_session_path(sessions_root, session_id)
+def parse_messages(sessions_root: Path, session: Session, after_timestamp: str | None) -> Iterable[Message]:
+    path = get_session_file_path(sessions_root, session)
     if not path.exists():
         return []
 
@@ -271,13 +330,12 @@ def parse_messages(sessions_root: Path, session_id: str, after_timestamp: str | 
     return messages
 
 
-def sync_active_session(client: OpenVikingClient, openclaw_root: Path, state_root: Path) -> dict[str, Any]:
-    sessions_root = openclaw_root / "agents" / "main" / "sessions"
-    session = get_active_session(openclaw_root)
-    if session is None:
-        raise RuntimeError("No active OpenClaw session found.")
-
-    state = load_sync_state(state_root)
+def sync_session(
+    client: OpenVikingClient,
+    sessions_root: Path,
+    state: dict[str, Any],
+    session: Session,
+) -> dict[str, Any]:
     sessions = state.setdefault("sessions", {})
     session_state = sessions.get(session.session_id)
     if not isinstance(session_state, dict):
@@ -286,7 +344,7 @@ def sync_active_session(client: OpenVikingClient, openclaw_root: Path, state_roo
     last_synced_timestamp = session_state.get("last_synced_timestamp")
     messages = [
         message
-        for message in parse_messages(sessions_root, session.session_id, last_synced_timestamp)
+        for message in parse_messages(sessions_root, session, last_synced_timestamp)
         if message.timestamp and (last_synced_timestamp is None or message.timestamp > last_synced_timestamp)
     ]
     messages.sort(key=lambda message: message.timestamp)
@@ -294,44 +352,68 @@ def sync_active_session(client: OpenVikingClient, openclaw_root: Path, state_roo
     synced_count = 0
     committed = False
     now = _utc_now_iso()
-    try:
-        openviking_session_id = None
-        if messages:
-            openviking_session_id = client._sync_session_id(session.session_id)
-        for message in messages:
-            client.add_session_message(openviking_session_id or session.session_id, message.role, message.content)
-            synced_count += 1
+    openviking_session_id = None
+    if messages:
+        openviking_session_id = client._sync_session_id(session.session_id)
+    for message in messages:
+        client.add_session_message(openviking_session_id or session.session_id, message.role, message.content)
+        synced_count += 1
 
-        session_state["last_status"] = "ok"
-        session_state["last_synced_count"] = synced_count
-        session_state["last_sync_at"] = now
-        session_state["committed"] = False
+    session_state["last_status"] = "ok"
+    session_state["last_synced_count"] = synced_count
+    session_state["last_sync_at"] = now
+    session_state["committed"] = False
+    session_state["session_key"] = session.session_key
+    session_state["session_file"] = session.session_file
+    if openviking_session_id is not None:
         session_state["openviking_session_id"] = openviking_session_id
 
-        if synced_count:
-            client.commit_session(openviking_session_id or session.session_id, wait=True)
-            committed = True
-            session_state["committed"] = True
-            session_state["last_commit_at"] = now
-            last_synced_timestamp = messages[-1].timestamp
-            session_state["last_synced_timestamp"] = last_synced_timestamp
-    except Exception:
-        session_state["last_status"] = "error"
-        session_state["last_synced_count"] = synced_count
-        session_state["last_sync_at"] = now
-        session_state["committed"] = False
-        sessions[session.session_id] = session_state
-        save_sync_state(state_root, state)
-        raise
+    if synced_count:
+        client.commit_session(openviking_session_id or session.session_id, wait=True)
+        committed = True
+        session_state["committed"] = True
+        session_state["last_commit_at"] = now
+        last_synced_timestamp = messages[-1].timestamp
+        session_state["last_synced_timestamp"] = last_synced_timestamp
 
     sessions[session.session_id] = session_state
-    save_sync_state(state_root, state)
     return {
+        "session_key": session.session_key,
         "session_id": session.session_id,
         "openviking_session_id": session_state.get("openviking_session_id"),
         "synced_count": synced_count,
         "committed": committed,
         "last_synced_timestamp": last_synced_timestamp,
+    }
+
+
+def sync_active_session(client: OpenVikingClient, openclaw_root: Path, state_root: Path) -> dict[str, Any]:
+    sessions_root = openclaw_root / "agents" / "main" / "sessions"
+    active_sessions = get_active_sessions(openclaw_root)
+    if not active_sessions:
+        raise RuntimeError("No active OpenClaw chat sessions found.")
+
+    state = load_sync_state(state_root)
+    summaries: list[dict[str, Any]] = []
+    try:
+        for session in active_sessions:
+            summaries.append(sync_session(client, sessions_root, state, session))
+    except Exception:
+        save_sync_state(state_root, state)
+        raise
+
+    save_sync_state(state_root, state)
+    last_timestamps = [
+        str(summary.get("last_synced_timestamp", ""))
+        for summary in summaries
+        if summary.get("last_synced_timestamp")
+    ]
+    return {
+        "session_count": len(summaries),
+        "sessions": summaries,
+        "synced_count": sum(int(summary.get("synced_count", 0) or 0) for summary in summaries),
+        "committed": any(bool(summary.get("committed")) for summary in summaries),
+        "last_synced_timestamp": max(last_timestamps) if last_timestamps else None,
     }
 
 
@@ -384,8 +466,24 @@ def _iter_memories(result: Any) -> Iterable[dict[str, Any]]:
 
 
 def _print_sync_summary(summary: dict[str, Any]) -> None:
+    child_summaries = summary.get("sessions")
+    if isinstance(child_summaries, list):
+        print(
+            "session_count={session_count} synced_count={synced_count} committed={committed} last_synced_timestamp={last_synced_timestamp}".format(
+                session_count=summary.get("session_count", len(child_summaries)),
+                synced_count=summary.get("synced_count", 0),
+                committed=str(summary.get("committed", False)).lower(),
+                last_synced_timestamp=summary.get("last_synced_timestamp", ""),
+            )
+        )
+        for child in child_summaries:
+            if isinstance(child, dict):
+                _print_sync_summary(child)
+        return
+
     print(
-        "session_id={session_id} openviking_session_id={openviking_session_id} synced_count={synced_count} committed={committed} last_synced_timestamp={last_synced_timestamp}".format(
+        "session_key={session_key} session_id={session_id} openviking_session_id={openviking_session_id} synced_count={synced_count} committed={committed} last_synced_timestamp={last_synced_timestamp}".format(
+            session_key=summary.get("session_key", ""),
             session_id=summary.get("session_id", ""),
             openviking_session_id=summary.get("openviking_session_id") or "",
             synced_count=summary.get("synced_count", 0),
