@@ -377,6 +377,11 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-mark-bg: color-mix(in oklab, #c1d7ff 58%, transparent);
   --th-mark-color: #163255;
   --th-mark-border: color-mix(in oklab, #1B365D 18%, transparent);
+  --zouk-status-online: #2e7d56;
+  --zouk-status-working: #4f7ea3;
+  --zouk-status-thinking: #a17436;
+  --zouk-status-offline: #6b6660;
+  --zouk-status-error: #b14b4b;
 }
 [data-theme="kami"] .b-lead { color: #5a554a; }
 [data-theme="kami"] .b-pre { background: #1a1a1a; color: #e8e4da; border-color: #1a1a1a; }
@@ -416,6 +421,11 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-mark-bg: color-mix(in oklab, var(--th-accent) 18%, #1a1917);
   --th-mark-color: #d9e7ff;
   --th-mark-border: color-mix(in oklab, var(--th-accent) 34%, transparent);
+  --zouk-status-online: #6fb697;
+  --zouk-status-working: #7aa3ce;
+  --zouk-status-thinking: #d2b170;
+  --zouk-status-offline: #5c6370;
+  --zouk-status-error: #d27474;
 }
 [data-theme="washi"] .b-lead { color: #a9a49a; }
 [data-theme="washi"] .b-pre { background: #111110; color: #e8e4da; border-color: #2a2927; }
@@ -508,16 +518,28 @@ html {
   position: absolute;
   right: 4px;
   bottom: 4px;
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--th-bg-2);
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--th-bg-2);
   border-radius: 999px;
-  background: #36a269;
+  background: var(--zouk-status-online);
+  box-sizing: content-box;
 }
 
-.zouk-reader-launcher.has-working::after {
-  background: #d89a2f;
-  animation: zoukStatusPulse 1.45s ease-in-out infinite;
+.zouk-reader-launcher.has-live.is-working::after {
+  background: var(--zouk-status-working);
+}
+
+.zouk-reader-launcher.has-live.is-thinking::after {
+  background: var(--zouk-status-thinking);
+}
+
+.zouk-reader-launcher.has-live.is-offline::after {
+  background: var(--zouk-status-offline);
+}
+
+.zouk-reader-launcher.has-live.is-error::after {
+  background: var(--zouk-status-error);
 }
 
 .zouk-reader-launcher svg,
@@ -596,28 +618,31 @@ html {
 
 .zouk-reader-avatar-dot {
   position: absolute;
-  right: 1px;
-  bottom: 1px;
+  right: -1px;
+  bottom: -1px;
   width: 8px;
   height: 8px;
-  border: 1.5px solid var(--th-bg);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--th-mute) 58%, transparent);
-  box-sizing: border-box;
+  border: 2px solid var(--th-bg);
+  border-radius: 50%;
+  background: var(--zouk-status-offline);
+  box-sizing: content-box;
   pointer-events: none;
 }
 
 .zouk-reader-avatar-dot.is-online {
-  background: #36a269;
+  background: var(--zouk-status-online);
 }
 
 .zouk-reader-avatar-dot.is-working {
-  background: #d89a2f;
-  animation: zoukStatusPulse 1.45s ease-in-out infinite;
+  background: var(--zouk-status-working);
+}
+
+.zouk-reader-avatar-dot.is-thinking {
+  background: var(--zouk-status-thinking);
 }
 
 .zouk-reader-avatar-dot.is-error {
-  background: #d65353;
+  background: var(--zouk-status-error);
 }
 
 .zouk-reader-avatar.is-compact {
@@ -628,9 +653,9 @@ html {
 }
 
 .zouk-reader-avatar.is-compact .zouk-reader-avatar-dot {
-  width: 7px;
-  height: 7px;
-  border-width: 1px;
+  width: 6px;
+  height: 6px;
+  border-width: 2px;
 }
 
 .zouk-reader-drag {
@@ -704,11 +729,15 @@ html {
 }
 
 .zouk-live-agent.is-working .zouk-live-agent__detail {
-  color: color-mix(in oklab, #d89a2f 66%, var(--th-ink));
+  color: color-mix(in oklab, var(--zouk-status-working) 70%, var(--th-ink));
+}
+
+.zouk-live-agent.is-thinking .zouk-live-agent__detail {
+  color: color-mix(in oklab, var(--zouk-status-thinking) 72%, var(--th-ink));
 }
 
 .zouk-live-agent.is-error .zouk-live-agent__detail {
-  color: #d65353;
+  color: var(--zouk-status-error);
 }
 
 .zouk-live-agent-more {
@@ -1233,18 +1262,6 @@ html {
 
   .zouk-context-preview__row {
     grid-template-columns: 88px minmax(0, 1fr);
-  }
-}
-
-@keyframes zoukStatusPulse {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(0.72);
-    opacity: 0.55;
   }
 }
 

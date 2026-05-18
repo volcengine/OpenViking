@@ -220,7 +220,8 @@ function updateAgentActivity(agents, packet) {
 
 function agentDotStatus(agent) {
   if (!agent || agent.status !== 'active') return 'offline';
-  if (agent.activity === 'working' || agent.activity === 'thinking') return 'working';
+  if (agent.activity === 'working') return 'working';
+  if (agent.activity === 'thinking') return 'thinking';
   if (agent.activity === 'error') return 'error';
   if (agent.activity === 'online') return 'online';
   return 'offline';
@@ -364,7 +365,7 @@ function avatarLabel(name) {
 function Avatar({ name, src, status = '', compact = false, kind = 'human' }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageSrc = !imageFailed ? normalizeAvatarUrl(src) : '';
-  const dotStatus = ['working', 'online', 'offline', 'error'].includes(status) ? status : '';
+  const dotStatus = ['working', 'thinking', 'online', 'offline', 'error'].includes(status) ? status : '';
   const avatarKind = kind === 'agent' ? 'agent' : 'human';
   return (
     <div
@@ -573,7 +574,14 @@ export function ZoukInteractiveBlog({ route }) {
     () => agents.filter(agentIsLive),
     [agents],
   );
-  const hasWorkingAgent = liveAgents.some((agent) => agentDotStatus(agent) === 'working');
+  const launcherStatus = useMemo(() => {
+    const statuses = liveAgents.map(agentDotStatus);
+    if (statuses.includes('error')) return 'error';
+    if (statuses.includes('working')) return 'working';
+    if (statuses.includes('thinking')) return 'thinking';
+    if (statuses.includes('online')) return 'online';
+    return liveAgents.length ? 'offline' : '';
+  }, [liveAgents]);
 
   const rememberSource = useCallback(() => {
     const next = currentSourceUrl();
@@ -963,7 +971,7 @@ export function ZoukInteractiveBlog({ route }) {
   const launcher = (
     <button
       type="button"
-      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}${liveAgents.length ? ' has-live' : ''}${hasWorkingAgent ? ' has-working' : ''}`}
+      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}${launcherStatus ? ` has-live is-${launcherStatus}` : ''}`}
       aria-label={panelVisible ? 'Close blog chat' : 'Open blog chat'}
       aria-pressed={panelVisible}
       onClick={toggleChat}
