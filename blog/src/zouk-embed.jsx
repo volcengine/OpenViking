@@ -436,11 +436,19 @@ function MessageBody({ content }) {
   );
 }
 
+function previewThreadContent(content) {
+  const parsed = parseInjectedMessage(content);
+  return compactText(parsed.body || content, 220);
+}
+
 function ThreadBlock({ message, state, agentsBySender, onToggle }) {
-  const replyCount = message.replyCount || message.replies?.length || 0;
+  const inlineReplies = Array.isArray(message.replies) ? message.replies : [];
+  const stateReplies = Array.isArray(state?.messages) ? state.messages : [];
+  const availableReplies = stateReplies.length ? stateReplies : inlineReplies;
+  const replyCount = message.replyCount || availableReplies.length || 0;
   if (!replyCount) return null;
   const expanded = Boolean(state?.open);
-  const replies = expanded ? (state?.messages || message.replies || []) : (message.replies || []).slice(-1);
+  const replies = expanded ? availableReplies : availableReplies.slice(-1);
   const label = replyCount === 1 ? '1 reply' : `${replyCount} replies`;
   return (
     <div className={`zouk-reader-thread${expanded ? ' is-expanded' : ''}`}>
@@ -457,7 +465,7 @@ function ThreadBlock({ message, state, agentsBySender, onToggle }) {
         <div className="zouk-reader-thread__body">
           {state?.loading ? <div className="zouk-reader-thread__state">Loading thread...</div> : null}
           {state?.error ? <div className="zouk-reader-thread__state is-error">{state.error}</div> : null}
-          {!state?.loading && !state?.error && replies.map((reply) => {
+          {!state?.loading && replies.map((reply) => {
             const replyAgent = agentsBySender.get(senderKey(reply.senderName));
             const avatarKind = replyAgent || reply.senderType === 'agent' ? 'agent' : 'human';
             return (
@@ -484,9 +492,10 @@ function ThreadBlock({ message, state, agentsBySender, onToggle }) {
           type="button"
           className="zouk-reader-thread__preview"
           onClick={() => onToggle(message)}
+          aria-label={`Expand ${label}`}
         >
           <span>{replies[0].senderName}</span>
-          <strong>{replies[0].content}</strong>
+          <strong>{previewThreadContent(replies[0].content)}</strong>
         </button>
       ) : null}
     </div>

@@ -891,8 +891,9 @@ html {
   gap: 6px;
   margin-top: 5px;
   padding: 3px 7px;
-  border-color: transparent;
-  border-radius: 6px;
+  border-color: color-mix(in oklab, var(--th-accent) 18%, transparent);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--th-bg-2) 58%, transparent);
   text-align: left;
 }
 
@@ -904,8 +905,10 @@ html {
 .zouk-reader-thread__preview strong {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
   font-weight: 400;
 }
 
