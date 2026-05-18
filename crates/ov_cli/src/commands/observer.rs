@@ -38,6 +38,16 @@ pub async fn retrieval(
     Ok(())
 }
 
+pub async fn filesystem(
+    client: &HttpClient,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.get("/api/v1/observer/filesystem", &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn system(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
     let response: serde_json::Value = client.get("/api/v1/observer/system", &[]).await?;
     output_success(&response, output_format, compact);

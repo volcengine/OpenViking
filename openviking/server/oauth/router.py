@@ -18,7 +18,6 @@ metadata) is delegated to the official ``mcp.server.auth`` SDK (mounted from
 from __future__ import annotations
 
 import html
-import logging
 import os
 from typing import Optional
 from urllib.parse import urlencode
@@ -38,8 +37,9 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnavailableError,
 )
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 router = APIRouter(tags=["oauth"])

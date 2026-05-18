@@ -19,6 +19,8 @@ Key features tested:
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 from typing import Optional
 
 import pytest
@@ -129,6 +131,26 @@ class TestObservabilityContextBasics:
         fields = ctx.to_log_fields()
 
         assert fields["custom_field"] == "custom_value"
+
+    def test_import_from_fresh_interpreter_does_not_trigger_circular_import(self) -> None:
+        """
+        Test that observability context can be imported in a fresh interpreter.
+
+        This guards against package-level import cycles between
+        ``openviking.observability.context`` and ``openviking_cli.utils``.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import importlib; importlib.import_module('openviking.observability.context')",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
 
 
 class TestRootContextBinding:

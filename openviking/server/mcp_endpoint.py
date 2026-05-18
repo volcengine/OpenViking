@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextvars
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -176,7 +176,13 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def find(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
+async def find(
+    query: str,
+    target_uri: str = "",
+    limit: int = 10,
+    min_score: float = 0.35,
+    level: Optional[List[int]] = None,
+) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
     result = await service.search.find(
@@ -185,6 +191,7 @@ async def find(query: str, target_uri: str = "", limit: int = 10, min_score: flo
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
+        level=level,
     )
     return _format_search_result(result)
 
@@ -196,6 +203,7 @@ async def search(
     session_id: Optional[str] = None,
     limit: int = 10,
     min_score: float = 0.35,
+    level: Optional[List[int]] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -211,6 +219,7 @@ async def search(
         session=session,
         limit=limit,
         score_threshold=min_score,
+        level=level,
     )
     return _format_search_result(result)
 
@@ -339,8 +348,8 @@ _LOCAL_FILE_HINT = (
     "For local files or directories, use the `ov` CLI:\n"
     "  1. Try first: ov add-resource <path>\n"
     "     (if `ov` is already on PATH, this is all you need)\n"
-    "  2. If `ov` is not installed, run:\n"
-    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  2. If `ov` is not installed, install the npm CLI package:\n"
+    "     npm i -g @openviking/cli\n"
     "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
     "configure ~/.openviking/ovcli.conf:\n"
     '       {"url": "https://your-host", "api_key": "your-key"}'
@@ -456,11 +465,11 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 
 @mcp.tool()
-async def forget(uri: str) -> str:
-    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here."""
+async def forget(uri: str, recursive: bool = False) -> str:
+    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here. Set recursive=true only when the user explicitly asks to delete a directory tree."""
     service = get_service()
     ctx = _get_ctx()
-    await service.fs.rm(uri, ctx=ctx)
+    await service.fs.rm(uri, ctx=ctx, recursive=recursive)
     return f"Deleted: {uri}"
 
 

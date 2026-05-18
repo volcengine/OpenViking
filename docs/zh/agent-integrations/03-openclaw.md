@@ -79,7 +79,9 @@ npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
 | `--workdir PATH`           | OpenClaw 数据目录                                               |
 | `--version VER`            | 插件版本（如 `0.2.9` → 插件 `v0.2.9`）                          |
 | `--current-version`        | 查看当前已安装的插件版本                                        |
-| `--plugin-version REF`     | 仅指定插件版本，支持 tag、分支或 commit                         |
+| `--plugin-version REF`     | 仅指定插件版本，自动识别：npm 版本（如 `2026.5.8`）或 npm dist-tag（如 `dev`）走 npm；其它 ref（如 `v0.3.16`、`main`）走 GitHub 仓库；默认 `npm latest` |
+| `--plugin-source=npm\|github` | 插件下载来源（默认 `npm`）                                       |
+| `--plugin-package=NAME`    | npm 插件包名（默认 `@openviking/openclaw-plugin`）              |
 | `--github-repo owner/repo` | 指定插件来源仓库，默认 `volcengine/OpenViking`                  |
 | `--update`                 | 只升级插件                                                      |
 | `-y`                       | 非交互模式，使用默认配置                                        |

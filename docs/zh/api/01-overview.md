@@ -348,6 +348,7 @@ JSON 输出 - 错误：
 | GET | `/metrics` | Prometheus 指标导出 | 可选 |
 | GET | `/api/v1/system/status` | 系统状态 | 需要 |
 | POST | `/api/v1/system/wait` | 等待处理完成 | 需要 |
+| POST | `/api/v1/system/consistency` | 文件系统和向量索引一致性检查 | 需要 |
 
 ### 资源端点
 
@@ -363,6 +364,8 @@ JSON 输出 - 错误：
 |------|------|------|------|
 | POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN |
 | POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN |
+| POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
+| POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
 
 ### 文件系统端点
 

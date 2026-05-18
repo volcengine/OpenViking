@@ -3,7 +3,9 @@ name: 07. API Effect Tests
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 1,10 * * *'
+  release:
+    types: [prereleased]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -196,7 +198,7 @@ jobs:
           cd tests/api_test
           export OPENVIKING_API_KEY=test-root-api-key
           export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
-          uv run python -m pytest scenarios/resources_retrieval_slow/ -v --tb=short --durations=0 --html=api-effect-test-report.html --self-contained-html
+          uv run python -m pytest scenarios/resources_retrieval_slow/ -v -n 4 --tb=short --durations=0 --html=api-effect-test-report.html --self-contained-html
         continue-on-error: true
 
       - name: Upload test reports

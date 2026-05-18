@@ -253,6 +253,22 @@ def _create_proxy_router() -> APIRouter:
     async def system_status(request: Request):
         return await _forward_request(request, "/api/v1/system/status")
 
+    @router.get("/ov/console/dashboard/summary")
+    async def console_dashboard_summary(request: Request):
+        return await _forward_request(request, "/api/v1/console/dashboard/summary")
+
+    @router.get("/ov/console/tokens")
+    async def console_tokens(request: Request):
+        return await _forward_request(request, "/api/v1/console/tokens")
+
+    @router.get("/ov/console/context-commits")
+    async def console_context_commits(request: Request):
+        return await _forward_request(request, "/api/v1/console/context-commits")
+
+    @router.get("/ov/console/audit")
+    async def console_audit(request: Request):
+        return await _forward_request(request, "/api/v1/console/audit")
+
     @router.get("/ov/observer/{component}")
     async def observer_component(request: Request, component: str):
         invalid = _validate_path_param(component, "component")

@@ -15,7 +15,7 @@ If you just want to know where to look first, start with the table below.
 | Entry point | Best for | Typical use case |
 | --- | --- | --- |
 | `/health`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
-| `ov tui` | `viking://` trees, directory summaries, file content, vector records | development debugging, verifying that data actually landed |
+| `ov tui` | `viking://` trees, directory summaries, file content, vector records, image preview for supported image files | development debugging, verifying that data actually landed |
 | `OpenViking Console` | web UI for browsing, search, resource import, tenants, and system state | interactive investigation without typing every command |
 | `telemetry` | per-request duration, token usage, vector retrieval, ingestion stages | debugging one specific slow or unexpected call |
 | `/metrics` | request trends, error rates, latency distribution, queue and probe state | Prometheus scraping, Grafana dashboards, alert rules |
@@ -152,7 +152,7 @@ Common keys:
 A typical debugging flow is:
 
 1. Run `ov tui viking://resources` and locate the target document or directory.
-2. Confirm the right-side panel shows `abstract`, `overview`, or file content.
+2. Confirm the right-side panel shows `abstract`, `overview`, or file content (supported image files — `png`, `jpg`, `jpeg`, `gif`, `bmp`, `webp`, `tiff`, `tif` — are rendered inline as a preview).
 3. Press `v` to inspect vector records for that URI.
 4. Press `c` to get the total count, and `n` to keep paging if needed.
 
@@ -277,6 +277,7 @@ OpenViking groups signal-level observability configuration under `server.observa
 - `server.observability.metrics`: metrics subsystem and exporters
 - `server.observability.traces`: trace export configuration
 - `server.observability.logs`: log export configuration
+- `server.observability.dump_body`: attaches HTTP request/response bodies (filtered by content-type, truncated by bytes) as attributes on the active trace span so they can be inspected in trace UIs. Off by default — bodies may contain secrets and high-cardinality content
 
 Example:
 
@@ -322,6 +323,10 @@ Example:
         "endpoint": "otel-collector:4317",
         "service_name": "openviking-server",
         "headers": {}
+      },
+      "dump_body": {
+        "enabled": false,
+        "max_bytes": 4096
       }
     }
   }

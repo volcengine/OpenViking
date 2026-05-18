@@ -179,8 +179,9 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     has_propagate = hasattr(langfuse, "propagate_attributes")
+                    is_enabled = getattr(langfuse, "enabled", False)
                     # logger.info(f"[LANGFUSE] Client status: enabled={langfuse.enabled}, has_propagate_attributes={has_propagate}")
-                    if langfuse.enabled and has_propagate:
+                    if is_enabled and has_propagate:
                         # logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)

@@ -80,8 +80,11 @@ scrape_configs:
 - `/metrics` 返回的是 Prometheus 文本，不是标准 OpenViking API 的 `{status, result, time}` JSON 结构。
 - 业务分析类统计（如 memory health、staleness、session extraction）应继续使用 `/api/v1/stats/*`，而不是迁移到 `/metrics`。
 - 人工查看组件瞬时状态更适合使用 `/api/v1/observer/*`。
+- `/metrics` 现在也包含 VikingBot feedback observability 指标，这些指标来自对持久化 session 数据的 scrape-time 聚合；具体指标族与示例可参见 Metrics 概念文档中的 feedback 章节。
 
 ## 相关文档
 
+- [指标与 Metrics](../concepts/12-metrics.md) - 指标族、标签、feedback 指标与 PromQL 示例
+- [VikingBot 问答效果反馈观测方案设计](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
 - [系统与监控](07-system.md) - 健康检查、系统状态与 Observer API
 - [API 概览](01-overview.md) - 所有 API 端点共享约定

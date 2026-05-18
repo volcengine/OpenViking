@@ -206,7 +206,7 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
 
     for i in positions_to_check:
         if 0 <= i <= line_len - search_len:
-            substring = line[i:i+search_len]
+            substring = line[i : i + search_len]
             score = get_similarity(substring, search_str)
             if score > best_score:
                 best_score = score
@@ -940,7 +940,9 @@ class MemoryPatchHandler:
             return result.content if result.content is not None else original_content
         else:
             error_msg = result.error or "Unknown error"
-            logger.warning(f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}")
+            logger.warning(
+                f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}"
+            )
             raise PatchParseError(f"Patch application failed: {error_msg}")
 
     def _extract_replace_content(self, patch: str) -> str:
@@ -1229,9 +1231,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
             # Get indent from current replace line
             current_replace_match = re.match(r"^[\t ]*", line)
-            current_replace_indent = (
-                current_replace_match.group(0) if current_replace_match else ""
-            )
+            current_replace_indent = current_replace_match.group(0) if current_replace_match else ""
 
             # Calculate relative indent level (how much deeper/shallower this line is compared to search)
             relative_level = len(current_replace_indent) - len(search_indent)
@@ -1259,12 +1259,13 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     final_content = line_ending.join(result_lines)
 
     # Check if all results are successful (including no-change cases)
-    all_successful = all(result.get("success", False) for result in diff_results)
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
         logger.warning("Patch application failed, skipping update")
-        raise PatchParseError(f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}")
+        raise PatchParseError(
+            f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}"
+        )
 
     return final_content
 

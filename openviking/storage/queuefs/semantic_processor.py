@@ -29,7 +29,9 @@ from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
+from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
+from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -39,6 +41,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -227,6 +230,47 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
+    async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
+        if msg.context_type not in {"resource", "skill"}:
+            return
+        parent = VikingURI(uri).parent
+        if parent is None:
+            return
+        parent_uri = parent.uri.rstrip("/")
+        if (
+            not parent_uri
+            or parent_uri in {"viking://", "viking:"}
+            or parent_uri == uri.rstrip("/")
+        ):
+            return
+
+        from openviking.storage.queuefs import get_queue_manager
+
+        queue_manager = get_queue_manager()
+        if queue_manager is None:
+            return
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        parent_msg = SemanticMsg(
+            uri=parent_uri,
+            context_type=msg.context_type,
+            recursive=False,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+            agent_id=msg.agent_id,
+            role=msg.role,
+            skip_vectorization=msg.skip_vectorization,
+            changes={"modified": [uri]},
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=msg.context_type,
+                uri=parent_uri,
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+                agent_id=msg.agent_id,
+            ),
+        )
+        await semantic_queue.enqueue(parent_msg)
+        logger.info("Enqueued parent semantic refresh: %s", parent_uri)
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
@@ -243,6 +287,16 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            if is_semantic_msg_stale(msg):
+                logger.info(
+                    "Skipping stale semantic message: uri=%s version=%s",
+                    msg.uri,
+                    msg.coalesce_version,
+                )
+                if msg.telemetry_id and msg.id:
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                self.report_success()
+                return None
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
                 self._circuit_breaker.check()
@@ -326,6 +380,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             is_code_repo=msg.is_code_repo,
                             changes=msg.changes,
                             skip_vectorization=msg.skip_vectorization,
+                            coalesce_key=msg.coalesce_key,
+                            coalesce_version=msg.coalesce_version,
                         )
                         self._dag_executor = executor
                         if msg.lifecycle_lock_handle_id:
@@ -337,6 +393,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             msg.uri,
                             executor.get_stats(),
                         )
+                        if not executor.stale:
+                            await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
@@ -347,7 +405,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         except Exception as e:
             error_class = classify_api_error(e)
-            if error_class == "permanent":
+            if error_class == ERROR_CLASS_PERMANENT:
                 logger.critical(
                     f"Permanent API error processing semantic message, dropping: {e}",
                     exc_info=True,
@@ -411,7 +469,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @staticmethod
     async def _ensure_lifecycle_lock(handle_id: str, lock_path: str) -> str:
-        """If the handle is missing (server restart), re-acquire a SUBTREE lock.
+        """If the handle is missing (server restart), re-acquire a TreeLock.
 
         Returns the (possibly new) handle ID, or "" on failure.
         """
@@ -421,7 +479,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if lm.get_handle(handle_id):
             return handle_id
         new_handle = lm.create_handle()
-        if await lm.acquire_subtree(new_handle, lock_path):
+        if await lm.acquire_tree(new_handle, lock_path):
             logger.info(f"Re-acquired lifecycle lock on {lock_path} (handle {new_handle.id})")
             return new_handle.id
         logger.warning(f"Failed to re-acquire lifecycle lock on {lock_path}")
@@ -564,13 +622,24 @@ class SemanticProcessor(DequeueHandlerBase):
         overview, abstract = self._enforce_size_limits(overview, abstract)
 
         try:
-            await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
-            await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
-            logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+            wrote_semantics = await self._write_memory_directory_semantics(
+                msg=msg,
+                viking_fs=viking_fs,
+                dir_uri=dir_uri,
+                overview=overview,
+                abstract=abstract,
+                ctx=ctx,
+            )
         except Exception as e:
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
+        if not wrote_semantics:
+            _mark_done()
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
+            return
+        logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
 
         try:
             if msg.skip_vectorization:
@@ -602,6 +671,27 @@ class SemanticProcessor(DequeueHandlerBase):
         finally:
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
+
+    async def _write_memory_directory_semantics(
+        self,
+        *,
+        msg: SemanticMsg,
+        viking_fs: Any,
+        dir_uri: str,
+        overview: str,
+        abstract: str,
+        ctx: Optional[RequestContext],
+    ) -> bool:
+        return await write_semantic_sidecars(
+            viking_fs=viking_fs,
+            dir_uri=dir_uri,
+            overview=overview,
+            abstract=abstract,
+            ctx=ctx,
+            is_stale=lambda: is_semantic_msg_stale(msg),
+            lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
+            log_prefix="[MemorySemantic]",
+        )
 
     async def _release_memory_lifecycle_lock(self, handle_id: str) -> None:
         """Release a lifecycle lock held by in-place memory refresh."""
@@ -1090,14 +1180,21 @@ class SemanticProcessor(DequeueHandlerBase):
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
         file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
-        output_language = resolve_output_language(file_summaries_str, config=config)
-
         # Build subdirectory summary string
         children_abstracts_str = (
             "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
             if children_abstracts
             else "None"
         )
+
+        language_source_parts = []
+        if file_summaries:
+            language_source_parts.append(file_summaries_str)
+        if children_abstracts:
+            language_source_parts.append(children_abstracts_str)
+        if not language_source_parts:
+            language_source_parts.append(dir_uri.split("/")[-1])
+        output_language = resolve_output_language("\n".join(language_source_parts), config=config)
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)

@@ -16,6 +16,8 @@ import pytest
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v2 import SessionCompressorV2
+from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.utils.content import deserialize_metadata, serialize_with_metadata
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -427,12 +429,23 @@ class TestCompressorV2:
         ctx = RequestContext(user=user, role=Role.ROOT)
         messages = [Message.create_user("test")]
 
-        class DummySchema:
+        class FixedSchema:
+            directory = "viking://user/{{ user_space }}/memories"
+            filename_template = "profile.md"
+
+            def filename_has_variables(self):
+                return False
+
+        class VariableSchema:
             directory = "viking://user/{{ user_space }}/memories/events"
+            filename_template = "{{ event_name }}.md"
+
+            def filename_has_variables(self):
+                return True
 
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
-                return [DummySchema()]
+                return [FixedSchema(), VariableSchema()]
 
             def _get_registry(self):
                 return object()
@@ -452,7 +465,7 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: object(),
-            acquire_subtree_batch=AsyncMock(return_value=False),
+            acquire_exact_tree_batch=AsyncMock(return_value=False),
             release=AsyncMock(),
         )
 
@@ -478,4 +491,158 @@ class TestCompressorV2:
             )
 
         assert result == []
-        assert lock_manager.acquire_subtree_batch.await_count == 2
+        assert lock_manager.acquire_exact_tree_batch.await_count == 2
+        _, kwargs = lock_manager.acquire_exact_tree_batch.await_args
+        assert kwargs["exact_paths"] == ["/local/default/user/default/memories/profile.md"]
+        assert kwargs["tree_paths"] == ["/local/default/user/default/memories/events"]
+
+    @pytest.mark.asyncio
+    async def test_extract_phase_runs_post_apply_before_lock_release(self):
+        """Agent experience source metadata should be updated inside the schema lock."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        events: List[str] = []
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+        class DummyProvider:
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                return SimpleNamespace(upsert_operations=[], delete_file_contents=[]), []
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = ["viking://agent/default/memories/experiences/debug.md"]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+            ),
+        )
+        handle = SimpleNamespace(id="handle-1", locks=[])
+
+        async def acquire_exact_tree_batch(*args, **kwargs):
+            events.append("acquire")
+            return True
+
+        async def release(_handle):
+            events.append("release")
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            release=AsyncMock(side_effect=release),
+        )
+
+        async def post_apply(result, inheritance_map, lock_handle):
+            assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
+            assert inheritance_map == {}
+            assert lock_handle is handle
+            events.append("post_apply")
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
+            result = await compressor._run_extract_phase(
+                provider=DummyProvider(),
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=True,
+                phase_label="experience(test)",
+                post_apply=post_apply,
+            )
+
+        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
+        assert events == ["acquire", "apply", "post_apply", "release"]
+
+    @pytest.mark.asyncio
+    async def test_append_trajectories_uses_exact_lock(self):
+        """Fallback source metadata append should protect the read-modify-write."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+        events: List[str] = []
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.content = serialize_with_metadata(
+                    {
+                        "content": "debug login issue",
+                        "source_trajectories": ["traj-0"],
+                    }
+                )
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return f"/local/default/agent/default/memories/experiences/{uri.rsplit('/', 1)[-1]}"
+
+            async def read_file(self, uri: str, ctx=None):
+                events.append("read")
+                return self.content
+
+            async def write_file(self, uri: str, content: str, ctx=None):
+                events.append("write")
+                self.content = content
+
+        handle = SimpleNamespace(id="handle-1", locks=[])
+
+        async def acquire_exact_path_batch(_handle, paths):
+            events.append(f"exact:{paths[0]}")
+            return True
+
+        async def release(_handle):
+            events.append("release")
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            release=AsyncMock(side_effect=release),
+        )
+        viking_fs = FakeVikingFS()
+
+        with patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager):
+            await compressor._append_trajectories_to_experiences(
+                [exp_uri],
+                ["traj-1"],
+                ctx,
+                viking_fs,
+            )
+
+        metadata = deserialize_metadata(viking_fs.content)
+        assert metadata["source_trajectories"] == ["traj-0", "traj-1"]
+        assert events == [
+            "exact:/local/default/agent/default/memories/experiences/debug.md",
+            "read",
+            "write",
+            "release",
+        ]

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Lock handle and LockOwner protocol for PathLock integration."""
+"""Lock handle and LockOwner protocol for path lock integration."""
 
 import time
 import uuid
@@ -14,7 +14,7 @@ def _new_lock_id() -> str:
 
 @runtime_checkable
 class LockOwner(Protocol):
-    """Minimal interface that PathLock requires from its caller."""
+    """Minimal interface that path lock code requires from its caller."""
 
     id: str
     locks: list[str]
@@ -28,7 +28,7 @@ class LockOwner(Protocol):
 
 @dataclass
 class LockHandle:
-    """Identifies a lock holder. PathLock uses ``id`` to generate fencing tokens
+    """Identifies a lock holder. Path lock code uses ``id`` to generate fencing tokens
     and ``locks`` to track acquired lock files."""
 
     id: str = field(default_factory=_new_lock_id)

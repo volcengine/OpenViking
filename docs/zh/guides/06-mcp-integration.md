@@ -106,7 +106,7 @@ claude mcp add --transport http openviking \
 | `add_resource` | 添加本地文件或 URL 作为资源 | `path`, `description`(可选) |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
-| `forget` | 删除任意 `viking://` URI（先用 `search` 查找） | `uri` |
+| `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 
 ## 故障排除

@@ -98,6 +98,7 @@ class HierarchicalRetriever:
         score_threshold: Optional[float] = None,
         score_gte: bool = False,
         scope_dsl: Optional[Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -165,10 +166,10 @@ class HierarchicalRetriever:
             for i, r in enumerate(global_results):
                 uri = r.get("uri", "UNKNOWN_URI")
                 score = r.get("_score", 0.0)
-                level = r.get("level", "UNKNOWN_LEVEL")
+                result_level = r.get("level", "UNKNOWN_LEVEL")
                 account_id = r.get("account_id", "UNKNOWN_ACCOUNT_ID")
                 logger.debug(
-                    f"  [{i}] URI: {uri}, score: {score:.4f}, level: {level}, account_id: {account_id}"
+                    f"  [{i}] URI: {uri}, score: {score:.4f}, level: {result_level}, account_id: {account_id}"
                 )
 
         # Step 3: Merge starting points
@@ -179,8 +180,11 @@ class HierarchicalRetriever:
             mode=mode,
         )
 
-        # 从 global_results 中提取 level 2 的文件作为初始候选者
-        initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
+        # Add global hits to the result pool only when they match the requested level.
+        if level is not None:
+            initial_candidates = [r for r in global_results if r.get("level", 2) in level]
+        else:
+            initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
 
         initial_candidates = self._prepare_initial_candidates(
             query.query,
@@ -203,6 +207,7 @@ class HierarchicalRetriever:
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
             initial_candidates=initial_candidates,
+            level=level,
         )
 
         # Step 6: Convert results
@@ -332,8 +337,8 @@ class HierarchicalRetriever:
         global_results: List[Dict[str, Any]],
         mode: str = RetrieverMode.THINKING,
     ) -> List[Dict[str, Any]]:
-        """Extract level-2 global hits and preserve rerank scores for them."""
-        initial_candidates = [dict(r) for r in global_results if r.get("level", 2) == 2]
+        """Preserve rerank scores for global hits added to the result pool."""
+        initial_candidates = [dict(r) for r in global_results]
         if not initial_candidates:
             return []
 
@@ -367,6 +372,7 @@ class HierarchicalRetriever:
         target_dirs: Optional[List[str]] = None,
         scope_dsl: Optional[Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
+        level: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -392,26 +398,28 @@ class HierarchicalRetriever:
         dir_queue: List[tuple] = []  # Priority queue: (-score, uri)
         visited: set = set()
         prev_topk_uris: set = set()
+        prev_pool_size = 0
         convergence_rounds = 0
+        stagnant_rounds = 0
 
-        # 添加初始候选者（level 2 文件）
+        # Add initial candidates that match the requested level.
         if initial_candidates:
             for r in initial_candidates:
                 uri = r.get("uri", "")
-                if uri:
-                    # 只添加 level 2 的文件
-                    if r.get("level", 2) == 2:
-                        score = r.get("_score", 0.0)
-                        if not passes_threshold(score):
-                            logger.debug(
-                                f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
-                            )
-                            continue
-                        r["_final_score"] = score
-                        collected_by_uri[uri] = r
+                if not uri:
+                    continue
+                if level is None or r.get("level", 2) in level:
+                    score = r.get("_score", 0.0)
+                    if not passes_threshold(score):
                         logger.debug(
-                            f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
+                            f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
                         )
+                        continue
+                    r["_final_score"] = score
+                    collected_by_uri[uri] = r
+                    logger.debug(
+                        f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
+                    )
 
         alpha = self.score_propagation_alpha
 
@@ -466,16 +474,17 @@ class HierarchicalRetriever:
                     continue
 
                 telemetry.count("vector.passed", 1)
-                # Deduplicate by URI and keep the highest-scored candidate.
-                previous = collected_by_uri.get(uri)
-                if previous is None or final_score > previous.get("_final_score", 0):
-                    r["_final_score"] = final_score
-                    collected_by_uri[uri] = r
-                    logger.debug(
-                        "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
-                        uri,
-                        final_score,
-                    )
+                if level is None or r.get("level", 2) in level:
+                    # Deduplicate by URI and keep the highest-scored candidate.
+                    previous = collected_by_uri.get(uri)
+                    if previous is None or final_score > previous.get("_final_score", 0):
+                        r["_final_score"] = final_score
+                        collected_by_uri[uri] = r
+                        logger.debug(
+                            "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
+                            uri,
+                            final_score,
+                        )
 
                 # Only recurse into directories (L0/L1). L2 files are terminal hits.
                 if uri not in visited and r.get("level", 2) != 2:
@@ -488,15 +497,23 @@ class HierarchicalRetriever:
                 reverse=True,
             )[:limit]
             current_topk_uris = {c.get("uri", "") for c in current_topk}
+            current_pool_size = len(collected_by_uri)
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:
                 convergence_rounds += 1
 
                 if convergence_rounds >= self.MAX_CONVERGENCE_ROUNDS:
                     break
+            elif current_pool_size == prev_pool_size:
+                stagnant_rounds += 1
+
+                if stagnant_rounds >= self.MAX_CONVERGENCE_ROUNDS:
+                    break
             else:
                 convergence_rounds = 0
+                stagnant_rounds = 0
                 prev_topk_uris = current_topk_uris
+                prev_pool_size = current_pool_size
 
         collected = sorted(
             collected_by_uri.values(),

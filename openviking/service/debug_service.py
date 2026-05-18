@@ -5,11 +5,12 @@ Debug Service - provides system status query and health check.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
+    FilesystemObserver,
     LockObserver,
     ModelsObserver,
     QueueObserver,
@@ -19,6 +20,9 @@ from openviking.storage.observers import (
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import get_lock_manager
 from openviking_cli.utils.config import OpenVikingConfig
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -62,18 +66,23 @@ class ObserverService:
         self,
         vikingdb: Optional[VikingDBManager] = None,
         config: Optional[OpenVikingConfig] = None,
+        agfs_client: Optional[Any] = None,
     ):
         self._vikingdb = vikingdb
         self._config = config
+        self._agfs_client = agfs_client
 
     def set_dependencies(
         self,
         vikingdb: VikingDBManager,
         config: OpenVikingConfig,
+        agfs_client: Optional[Any] = None,
     ) -> None:
         """Set dependencies after initialization."""
         self._vikingdb = vikingdb
         self._config = config
+        if agfs_client is not None:
+            self._agfs_client = agfs_client
 
     @property
     def _dependencies_ready(self) -> bool:
@@ -185,6 +194,43 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
+    @property
+    def filesystem(self) -> ComponentStatus:
+        """Get filesystem operation status."""
+        observer = FilesystemObserver()
+        return ComponentStatus(
+            name="filesystem",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_table(),
+        )
+
+    async def get_filesystem_stats(self, mount_path: Optional[str] = None) -> dict:
+        """
+        Get filesystem statistics from RAGFS.
+
+        Args:
+            mount_path: Optional specific mount path.
+
+        Returns:
+            Statistics data.
+        """
+        try:
+            if self._agfs_client is None:
+                logger.debug("RAGFS client not available, returning empty stats")
+                return {}
+
+            # Call get_stats on the RAGFS client
+            import asyncio
+            stats = await asyncio.to_thread(
+                self._agfs_client.get_stats,
+                mount_path
+            )
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting filesystem stats: {e}")
+            return {}
+
     def system(self, ctx: Optional[RequestContext] = None) -> SystemStatus:
         """Get system overall status."""
         components = {
@@ -193,6 +239,7 @@ class ObserverService:
             "models": self.models,
             "lock": self.lock,
             "retrieval": self.retrieval,
+            "filesystem": self.filesystem,
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]
         return SystemStatus(
@@ -215,16 +262,18 @@ class DebugService:
         self,
         vikingdb: Optional[VikingDBManager] = None,
         config: Optional[OpenVikingConfig] = None,
+        agfs_client: Optional[Any] = None,
     ):
-        self._observer = ObserverService(vikingdb, config)
+        self._observer = ObserverService(vikingdb, config, agfs_client)
 
     def set_dependencies(
         self,
         vikingdb: VikingDBManager,
         config: OpenVikingConfig,
+        agfs_client: Optional[Any] = None,
     ) -> None:
         """Set dependencies after initialization."""
-        self._observer.set_dependencies(vikingdb, config)
+        self._observer.set_dependencies(vikingdb, config, agfs_client)
 
     @property
     def observer(self) -> ObserverService:

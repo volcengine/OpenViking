@@ -4,13 +4,13 @@
 
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
 
 try:
     import openai
@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _DASHSCOPE_HOSTS = {
@@ -141,8 +141,11 @@ class OpenAIVLM(VLMBase):
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
+        extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
-            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
+            extra_body["enable_thinking"] = bool(thinking)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
     def _update_token_usage_from_response(
         self,
@@ -390,11 +393,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -418,11 +422,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

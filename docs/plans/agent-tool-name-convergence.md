@@ -24,8 +24,8 @@
 | `read` | 是：REST `/api/v1/content/read`、MCP `read`、CLI `ov read` | 读取指定 URI 的内容。 |
 | `list` | 是：REST `/api/v1/fs/ls`、MCP `list`、CLI `ov ls` | 列出目录或命名空间下的节点。 |
 | `add_resource` | 是：REST `/api/v1/resources`、MCP `add_resource`、CLI `ov add-resource` | 添加外部资源。 |
+| `add_skill` | 是：REST `/api/v1/skills`、CLI `ov add-skill` | 添加或注册 Agent skill。 |
 | `grep` / `glob` | 是：REST `/api/v1/search/grep` 等、MCP `grep` / `glob`、CLI `ov grep` / `ov glob` | 精确文本检索和路径匹配。 |
-| `import` | 否 | OpenClaw 的 `ov_import` 同时覆盖 resource / skill 导入，目前 OV 没有完全等价的单一通用工具。 |
 | `archive_search` / `archive_read` | 否 | OpenClaw archive 工具绑定 session archive 语义，目前 OV 只有底层 grep/read 能力。 |
 
 ## 1. Search
@@ -97,13 +97,16 @@ Remember 是写入长期记忆：把文本、消息或会话内容写入 OpenVik
 | opencode skill plugin | `ov health` | OV CLI | 已下沉，不改名 | 这是 CLI 命令名前缀。 |
 | Hermes OpenViking provider | 无公开 `viking_health` 工具 | 配置 / provider 初始化检查 endpoint | 不在本 PR 改 | 最新公开工具列举不包含 health。 |
 
-## 6. Import / Archive / Read / Browse
+## 6. Add Resource / Add Skill / Archive / Read / Browse
 
-这些能力当前不能简单改名到通用工具，因为宿主语义尚未完全下沉。
+Resource 和 skill 导入不再合并成 `import`。二者落点命名空间、底层 API 和参数不同：resource 进入 `viking://resources/...`，skill 进入 `viking://agent/skills/...`。因此 OpenClaw 的 Agent 可见工具应直接拆成 `add_resource` 和 `add_skill`，而不是继续暴露 `ov_import(kind=...)`。
 
 | 插件 / 接入 | 当前暴露工具名 / 入口 | 当前实际调用的 OV 接口 | 能否直接收敛到通用工具名 | 结论 / 原因 |
 |---|---|---|---|---|
-| OpenClaw | `ov_import` | resource 走 `/api/v1/resources` / `add_resource`；skill 走 `/api/v1/skills` | 否 | 同时覆盖 resource / skill 导入，OV 还没有完全等价的 `import` 通用工具。 |
+| OpenClaw | 原 `ov_import(kind=resource)`，现 `add_resource` | local 文件 / 目录先 `temp_upload`，再走 `/api/v1/resources`；remote URL / Git URL 直接走 `/api/v1/resources` | 是 | resource 导入已有稳定 OV 能力名和底层接口。OpenClaw 插件仍负责本地文件 / 目录上传与 zip，但 Agent 可见工具名收敛为 `add_resource`。 |
+| OpenClaw | 原 `ov_import(kind=skill)`，现 `add_skill` | local skill 文件 / 目录先 `temp_upload`，或 `data` 直接走 `/api/v1/skills` | 是 | skill 导入已有稳定 OV 能力名和底层接口，且参数与 resource 不同，拆成独立工具比 `ov_import + kind` 更清晰。 |
+| OpenClaw slash command | 原 `/ov-import`，现 `/add-resource` / `/add-skill` | 分别调用 `add_resource` / `add_skill` 执行路径 | 是 | 用户手动命令也和 Agent 可见工具名保持一致；不再用 `--kind` 在一个命令里复用两种导入语义。 |
+| OV server `/mcp` | `add_resource` | MCP tool `add_resource` 调 resource service | 已收敛 | 当前只支持 remote URL / Git URL，不支持本地 path，也没有 `add_skill`。 |
 | OpenClaw | `ov_archive_search` | REST `/api/v1/search/grep` 等底层能力 | 否 | 语义是搜索当前 session history archive，不是通用 grep。 |
 | OpenClaw | `ov_archive_expand` | REST `/api/v1/sessions/{id}/archives/{archive_id}` | 否 | 语义是读取当前 session archive 片段，不是通用 read。 |
 | Codex MCP | 无 import / archive / browse 工具；可通过 OV `/mcp` 使用 `read` 等通用能力 | REST / MCP | 不涉及 | Codex 示例插件只保留显式 memory 四件套。 |
@@ -113,11 +116,13 @@ Remember 是写入长期记忆：把文本、消息或会话内容写入 OpenVik
 | opencode skill plugin | `ov search` / `ov read` / `ov ls` / `ov rm` 等 CLI 命令 | OV CLI | 已下沉，不改名 | 这是 shell skill，不是 native tool；`ov` 是 CLI 命令名前缀，不属于 Agent 工具名收敛问题。 |
 | Hermes OpenViking provider | `viking_read` / `viking_browse` / `viking_add_resource` | provider 内部调用 OpenViking read / browse / resource ingest | 不在本 PR 改 | Hermes 最新公开工具包含 read、browse、add_resource；未公开 archive_search / archive_read。 |
 
+`import_ovpack` 不归入普通 Agent 导入能力。它走 `POST /api/v1/pack/import`，用于导入 `.ovpack` 上下文包，更接近备份、迁移和恢复，不是聊天中“把这个文档 / skill 加入 OpenViking”的 resource / skill 导入。
+
 ## 本 PR 的实际收敛
 
 - OV server `/mcp`：提供 `find` 和 `search` 两层显式搜索；`find` 是轻量检索，`search` 是 session-aware deep search。
 - Codex MCP：当前暴露 `find`、`remember`、`forget`、`health`，全部不带 `viking_` 前缀。
-- OpenClaw：当前暴露 `memory_search` 并同步 `openclaw.plugin.json`；`memory_recall` 继续作为召回语义保留，不和 search 混成一个通用工具。
+- OpenClaw：当前暴露 `memory_search` 并同步 `openclaw.plugin.json`；`memory_recall` 继续作为召回语义保留，不和 search 混成一个通用工具；原 Agent 可见 `ov_import` 已拆成 `add_resource` / `add_skill`。
 - 不引入新的 ToolCatalog / agent tools 抽象，不迁移 Claude Code、opencode、Hermes 的既有工具名和执行语义。
 
 ## 后续下沉原则

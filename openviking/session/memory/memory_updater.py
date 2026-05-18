@@ -11,23 +11,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryField, MemoryFileContent, ResolvedOperations, ResolvedOperation
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.utils import (
-    deserialize_full,
-    flat_model_to_dict,
     parse_memory_file_with_fields,
     serialize_with_metadata,
 )
-from openviking.session.memory.utils.uri import supplement_operation_uris, render_template
+from openviking.session.memory.utils.uri import render_template, supplement_operation_uris
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -100,6 +100,22 @@ class ExtractContext:
                         return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
                     except (ValueError, TypeError):
                         continue
+        return datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def get_session_timestamp(self) -> str:
+        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
+
+        Fallback 到 datetime.now() 以保证总是返回非空字符串。
+        """
+        from datetime import datetime
+
+        for msg in self.messages:
+            created_at = getattr(msg, "created_at", None)
+            if created_at:
+                try:
+                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                except (ValueError, TypeError):
+                    continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
@@ -285,7 +301,6 @@ class MemoryUpdater:
         extract_context: ExtractContext = None,
         isolation_handler: MemoryIsolationHandler = None,
     ) -> MemoryUpdateResult:
-
         result = MemoryUpdateResult()
         viking_fs = self._get_viking_fs()
 
@@ -338,7 +353,17 @@ class MemoryUpdater:
                     result.add_error(uri, e)
 
         # Apply delete operations (delete_file_contents is List[MemoryFileContent])
+        # Skip deletes whose URI was just written in the same batch — this happens when the
+        # LLM issues a Replace with the same experience_name (delete old + create same-name new),
+        # which is semantically an Update. Executing the delete would remove the just-written file.
+        upserted_uris = set(result.written_uris + result.edited_uris)
         for file_content in operations.delete_file_contents:
+            if file_content.uri in upserted_uris:
+                tracer.info(
+                    f"[apply_operations] skipping delete for {file_content.uri}: "
+                    "URI was upserted in the same batch (Replace-with-same-name treated as Update)"
+                )
+                continue
             try:
                 await self._apply_delete(file_content.uri, ctx)
                 result.add_deleted(file_content.uri)
@@ -353,7 +378,7 @@ class MemoryUpdater:
 
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
-        dirs = dict()
+        dirs = {}
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
                 dir_path = "/".join(uri_str.split("/")[:-1])
@@ -378,21 +403,22 @@ class MemoryUpdater:
         schema = self._registry.get(memory_type)
         # Process each URI independently
         for uri in resolved_op.uris:
-            old_content = resolved_op.old_memory_file_content
+            # Always read from disk first to get the latest content,
+            # so consecutive patches to the same URI see each other's changes.
+            old_content = None
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if content:
+                    parsed = parse_memory_file_with_fields(content)
+                    old_content = MemoryFileContent(
+                        uri=uri, plain_content=parsed.get("content", ""), memory_fields=parsed
+                    )
+            except Exception:
+                # File doesn't exist yet, that's okay
+                pass
+            # Fall back to pre-fetched content if disk read failed
             if old_content is None:
-                # If no pre-fetched content, try to read it now
-                try:
-                    content = await viking_fs.read_file(uri, ctx=ctx)
-                    if content:
-                        parsed = parse_memory_file_with_fields(content)
-                        old_content = MemoryFileContent(
-                            uri=uri,
-                            plain_content=parsed.get("content", ""),
-                            memory_fields=parsed
-                        )
-                except Exception:
-                    # File doesn't exist yet, that's okay
-                    pass
+                old_content = resolved_op.old_memory_file_content
 
             metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
             # Process fields defined in schema (apply merge_op)
@@ -406,13 +432,21 @@ class MemoryUpdater:
                         if field.name == "content":
                             current_value = old_content.plain_content
                         else:
-                            current_value = old_content.memory_fields.get(
-                                field.name
-                            )
+                            current_value = old_content.memory_fields.get(field.name)
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     new_value = merge_op.apply(current_value, patch_value)
                     metadata[field.name] = new_value
+
+            # Preserve system-managed metadata from the old file that is not
+            # covered by the schema (e.g. source_trajectories). These fields
+            # are written by the system, never by the LLM, so they would be
+            # silently dropped on every Update without this copy.
+            if old_content and old_content.memory_fields:
+                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
+                for key, val in old_content.memory_fields.items():
+                    if key not in schema_field_names and key not in metadata and val is not None:
+                        metadata[key] = val
 
             # serialize_with_metadata modifies metadata dict, so pass a copy
             new_full_content = serialize_with_metadata(
@@ -428,7 +462,7 @@ class MemoryUpdater:
 
         # Delete from VikingFS
         # VikingFS automatically handles vector index cleanup
-        # Pass transaction_handle so rm() reuses the compressor's subtree lock
+        # Pass transaction_handle so rm() reuses the compressor's tree lock
         # instead of trying to acquire a new lock (which would conflict).
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx, lock_handle=self._transaction_handle)
@@ -501,10 +535,16 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
-                    if enqueued and embedding_msg.telemetry_id:
+                    if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id
+                        )
+                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    if not enqueued and embedding_msg.telemetry_id:
+                        request_wait_tracker.mark_embedding_failed(
+                            embedding_msg.telemetry_id,
+                            embedding_msg.id,
+                            "embedding enqueue returned false",
                         )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 

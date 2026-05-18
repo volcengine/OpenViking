@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from openviking.parse.parsers.code.ast.languages.base import LanguageExtractor
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig
@@ -121,7 +121,9 @@ def _extract_use_declaration(node, content_bytes: bytes) -> List[str]:
                 if sub.type == "name":
                     name_node = sub
                     break
-        return _normalize_name(_node_text(name_node, content_bytes)) if name_node is not None else ""
+        return (
+            _normalize_name(_node_text(name_node, content_bytes)) if name_node is not None else ""
+        )
 
     clauses = []
     if group_node is not None:
@@ -204,7 +206,12 @@ def _extract_class(
         name = f"{name_prefix}{name}" if name else name_prefix.strip()
 
     for child in node.children:
-        if child.type in ("base_clause", "extends_clause", "implements_clause", "class_interface_clause"):
+        if child.type in (
+            "base_clause",
+            "extends_clause",
+            "implements_clause",
+            "class_interface_clause",
+        ):
             for b in _collect_typeish_tokens(child, content_bytes):
                 if b not in bases:
                     bases.append(b)
@@ -268,10 +275,14 @@ def _process_siblings(
             classes.append(_extract_class(child, content_bytes, docstring=doc, name_prefix=""))
         elif child.type == "interface_declaration":
             doc = _preceding_doc(siblings, idx, content_bytes)
-            classes.append(_extract_class(child, content_bytes, docstring=doc, name_prefix="interface "))
+            classes.append(
+                _extract_class(child, content_bytes, docstring=doc, name_prefix="interface ")
+            )
         elif child.type == "trait_declaration":
             doc = _preceding_doc(siblings, idx, content_bytes)
-            classes.append(_extract_class(child, content_bytes, docstring=doc, name_prefix="trait "))
+            classes.append(
+                _extract_class(child, content_bytes, docstring=doc, name_prefix="trait ")
+            )
         elif child.type == "enum_declaration":
             doc = _preceding_doc(siblings, idx, content_bytes)
             classes.append(_extract_class(child, content_bytes, docstring=doc, name_prefix="enum "))
@@ -300,7 +311,9 @@ def _process_siblings(
         elif child.type == "namespace_definition":
             for sub in child.children:
                 if sub.type in ("declaration_list", "compound_statement"):
-                    _process_siblings(list(sub.children), content_bytes, imports, classes, functions)
+                    _process_siblings(
+                        list(sub.children), content_bytes, imports, classes, functions
+                    )
 
 
 class PhpExtractor(LanguageExtractor):

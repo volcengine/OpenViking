@@ -540,8 +540,10 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
+| `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
 | `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
+| `extra_request_body` | object | Extra JSON body fields for OpenAI-compatible completion requests, useful for provider-specific options such as Ollama `{"think": false}` |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
@@ -593,6 +595,24 @@ Common use cases:
 - **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
+
+**Custom Request Body**
+
+For OpenAI-compatible providers that accept provider-specific JSON body fields, add them via `extra_request_body`. OpenViking merges these fields into the `extra_body` sent by the OpenAI SDK or LiteLLM:
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "api_key": "ollama",
+    "model": "ollama/llama3.1",
+    "api_base": "http://127.0.0.1:11434",
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
 
 **Streaming Mode**
 
@@ -735,7 +755,7 @@ Retrieval ranking configuration for final search scores.
 {
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 0.5
+    "score_propagation_alpha": 1.0
   }
 }
 ```
@@ -743,7 +763,7 @@ Retrieval ranking configuration for final search scores.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
-| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `0.5` keeps the existing equal blend; `1.0` ignores the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `0.5` |
+| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `1.0` ignores the parent score (semantic similarity only); `0.5` is an equal blend with the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `1.0` |
 
 Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
 
@@ -781,12 +801,78 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 |-----------|------|-------------|---------|
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
-| `queue_db_path` | str (optional) | Override path of the queuefs sqlite database file. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
+| `queuefs` | object | QueueFS configuration. Controls the namespace mode, backend, and runtime options for `/queue` | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
+| `queue_db_path` | str (optional) | Legacy compatibility field for QueueFS sqlite DB path. Superseded by `storage.agfs.queuefs.db_path`. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
 
 RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
+
+##### QueueFS Configuration
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
+| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, or `"sqlite3"` | `"sqlite"` |
+| `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
+| `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
+| `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
+
+Notes:
+
+- QueueFS defaults to `sqlite` even if the main AGFS storage backend is `local`, `s3`, or `memory`.
+- `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
+- `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
+- If both `storage.agfs.queuefs.db_path` and legacy `storage.agfs.queue_db_path` are set, `storage.agfs.queuefs.db_path` wins.
+- If QueueFS backend is `memory`, any `db_path` or legacy `queue_db_path` is ignored.
+
+Examples:
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queuefs": {
+        "mode": "shared",
+        "backend": "sqlite",
+        "db_path": "./data/_system/queue/custom-queue.db"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queuefs": {
+        "mode": "worker",
+        "backend": "memory"
+      }
+    }
+  }
+}
+```
+
+Legacy compatibility example:
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "queue_db_path": "./data/_system/queue/queue.db"
+    }
+  }
+}
+```
 
 
 ##### S3 Backend Configuration
@@ -966,6 +1052,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 ### ovcli.conf
 
+You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
 ```json
@@ -1073,6 +1161,26 @@ Path locks are enabled by default and usually require no configuration. **The de
 | `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
+## storage.task_tracker Section
+
+The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). The `persistent` backend stores task state on the workspace volume so that **a `task_id` returned by one instance can be looked up from another instance**, and task history survives a restart. The default `memory` backend keeps task state per process — sufficient for single-instance deployments.
+
+```json
+{
+  "storage": {
+    "task_tracker": {
+      "backend": "memory"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `backend` | str | Task tracker backend. `"memory"` keeps task state in process memory (single-instance). `"persistent"` enables cross-instance task lookup and survives restarts. | `"memory"` |
+
+Set `backend` to `"persistent"` for multi-instance deployments where callers may poll `GET /api/v1/tasks/{task_id}` from any instance, or when task history needs to outlive the process.
 
 ## encryption Section
 
@@ -1193,6 +1301,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "max_concurrent": 100,
     "max_retries": 3,
     "extra_headers": {},
+    "extra_request_body": {},
     "stream": false
   },
   "rerank": {
@@ -1205,7 +1314,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
   },
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 0.5
+    "score_propagation_alpha": 1.0
   },
   "encryption": {
     "enabled": false,

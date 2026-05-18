@@ -4,17 +4,27 @@
 
 import logging
 import re
+import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.utils.model_retry import (
+    classify_api_error,
+    ERROR_CLASS_QUOTA_EXCEEDED,
+    ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_PERMANENT,
+    PrimaryBackupSwitcher,
+)
 from openviking.utils.time_utils import format_iso8601
+from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -64,6 +74,7 @@ class VLMBase(ABC):
         self.timeout = config.get("timeout", 60.0)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
+        self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
 
         # Token usage tracking
@@ -251,20 +262,6 @@ class VLMBase(ABC):
         """
         return self._token_tracker.to_dict()
 
-    def get_token_usage_summary(self) -> Dict[str, Any]:
-        """Get token usage summary
-
-        Returns:
-            Dict[str, Any]: Token usage summary
-        """
-        total_usage = self._token_tracker.get_total_usage()
-        return {
-            "total_prompt_tokens": total_usage.prompt_tokens,
-            "total_completion_tokens": total_usage.completion_tokens,
-            "total_tokens": total_usage.total_tokens,
-            "last_updated": format_iso8601(total_usage.last_updated),
-        }
-
     def reset_token_usage(self) -> None:
         """Reset token usage"""
         self._token_tracker.reset()
@@ -330,3 +327,253 @@ class VLMFactory:
         from .registry import get_all_provider_names
 
         return get_all_provider_names()
+
+
+class FailoverVLM(VLMBase):
+    """VLM wrapper that provides failover to a backup VLM instance.
+
+    When the primary VLM instance fails with permanent or quota errors,
+    this wrapper will automatically switch to using the backup VLM instance.
+    After 10 minutes or 50 requests, it will attempt to failback to primary.
+    """
+
+    def __init__(
+        self,
+        primary: VLMBase,
+        backup: VLMBase,
+        failback_timeout_seconds: float = 600.0,  # 10 minutes
+        failback_request_count: int = 50,
+    ):
+        """Initialize FailoverVLM with primary and backup VLM instances.
+
+        Args:
+            primary: The primary VLM instance to use first
+            backup: The backup VLM instance to use when primary fails
+            failback_timeout_seconds: Time after which to attempt failback to primary
+            failback_request_count: Number of backup requests after which to attempt failback
+        """
+        # Use a dummy config since we're wrapping existing instances
+        config = {
+            "model": primary.model,
+            "provider": primary.provider,
+        }
+        super().__init__(config)
+
+        self.primary = primary
+        self.backup = backup
+        self._logger = logging.getLogger(__name__)
+        self._switcher = PrimaryBackupSwitcher(
+            failback_timeout_seconds=failback_timeout_seconds,
+            failback_request_count=failback_request_count,
+        )
+
+    def _get_completion_with_failover(
+        self,
+        method_name: str,
+        *args,
+        **kwargs
+    ):
+        """Execute a VLM method with failover support.
+
+        Args:
+            method_name: Name of the method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the VLM method
+
+        Raises:
+            The last exception encountered if both primary and backup fail
+        """
+        last_error = None
+
+        # Try primary if we should
+        if self._switcher.should_try_primary():
+            try:
+                method = getattr(self.primary, method_name)
+                result = method(*args, **kwargs)
+                self._switcher.record_primary_success()
+                return result
+            except Exception as e:
+                last_error = e
+                if self._switcher.record_primary_failure(e):
+                    # Switched to backup, continue to try backup
+                    pass
+                else:
+                    # Not a failover-worthy error, re-raise
+                    raise
+
+        # Try backup
+        try:
+            self._switcher.record_backup_request()
+            method = getattr(self.backup, method_name)
+            return method(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            self._logger.error(f"Backup VLM also failed with error: {e}")
+            raise last_error
+
+    async def _get_completion_with_failover_async(
+        self,
+        method_name: str,
+        *args,
+        **kwargs
+    ):
+        """Execute an async VLM method with failover support.
+
+        Args:
+            method_name: Name of the async method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the async VLM method
+
+        Raises:
+            The last exception encountered if both primary and backup fail
+        """
+        last_error = None
+
+        # Try primary if we should
+        if self._switcher.should_try_primary():
+            try:
+                method = getattr(self.primary, method_name)
+                result = await method(*args, **kwargs)
+                self._switcher.record_primary_success()
+                return result
+            except Exception as e:
+                last_error = e
+                if self._switcher.record_primary_failure(e):
+                    # Switched to backup, continue to try backup
+                    pass
+                else:
+                    # Not a failover-worthy error, re-raise
+                    raise
+
+        # Try backup
+        try:
+            self._switcher.record_backup_request()
+            method = getattr(self.backup, method_name)
+            return await method(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            self._logger.error(f"Backup VLM also failed with error: {e}")
+            raise last_error
+
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion with failover support."""
+        return self._get_completion_with_failover(
+            "get_completion",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_completion_async(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion asynchronously with failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_completion_async",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    def get_vision_completion(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion with failover support."""
+        return self._get_completion_with_failover(
+            "get_vision_completion",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_vision_completion_async(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion asynchronously with failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_vision_completion_async",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    @property
+    def is_using_backup(self) -> bool:
+        """Check if currently using the backup VLM instance."""
+        return self._switcher.is_using_backup
+
+    @property
+    def _active_vlm(self) -> VLMBase:
+        """Get the currently active VLM instance."""
+        return self.backup if self._switcher.is_using_backup else self.primary
+
+    def update_token_usage(
+        self,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        duration_seconds: float = 0.0,
+    ) -> None:
+        """Update token usage for the currently active instance."""
+        self._active_vlm.update_token_usage(
+            model_name=model_name,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            duration_seconds=duration_seconds,
+        )
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get combined token usage from both primary and backup instances."""
+        from openviking.models.vlm.token_usage import TokenUsageTracker
+        merged_tracker = TokenUsageTracker.merge(
+            self.primary._token_tracker,
+            self.backup._token_tracker
+        )
+        return merged_tracker.to_dict()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage for both primary and backup instances."""
+        self.primary.reset_token_usage()
+        self.backup.reset_token_usage()

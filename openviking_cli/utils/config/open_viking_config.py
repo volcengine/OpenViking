@@ -45,6 +45,11 @@ from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
 
 
+def _get_config_warning_logger():
+    """Use stdlib logging during config bootstrap to avoid early logger side effects."""
+    return logging.getLogger(__name__)
+
+
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
@@ -151,7 +156,7 @@ class OpenVikingConfig(BaseModel):
     @model_validator(mode="after")
     def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
         if self.language_fallback and self.language_fallback != "en":
-            logging.getLogger(__name__).warning(
+            _get_config_warning_logger().warning(
                 "Config field 'language_fallback=%s' is deprecated and has no effect; "
                 "remove it, or set 'output_language_override' to pin an explicit language.",
                 self.language_fallback,
@@ -253,7 +258,7 @@ class OpenVikingConfig(BaseModel):
                     isinstance(memory_config_data, dict)
                     and "agent_scope_mode" in memory_config_data
                 ):
-                    logging.getLogger(__name__).warning(
+                    _get_config_warning_logger().warning(
                         "memory.agent_scope_mode is deprecated and ignored. "
                         "User/agent namespace behavior is now controlled by per-account "
                         "namespace policy."
@@ -344,6 +349,9 @@ class OpenVikingConfigSingleton:
                             )
                     finally:
                         cls._initializing = False
+                    from openviking_cli.utils.logger import reconfigure_logging
+
+                    reconfigure_logging()
         return cls._instance
 
     @classmethod
@@ -378,6 +386,9 @@ class OpenVikingConfigSingleton:
                         )
             finally:
                 cls._initializing = False
+        from openviking_cli.utils.logger import reconfigure_logging
+
+        reconfigure_logging()
         return cls._instance
 
     @classmethod
