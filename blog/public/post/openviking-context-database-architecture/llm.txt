@@ -240,25 +240,6 @@ openviking privacy version skill byted-viking-search-knowledgebase 2
 openviking privacy activate skill byted-viking-search-knowledgebase 2
 ```
 
-## Evaluation And Agent Support
-
-Evaluation is benchmark-driven and deserves a separate article. The key evaluation scenarios include:
-
-- RAG benchmarks.
-- Memory benchmarks.
-- Long-task benchmarks.
-- SWE benchmarks.
-- Multi-agent human-agent collaboration.
-
-Key evaluation dimensions include:
-
-- Accuracy.
-- Task latency.
-- Token usage.
-- Multimodal support.
-
-Agent support with OpenViking Serverless is work in progress.
-
 ## Closing
 
 OpenViking is moving from conceptual architecture to product construction. Through open source, the team has collected many issues and large amounts of feedback. Capacity and performance are now core priorities.

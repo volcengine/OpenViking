@@ -6,7 +6,6 @@ import {
 import {
   ArchitectureStack,
   ConsistencyLockMatrix,
-  EvaluationDashboard,
   PrivacyIdentityFlow,
   WritePipelineBottleneck,
 } from './round2-blocks';
@@ -388,46 +387,6 @@ openviking privacy list skill
 openviking privacy upsert skill byted-viking-search-knowledgebase \\
   --values-json '{"api_key":"secret-2","base_url":"https://example.com"}'
 openviking privacy activate skill byted-viking-search-knowledgebase 2`}</Pre>
-
-      <H2 id="evaluation">{T({ en: 'Evaluation Still Drives The Product', zh: '效果评估继续牵引产品' })}</H2>
-      <P>{T({
-        en: 'The article only sketches evaluation because it deserves its own write-up. The important point is that OpenViking measures across RAG, memory, long tasks, SWE tasks, and multi-agent human-agent collaboration.',
-        zh: '原文只简单提到效果评估，因为它值得单独写一篇。关键是 OpenViking 会围绕 RAG、记忆、长任务、SWE 任务、多智能体人机协同持续测评。',
-      })}</P>
-      <Table
-        headers={[
-          T({ en: 'Benchmark area', zh: '评估场景' }),
-          T({ en: 'Architecture question it answers', zh: '它回答的架构问题' }),
-        ]}
-        rows={[
-          [T({ en: 'RAG', zh: 'RAG' }), T({ en: 'Does directory-scoped retrieval improve answer accuracy and reduce irrelevant context?', zh: '目录范围检索是否能提升回答精度并减少无关上下文？' })],
-          [T({ en: 'Memory', zh: '记忆' }), T({ en: 'Can user and agent isolation preserve useful memory without leaking private state?', zh: '用户和 Agent 隔离是否能保存有用记忆，同时不泄露私有状态？' })],
-          [T({ en: 'Long tasks', zh: '长任务' }), T({ en: 'Do L0/L1/L2 summaries help agents plan across large context without exhausting tokens?', zh: 'L0/L1/L2 摘要是否能帮助 Agent 跨大上下文规划，同时不耗尽 Token？' })],
-          [T({ en: 'SWE', zh: 'SWE' }), T({ en: 'Do preserved repository paths and scoped retrieval help agents navigate codebases?', zh: '保留仓库路径和范围检索是否能帮助 Agent 导航代码库？' })],
-          [T({ en: 'Multi-agent collaboration', zh: '多智能体协作' }), T({ en: 'Can peer identity and permission boundaries support shared work without collapsing ownership?', zh: '对等身份和权限边界是否能支撑协作，同时不破坏所有权？' })],
-        ]}
-      />
-      <Cols count={2}>
-        <Col>
-          <H3>{T({ en: 'Scenarios', zh: '场景' })}</H3>
-          <Ul marker="check">
-            <Li>{T({ en: 'RAG benchmarks', zh: 'RAG 基准测试' })}</Li>
-            <Li>{T({ en: 'Memory benchmarks', zh: '记忆基准测试' })}</Li>
-            <Li>{T({ en: 'Long-task benchmarks', zh: '长任务基准测试' })}</Li>
-            <Li>{T({ en: 'SWE benchmarks', zh: 'SWE 基准测试' })}</Li>
-          </Ul>
-        </Col>
-        <Col>
-          <H3>{T({ en: 'Dimensions', zh: '维度' })}</H3>
-          <Ul marker="check">
-            <Li>{T({ en: 'Accuracy', zh: '精度' })}</Li>
-            <Li>{T({ en: 'Task latency', zh: '任务时延' })}</Li>
-            <Li>{T({ en: 'Token consumption', zh: 'Token 消耗' })}</Li>
-            <Li>{T({ en: 'Multimodal support', zh: '多模态支持' })}</Li>
-          </Ul>
-        </Col>
-      </Cols>
-      <EvaluationDashboard t={T} />
 
       <Hr ornament />
 

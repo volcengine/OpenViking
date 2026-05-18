@@ -201,37 +201,9 @@ function Round2Styles() {
         padding: 12px;
       }
       .ovarch2-flow__node + .ovarch2-flow__node { margin-top: 10px; }
-      .ovarch2-dashboard {
-        display: grid;
-        grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.6fr);
-        gap: 14px;
-      }
-      .ovarch2-score {
-        display: grid;
-        gap: 10px;
-      }
-      .ovarch2-score__row {
-        display: grid;
-        grid-template-columns: 120px minmax(0, 1fr) 42px;
-        gap: 10px;
-        align-items: center;
-      }
-      .ovarch2-score__track {
-        height: 9px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: color-mix(in oklab, var(--th-line) 60%, transparent);
-      }
-      .ovarch2-score__fill {
-        display: block;
-        height: 100%;
-        border-radius: inherit;
-        background: var(--tone);
-      }
       @media (max-width: 760px) {
         .ovarch2__head,
         .ovarch2-flow,
-        .ovarch2-dashboard {
           grid-template-columns: 1fr;
           display: grid;
         }
@@ -246,9 +218,6 @@ function Round2Styles() {
         }
         .ovarch2-flow__boundary {
           min-height: 54px;
-        }
-        .ovarch2-score__row {
-          grid-template-columns: 92px minmax(0, 1fr) 36px;
         }
       }
     `}</style>
@@ -528,86 +497,3 @@ export function PrivacyIdentityFlow({ t }) {
   );
 }
 
-export function EvaluationDashboard({ t }) {
-  const scenarios = [
-    {
-      key: 'rag',
-      title: 'RAG',
-      tone: theme.green,
-      scores: { accuracy: 82, latency: 68, tokens: 74, multimodal: 71 },
-      focus: tt(t, { en: 'Can the system retrieve the right evidence before the model answers?', zh: '系统能否在模型回答前召回正确证据？' }),
-    },
-    {
-      key: 'memory',
-      title: tt(t, { en: 'Memory', zh: '记忆' }),
-      tone: theme.violet,
-      scores: { accuracy: 76, latency: 72, tokens: 81, multimodal: 58 },
-      focus: tt(t, { en: 'Can personal or agent memory be isolated, updated, and reused?', zh: '个人或 Agent 记忆能否隔离、更新并复用？' }),
-    },
-    {
-      key: 'longtask',
-      title: tt(t, { en: 'Long task', zh: '长任务' }),
-      tone: theme.gold,
-      scores: { accuracy: 70, latency: 61, tokens: 79, multimodal: 64 },
-      focus: tt(t, { en: 'Can context survive many steps without filling the prompt window?', zh: '上下文能否跨多步保留，同时不塞满窗口？' }),
-    },
-    {
-      key: 'swe',
-      title: 'SWE',
-      tone: theme.blue,
-      scores: { accuracy: 73, latency: 65, tokens: 67, multimodal: 52 },
-      focus: tt(t, { en: 'Can repository structure, code search, and source reads compose well?', zh: '仓库结构、代码搜索和源码读取能否稳定组合？' }),
-    },
-  ];
-  const [selected, setSelected] = useState('rag');
-  const active = scenarios.find(item => item.key === selected) || scenarios[0];
-  const rows = useMemo(() => [
-    [tt(t, { en: 'Accuracy', zh: '精度' }), active.scores.accuracy],
-    [tt(t, { en: 'Task latency', zh: '任务时延' }), active.scores.latency],
-    [tt(t, { en: 'Token economy', zh: 'Token 经济性' }), active.scores.tokens],
-    [tt(t, { en: 'Multimodal support', zh: '多模态支持' }), active.scores.multimodal],
-  ], [active, t]);
-
-  return (
-    <BlockShell
-      t={t}
-      kicker={tt(t, { en: 'Evaluation', zh: '效果评估' })}
-      title={tt(t, { en: 'A product dashboard for context quality', zh: '面向上下文质量的产品仪表盘' })}
-      aside={tt(t, { en: 'The numbers are illustrative scoring dimensions.', zh: '数值用于展示测评维度。' })}
-    >
-      <div className="ovarch2-dashboard">
-        <div className="ovarch2__card">
-          <div style={{ display: 'grid', gap: 8 }}>
-            {scenarios.map(item => (
-              <button
-                type="button"
-                key={item.key}
-                className="ovarch2__button"
-                aria-pressed={selected === item.key}
-                onClick={() => setSelected(item.key)}
-                style={{ textAlign: 'left' }}
-              >
-                {item.title}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="ovarch2__card" style={{ '--tone': active.tone, borderLeft: `4px solid ${active.tone}` }}>
-          <H4 toc={false}>{active.title}</H4>
-          <P>{active.focus}</P>
-          <div className="ovarch2-score">
-            {rows.map(([label, score]) => (
-              <div className="ovarch2-score__row" key={label}>
-                <span className="ovarch2__mono">{label}</span>
-                <span className="ovarch2-score__track" aria-hidden="true">
-                  <span className="ovarch2-score__fill" style={{ width: `${score}%`, '--tone': active.tone }} />
-                </span>
-                <span className="ovarch2__mono">{score}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </BlockShell>
-  );
-}
