@@ -1,6 +1,10 @@
 from datetime import datetime
 
-from vikingbot.observability.outcome import evaluate_response_outcome
+from vikingbot.observability.outcome import (
+    detect_feedback_from_message,
+    evaluate_response_outcome,
+    normalize_llm_feedback_decision,
+)
 
 
 def test_evaluate_response_outcome_marks_resolved_without_follow_up():
@@ -226,3 +230,44 @@ def test_evaluate_response_outcome_marks_follow_up_without_feedback():
     assert evaluation.reask_within_10m is False
     assert evaluation.clarification_turns == 1
     assert evaluation.follow_up_without_feedback is True
+
+
+def test_detect_feedback_from_message_recognizes_positive_natural_language():
+    feedback = detect_feedback_from_message("谢谢，已经解决了")
+
+    assert feedback is not None
+    assert feedback.feedback_type == "thumb_up"
+    assert feedback.feedback_score == 1.0
+
+
+def test_detect_feedback_from_message_recognizes_negative_natural_language():
+    feedback = detect_feedback_from_message("这完全没帮助")
+
+    assert feedback is not None
+    assert feedback.feedback_type == "thumb_down"
+    assert feedback.feedback_score == -1.0
+
+
+def test_detect_feedback_from_message_ignores_plain_follow_up_question():
+    feedback = detect_feedback_from_message("为什么还是不行，下一步怎么做？")
+
+    assert feedback is None
+
+
+def test_normalize_llm_feedback_decision_accepts_valid_payload():
+    decision = normalize_llm_feedback_decision(
+        {"is_feedback": True, "sentiment": "positive", "confidence": 0.92}
+    )
+
+    assert decision is not None
+    assert decision.is_feedback is True
+    assert decision.sentiment == "positive"
+    assert decision.confidence == 0.92
+
+
+def test_normalize_llm_feedback_decision_rejects_invalid_payload():
+    decision = normalize_llm_feedback_decision(
+        {"is_feedback": "yes", "sentiment": "positive", "confidence": "0.9"}
+    )
+
+    assert decision is None
