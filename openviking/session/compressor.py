@@ -253,8 +253,22 @@ class SessionCompressor:
         viking_fs,
         ctx: RequestContext,
     ) -> bool:
-        """Merge candidate content into an existing memory file."""
+        """Merge candidate content into an existing memory file.
+
+        Uses optimistic concurrency control (OCC): reads the file's modTime
+        before the expensive LLM merge call, then verifies it hasn't changed
+        before writing. If a concurrent modification is detected, the merge
+        is aborted and the caller treats it as skipped — the next commit
+        cycle will re-dedup and re-attempt.
+        """
         try:
+            stat_info = await viking_fs.stat(target_memory.uri, ctx=ctx)
+            read_mod_time = (
+                str(stat_info.get("modTime", stat_info.get("mtime", "")))
+                if isinstance(stat_info, dict)
+                else ""
+            )
+
             existing_content = await viking_fs.read_file(target_memory.uri, ctx=ctx)
             payload = await self.extractor._merge_memory_bundle(
                 existing_abstract=target_memory.abstract,
@@ -269,7 +283,19 @@ class SessionCompressor:
             if not payload:
                 return False
 
-            await viking_fs.write_file(target_memory.uri, payload.content, ctx=ctx)
+            if read_mod_time:
+                written = await viking_fs.cas_write_file(
+                    target_memory.uri, payload.content, read_mod_time, ctx=ctx
+                )
+                if not written:
+                    logger.warning(
+                        "OCC: concurrent modification on %s, skipping merge",
+                        target_memory.uri,
+                    )
+                    return False
+            else:
+                await viking_fs.write_file(target_memory.uri, payload.content, ctx=ctx)
+
             target_memory.abstract = payload.abstract
             target_memory.meta = {**(target_memory.meta or {}), "overview": payload.overview}
             logger.info(
@@ -295,7 +321,23 @@ class SessionCompressor:
     async def _delete_existing_memory(
         self, memory: Context, viking_fs, ctx: RequestContext
     ) -> bool:
-        """Hard delete an existing memory file and clean up its vector record."""
+        """Hard delete an existing memory file and clean up its vector record.
+
+        Uses optimistic concurrency control (OCC): verifies the file hasn't
+        been modified since the dedup search read it. If a concurrent
+        modification is detected, the delete is aborted to avoid clobbering
+        another session's merge.
+        """
+        dedup_score = (memory.meta or {}).get("_dedup_score", 0)
+        if isinstance(dedup_score, (int, float)) and dedup_score < 0.5:
+            logger.warning(
+                "Refusing to delete memory %s with low dedup_score=%.4f "
+                "(floor=0.50). LLM may have hallucinated the DELETE decision.",
+                memory.uri,
+                float(dedup_score),
+            )
+            return False
+
         try:
             await viking_fs.rm(memory.uri, recursive=False, ctx=ctx)
         except Exception as e:

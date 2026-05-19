@@ -526,10 +526,21 @@ class MemoryExtractor:
         viking_fs,
         ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
-        """Update user profile - always merge with existing content."""
+        """Update user profile - always merge with existing content.
+
+        Uses optimistic concurrency control (OCC) when merging into an
+        existing profile to prevent lost updates from concurrent sessions.
+        """
         uri = f"{canonical_user_root(ctx)}/memories/profile.md"
         existing = ""
+        read_mod_time = ""
         try:
+            stat_info = await viking_fs.stat(uri, ctx=ctx)
+            read_mod_time = (
+                str(stat_info.get("modTime", stat_info.get("mtime", "")))
+                if isinstance(stat_info, dict)
+                else ""
+            )
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
         except Exception:
             pass
@@ -557,7 +568,17 @@ class MemoryExtractor:
             if not payload:
                 logger.warning("Profile merge bundle failed; keeping existing profile unchanged")
                 return None
-            await viking_fs.write_file(uri=uri, content=payload.content, ctx=ctx)
+            if read_mod_time:
+                written = await viking_fs.cas_write_file(
+                    uri, payload.content, read_mod_time, ctx=ctx
+                )
+                if not written:
+                    logger.warning(
+                        "OCC: concurrent modification on profile %s, skipping write", uri
+                    )
+                    return None
+            else:
+                await viking_fs.write_file(uri=uri, content=payload.content, ctx=ctx)
             logger.info(f"Merged profile info to {uri}")
             return payload
 
@@ -644,7 +665,14 @@ class MemoryExtractor:
             return None
 
         existing = ""
+        read_mod_time = ""
         try:
+            stat_info = await viking_fs.stat(uri, ctx=ctx)
+            read_mod_time = (
+                str(stat_info.get("modTime", stat_info.get("mtime", "")))
+                if isinstance(stat_info, dict)
+                else ""
+            )
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
             existing = ""
@@ -749,7 +777,15 @@ class MemoryExtractor:
         merged_content = self._generate_tool_memory_content(
             tool_name, merged_stats, merged_guidelines, fields=merged_fields
         )
-        await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
+        if read_mod_time:
+            written = await viking_fs.cas_write_file(uri, merged_content, read_mod_time, ctx=ctx)
+            if not written:
+                logger.warning(
+                    "OCC: concurrent modification on tool memory %s, skipping write", uri
+                )
+                return None
+        else:
+            await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
         return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     def _compute_statistics_derived(self, stats: dict) -> dict:
@@ -1198,7 +1234,14 @@ class MemoryExtractor:
             return None
 
         existing = ""
+        read_mod_time = ""
         try:
+            stat_info = await viking_fs.stat(uri, ctx=ctx)
+            read_mod_time = (
+                str(stat_info.get("modTime", stat_info.get("mtime", "")))
+                if isinstance(stat_info, dict)
+                else ""
+            )
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
             existing = ""
@@ -1320,7 +1363,15 @@ class MemoryExtractor:
         merged_content = self._generate_skill_memory_content(
             skill_name, merged_stats, merged_guidelines, fields=merged_fields
         )
-        await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
+        if read_mod_time:
+            written = await viking_fs.cas_write_file(uri, merged_content, read_mod_time, ctx=ctx)
+            if not written:
+                logger.warning(
+                    "OCC: concurrent modification on skill memory %s, skipping write", uri
+                )
+                return None
+        else:
+            await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
         return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
