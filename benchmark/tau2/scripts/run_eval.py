@@ -28,6 +28,11 @@ from tau2_common import (
     write_json,
 )
 
+TRAIN_OUTCOME_TRANSCRIPT_ONLY = "transcript_only"
+TRAIN_OUTCOME_MESSAGE_VERSION = "v3_failure_reflection"
+TRAIN_TRANSCRIPT_OPENVIKING_TEXT = "openviking_text"
+DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS = 5000
+
 
 def _reward(sim: dict[str, Any]) -> float:
     info = sim.get("reward_info") or {}
@@ -70,7 +75,27 @@ def _strategy_int(
     return int(value)
 
 
-def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[str, int]:
+def _strategy_optional_int(
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    key: str,
+    *,
+    fallback_key: str | None = None,
+) -> int | None:
+    openviking = config.get("openviking", {})
+    value = strategy.get(key)
+    if value is None:
+        value = openviking.get(key)
+    if value is None and fallback_key:
+        value = strategy.get(fallback_key)
+    if value is None and fallback_key:
+        value = openviking.get(fallback_key)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[str, int | None]:
     retrieval_top_k = _strategy_int(config, strategy, "retrieval_top_k", default=4)
     first_user_retrieval_top_k = _strategy_int(
         config,
@@ -100,12 +125,39 @@ def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[
         fallback_key="prewrite_retrieval_top_k",
         default=prewrite_retrieval_top_k,
     )
+    memory_inject_max_chars = _strategy_optional_int(
+        config,
+        strategy,
+        "memory_inject_max_chars",
+    )
+    first_user_memory_inject_max_chars = _strategy_optional_int(
+        config,
+        strategy,
+        "first_user_memory_inject_max_chars",
+        fallback_key="memory_inject_max_chars",
+    )
+    prewrite_memory_inject_max_chars = _strategy_optional_int(
+        config,
+        strategy,
+        "prewrite_memory_inject_max_chars",
+        fallback_key="memory_inject_max_chars",
+    )
+    for key, value in {
+        "memory_inject_max_chars": memory_inject_max_chars,
+        "first_user_memory_inject_max_chars": first_user_memory_inject_max_chars,
+        "prewrite_memory_inject_max_chars": prewrite_memory_inject_max_chars,
+    }.items():
+        if value is not None and value < 0:
+            raise ValueError(f"{strategy['id']} has negative {key}: {value}")
     return {
         "retrieval_top_k": retrieval_top_k,
         "first_user_retrieval_top_k": first_user_retrieval_top_k,
         "first_user_inject_top_k": first_user_inject_top_k,
         "prewrite_retrieval_top_k": prewrite_retrieval_top_k,
         "prewrite_inject_top_k": prewrite_inject_top_k,
+        "memory_inject_max_chars": memory_inject_max_chars,
+        "first_user_memory_inject_max_chars": first_user_memory_inject_max_chars,
+        "prewrite_memory_inject_max_chars": prewrite_memory_inject_max_chars,
     }
 
 
@@ -128,6 +180,83 @@ def _memory_corpus_key_for(
     if train_num_tasks is not None:
         key = f"{key}_train{train_num_tasks}"
     return key
+
+
+def _train_outcome_mode(strategy: dict[str, Any]) -> str:
+    return str(strategy.get("train_outcome_mode") or TRAIN_OUTCOME_TRANSCRIPT_ONLY)
+
+
+def _train_transcript_format(strategy: dict[str, Any]) -> str:
+    return str(strategy.get("train_transcript_format") or TRAIN_TRANSCRIPT_OPENVIKING_TEXT)
+
+
+def _train_tool_output_max_chars(strategy: dict[str, Any]) -> int:
+    raw = strategy.get("train_tool_output_max_chars")
+    if raw is None:
+        return DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS
+    return int(raw)
+
+
+def _train_skip_failed_sessions(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("train_skip_failed_sessions"))
+
+
+def _enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _terminal_continuation_tools(strategy: dict[str, Any]) -> list[str]:
+    raw = strategy.get("terminal_continuation_tools") or []
+    if isinstance(raw, str):
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
+def _terminal_continuation_max_checks(strategy: dict[str, Any]) -> int:
+    raw = strategy.get("terminal_continuation_max_checks")
+    if raw is None:
+        return 1
+    return int(raw)
+
+
+def _terminal_plan_state_check(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("terminal_plan_state_check"))
+
+
+def _terminal_plan_state_max_checks(strategy: dict[str, Any]) -> int:
+    raw = strategy.get("terminal_plan_state_max_checks")
+    if raw is None:
+        return 1
+    return int(raw)
+
+
+def _compress_failure_memories(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("compress_failure_memories"))
+
+
+def _memory_read_selector(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("memory_read_selector"))
+
+
+def _prewrite_drift_retry(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("prewrite_drift_retry"))
+
+
+def _write_consequence_final_response_check(strategy: dict[str, Any]) -> bool:
+    return _enabled(strategy.get("write_consequence_final_response_check"))
+
+
+def _write_consequence_final_response_max_checks(strategy: dict[str, Any]) -> int:
+    raw = strategy.get("write_consequence_final_response_max_checks")
+    if raw is None:
+        return 1
+    return int(raw)
 
 
 def _memory_corpus_dir(config: dict[str, Any], configured_run_id: str, corpus_key: str) -> Path:
@@ -284,13 +413,82 @@ def _tau2_command(
             str(budget["prewrite_inject_top_k"]),
             "--retrieval-mode",
             str(strategy.get("retrieval_mode", "first_user")),
+            "--train-outcome-mode",
+            _train_outcome_mode(strategy),
+            "--train-transcript-format",
+            _train_transcript_format(strategy),
+            "--train-tool-output-max-chars",
+            str(_train_tool_output_max_chars(strategy)),
             "--seed",
             str(seed),
         ]
+        if budget["memory_inject_max_chars"] is not None:
+            command.extend(
+                ["--memory-inject-max-chars", str(budget["memory_inject_max_chars"])]
+            )
+        if budget["first_user_memory_inject_max_chars"] is not None:
+            command.extend(
+                [
+                    "--first-user-memory-inject-max-chars",
+                    str(budget["first_user_memory_inject_max_chars"]),
+                ]
+            )
+        if budget["prewrite_memory_inject_max_chars"] is not None:
+            command.extend(
+                [
+                    "--prewrite-memory-inject-max-chars",
+                    str(budget["prewrite_memory_inject_max_chars"]),
+                ]
+            )
+        if _enabled(strategy.get("train_include_system_prompt")):
+            command.append("--train-include-system-prompt")
+        if _enabled(strategy.get("train_routing_hint")):
+            command.append("--train-routing-hint")
+        if _train_skip_failed_sessions(strategy):
+            command.append("--train-skip-failed-sessions")
         if fixed_first_user_file is not None:
             command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
         if scope_prompt_file is not None:
             command.extend(["--scope-prompt-file", str(scope_prompt_file)])
+        if _enabled(strategy.get("terminal_continuation_check")):
+            command.append("--terminal-continuation-check")
+            command.extend(
+                [
+                    "--terminal-continuation-max-checks",
+                    str(_terminal_continuation_max_checks(strategy)),
+                ]
+            )
+            for tool_name in _terminal_continuation_tools(strategy):
+                command.extend(["--terminal-continuation-tool", tool_name])
+            if _enabled(strategy.get("terminal_continuation_text_check")):
+                command.append("--terminal-continuation-text-check")
+        if _terminal_plan_state_check(strategy):
+            command.append("--terminal-plan-state-check")
+            command.extend(
+                [
+                    "--terminal-plan-state-max-checks",
+                    str(_terminal_plan_state_max_checks(strategy)),
+                ]
+            )
+            if not _enabled(strategy.get("terminal_continuation_check")):
+                for tool_name in _terminal_continuation_tools(strategy):
+                    command.extend(["--terminal-continuation-tool", tool_name])
+                if _enabled(strategy.get("terminal_continuation_text_check")):
+                    command.append("--terminal-continuation-text-check")
+        if _compress_failure_memories(strategy):
+            command.append("--compress-failure-memories")
+        if _memory_read_selector(strategy):
+            command.append("--memory-read-selector")
+        if _prewrite_drift_retry(strategy):
+            command.append("--prewrite-drift-retry")
+        if _write_consequence_final_response_check(strategy):
+            command.append("--write-consequence-final-response-check")
+            command.extend(
+                [
+                    "--write-consequence-final-response-max-checks",
+                    str(_write_consequence_final_response_max_checks(strategy)),
+                ]
+            )
         if task_ids:
             for task_id in task_ids:
                 command.extend(["--task-id", task_id])
@@ -340,6 +538,47 @@ def _tau2_command(
     ]
     if fixed_first_user_file is not None:
         command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
+    if scope_prompt_file is not None:
+        command.extend(["--scope-prompt-file", str(scope_prompt_file)])
+    if _enabled(strategy.get("terminal_continuation_check")):
+        command.append("--terminal-continuation-check")
+        command.extend(
+            [
+                "--terminal-continuation-max-checks",
+                str(_terminal_continuation_max_checks(strategy)),
+            ]
+        )
+        for tool_name in _terminal_continuation_tools(strategy):
+            command.extend(["--terminal-continuation-tool", tool_name])
+        if _enabled(strategy.get("terminal_continuation_text_check")):
+            command.append("--terminal-continuation-text-check")
+    if _terminal_plan_state_check(strategy):
+        command.append("--terminal-plan-state-check")
+        command.extend(
+            [
+                "--terminal-plan-state-max-checks",
+                str(_terminal_plan_state_max_checks(strategy)),
+            ]
+        )
+        if not _enabled(strategy.get("terminal_continuation_check")):
+            for tool_name in _terminal_continuation_tools(strategy):
+                command.extend(["--terminal-continuation-tool", tool_name])
+            if _enabled(strategy.get("terminal_continuation_text_check")):
+                command.append("--terminal-continuation-text-check")
+    if _compress_failure_memories(strategy):
+        command.append("--compress-failure-memories")
+    if _memory_read_selector(strategy):
+        command.append("--memory-read-selector")
+    if _prewrite_drift_retry(strategy):
+        command.append("--prewrite-drift-retry")
+    if _write_consequence_final_response_check(strategy):
+        command.append("--write-consequence-final-response-check")
+        command.extend(
+            [
+                "--write-consequence-final-response-max-checks",
+                str(_write_consequence_final_response_max_checks(strategy)),
+            ]
+        )
 
     if task_ids:
         for task_id in task_ids:
@@ -364,18 +603,34 @@ def _fixed_first_user_file(config: dict[str, Any], domain: str) -> Path | None:
 def _scope_prompt_file(
     config: dict[str, Any], strategy: dict[str, Any], domain: str
 ) -> Path | None:
+    def _resolve_scope_prompt(raw: Any) -> Path | None:
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            if raw.get("enabled") is False:
+                return None
+            if "domain_files" in raw:
+                return _resolve_scope_prompt(raw.get("domain_files"))
+            for key in ("file", "path", "prompt_file"):
+                if raw.get(key):
+                    return _resolve_scope_prompt(raw.get(key))
+            raw = raw.get(domain) or raw.get("default")
+        if raw is None or str(raw).strip() == "":
+            return None
+        return resolve_path(str(raw))
+
     raw = strategy.get("scope_prompt_file")
     if raw is None:
         raw = strategy.get("scope_prompt_files")
     if raw is None:
+        raw = strategy.get("scope_prompt")
+    if raw is None:
         raw = config.get("openviking", {}).get("scope_prompt_file")
     if raw is None:
         raw = config.get("openviking", {}).get("scope_prompt_files")
-    if isinstance(raw, dict):
-        raw = raw.get(domain) or raw.get("default")
-    if raw is None or str(raw).strip() == "":
-        return None
-    return resolve_path(str(raw))
+    if raw is None:
+        raw = config.get("openviking", {}).get("scope_prompt")
+    return _resolve_scope_prompt(raw)
 
 
 def _build_plan(
@@ -390,10 +645,15 @@ def _build_plan(
     repeat_count_override: int | None,
     cell_concurrency_override: int | None,
     strategy_concurrency_override: int | None,
+    cell_timeout_seconds_override: int | None,
 ) -> dict[str, Any]:
     repeat_count = repeat_count_override or int(config["benchmark"].get("repeat_count", 8))
     base_seed = int(config["benchmark"].get("seed", 300))
-    cell_timeout_seconds = int(config["benchmark"].get("cell_timeout_seconds", 0) or 0)
+    cell_timeout_seconds = (
+        cell_timeout_seconds_override
+        if cell_timeout_seconds_override is not None
+        else int(config["benchmark"].get("cell_timeout_seconds", 0) or 0)
+    )
     strategy_concurrency = strategy_concurrency_override
     if strategy_concurrency is None:
         strategy_concurrency = cell_concurrency_override
@@ -411,6 +671,20 @@ def _build_plan(
         strategies = [
             strategy for strategy in strategies if strategy["id"] in selected_strategy_ids
         ]
+    deprecated_write_consequence_keys = {"write_consequence_check", "write_consequence_max_checks"}
+    deprecated_by_strategy = {
+        str(strategy.get("id")): sorted(
+            key for key in deprecated_write_consequence_keys if key in strategy
+        )
+        for strategy in strategies
+        if any(key in strategy for key in deprecated_write_consequence_keys)
+    }
+    if deprecated_by_strategy:
+        raise ValueError(
+            "pending write-consequence/full-check strategies were removed; "
+            "use write_consequence_final_response_check only. Deprecated keys: "
+            + json.dumps(deprecated_by_strategy, ensure_ascii=False, sort_keys=True)
+        )
     cells = []
     plan_domains = domains(config)
     if selected_domains:
@@ -479,6 +753,37 @@ def _build_plan(
                             )
                         ),
                         "retrieval_mode": strategy.get("retrieval_mode"),
+                        "train_outcome_mode": _train_outcome_mode(strategy),
+                        "train_transcript_format": _train_transcript_format(strategy),
+                        "train_include_system_prompt": _enabled(
+                            strategy.get("train_include_system_prompt")
+                        ),
+                        "train_routing_hint": _enabled(strategy.get("train_routing_hint")),
+                        "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
+                        "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
+                        "terminal_continuation_check": _enabled(
+                            strategy.get("terminal_continuation_check")
+                        ),
+                        "terminal_continuation_tools": _terminal_continuation_tools(strategy),
+                        "terminal_continuation_text_check": _enabled(
+                            strategy.get("terminal_continuation_text_check")
+                        ),
+                        "terminal_continuation_max_checks": (
+                            _terminal_continuation_max_checks(strategy)
+                        ),
+                        "terminal_plan_state_check": _terminal_plan_state_check(strategy),
+                        "terminal_plan_state_max_checks": (
+                            _terminal_plan_state_max_checks(strategy)
+                        ),
+                        "compress_failure_memories": _compress_failure_memories(strategy),
+                        "memory_read_selector": _memory_read_selector(strategy),
+                        "prewrite_drift_retry": _prewrite_drift_retry(strategy),
+                        "write_consequence_final_response_check": (
+                            _write_consequence_final_response_check(strategy)
+                        ),
+                        "write_consequence_final_response_max_checks": (
+                            _write_consequence_final_response_max_checks(strategy)
+                        ),
                         "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
@@ -526,6 +831,7 @@ def _cell_artifacts(cell: dict[str, Any], repo: Path, out: Path) -> dict[str, st
         corpus_dir = Path(cell["corpus_dir"])
         artifacts["retrieval_trace"] = str(run_dir / f"{cell['run_label']}.retrieval_trace.jsonl")
         artifacts["corpus_manifest"] = str(corpus_dir / "corpus_manifest.json")
+        artifacts["failure_memory_sidecar"] = str(corpus_dir / "failure_memory_sidecar.json")
         return artifacts
     return {"results": str(repo / "data" / "simulations" / f"{cell['run_label']}.json")}
 
@@ -561,6 +867,85 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
     key = _memory_corpus_key(cell)
     manifest_path = Path(cell["corpus_dir"]) / "corpus_manifest.json"
     if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        cached_mode = str(manifest.get("train_outcome_mode") or "transcript_only")
+        requested_mode = str(cell.get("train_outcome_mode") or "transcript_only")
+        if cached_mode != requested_mode:
+            raise RuntimeError(
+                "cached corpus train_outcome_mode mismatch for "
+                f"{key}: {cached_mode!r} != {requested_mode!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_transcript_format = str(
+            manifest.get("train_transcript_format") or TRAIN_TRANSCRIPT_OPENVIKING_TEXT
+        )
+        requested_transcript_format = str(
+            cell.get("train_transcript_format") or TRAIN_TRANSCRIPT_OPENVIKING_TEXT
+        )
+        if cached_transcript_format != requested_transcript_format:
+            raise RuntimeError(
+                "cached corpus train_transcript_format mismatch for "
+                f"{key}: {cached_transcript_format!r} != {requested_transcript_format!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_include_system_prompt = bool(manifest.get("train_include_system_prompt") or False)
+        requested_include_system_prompt = bool(cell.get("train_include_system_prompt") or False)
+        if cached_include_system_prompt != requested_include_system_prompt:
+            raise RuntimeError(
+                "cached corpus train_include_system_prompt mismatch for "
+                f"{key}: {cached_include_system_prompt!r} != {requested_include_system_prompt!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_routing_hint = bool(manifest.get("train_routing_hint") or False)
+        requested_routing_hint = bool(cell.get("train_routing_hint") or False)
+        if cached_routing_hint != requested_routing_hint:
+            raise RuntimeError(
+                "cached corpus train_routing_hint mismatch for "
+                f"{key}: {cached_routing_hint!r} != {requested_routing_hint!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_tool_output_max_chars = int(
+            manifest.get("train_tool_output_max_chars") or DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS
+        )
+        requested_tool_output_max_chars = int(
+            cell.get("train_tool_output_max_chars") or DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS
+        )
+        if cached_tool_output_max_chars != requested_tool_output_max_chars:
+            raise RuntimeError(
+                "cached corpus train_tool_output_max_chars mismatch for "
+                f"{key}: {cached_tool_output_max_chars!r} != {requested_tool_output_max_chars!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_skip_failed = bool(manifest.get("train_skip_failed_sessions") or False)
+        requested_skip_failed = bool(cell.get("train_skip_failed_sessions") or False)
+        if cached_skip_failed != requested_skip_failed:
+            raise RuntimeError(
+                "cached corpus train_skip_failed_sessions mismatch for "
+                f"{key}: {cached_skip_failed!r} != {requested_skip_failed!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_version = str(manifest.get("train_outcome_message_version") or "")
+        if (
+            requested_mode != TRAIN_OUTCOME_TRANSCRIPT_ONLY
+            and cached_version != TRAIN_OUTCOME_MESSAGE_VERSION
+        ):
+            raise RuntimeError(
+                "cached corpus train_outcome_message_version mismatch for "
+                f"{key}: {cached_version!r} != {TRAIN_OUTCOME_MESSAGE_VERSION!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        if _compress_failure_memories(cell):
+            sidecar_path = manifest.get("failure_memory_sidecar")
+            if not sidecar_path or not Path(str(sidecar_path)).is_file():
+                raise RuntimeError(
+                    "cached corpus is missing failure_memory_sidecar for "
+                    f"{key}; rebuild the evaluator-augmented corpus"
+                )
+            if int(manifest.get("failure_memory_diff_error_count") or 0) > 0:
+                raise RuntimeError(
+                    "cached corpus has failure memory_diff read errors for "
+                    f"{key}; rebuild the evaluator-augmented corpus"
+                )
         row = {
             "domain": cell["domain"],
             "strategy_id": cell["strategy_id"],
@@ -873,6 +1258,14 @@ def main() -> int:
         "--train-num-tasks", type=int, help="Train OpenViking memory on the first N train tasks."
     )
     parser.add_argument(
+        "--cell-timeout-seconds",
+        type=int,
+        help=(
+            "Override benchmark.cell_timeout_seconds. A timed-out cell is recorded "
+            "with returncode 124 and excluded from scoreboard metrics."
+        ),
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Write a lightweight environment/config preflight report.",
@@ -893,6 +1286,8 @@ def main() -> int:
         raise SystemExit("--cell-concurrency must be >= 1")
     if args.strategy_concurrency is not None and args.strategy_concurrency < 1:
         raise SystemExit("--strategy-concurrency must be >= 1")
+    if args.cell_timeout_seconds is not None and args.cell_timeout_seconds < 1:
+        raise SystemExit("--cell-timeout-seconds must be >= 1")
 
     config = load_config(args.config)
     out = output_dir(config, args.run_id)
@@ -913,6 +1308,7 @@ def main() -> int:
         repeat_count_override=args.repeat_count,
         cell_concurrency_override=args.cell_concurrency,
         strategy_concurrency_override=args.strategy_concurrency,
+        cell_timeout_seconds_override=args.cell_timeout_seconds,
     )
     write_json(out / "run_plan.json", plan)
     write_json(out / "resolved_config.json", config)

@@ -27,20 +27,21 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Convert this agent session into a reusable trajectory-view memory.
+        return f"""You are a memory extraction agent. Convert this session into reusable trajectory-view memories.
 
-One session = one trajectory-view record. Always output exactly one record.
-Write the record as a compact procedure-like view of the useful execution pattern,
-not as a raw transcript. Keep the future agent's decision points, tool path,
-confirmation/write boundary, failure corrections, and applicability boundary.
-Generalize case evidence; do not copy raw user names, identifiers, dates, amounts,
-exact budgets, routes, counts, payment details, or tool payloads into the reusable memory.
-Sub-tasks, pivots, errors, and follow-ups are folded into that one record as steps,
-guardrails, or evidence — not separate trajectories.
+Each memory is a compact operation contract for a future agent, not a transcript.
+Capture trigger, prerequisites, verified boundaries, procedure, provenance,
+anti-patterns, and applicability. Split separate intents, pivots, enabling writes,
+and final writes into separate records; omit low-value side work. Use only schema
+operation-family enum values, not compound labels. Generalize away raw identifiers,
+names, exact dates, amounts, routes, and tool payloads. Do not let a later
+operation in the session rename, narrow, or extend an earlier operation record.
+Stop each record at its family boundary; do not include a second lifecycle-
+changing write in the same operation contract.
 
-Output a JSON object with a `trajectories` array containing exactly one item.
-Follow field descriptions in the schema. JSON only, no explanation.
-All content fields must be written in {output_language}.
+Output JSON only: {{"trajectories": [...]}}. Include items only for reusable
+operation contracts supported by the session. Follow field descriptions in the
+schema. All content fields must be written in {output_language}.
 """
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:

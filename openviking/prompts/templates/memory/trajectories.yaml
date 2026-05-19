@@ -1,6 +1,6 @@
 memory_type: trajectories
 description: |
-  A compact, reusable view of how the agent handled one task in a conversation.
+  A compact, reusable operation contract distilled from an agent task trajectory.
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
@@ -20,7 +20,7 @@ fields:
       If English: lowercase snake_case, max 5 words.
       If Chinese: concise noun phrase, max 15 characters.
       Do not create near-duplicate names for the same task.
-      Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix", "机票重复预订处理".
+      Good: "duplicate_request_resolution", "pytest_asyncio_cancel_hang_fix", "重复请求处理".
     merge_op: immutable
 
   - name: outcome
@@ -32,41 +32,48 @@ fields:
   - name: content
     type: string
     description: |
-      Procedure-like trajectory view in EXACTLY this format:
+      Procedure-like operation contract in EXACTLY this format:
 
       # <trajectory_name>
-      - Domain: <task domain or product area, e.g. airline, retail, software tooling>
+      - Domain: <task domain or product area, e.g. customer support, commerce operations, software tooling>
       - Trigger: <the reusable user intent or task situation — one sentence>
+      - Operation Intent:
+        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, cancel_existing_object, replace_existing_object, attribute_append_remove, compensation_or_refund, read_then_transfer, final_response_only>
+        - Primary object: <the object whose state or lifecycle this record is about>
+        - Target object/lifecycle: <the intended final state, lifecycle transition, or handoff target>
       - Preconditions:
         1. <state, identity, policy, tool-observation, or confirmation prerequisite>
         2. <...>
+      - Immutable Object Boundary:
+        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
       - Procedure:
         1. <future-agent instruction for the first decision/action step; include key tool names when useful>
         2. <future-agent instruction for the next decision/action step>
         3. <continue until the write/confirmation/final-response boundary is clear>
+      - Write Field Provenance:
+        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
       - Anti-patterns:
         - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
       - Applicability Boundary:
         - <when this memory applies>
         - <when this memory should not be used>
+      - Negative Applicability:
+        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
       - Result: <final outcome and important side effects — one sentence>
       - Evidence: <brief generalized source note from this session, including success/failure/partial status>
 
       Rules:
-      - Write for future agent execution, not for human audit. Prefer clear instructions over chronological narration.
-      - Preserve the successful or best-known path: critical reads, required policy checks, confirmation steps, write-tool ordering, and final user-facing completion.
-      - Keep negative lessons in Anti-patterns, not mixed into Procedure.
-      - Keep the memory grounded in this session, but abstract away user-specific names, raw IDs, exact payloads, and long tool responses.
-      - Do not include raw user/order/reservation/payment/card IDs, user names, email/phone/address values, exact dates, case-specific amounts, exact budgets, route pairs, airport pairs, passenger/bag counts, card suffixes, flight numbers, order numbers, or raw tool payloads. Replace them with semantic descriptions such as "a delivered order", "an ineligible basic-economy reservation", "the saved payment method", or "a policy-ineligible cancellation". Stable policy constants may be kept when they are needed for future execution.
-      - The Evidence line is not an exception: it may name the source status and lesson type, but must not carry case-specific values such as exact amounts, routes, dates, counts, product names, or customer-specific state.
-      - Bad Evidence: "a mechanical keyboard exceeded the $200 threshold". Good Evidence: "a product variant exceeded the user-specified threshold".
-      - Bad Evidence: "the ORD-to-LAX reservation on May 12 used card ending 1234". Good Evidence: "a matching reservation required the saved payment method and policy checks before the write action".
-      - Mention tool names when they are part of the reusable path, but summarize observations instead of copying raw JSON.
-      - If the session failed or was partial, still write the best reusable lesson: put the corrected approach in Procedure and the failure cause in Anti-patterns / Evidence.
-      - Avoid broad SOPs. The Trigger and Applicability Boundary should make this record narrower than a whole domain workflow.
-
-      General Rules:
-      - Use exactly the title, Domain line, and 7 labels above in this exact order.
+      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
+      - Extract one record per primary user intent, object, and lifecycle transition. Split separable intents, pivots, follow-ups, enabling writes, and final writes; omit low-value side work.
+      - Family must be exactly one listed enum value. Do not invent compound labels. Use read_then_transfer when the reusable path ends in handoff after verification.
+      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
+      - Stop each record at its family boundary: update_existing_object stops after update verification, cancel_existing_object after cancellation verification, create_new_object after creation verification, replace_existing_object after replacement verification, read_then_transfer after handoff verification.
+      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
+      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
+      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
+      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
+      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts, exact routes/locations, product names, and raw tool payloads. Keep tool names only when they are part of the reusable path.
+      - Use exactly the title, Domain line, and 11 labels above in this exact order.
       - Trigger, Result, and Evidence are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch

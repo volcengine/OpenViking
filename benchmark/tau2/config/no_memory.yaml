@@ -7,3 +7,14 @@ strategies:
   - id: no_memory
     label: TAU-2 no-memory baseline
     memory_backend: none
+  - id: no_memory_terminal_plan_state_check
+    label: TAU-2 no-memory baseline with terminal plan-state continuation classifier
+    memory_backend: none
+    terminal_plan_state_check: true
+    terminal_plan_state_max_checks: 1
+    terminal_continuation_text_check: true
+  - id: no_memory_write_consequence_final_response_check
+    label: TAU-2 no-memory baseline with final-response consequence grounding check
+    memory_backend: none
+    write_consequence_final_response_check: true
+    write_consequence_final_response_max_checks: 1
