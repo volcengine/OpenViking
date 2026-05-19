@@ -5,25 +5,12 @@ import { createClient } from '#/gen/ov-client/client'
 import { client as sdkClient } from '#/gen/ov-client/client.gen'
 
 import { normalizeOvClientError, OvClientError } from './errors'
-import { addRequestLog, updateRequestLog } from '../request-logs'
 import { DEFAULT_API_KEY_STORAGE_KEY } from './types'
 import type { OvClientAdapter, OvClientOptions, OvConnectionState, OvErrorEnvelope } from './types'
 
 const DEFAULT_TELEMETRY_PATHS = new Set(['/api/v1/search/find', '/api/v1/search/search', '/api/v1/resources'])
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
 const WEB_STUDIO_AGENT_ID = 'web-studio'
-const REQUEST_LOG_META_KEY = '__ovRequestLog'
-
-type RequestLogMeta = {
-  id: string
-  startedAt: number
-}
-
-declare module 'axios' {
-  export interface InternalAxiosRequestConfig {
-    [REQUEST_LOG_META_KEY]?: RequestLogMeta
-  }
-}
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
@@ -79,20 +66,6 @@ function resolvePathname(rawUrl?: string): string {
     return new URL(rawUrl, 'http://openviking.local').pathname
   } catch {
     return rawUrl.startsWith('/') ? rawUrl : ''
-  }
-}
-
-function resolveRequestPath(rawUrl?: string, params?: unknown): string {
-  if (!rawUrl) {
-    return ''
-  }
-
-  try {
-    const url = new URL(rawUrl, 'http://openviking.local')
-    const query = url.search || (params ? '?...' : '')
-    return `${url.pathname}${query}`
-  } catch {
-    return rawUrl
   }
 }
 
@@ -189,40 +162,16 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     config.headers = headers
     maybeInjectTelemetry(config, runtimeOptions.defaultTelemetry)
 
-    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
-    const startedAt = Date.now()
-    config[REQUEST_LOG_META_KEY] = { id, startedAt }
-    addRequestLog({
-      id,
-      method: (config.method || 'GET').toUpperCase(),
-      path: resolveRequestPath(config.url, config.params),
-      startedAt: new Date(startedAt).toISOString(),
-      status: 'pending',
-    })
-
     return config
   })
 
   instance.interceptors.response.use(
     (response) => {
-      const meta = response.config[REQUEST_LOG_META_KEY]
       const requestId = readHeader(response.headers, 'x-request-id')
 
       if (isEnvelopeError(response.data)) {
         const { error } = response.data
         const message = error.message || 'OpenViking request failed'
-
-        if (meta) {
-          updateRequestLog(meta.id, {
-            durationMs: Date.now() - meta.startedAt,
-            errorMessage: message,
-            requestId,
-            status: 'error',
-            statusCode: response.status,
-          })
-        }
 
         throw new OvClientError({
           code: error.code || 'ERROR',
@@ -234,32 +183,10 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
         })
       }
 
-      if (meta) {
-        updateRequestLog(meta.id, {
-          durationMs: Date.now() - meta.startedAt,
-          requestId,
-          status: 'success',
-          statusCode: response.status,
-        })
-      }
-
       return response
     },
     (error) => {
       const normalized = normalizeOvClientError(error)
-      const meta = isRecord(error) && isRecord(error.config)
-        ? (error.config[REQUEST_LOG_META_KEY] as RequestLogMeta | undefined)
-        : undefined
-      if (meta) {
-        updateRequestLog(meta.id, {
-          durationMs: Date.now() - meta.startedAt,
-          errorMessage: normalized.message,
-          requestId: normalized.requestId,
-          status: 'error',
-          statusCode: normalized.statusCode,
-        })
-      }
-
       return Promise.reject(normalized)
     },
   )

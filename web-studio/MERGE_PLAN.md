@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | App shell | 保留 | 布局、侧边栏、主题、i18n、连接设置。 |
 | 请求适配层 | 保留 | `src/lib/ov-client` 继续负责 baseUrl、认证头、telemetry 注入和错误归一化。 |
-| Request logs | 保留本地请求日志 | 当前是前端本地请求日志。#2016 有官方 audit BFF，但首版不强行替换整个 request logs 页面。 |
+| Request logs | 改接 #2016 Console Audit BFF | 当前使用 `GET /api/v1/console/audit` 和 generated client；不再保留前端内存 request logs。 |
 | Home | 保留并改接 #2016 Console BFF | 删除旧实验 `/api/v1/stats/tokens`。 |
 | Resources 文件管理 | 保留 | 文件树、列表、预览、搜索、跳转是核心功能。 |
 | Resources 上传 | 保留 | 当前 target 已确认 `POST /api/v1/resources/temp_upload`，且 `POST /api/v1/resources` 支持 `temp_file_id` / `source_name`。 |
@@ -81,7 +81,7 @@
 | `GET /api/v1/console/dashboard/summary` | 首页 summary cards | 接入。 |
 | `GET /api/v1/console/tokens?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&bucket=day` | Token 趋势 | 接入。 |
 | `GET /api/v1/console/context-commits?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&bucket=hour\|4h` | 上下文提交热力图 | 接入，首版选一种 bucket，不做复杂 drill-down。 |
-| `GET /api/v1/console/audit` | 官方请求审计日志 | 首版可暂不接入，保留前端本地 request logs。 |
+| `GET /api/v1/console/audit` | 官方请求审计日志 | 接入 request logs 页面；支持 `enabled=false` 空态，不再维护前端本地 request logs。 |
 
 Web Studio 请求层以用户配置的 OV Server `baseUrl` 为准。#2016 后端说明里列出的 `/console/api/v1/ov/console/*` 是官方 console 静态服务代理路径；Web Studio 首版不硬编码或重新引入这类 alias。
 
@@ -409,7 +409,6 @@ feat(web-studio): add frontend console workspace
 
 - Resource tags 全链路。
 - Config 编辑页。
-- 官方 audit logs 页面替换当前本地 request logs。
 - bot token 级 streaming 和 reasoning delta。
 - bot 文件附件消费。
 - session rename。
