@@ -52,7 +52,7 @@
 | Request logs | 改接 #2016 Console Audit BFF | 当前使用 `GET /api/v1/console/audit` 和 generated client；不再保留前端内存 request logs。 |
 | Home | 保留并改接 #2016 Console BFF | 删除旧实验 `/api/v1/stats/tokens`。 |
 | Resources 文件管理 | 保留 | 文件树、列表、预览、搜索、跳转是核心功能。 |
-| Resources 上传 | 保留 | 当前 target 已确认 `POST /api/v1/resources/temp_upload`，且 `POST /api/v1/resources` 支持 `temp_file_id` / `source_name`。 |
+| Resources 上传 | 保留 | 当前 target 已确认 `POST /api/v1/resources/temp_upload`，`POST /api/v1/resources` 支持 `temp_file_id` / `source_name`，`GET /api/v1/tasks` 支持刷新后恢复 `add_resource` 任务列表。 |
 | Sessions | 降级保留 | 保留列表、创建、删除、历史消息、基础聊天；不承诺 token 级 streaming 和附件。 |
 | Code editor | 保留 | 当前 target 已确认 `POST /api/v1/content/write`，可以保留文本编辑与保存。 |
 
@@ -260,7 +260,8 @@ web-studio/types/ov-server/
 | `api/v1/content.ts` | `ContentReadResult = string \| Record<string, unknown>`、`ContentWriteResult`。 |
 | `api/v1/search.ts` | `SearchResult`、`SearchHit`，不把 tags 暴露给首版 UI view model。 |
 | `api/v1/resources.ts` | `TempUploadResult`、`AddResourceResult`。 |
-| `api/v1/system.ts` / `api/v1/tasks.ts` | 仅当 Home 首版仍保留 system health 或 task 列表时定义本地子集。 |
+| `api/v1/tasks.ts` | `TaskRecord`、`TaskListResult`，用于 Resources 上传任务恢复与轮询。 |
+| `api/v1/system.ts` | 仅当 Home 首版仍保留 system health 时定义本地子集。 |
 
 不建议：
 
@@ -369,6 +370,7 @@ npm run gen-server-client
 8. 修 Resources：
    - 删除 tags 展示和 tags 类型映射。
    - 保留文件管理、内容读取/保存、搜索、本地上传。
+   - 本地/远程上传使用 `wait=false` 后端任务；通过 generated client `getTasks` 恢复和轮询 `add_resource` 任务。
    - 若 target 缺失本地上传接口，隐藏本地上传入口。
 9. 修 Sessions：
    - 隐藏 chat 附件。
