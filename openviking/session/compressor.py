@@ -311,8 +311,8 @@ class SessionCompressor:
             # Clean up vector record for the missing file so it's not retried
             try:
                 await self.vikingdb.delete_uris(ctx, [target_memory.uri])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to clean up vector record for %s: %s", target_memory.uri, e)
             return False
         except Exception as e:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
@@ -323,10 +323,9 @@ class SessionCompressor:
     ) -> bool:
         """Hard delete an existing memory file and clean up its vector record.
 
-        Uses optimistic concurrency control (OCC): verifies the file hasn't
-        been modified since the dedup search read it. If a concurrent
-        modification is detected, the delete is aborted to avoid clobbering
-        another session's merge.
+        Enforces a dedup score guardrail: refuses to delete memories whose
+        _dedup_score is below 0.5, preventing LLM-hallucinated DELETE decisions
+        on low-similarity matches.
         """
         dedup_score = (memory.meta or {}).get("_dedup_score", 0)
         if isinstance(dedup_score, (int, float)) and dedup_score < 0.5:

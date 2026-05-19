@@ -2123,7 +2123,11 @@ class VikingFS:
 
         try:
             stat = await self._run_in_threadpool(self.agfs.stat, path)
-        except Exception:
+        except FileNotFoundError:
+            logger.debug("OCC stat failed for %s: file not found", uri)
+            return False
+        except Exception as e:
+            logger.warning("OCC stat failed for %s: %s", uri, e)
             return False
 
         current_mod_time = ""
