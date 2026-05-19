@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
+import { getFsLs, getOvResult, isOvClientError } from '#/lib/ov-client'
 import {
   Dialog,
   DialogContent,
@@ -13,9 +14,9 @@ import {
 } from '#/components/ui/dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { Spinner } from '#/components/ui/spinner'
-import type { VikingFsEntry } from '../-types/viking-fm'
+import type { FSListResult } from '@ov-server/api/v1/fs'
 import { normalizeDirUri, normalizeFsEntries } from '../-lib/normalize'
-import { getFsLs, getOvResult, isOvClientError } from '#/lib/ov-client'
+import type { VikingFsEntry } from '../-types/viking-fm'
 
 function getErrorMessage(error: unknown): string {
   if (isOvClientError(error)) {
@@ -71,7 +72,7 @@ export function DirectoryPickerDialog({
   const dirQuery = useQuery({
     queryKey: ['dir-picker', normalizedUri],
     queryFn: async () => {
-      const result = await getOvResult(
+      const result = await getOvResult<FSListResult>(
         getFsLs({
           query: {
             uri: normalizedUri,

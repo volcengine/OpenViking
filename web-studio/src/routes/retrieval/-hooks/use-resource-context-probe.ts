@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { getFsLs, getOvResult } from '#/lib/ov-client'
+import type { FSListResult } from '@ov-server/api/v1/fs'
 
 type ResourceProbeResult = {
   hasContext: boolean
 }
 
-function normalizeHasEntries(result: unknown): boolean {
+function normalizeHasEntries(result: FSListResult | unknown): boolean {
   if (Array.isArray(result)) {
     return result.length > 0
   }
@@ -23,7 +24,7 @@ function normalizeHasEntries(result: unknown): boolean {
 export function useResourceContextProbe() {
   return useQuery<ResourceProbeResult>({
     queryFn: async () => {
-      const result = await getOvResult(
+      const result = await getOvResult<FSListResult>(
         getFsLs({
           query: {
             node_limit: 1,

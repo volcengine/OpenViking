@@ -1,4 +1,4 @@
-import type { ChatStreamEvent, ChatStreamEventType } from '../-types/chat'
+import type { ChatStreamEvent, ChatStreamEventType } from '@ov-server/bot/v1/chat'
 
 const VALID_EVENT_TYPES = new Set<string>([
   'response', 'tool_call', 'tool_result', 'reasoning', 'iteration',
@@ -44,7 +44,7 @@ export async function* parseSseStream(response: Response): AsyncGenerator<ChatSt
   let buffer = ''
 
   try {
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
 

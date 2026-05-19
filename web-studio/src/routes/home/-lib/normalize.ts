@@ -3,11 +3,13 @@ import {
   HEATMAP_EMPTY_COLOR,
 } from '../-constants/dashboard'
 import type {
-  AgentVisit,
+  ConsoleAgentVisit,
+  ConsoleContextCommitItem,
+  ConsoleTokenSeriesItem,
+} from '@ov-server/api/v1/console'
+import type {
   CommitHeatmapStats,
-  ContextCommitItem,
   HeatMapDayValue,
-  TokenSeriesItem,
 } from '../-types/dashboard'
 import {
   asArray,
@@ -16,7 +18,7 @@ import {
   asString,
 } from './format'
 
-export function normalizeTokenSeries(items: unknown): Array<Required<TokenSeriesItem>> {
+export function normalizeTokenSeries(items: unknown): Array<Required<ConsoleTokenSeriesItem>> {
   return asArray(items).map((raw) => {
     const record = asRecord(raw)
     const vlmInput = asNumber(record.vlm_input)
@@ -103,7 +105,7 @@ export function computeCommitHeatmapStats(items: HeatMapDayValue[]): CommitHeatm
 }
 
 export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
-  const rowsByDate = new Map<string, Required<ContextCommitItem>>()
+  const rowsByDate = new Map<string, Required<ConsoleContextCommitItem>>()
 
   for (const item of normalizeCommitItems(items)) {
     if (!item.date) continue
@@ -138,7 +140,7 @@ export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
     }))
 }
 
-export function normalizeCommitItems(items: unknown): Array<Required<ContextCommitItem>> {
+export function normalizeCommitItems(items: unknown): Array<Required<ConsoleContextCommitItem>> {
   return asArray(items).map((raw) => {
     const record = asRecord(raw)
     const addResource = asNumber(record.add_resource)
@@ -157,7 +159,7 @@ export function normalizeCommitItems(items: unknown): Array<Required<ContextComm
   })
 }
 
-export function normalizeAgents(items: unknown): AgentVisit[] {
+export function normalizeAgents(items: unknown): ConsoleAgentVisit[] {
   return asArray(items)
     .map((raw) => {
       const record = asRecord(raw)

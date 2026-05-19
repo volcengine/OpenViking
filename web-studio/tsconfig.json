@@ -6,6 +6,7 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "paths": {
+      "@ov-server/*": ["./types/ov-server/*"],
       "#/*": ["./src/*"],
       "@/*": ["./src/*"]
     },

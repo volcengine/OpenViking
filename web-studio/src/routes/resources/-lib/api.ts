@@ -1,5 +1,7 @@
 import { fetchFind, fetchFindAllTypes, fetchSearch } from '#/lib/retrieval'
 import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postContentWrite } from '#/lib/ov-client'
+import type { ContentReadResult, ContentWriteResult } from '@ov-server/api/v1/content'
+import type { FSListResult, FSStatResult, FSTreeResult } from '@ov-server/api/v1/fs'
 
 import { fileNameFromUri, formatModTime, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
 import type {
@@ -27,7 +29,7 @@ export async function fetchFsList(uri: string, options: VikingListQueryOptions =
   const normalizedUri = normalizeDirUri(uri)
 
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<FSListResult>(
       getFsLs({
         query: {
           uri: normalizedUri,
@@ -55,7 +57,7 @@ export async function fetchFsTree(rootUri: string, options: VikingTreeQueryOptio
   const normalizedRootUri = normalizeDirUri(rootUri)
 
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<FSTreeResult>(
       getFsTree({
         query: {
           uri: normalizedRootUri,
@@ -83,7 +85,7 @@ export async function fetchFileContent(uri: string, options: VikingReadQueryOpti
   const limit = options.limit ?? -1
 
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<ContentReadResult>(
       getContentRead({
         query: {
           uri,
@@ -109,7 +111,7 @@ export async function fetchFileContent(uri: string, options: VikingReadQueryOpti
 
 export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<FSStatResult>(
       getFsStat({ query: { uri } }),
     )
     const data = result as Record<string, unknown>
@@ -141,7 +143,7 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
 
 export async function saveFileContent(uri: string, content: string): Promise<void> {
   try {
-    await getOvResult(
+    await getOvResult<ContentWriteResult>(
       postContentWrite({
         body: {
           uri,

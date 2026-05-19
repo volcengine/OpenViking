@@ -8,6 +8,7 @@ import {
   postResourcesTempUpload,
 } from '#/lib/ov-client'
 import { parseUploadError } from '#/routes/resources/-lib/upload'
+import type { AddResourceResult, TempUploadResult } from '@ov-server/api/v1/resources'
 
 export type ResourceUploadTaskStatus =
   | 'pending'
@@ -150,7 +151,7 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
         progress: 0,
       }))
 
-      const uploadResult = await getOvResult(
+      const uploadResult = await getOvResult<TempUploadResult>(
         postResourcesTempUpload({
           body: {
             file: params.file,
@@ -181,7 +182,7 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
         progress: null,
       }))
 
-      const addResult = await getOvResult(
+      const addResult = await getOvResult<AddResourceResult>(
         postResources({
           body: {
             ...commonBody,
@@ -191,12 +192,12 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
         }),
       )
 
-      if (isRecord(addResult) && addResult.status === 'error') {
-        const errors = Array.isArray(addResult.errors) ? (addResult.errors as string[]) : []
+      if (addResult.status === 'error') {
+        const errors = Array.isArray(addResult.errors) ? addResult.errors : []
         throw new Error(errors.join('; ') || 'Processing failed')
       }
 
-      const rootUri = isRecord(addResult) && typeof addResult.root_uri === 'string'
+      const rootUri = typeof addResult.root_uri === 'string'
         ? addResult.root_uri
         : null
 
@@ -282,7 +283,7 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
 
     void (async () => {
       try {
-        const result = await getOvResult(
+        const result = await getOvResult<AddResourceResult>(
           postResources({
             body: {
               ...params.commonBody,
@@ -292,15 +293,15 @@ export function ResourceUploadProvider({ children }: { children: React.ReactNode
           }),
         )
 
-        if (isRecord(result) && result.status === 'error') {
-          const errors = Array.isArray(result.errors) ? (result.errors as string[]) : []
+        if (result.status === 'error') {
+          const errors = Array.isArray(result.errors) ? result.errors : []
           throw new Error(errors.join('; ') || 'Processing failed')
         }
 
-        const warnings = isRecord(result) && Array.isArray(result.warnings)
-          ? (result.warnings as string[])
+        const warnings = Array.isArray(result.warnings)
+          ? result.warnings
           : []
-        const rootUri = isRecord(result) && typeof result.root_uri === 'string'
+        const rootUri = typeof result.root_uri === 'string'
           ? result.root_uri
           : null
 
