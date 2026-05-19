@@ -1,175 +1,320 @@
-# Web Studio
+# OpenViking Web Studio
 
-Web Studio 是 OpenViking 的前端工作台，基于 Vite 和 React 19 构建，当前以单页应用形式运行。
+Web Studio 是 OpenViking 的 React/Vite 前端工作台，面向开发者使用。它是一个静态单页应用，只负责呈现资源、检索、会话和运维界面；资源存储、索引、检索、任务队列和 Bot 运行时都来自独立的 OpenViking Server。
 
-它用于承接 OpenViking 的资源、会话和运维工作区，并逐步把现有能力收敛到统一的前端界面中。
+当前主要功能区：
 
-## 当前状态
+- `resources`：资源浏览、上传、导入任务跟踪和文件预览。
+- `retrieval`：搜索、find、grep 等检索工作流。
+- `sessions`：基于 VikingBot 的会话列表、聊天和 SSE 流式响应。
+- `operations`：运行状态、诊断和管理相关视图。
 
-- 应用首页会重定向到 /resources。
-- 当前顶层工作区包括 resources、sessions、operations。
-- 这三个页面目前仍是占位页：
-  - src/routes/resources/route.tsx
-  - src/routes/sessions/route.tsx
-  - src/routes/operations/route.tsx
-- 对应的翻译资源在 src/i18n/locales/en.ts 和 src/i18n/locales/zh-CN.ts 中也仍然包含占位说明，用于表达当前页面骨架和后续接入方向。
+实现规则见 [AGENTS.md](AGENTS.md)，产品入口和信息架构见 [WORKSPACE_IA.md](WORKSPACE_IA.md)。
 
-产品入口与功能区规划见 [WORKSPACE_IA.md](WORKSPACE_IA.md)。
+## 运行依赖
 
-## 技术栈
+Web Studio 运行时必须连接 OpenViking Server。默认开发地址是：
 
-- React 19
-- Vite 7
-- TanStack Router
-- TanStack Query
-- Tailwind CSS v4
-- shadcn/ui
-- i18next + react-i18next
-- Axios
-- Vitest
+```text
+http://127.0.0.1:1933
+```
+
+会话和聊天界面还依赖 OpenViking Server 代理出来的 VikingBot API：
+
+```text
+GET  /bot/v1/health
+POST /bot/v1/chat
+POST /bot/v1/chat/stream
+POST /bot/v1/feedback
+```
+
+因此，本地开发和部署 Web Studio 时都应使用 `--with-bot` 启动服务端：
+
+```bash
+openviking-server --with-bot
+```
+
+不带 `--with-bot` 时，资源、搜索、任务、系统状态等核心 API 仍可能可用，但 `/bot/v1/*` 会返回 `503`。这种状态下 Web Studio 的会话页不能提供真实聊天能力。
+
+## 前置条件
+
+- Node.js：需要兼容 Vite 7，推荐使用 Node.js 22 LTS。
+- npm：使用 `web-studio/package-lock.json` 安装依赖。
+- OpenViking Python 环境：如果要使用会话页，必须安装 `bot` extra。
+
+从仓库源码开发时，在仓库根目录准备后端环境：
+
+```bash
+uv pip install -e ".[bot,dev]"
+openviking-server init
+openviking-server doctor
+openviking-server --with-bot
+```
+
+使用已发布包时：
+
+```bash
+pip install "openviking[bot]"
+openviking-server init
+openviking-server doctor
+openviking-server --with-bot
+```
+
+启动前端前，先确认依赖的服务端可用：
+
+```bash
+curl http://127.0.0.1:1933/health
+curl http://127.0.0.1:1933/ready
+curl http://127.0.0.1:1933/bot/v1/health
+```
+
+如果 `/bot/v1/health` 返回 503，通常说明服务端没有用 `--with-bot` 启动，或当前 Python 环境没有安装 `openviking[bot]` 依赖。
 
 ## 本地开发
 
-安装依赖：
+安装前端依赖：
 
 ```bash
+cd web-studio
 npm install
 ```
 
-启动开发服务器：
+启动 Vite 开发服务器：
 
 ```bash
 npm run dev
 ```
 
-默认端口为 3000。
+浏览器访问：
+
+```text
+http://127.0.0.1:3000
+```
+
+默认连接 `http://127.0.0.1:1933`。如果要指定其它服务端作为初始连接地址：
+
+```bash
+VITE_OV_BASE_URL=http://127.0.0.1:1933 npm run dev
+```
+
+页面右上角的连接设置仍然可以在运行时覆盖 base URL、API key、account ID 和 user ID。
+
+## 连接与鉴权
+
+Web Studio 通过 `src/lib/ov-client` 封装生成的 OpenViking API client。业务代码默认从 `#/lib/ov-client` 取客户端能力，不直接依赖 `src/gen/ov-client`。
+
+浏览器侧连接信息保存位置：
+
+- API key：`sessionStorage`，键名 `ov_console_api_key`。
+- base URL、account ID、user ID：`localStorage`，键名 `ov_console_connection`。
+
+请求适配层会按当前连接状态注入：
+
+- `X-API-Key`
+- `X-OpenViking-Account`
+- `X-OpenViking-User`
+- `X-OpenViking-Agent: web-studio`
+
+本地开发模式下，如果服务端没有配置 `root_api_key`，可能允许隐式身份。多租户或生产环境应配置真实 root key 或 user key，并在 Web Studio 的连接设置里填入对应信息。
 
 ## 常用命令
 
-启动开发环境：
+| 命令                        | 用途                                            |
+| --------------------------- | ----------------------------------------------- |
+| `npm run dev`               | 启动 Vite 开发服务器，默认端口 3000。           |
+| `npm run build`             | 走 Vite 构建链路并输出 `dist/`。                |
+| `npm run preview`           | 本地预览 `dist/` 构建产物。                     |
+| `npm run lint`              | 运行当前业务代码范围的 ESLint。                 |
+| `npm run format`            | 使用 Prettier 检查格式。                        |
+| `npm run check`             | 执行 Prettier 写入和 ESLint 自动修复。          |
+| `npm run test`              | 运行 Vitest。                                   |
+| `npm run gen-server-client` | 从服务端 OpenAPI 重新生成 `src/gen/ov-client`。 |
 
-```bash
-npm run dev
+## OpenAPI Client 生成
+
+生成代码目录：
+
+```text
+src/gen/ov-client
 ```
 
-生产构建：
+不要手动修改生成产物。需要更新客户端时，先启动对应版本的 OpenViking Server，再执行生成命令：
 
 ```bash
-npm run build
-```
-
-预览构建产物：
-
-```bash
-npm run preview
-```
-
-运行测试：
-
-```bash
-npm run test
-```
-
-运行当前业务范围的 lint：
-
-```bash
-npm run lint
-```
-
-执行格式化并自动修复当前 lint 范围：
-
-```bash
-npm run check
-```
-
-仅检查格式：
-
-```bash
-npm run format
-```
-
-重新生成服务端客户端：
-
-```bash
+openviking-server --with-bot
+cd web-studio
 npm run gen-server-client
 ```
 
-## 目录概览
-
-核心目录如下：
-
-- src/routes：TanStack Router 路由入口
-- src/components/ui：可复用基础 UI 组件
-- src/lib/ov-client：前端请求适配层
-- src/gen/ov-client：OpenAPI 生成客户端
-- src/i18n/locales：当前中英文翻译资源
-- src/styles.css：全局样式与设计 token
-
-当前顶层页面已迁移为目录式路由，例如：
+当前生成脚本固定读取：
 
 ```text
-src/routes/resources/
-  route.tsx
-  -components/
-  -hooks/
-  -lib/
-  -constants/
-  -schemas/
-  -types/
+http://127.0.0.1:1933/openapi.json
 ```
 
-## 后端连接与客户端生成
+脚本会格式化 OpenAPI 文档、整理 operationId，再通过 `@hey-api/openapi-ts` 生成最终 SDK。生成后仍应让业务代码优先走 `src/lib/ov-client`，避免绕过鉴权头注入、telemetry 注入和错误归一化。
 
-前端默认连接地址为 http://127.0.0.1:1933。
+## 目录结构
 
-这个地址同时用于：
+核心目录：
 
-- 运行时 API 请求
-- OpenAPI 文档拉取与客户端生成
+```text
+src/routes/              TanStack Router 路由
+src/routes/<page>/       顶层页面模块
+src/routes/<page>/-*     页面私有组件、hooks、schemas 和工具函数
+src/components/ui/       共享基础 UI 组件
+src/components/          共享业务组件
+src/hooks/               共享 React hooks
+src/lib/ov-client/       OpenViking client 运行时适配层
+src/gen/ov-client/       OpenAPI 生成客户端
+src/i18n/locales/        zh-CN 和 en 翻译资源
+src/styles.css           全局样式和设计 token
+types/ov-server/         手工补充的服务端 typed result 子集
+```
 
-连接信息当前的存储方式：
+页面私有实现应优先放在对应路由目录下。所有用户可见文案都应同步维护 `src/i18n/locales/en.ts` 和 `src/i18n/locales/zh-CN.ts`。
 
-- X-API-Key 保存在 sessionStorage，键名为 ov_console_api_key
-- baseUrl、accountId、userId 保存在 localStorage
+## 静态部署
 
-页面初始化后，这些值会同步到 src/lib/ov-client/client.ts 导出的全局 ovClient。
+Web Studio 的部署产物是 `dist/` 静态文件。OpenViking Server 是独立运行依赖，不能被前端构建替代。
 
-如果需要重新生成客户端，gen-server-client 会执行以下流程：
+### 1. 启动必需的服务端
 
-1. 从 http://127.0.0.1:1933/openapi.json 拉取 OpenAPI 文档。
-2. 格式化中间文件。
-3. 清洗 operationId。
-4. 生成 src/gen/ov-client 下的最终 SDK。
+生产或类生产环境示例：
 
-生成产物目录是 src/gen/ov-client，不应手动修改。
+```bash
+openviking-server --host 0.0.0.0 --port 1933 --with-bot
+```
 
-## 请求层说明
+生产环境应在 `ov.conf` 中配置 `server.root_api_key`。如果 Web Studio 和 OpenViking Server 不在同源地址下，还需要把 Web Studio 的访问源加入 `server.cors_origins`。
 
-前端请求层分为两层：
+最小健康检查：
 
-### OpenAPI 生成层
+```bash
+curl https://ov-api.example.com/health
+curl https://ov-api.example.com/ready
+curl https://ov-api.example.com/bot/v1/health
+```
 
-- 目录：src/gen/ov-client
-- 作用：承接后端 OpenAPI 自动生成的类型和客户端
+`/bot/v1/health` 是 Web Studio 部署契约的一部分。只有 core server 健康、但 bot proxy 不健康时，会话界面仍然不可用。
 
-### 前端适配层
+### 2. 构建 Web Studio
 
-- 目录：src/lib/ov-client
-- 作用：补齐前端运行时约定，例如请求头注入、telemetry 注入和错误归一化
+构建时写入公开 API 地址：
 
-业务代码默认应通过 src/lib/ov-client 使用接口，而不是直接依赖生成层。
+```bash
+cd web-studio
+npm ci
+VITE_OV_BASE_URL=https://ov-api.example.com npm run build
+```
 
-## i18n 说明
+`VITE_OV_BASE_URL` 会作为浏览器中的初始服务端地址。用户仍可以在连接设置中修改它，但生产构建不应依赖本地默认值 `http://127.0.0.1:1933`。
 
-当前前端已经接入 i18next，翻译资源集中在 src/i18n/locales。
+### 3. 发布静态文件
 
-现阶段需要注意两点：
+任意静态文件服务器都可以托管 `dist/`，但必须把未知路由回退到 `index.html`，因为 Web Studio 使用客户端路由。
 
-- 当前 resources、sessions、operations 相关翻译中仍有占位文案。
-- 当这些页面进入真实实现时，应同步改写对应翻译资源，而不是保留“后续接入”类说明。
+最小 nginx 示例：
 
-## 文档分工
+```nginx
+server {
+    listen 80;
+    server_name web-studio.example.com;
 
-README 只负责说明项目用途、当前状态、目录入口和开发方式。
+    root /srv/web-studio/dist;
+    index index.html;
 
-实现规范、占位页维护规则、i18n 约束和页面实现边界，统一放在 [AGENTS.md](AGENTS.md)。如果你要修改前端实现细节，先看 [AGENTS.md](AGENTS.md)。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+如果希望前端和 API 同源，可以把 API 路径反向代理到 OpenViking Server：
+
+```nginx
+server {
+    listen 80;
+    server_name ov.example.com;
+
+    root /srv/web-studio/dist;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /bot/ {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /ready {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+同源部署时构建：
+
+```bash
+VITE_OV_BASE_URL=https://ov.example.com npm run build
+```
+
+### 4. Docker 服务端依赖
+
+官方 OpenViking 镜像可以作为 Web Studio 依赖的 API server：
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking:/app/.openviking \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
+```
+
+官方镜像默认会启动 VikingBot。用于 Web Studio 会话页时，不要传 `--without-bot`，也不要设置 `OPENVIKING_WITH_BOT=0`。
+
+Web Studio 静态文件仍需单独构建和托管，除非你的部署镜像或平台显式把 `web-studio/dist` 集成进去。
+
+## 常见问题
+
+### `/bot/v1/*` 返回 503
+
+服务端没有启用 `--with-bot`，或者 VikingBot gateway 启动失败。安装 bot 依赖后重启：
+
+```bash
+uv pip install -e ".[bot,dev]"
+openviking-server --with-bot
+```
+
+服务端日志中应能看到 `Bot API proxy enabled`。
+
+### 生成 client 时拉不到 OpenAPI
+
+`npm run gen-server-client` 当前固定读取 `http://127.0.0.1:1933/openapi.json`。先启动本地 server，并确保这个 server 版本就是前端要适配的目标版本。
+
+### 浏览器出现 CORS 错误
+
+如果 Web Studio 和 OpenViking Server 不同源，需要在 `ov.conf` 的 `server.cors_origins` 中加入 Web Studio 的访问源并重启 server。同源部署时，反向代理 `/api/`、`/bot/`、`/health` 和 `/ready` 到 OpenViking Server。
+
+### 连接弹窗反复打开
+
+通常是 API key 无效、key 与当前 server 不匹配，或填写的 `accountId`/`userId` 和 key 的权限范围不一致。先用相同 server URL 和 key 直接请求一个 API 验证，再更新 Web Studio 连接设置。
+
+## 相关文档
+
+- [AGENTS.md](AGENTS.md)：Web Studio 本地实现规则。
+- [WORKSPACE_IA.md](WORKSPACE_IA.md)：Web Studio 信息架构和产品规划。
+- [VIKINGBOT_STATUS.md](VIKINGBOT_STATUS.md)：sessions/chat 实现说明。
+- [OpenViking server deployment](../docs/en/guides/03-deployment.md)：服务端部署说明。
+- [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md)：Bot proxy 验证流程。
