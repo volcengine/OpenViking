@@ -38,14 +38,14 @@ fields:
       Do not collapse the user into a single narrow domain only because the latest conversation is about one topic.
 
       Good example:
-      # 用户个人信息
-      - 职业/工作范围：用户经常处理跨领域、跨受众或跨交付类型的工作，不应归纳为单一业务场景。
-      - 工作习惯：重视先判断任务阶段，再决定是继续探索、收口核验、交付还是交接。
-      - 沟通风格：偏好结论明确、依据清楚、风险点前置的回答。
+      # User Personal Information
+      - Profession/Work scope: The user frequently handles work across different domains, audiences, or delivery types, and should not be reduced to a single business scenario.
+      - Work habits: Values first determining the task stage, then deciding whether to continue exploring, wrap up and verify, deliver, or hand off.
+      - Communication style: Prefers answers with clear conclusions, clear evidence, and risk points raised upfront.
 
       Bad example:
-      # 用户个人信息
-      - 职业：某个最近话题对应的单一岗位
+      # User Personal Information
+      - Profession: A single role corresponding to a recent topic
 
       The bad example is too narrow if it is only supported by one recent topic while broader memories show many workstreams.
 
