@@ -99,11 +99,15 @@ export function DirectoryPickerDialog({
         <div className="flex flex-wrap items-center gap-1 text-sm">
           {breadcrumbs.map((crumb, i) => (
             <span key={crumb.uri} className="flex items-center gap-1">
-              {i > 0 && <ChevronRight className="size-3 text-muted-foreground" />}
+              {i > 0 && (
+                <ChevronRight className="size-3 text-muted-foreground" />
+              )}
               <button
                 type="button"
                 className={`rounded px-1 py-0.5 hover:bg-muted ${
-                  i === breadcrumbs.length - 1 ? 'font-medium text-foreground' : 'text-muted-foreground'
+                  i === breadcrumbs.length - 1
+                    ? 'font-medium text-foreground'
+                    : 'text-muted-foreground'
                 }`}
                 onClick={() => setBrowseUri(crumb.uri)}
               >
@@ -126,7 +130,8 @@ export function DirectoryPickerDialog({
           ) : dirQuery.data && dirQuery.data.length > 0 ? (
             <div className="p-1">
               {dirQuery.data.map((entry: VikingFsEntry) => {
-                const name = entry.uri.replace(/\/$/, '').split('/').pop() || entry.uri
+                const name =
+                  entry.uri.replace(/\/$/, '').split('/').pop() || entry.uri
                 return (
                   <button
                     key={entry.uri}
@@ -150,7 +155,8 @@ export function DirectoryPickerDialog({
 
         {/* Selected path */}
         <p className="truncate text-xs text-muted-foreground">
-          {t('dirPicker.selected')} <span className="font-mono">{normalizedUri}</span>
+          {t('dirPicker.selected')}{' '}
+          <span className="font-mono">{normalizedUri}</span>
         </p>
 
         <DialogFooter>

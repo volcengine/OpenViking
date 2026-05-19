@@ -30,7 +30,12 @@ interface TreeNodeProps {
 }
 
 const FolderIcon = ({ isOpen }: { isOpen: boolean }) => (
-  <svg className="size-5 shrink-0 text-foreground/70" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+  <svg
+    className="size-5 shrink-0 text-foreground/70"
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="none"
+  >
     {isOpen ? (
       <path d="M5 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 2h4a2 2 0 0 1 2 2v1M5 19h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2z" />
     ) : (
@@ -40,12 +45,27 @@ const FolderIcon = ({ isOpen }: { isOpen: boolean }) => (
 )
 
 const ChevronIcon = ({ isOpen }: { isOpen: boolean }) => (
-  <svg className={cn('size-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')} viewBox="0 0 20 20" fill="currentColor">
-    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 0 1 0-1.414L10.586 10 7.293 6.707a1 1 0 0 1 1.414-1.414l4 4a1 1 0 0 1 0 1.414l-4 4a1 1 0 0 1-1.414 0z" clipRule="evenodd" />
+  <svg
+    className={cn(
+      'size-4 shrink-0 text-muted-foreground transition-transform',
+      isOpen && 'rotate-90',
+    )}
+    viewBox="0 0 20 20"
+    fill="currentColor"
+  >
+    <path
+      fillRule="evenodd"
+      d="M7.293 14.707a1 1 0 0 1 0-1.414L10.586 10 7.293 6.707a1 1 0 0 1 1.414-1.414l4 4a1 1 0 0 1 0 1.414l-4 4a1 1 0 0 1-1.414 0z"
+      clipRule="evenodd"
+    />
   </svg>
 )
 
-const LIST_OPTS = { output: 'agent' as const, showAllHidden: true, nodeLimit: 200 }
+const LIST_OPTS = {
+  output: 'agent' as const,
+  showAllHidden: true,
+  nodeLimit: 200,
+}
 
 function sortEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
   return [...entries].sort((a, b) => {
@@ -98,8 +118,13 @@ function TreeNode({
 
   if (!entry.isDir) {
     return (
-      <div className="relative text-foreground" style={{ marginLeft: `${level * 16}px` }}>
-        {level > 0 && <span className="absolute -left-2 top-1/2 h-3 w-2 -translate-y-1/2 rounded-bl-md border-b border-l border-border" />}
+      <div
+        className="relative text-foreground"
+        style={{ marginLeft: `${level * 16}px` }}
+      >
+        {level > 0 && (
+          <span className="absolute -left-2 top-1/2 h-3 w-2 -translate-y-1/2 rounded-bl-md border-b border-l border-border" />
+        )}
         <div
           className={cn(
             'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
@@ -118,7 +143,9 @@ function TreeNode({
   return (
     <div className="relative text-foreground">
       <div className="relative" style={{ marginLeft: `${level * 16}px` }}>
-        {level > 0 && <span className="absolute -left-2 top-1/2 h-3 w-2 -translate-y-1/2 rounded-bl-md border-b border-l border-border" />}
+        {level > 0 && (
+          <span className="absolute -left-2 top-1/2 h-3 w-2 -translate-y-1/2 rounded-bl-md border-b border-l border-border" />
+        )}
         <div
           className={cn(
             'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
@@ -127,8 +154,18 @@ function TreeNode({
           onClick={handleSelect}
           onMouseEnter={handleMouseEnter}
         >
-          {(!data || children.length > 0) ? (
-            <button type="button" className="inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); handleToggle() }} aria-label={isOpen ? t('fileTree.collapse') : t('fileTree.expand')}>
+          {!data || children.length > 0 ? (
+            <button
+              type="button"
+              className="inline-flex shrink-0"
+              onClick={(e) => {
+                e.stopPropagation()
+                handleToggle()
+              }}
+              aria-label={
+                isOpen ? t('fileTree.collapse') : t('fileTree.expand')
+              }
+            >
               <ChevronIcon isOpen={isOpen} />
             </button>
           ) : (
@@ -138,23 +175,36 @@ function TreeNode({
           <span className="min-w-0 truncate text-sm">{entry.name}</span>
         </div>
       </div>
-      <div className={cn('grid transition-[grid-template-rows] duration-300 ease-in-out', isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows] duration-300 ease-in-out',
+          isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        )}
+      >
         <div className="overflow-hidden">
-          {isOpen && !data && <div className="px-2 py-1 text-xs text-muted-foreground" style={{ marginLeft: `${(level + 1) * 16}px` }}>{t('fileTree.loading')}</div>}
-          {isOpen && children.map((child) => (
-            <TreeNodeMemo
-              key={child.uri}
-              entry={child}
-              level={level + 1}
-              currentUri={currentUri}
-              selectedFileUri={selectedFileUri}
-              expandedKeys={expandedKeys}
-              onExpandedKeysChange={onExpandedKeysChange}
-              onSelectDirectory={onSelectDirectory}
-              onSelectFile={onSelectFile}
-              prefetch={prefetch}
-            />
-          ))}
+          {isOpen && !data && (
+            <div
+              className="px-2 py-1 text-xs text-muted-foreground"
+              style={{ marginLeft: `${(level + 1) * 16}px` }}
+            >
+              {t('fileTree.loading')}
+            </div>
+          )}
+          {isOpen &&
+            children.map((child) => (
+              <TreeNodeMemo
+                key={child.uri}
+                entry={child}
+                level={level + 1}
+                currentUri={currentUri}
+                selectedFileUri={selectedFileUri}
+                expandedKeys={expandedKeys}
+                onExpandedKeysChange={onExpandedKeysChange}
+                onSelectDirectory={onSelectDirectory}
+                onSelectFile={onSelectFile}
+                prefetch={prefetch}
+              />
+            ))}
         </div>
       </div>
     </div>
@@ -174,7 +224,14 @@ const ROOT_ENTRY: VikingFsEntry = {
   abstract: '',
 }
 
-export function FileTree({ currentUri, selectedFileUri, expandedKeys, onExpandedKeysChange, onSelectDirectory, onSelectFile }: FileTreeProps) {
+export function FileTree({
+  currentUri,
+  selectedFileUri,
+  expandedKeys,
+  onExpandedKeysChange,
+  onSelectDirectory,
+  onSelectFile,
+}: FileTreeProps) {
   const { prefetch } = usePrefetchVikingFsList()
 
   return (

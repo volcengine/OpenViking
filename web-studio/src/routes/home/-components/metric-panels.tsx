@@ -1,11 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ComponentType, CSSProperties, ReactNode } from 'react'
-import {
-  Coins,
-  Database,
-  Search,
-  Users,
-} from 'lucide-react'
+import { Coins, Database, Search, Users } from 'lucide-react'
 
 import { Skeleton } from '#/components/ui/skeleton'
 
@@ -17,16 +12,9 @@ import type {
   RetrievalCounts,
   TokenCounts,
 } from '../-types/dashboard'
-import {
-  asNumber,
-  formatNumber,
-  formatTimestamp,
-} from '../-lib/format'
+import { asNumber, formatNumber, formatTimestamp } from '../-lib/format'
 import { normalizeAgents } from '../-lib/normalize'
-import {
-  DetailRow,
-  Panel,
-} from './panel'
+import { DetailRow, Panel } from './panel'
 
 function parseDisplayNumber(value: string): number | null {
   const normalized = value.replace(/,/g, '').trim()
@@ -65,7 +53,10 @@ function MetricPanel({
     if (!el) return
 
     const target = parseDisplayNumber(value)
-    if (target === null || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (
+      target === null ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
       el.textContent = value
       previousValueRef.current = value
       return
@@ -76,9 +67,10 @@ function MetricPanel({
       return
     }
 
-    const current = previousValueRef.current === null
-      ? 0
-      : parseDisplayNumber(previousValueRef.current) ?? target
+    const current =
+      previousValueRef.current === null
+        ? 0
+        : (parseDisplayNumber(previousValueRef.current) ?? target)
     previousValueRef.current = value
 
     const startedAt = performance.now()
@@ -105,14 +97,19 @@ function MetricPanel({
       <div>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-normal text-[oklch(0.42_0.04_232)] dark:text-[oklch(0.8_0.03_232)]">{title}</h2>
+            <h2 className="truncate text-sm font-semibold tracking-normal text-[oklch(0.42_0.04_232)] dark:text-[oklch(0.8_0.03_232)]">
+              {title}
+            </h2>
             <p className="sr-only">{description}</p>
           </div>
           <span
             className="flex size-7 shrink-0 items-center justify-center rounded-full"
             style={{ backgroundColor: HOME_ACCENT_COLORS.iconSoft }}
           >
-            <Icon className="size-3.5" style={{ color: HOME_ACCENT_COLORS.icon }} />
+            <Icon
+              className="size-3.5"
+              style={{ color: HOME_ACCENT_COLORS.icon }}
+            />
           </span>
         </div>
 
@@ -127,7 +124,11 @@ function MetricPanel({
         )}
       </div>
 
-      {children ? <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(92px,1fr))] gap-2">{children}</div> : null}
+      {children ? (
+        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(92px,1fr))] gap-2">
+          {children}
+        </div>
+      ) : null}
     </Panel>
   )
 }
@@ -159,9 +160,18 @@ export function ContextDataPanel({
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
       ) : (
         <>
-          <DetailRow label={t('contextData.files')} value={formatNumber(data?.files)} />
-          <DetailRow label={t('contextData.skills')} value={formatNumber(data?.skills)} />
-          <DetailRow label={t('contextData.memories')} value={formatNumber(data?.memories)} />
+          <DetailRow
+            label={t('contextData.files')}
+            value={formatNumber(data?.files)}
+          />
+          <DetailRow
+            label={t('contextData.skills')}
+            value={formatNumber(data?.skills)}
+          />
+          <DetailRow
+            label={t('contextData.memories')}
+            value={formatNumber(data?.memories)}
+          />
         </>
       )}
     </MetricPanel>
@@ -195,9 +205,18 @@ export function TodayTokensPanel({
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
       ) : (
         <>
-          <DetailRow label={t('todayTokens.vlmInput')} value={formatNumber(data?.vlm_input)} />
-          <DetailRow label={t('todayTokens.vlmOutput')} value={formatNumber(data?.vlm_output)} />
-          <DetailRow label={t('todayTokens.embeddingInput')} value={formatNumber(data?.embedding_input)} />
+          <DetailRow
+            label={t('todayTokens.vlmInput')}
+            value={formatNumber(data?.vlm_input)}
+          />
+          <DetailRow
+            label={t('todayTokens.vlmOutput')}
+            value={formatNumber(data?.vlm_output)}
+          />
+          <DetailRow
+            label={t('todayTokens.embeddingInput')}
+            value={formatNumber(data?.embedding_input)}
+          />
         </>
       )}
     </MetricPanel>
@@ -231,8 +250,14 @@ export function TodayRetrievalsPanel({
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
       ) : (
         <>
-          <DetailRow label={t('todayRetrievals.find')} value={formatNumber(data?.find)} />
-          <DetailRow label={t('todayRetrievals.search')} value={formatNumber(data?.search)} />
+          <DetailRow
+            label={t('todayRetrievals.find')}
+            value={formatNumber(data?.find)}
+          />
+          <DetailRow
+            label={t('todayRetrievals.search')}
+            value={formatNumber(data?.search)}
+          />
         </>
       )}
     </MetricPanel>
@@ -266,7 +291,9 @@ export function AgentAccessPanel({
       {disabled ? (
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
       ) : agents.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t('agentAccess.empty')}</p>
+        <p className="text-xs text-muted-foreground">
+          {t('agentAccess.empty')}
+        </p>
       ) : (
         <div className="grid gap-2">
           {agents.slice(0, 3).map((agent) => (
@@ -274,7 +301,9 @@ export function AgentAccessPanel({
               key={agent.agent_id}
               className="flex min-h-8 items-center justify-between gap-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]"
             >
-              <span className="min-w-0 truncate font-medium">{agent.agent_id}</span>
+              <span className="min-w-0 truncate font-medium">
+                {agent.agent_id}
+              </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {formatTimestamp(agent.last_seen_at || '')}
               </span>

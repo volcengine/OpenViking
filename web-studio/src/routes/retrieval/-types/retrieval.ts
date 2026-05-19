@@ -1,9 +1,13 @@
-import type { RESULT_COUNT_OPTIONS, RETRIEVAL_MODES, RETRIEVAL_SCOPES } from '../-constants/retrieval'
+import type {
+  RESULT_COUNT_OPTIONS,
+  RETRIEVAL_MODES,
+  RETRIEVAL_SCOPES,
+} from '../-constants/retrieval'
 import type { FindContextType, FindResultItem } from '#/lib/retrieval'
 
-export type RetrievalMode = typeof RETRIEVAL_MODES[number]
-export type RetrievalScope = typeof RETRIEVAL_SCOPES[number]
-export type ResultCountOption = typeof RESULT_COUNT_OPTIONS[number]
+export type RetrievalMode = (typeof RETRIEVAL_MODES)[number]
+export type RetrievalScope = (typeof RETRIEVAL_SCOPES)[number]
+export type ResultCountOption = (typeof RESULT_COUNT_OPTIONS)[number]
 
 export type RetrievalSearch = {
   q?: string

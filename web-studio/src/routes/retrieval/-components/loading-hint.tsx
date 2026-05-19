@@ -18,7 +18,10 @@ export function LoadingHint() {
   return (
     <div className="flex min-h-80 flex-col items-center justify-center gap-3">
       <Loader2 className="size-6 animate-spin text-muted-foreground/50" />
-      <p key={hintIndex} className="animate-palette-in text-xs text-muted-foreground/60">
+      <p
+        key={hintIndex}
+        className="animate-palette-in text-xs text-muted-foreground/60"
+      >
         {t(LOADING_HINT_KEYS[hintIndex])}
       </p>
     </div>

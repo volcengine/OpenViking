@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, FolderOpen, RefreshCcw, Search, Upload } from 'lucide-react'
+import {
+  ChevronRight,
+  FolderOpen,
+  RefreshCcw,
+  Search,
+  Upload,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 
@@ -60,10 +66,7 @@ export function VikingFileManager({
   onUriChange,
 }: VikingFileManagerProps) {
   const { t } = useTranslation('resources')
-  const {
-    tasks,
-    hasActiveTasks,
-  } = useResourceUpload()
+  const { tasks, hasActiveTasks } = useResourceUpload()
   const [currentUri, setCurrentUri] = useState(
     normalizeDirUri(initialUri || 'viking://'),
   )
@@ -72,7 +75,9 @@ export function VikingFileManager({
   )
   const [selectedFile, setSelectedFile] = useState<VikingFsEntry | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(initialUploadOpen ?? false)
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(
+    initialUploadOpen ?? false,
+  )
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
 
   useEffect(() => {
@@ -203,24 +208,27 @@ export function VikingFileManager({
         <span>{` ${t('processingNotice.suffix')}`}</span>
       </div>,
       {
-      position: 'top-center',
-      duration: 2500,
-      className: 'w-auto max-w-[min(94vw,720px)]',
-      onAutoClose: () => {
-        processingToastIdRef.current = null
-      },
-      onDismiss: () => {
-        processingToastIdRef.current = null
-      },
+        position: 'top-center',
+        duration: 2500,
+        className: 'w-auto max-w-[min(94vw,720px)]',
+        onAutoClose: () => {
+          processingToastIdRef.current = null
+        },
+        onDismiss: () => {
+          processingToastIdRef.current = null
+        },
       },
     )
   }, [hasActiveTasks])
 
-  useEffect(() => () => {
-    if (processingToastIdRef.current !== null) {
-      toast.dismiss(processingToastIdRef.current)
-    }
-  }, [])
+  useEffect(
+    () => () => {
+      if (processingToastIdRef.current !== null) {
+        toast.dismiss(processingToastIdRef.current)
+      }
+    },
+    [],
+  )
 
   const handleRefresh = async () => {
     await invalidateList()
@@ -264,7 +272,10 @@ export function VikingFileManager({
     const startWidth = treeWidthRef.current
 
     const onMove = (ev: MouseEvent) => {
-      const newWidth = Math.min(Math.max(startWidth + ev.clientX - startX, 160), 600)
+      const newWidth = Math.min(
+        Math.max(startWidth + ev.clientX - startX, 160),
+        600,
+      )
       setTreeWidth(newWidth)
     }
     const onUp = () => {
@@ -284,10 +295,22 @@ export function VikingFileManager({
     <div className="flex h-10 items-center gap-1 border-b px-3">
       {!showTree && (
         <>
-          <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            title={t('toolbar.refresh')}
+            onClick={() => void handleRefresh()}
+          >
             <RefreshCcw className="size-4" />
           </Button>
-          <Button variant="secondary" size="icon" className="h-8 w-fit px-2" title={t('toolbar.search')} onClick={() => setPaletteOpen(true)}>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-8 w-fit px-2"
+            title={t('toolbar.search')}
+            onClick={() => setPaletteOpen(true)}
+          >
             <Search className="size-4" />
           </Button>
           <div className="mx-1 h-4 w-px bg-border" />
@@ -338,9 +361,18 @@ export function VikingFileManager({
       <div className="flex min-h-0 flex-1">
         {showTree && (
           <>
-            <section className="flex min-h-0 flex-col bg-muted/30" style={{ width: treeWidth, minWidth: treeWidth }}>
+            <section
+              className="flex min-h-0 flex-col bg-muted/30"
+              style={{ width: treeWidth, minWidth: treeWidth }}
+            >
               <div className="flex h-10 items-center gap-1 overflow-hidden border-b px-2">
-                <Button variant="ghost" size="icon" className="size-7" title={t('toolbar.refresh')} onClick={() => void handleRefresh()}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  title={t('toolbar.refresh')}
+                  onClick={() => void handleRefresh()}
+                >
                   <RefreshCcw className="size-4" />
                 </Button>
                 <div className="ml-auto flex w-fit items-center gap-1.5">
@@ -410,8 +442,15 @@ export function VikingFileManager({
               {entries.length === 0 && !listQuery.isLoading ? (
                 <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
                   <FolderOpen className="size-16 text-muted-foreground/20" />
-                  <p className="text-sm text-muted-foreground">{t('emptyState.title')}</p>
-                  <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setUploadDialogOpen(true)}>
+                  <p className="text-sm text-muted-foreground">
+                    {t('emptyState.title')}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="gap-1.5"
+                    onClick={() => setUploadDialogOpen(true)}
+                  >
                     <Upload className="size-4" />
                     {t('emptyState.upload')}
                   </Button>
@@ -433,15 +472,22 @@ export function VikingFileManager({
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onNavigate={handleNavigateFromSearch}
-        onNavigateDir={(uri) => { updateUri(uri); setPaletteOpen(false) }}
+        onNavigateDir={(uri) => {
+          updateUri(uri)
+          setPaletteOpen(false)
+        }}
         scopeUri={currentUri}
       />
 
       <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
         <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
           <DialogHeader className="border-b px-6 py-5">
-            <DialogTitle className="text-xl">{t('uploadDialog.title')}</DialogTitle>
-            <DialogDescription>{t('uploadDialog.description')}</DialogDescription>
+            <DialogTitle className="text-xl">
+              {t('uploadDialog.title')}
+            </DialogTitle>
+            <DialogDescription>
+              {t('uploadDialog.description')}
+            </DialogDescription>
           </DialogHeader>
           <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
             <AddResourceForm onSubmitted={handleUploadSubmitted} />

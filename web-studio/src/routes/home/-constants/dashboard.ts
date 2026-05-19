@@ -12,7 +12,20 @@ export const HOME_ACCENT_COLORS = {
   iconSoft: 'oklch(0.68 0.14 232 / 0.14)',
 }
 
-export const HEATMAP_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+export const HEATMAP_MONTH_LABELS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
 export const HEATMAP_WEEK_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
 export const HEATMAP_COLOR_STOPS = [
   'oklch(0.82 0.07 232)',

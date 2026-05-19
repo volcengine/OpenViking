@@ -41,7 +41,8 @@ const zhCN = {
       showAdvancedIdentityFields: '显示高级身份字段',
     },
     errorBoundary: {
-      description: '路由渲染过程中出现未处理异常。可以先重试一次；如果问题持续，查看下方错误信息继续排查。',
+      description:
+        '路由渲染过程中出现未处理异常。可以先重试一次；如果问题持续，查看下方错误信息继续排查。',
       reload: '刷新页面',
       retry: '重试',
       title: '页面发生错误',
@@ -62,7 +63,8 @@ const zhCN = {
   },
   connection: {
     devMode: {
-      description: '当前服务使用隐式身份，通常不需要填写 account、user 和 API key。',
+      description:
+        '当前服务使用隐式身份，通常不需要填写 account、user 和 API key。',
       title: '已检测到开发模式',
     },
     dialog: {
@@ -97,12 +99,14 @@ const zhCN = {
   },
   home: {
     agentAccess: {
-      description: '去重统计今日访问过 OpenViking 的 Agent，并展示最近访问时间。',
+      description:
+        '去重统计今日访问过 OpenViking 的 Agent，并展示最近访问时间。',
       empty: '今日暂无 Agent 访问',
       title: 'Agent 访问数',
     },
     contextCommits: {
-      description: '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',
+      description:
+        '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',
       empty: '过去一年暂无上下文提交',
       hourRange: '{{start}}-{{end}}',
       legend: {
@@ -133,14 +137,16 @@ const zhCN = {
       },
     },
     contextData: {
-      description: '包含文件、技能、用户记忆与 Agent 记忆，用于衡量当前上下文资源规模。',
+      description:
+        '包含文件、技能、用户记忆与 Agent 记忆，用于衡量当前上下文资源规模。',
       files: '文件',
       memories: '记忆',
       skills: '技能',
       title: '上下文数据量',
     },
     menuIntro: {
-      description: '左侧导航可折叠；常用入口包括总览、上下文管理、目录递归检索、请求日志、设置、GitHub 和文档站。',
+      description:
+        '左侧导航可折叠；常用入口包括总览、上下文管理、目录递归检索、请求日志、设置、GitHub 和文档站。',
       items: {
         github: {
           description: '打开 OpenViking 源码仓库。',
@@ -174,14 +180,16 @@ const zhCN = {
       title: 'Overview + 整体菜单介绍',
     },
     page: {
-      description: '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
+      description:
+        '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
       eyebrow: 'OpenViking Studio',
       settings: '连接与设置',
       title: 'Overview',
     },
     requestFailed: '请求失败',
     todayRetrievals: {
-      description: '展示用户或 Agent 今日使用语义检索 find() 和 search() 的成功调用次数，每天零点刷新。',
+      description:
+        '展示用户或 Agent 今日使用语义检索 find() 和 search() 的成功调用次数，每天零点刷新。',
       find: 'find()',
       search: 'search()',
       title: '今日检索次数',
@@ -194,7 +202,8 @@ const zhCN = {
       vlmOutput: 'VLM output tokens',
     },
     tokenTrend: {
-      description: '展示最近 14 天每日 token 消耗，包含 VLM 输入、VLM 输出和 Embedding 输入。',
+      description:
+        '展示最近 14 天每日 token 消耗，包含 VLM 输入、VLM 输出和 Embedding 输入。',
       empty: '最近 14 天暂无 token 消耗',
       title: 'tokens 总消耗统计',
     },
@@ -272,7 +281,8 @@ const zhCN = {
     dropzone: {
       title: '拖拽文件到此处，或点击选择文件',
       hint: '每次最多上传 10 个文件。',
-      supportedFormats: '支持 PDF、Word、PPTX、Excel、Markdown、代码文件、图片等',
+      supportedFormats:
+        '支持 PDF、Word、PPTX、Excel、Markdown、代码文件、图片等',
     },
     fileInfo: {
       name: '文件',
@@ -316,9 +326,11 @@ const zhCN = {
     'remoteUrl.placeholder': 'https://github.com/org/repo',
     'remoteUrl.hint': 'HTTP(S) 链接、Git 仓库地址或其他远程资源地址。',
     strict: '严格模式',
-    'strict.hint': '开启时，服务器会拒绝不支持或无法识别类型的文件，而非静默跳过。',
+    'strict.hint':
+      '开启时，服务器会拒绝不支持或无法识别类型的文件，而非静默跳过。',
     directlyUploadMedia: '直接上传媒体文件',
-    'directlyUploadMedia.hint': '开启时，媒体文件（图片、音频、视频）原样存储。关闭后，媒体文件会先通过 AI 视觉/音频管道提取内容再存储。',
+    'directlyUploadMedia.hint':
+      '开启时，媒体文件（图片、音频、视频）原样存储。关闭后，媒体文件会先通过 AI 视觉/音频管道提取内容再存储。',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',

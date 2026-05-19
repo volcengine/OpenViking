@@ -1,8 +1,19 @@
 import { useMemo, useRef, useCallback, useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchFileContent, fetchFind, fetchFindAllTypes, fetchFsList, fetchFsStat, fetchFsTree } from '../-lib/api'
-import { detectFileType, normalizeDirUri, shouldAutoRead } from '../-lib/normalize'
+import {
+  fetchFileContent,
+  fetchFind,
+  fetchFindAllTypes,
+  fetchFsList,
+  fetchFsStat,
+  fetchFsTree,
+} from '../-lib/api'
+import {
+  detectFileType,
+  normalizeDirUri,
+  shouldAutoRead,
+} from '../-lib/normalize'
 import type {
   GroupedFindResult,
   VikingFsEntry,
@@ -15,10 +26,18 @@ import type {
 
 const DEFAULT_QUERY_OPTS = { staleTime: 30_000 }
 
-const PREFETCH_OPTS = { output: 'agent' as const, showAllHidden: true, nodeLimit: 200 }
+const PREFETCH_OPTS = {
+  output: 'agent' as const,
+  showAllHidden: true,
+  nodeLimit: 200,
+}
 const PREFETCH_STALE = 60_000
 
-export function useVikingFsList(uri: string, options: VikingListQueryOptions = {}, enabled = true) {
+export function useVikingFsList(
+  uri: string,
+  options: VikingListQueryOptions = {},
+  enabled = true,
+) {
   return useQuery({
     queryKey: ['viking-fs-ls', normalizeDirUri(uri), options],
     queryFn: () => fetchFsList(normalizeDirUri(uri), options),
@@ -27,7 +46,11 @@ export function useVikingFsList(uri: string, options: VikingListQueryOptions = {
   })
 }
 
-export function useVikingFsTree(rootUri: string, options: VikingTreeQueryOptions = {}, enabled = true) {
+export function useVikingFsTree(
+  rootUri: string,
+  options: VikingTreeQueryOptions = {},
+  enabled = true,
+) {
   return useQuery({
     queryKey: ['viking-fs-tree', normalizeDirUri(rootUri), options],
     queryFn: () => fetchFsTree(normalizeDirUri(rootUri), options),
@@ -40,19 +63,22 @@ export function usePrefetchVikingFsList() {
   const client = useQueryClient()
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const prefetch = useCallback((uri: string) => {
-    const key = ['viking-fs-ls', normalizeDirUri(uri), PREFETCH_OPTS]
-    if (client.getQueryState(key)?.data) return
+  const prefetch = useCallback(
+    (uri: string) => {
+      const key = ['viking-fs-ls', normalizeDirUri(uri), PREFETCH_OPTS]
+      if (client.getQueryState(key)?.data) return
 
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      client.prefetchQuery({
-        queryKey: key,
-        queryFn: () => fetchFsList(normalizeDirUri(uri), PREFETCH_OPTS),
-        staleTime: PREFETCH_STALE,
-      })
-    }, 200)
-  }, [client])
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => {
+        client.prefetchQuery({
+          queryKey: key,
+          queryFn: () => fetchFsList(normalizeDirUri(uri), PREFETCH_OPTS),
+          staleTime: PREFETCH_STALE,
+        })
+      }, 200)
+    },
+    [client],
+  )
 
   return { prefetch }
 }
@@ -64,10 +90,13 @@ export function useVikingFilePreview(
 ) {
   const maxAutoReadBytes = policy.maxAutoReadBytes ?? 2 * 1024 * 1024
   const defaultReadLimit = policy.defaultReadLimit ?? 500
-  const effectiveReadOptions = useMemo(() => ({
-    offset: readOptions.offset ?? 0,
-    limit: readOptions.limit ?? defaultReadLimit,
-  }), [readOptions.offset, readOptions.limit, defaultReadLimit])
+  const effectiveReadOptions = useMemo(
+    () => ({
+      offset: readOptions.offset ?? 0,
+      limit: readOptions.limit ?? defaultReadLimit,
+    }),
+    [readOptions.offset, readOptions.limit, defaultReadLimit],
+  )
 
   const autoRead = useMemo(
     () =>

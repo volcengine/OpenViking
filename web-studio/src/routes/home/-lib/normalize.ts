@@ -7,18 +7,12 @@ import type {
   ConsoleContextCommitItem,
   ConsoleTokenSeriesItem,
 } from '@ov-server/api/v1/console'
-import type {
-  CommitHeatmapStats,
-  HeatMapDayValue,
-} from '../-types/dashboard'
-import {
-  asArray,
-  asNumber,
-  asRecord,
-  asString,
-} from './format'
+import type { CommitHeatmapStats, HeatMapDayValue } from '../-types/dashboard'
+import { asArray, asNumber, asRecord, asString } from './format'
 
-export function normalizeTokenSeries(items: unknown): Array<Required<ConsoleTokenSeriesItem>> {
+export function normalizeTokenSeries(
+  items: unknown,
+): Array<Required<ConsoleTokenSeriesItem>> {
   return asArray(items).map((raw) => {
     const record = asRecord(raw)
     const vlmInput = asNumber(record.vlm_input)
@@ -40,35 +34,45 @@ function percentile(sortedValues: number[], ratio: number): number {
   return sortedValues[Math.max(0, Math.min(sortedValues.length - 1, index))]
 }
 
-export function buildHeatmapPanelColors(items: HeatMapDayValue[]): Record<number, string> {
-  const nonZeroCounts = Array.from(new Set(
-    items
-      .map((item) => item.count)
-      .filter((count) => count > 0)
-      .sort((a, b) => a - b),
-  ))
+export function buildHeatmapPanelColors(
+  items: HeatMapDayValue[],
+): Record<number, string> {
+  const nonZeroCounts = Array.from(
+    new Set(
+      items
+        .map((item) => item.count)
+        .filter((count) => count > 0)
+        .sort((a, b) => a - b),
+    ),
+  )
 
   if (nonZeroCounts.length === 0) {
     return { 0: HEATMAP_EMPTY_COLOR }
   }
 
-  const thresholds = Array.from(new Set([
-    Math.max(1, percentile(nonZeroCounts, 0.25)),
-    Math.max(1, percentile(nonZeroCounts, 0.5)),
-    Math.max(1, percentile(nonZeroCounts, 0.75)),
-    Math.max(1, percentile(nonZeroCounts, 0.9)),
-  ])).sort((a, b) => a - b)
+  const thresholds = Array.from(
+    new Set([
+      Math.max(1, percentile(nonZeroCounts, 0.25)),
+      Math.max(1, percentile(nonZeroCounts, 0.5)),
+      Math.max(1, percentile(nonZeroCounts, 0.75)),
+      Math.max(1, percentile(nonZeroCounts, 0.9)),
+    ]),
+  ).sort((a, b) => a - b)
 
   return thresholds.reduce<Record<number, string>>(
     (colors, threshold, index) => ({
       ...colors,
-      [threshold]: HEATMAP_COLOR_STOPS[Math.min(index, HEATMAP_COLOR_STOPS.length - 1)],
+      [threshold]:
+        HEATMAP_COLOR_STOPS[Math.min(index, HEATMAP_COLOR_STOPS.length - 1)],
     }),
     { 0: HEATMAP_EMPTY_COLOR },
   )
 }
 
-export function getHeatmapFillColor(count: number, panelColors: Record<number, string>): string {
+export function getHeatmapFillColor(
+  count: number,
+  panelColors: Record<number, string>,
+): string {
   if (count <= 0) return 'var(--heatmap-empty)'
 
   const thresholds = Object.keys(panelColors)
@@ -83,25 +87,30 @@ export function getHeatmapFillColor(count: number, panelColors: Record<number, s
 
   return matched === null
     ? HEATMAP_COLOR_STOPS[0]
-    : panelColors[matched] ?? HEATMAP_COLOR_STOPS[0]
+    : (panelColors[matched] ?? HEATMAP_COLOR_STOPS[0])
 }
 
-export function computeCommitHeatmapStats(items: HeatMapDayValue[]): CommitHeatmapStats {
-  return items.reduce<CommitHeatmapStats>((stats, item) => {
-    if (item.count <= 0) return stats
+export function computeCommitHeatmapStats(
+  items: HeatMapDayValue[],
+): CommitHeatmapStats {
+  return items.reduce<CommitHeatmapStats>(
+    (stats, item) => {
+      if (item.count <= 0) return stats
 
-    return {
-      activeDays: stats.activeDays + 1,
-      peakCount: item.count > stats.peakCount ? item.count : stats.peakCount,
-      peakDate: item.count > stats.peakCount ? item.date : stats.peakDate,
-      recentDate: item.date > stats.recentDate ? item.date : stats.recentDate,
-    }
-  }, {
-    activeDays: 0,
-    peakCount: 0,
-    peakDate: '',
-    recentDate: '',
-  })
+      return {
+        activeDays: stats.activeDays + 1,
+        peakCount: item.count > stats.peakCount ? item.count : stats.peakCount,
+        peakDate: item.count > stats.peakCount ? item.date : stats.peakDate,
+        recentDate: item.date > stats.recentDate ? item.date : stats.recentDate,
+      }
+    },
+    {
+      activeDays: 0,
+      peakCount: 0,
+      peakDate: '',
+      recentDate: '',
+    },
+  )
 }
 
 export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
@@ -125,7 +134,8 @@ export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
       add_skill: existing.add_skill + item.add_skill,
       date: item.date,
       hour: 0,
-      session_add_message: existing.session_add_message + item.session_add_message,
+      session_add_message:
+        existing.session_add_message + item.session_add_message,
       session_commit: existing.session_commit + item.session_commit,
       total: existing.total + item.total,
     })
@@ -140,7 +150,9 @@ export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
     }))
 }
 
-export function normalizeCommitItems(items: unknown): Array<Required<ConsoleContextCommitItem>> {
+export function normalizeCommitItems(
+  items: unknown,
+): Array<Required<ConsoleContextCommitItem>> {
   return asArray(items).map((raw) => {
     const record = asRecord(raw)
     const addResource = asNumber(record.add_resource)
@@ -154,7 +166,9 @@ export function normalizeCommitItems(items: unknown): Array<Required<ConsoleCont
       hour: asNumber(record.hour),
       session_add_message: sessionAddMessage,
       session_commit: sessionCommit,
-      total: asNumber(record.total) || addResource + addSkill + sessionAddMessage + sessionCommit,
+      total:
+        asNumber(record.total) ||
+        addResource + addSkill + sessionAddMessage + sessionCommit,
     }
   })
 }

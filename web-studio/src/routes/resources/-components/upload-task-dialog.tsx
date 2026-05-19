@@ -96,10 +96,14 @@ export function UploadTaskDialog({
                 {sortedTasks.map((task) => {
                   const isFailed = task.status === 'failed'
                   const isExpanded = expandedTaskIds.has(task.id)
-                  const hasDetail = isFailed && (task.errorCode || task.errorMessage)
+                  const hasDetail =
+                    isFailed && (task.errorCode || task.errorMessage)
 
                   return (
-                    <div key={task.id} className="border-b border-border/50 last:border-b-0">
+                    <div
+                      key={task.id}
+                      className="border-b border-border/50 last:border-b-0"
+                    >
                       <div
                         className={cn(
                           'grid grid-cols-[minmax(0,1fr)_140px_96px] gap-4 px-4 py-3 text-sm',
@@ -109,7 +113,9 @@ export function UploadTaskDialog({
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-                            <span className="truncate font-medium">{task.fileName}</span>
+                            <span className="truncate font-medium">
+                              {task.fileName}
+                            </span>
                           </div>
                         </div>
 
@@ -132,17 +138,23 @@ export function UploadTaskDialog({
                         </div>
 
                         <div className="flex items-center text-muted-foreground">
-                          {typeof task.fileSize === 'number' ? formatFileSize(task.fileSize) : '-'}
+                          {typeof task.fileSize === 'number'
+                            ? formatFileSize(task.fileSize)
+                            : '-'}
                         </div>
                       </div>
 
                       {hasDetail && isExpanded ? (
                         <div className="space-y-1 border-t border-border/40 bg-rose-500/6 px-10 py-3 text-sm">
                           {task.errorCode ? (
-                            <div className="font-mono text-black">{task.errorCode}</div>
+                            <div className="font-mono text-black">
+                              {task.errorCode}
+                            </div>
                           ) : null}
                           {task.errorMessage ? (
-                            <div className="text-black">{task.errorMessage}</div>
+                            <div className="text-black">
+                              {task.errorMessage}
+                            </div>
                           ) : null}
                         </div>
                       ) : null}

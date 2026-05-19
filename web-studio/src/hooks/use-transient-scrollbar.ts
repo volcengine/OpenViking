@@ -17,11 +17,14 @@ export function useTransientScrollbar(hideDelay = 700) {
     }, hideDelay)
   }, [hideDelay])
 
-  useEffect(() => () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-    }
-  }, [])
+  useEffect(
+    () => () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+    },
+    [],
+  )
 
   return { isScrolling, onScroll }
 }

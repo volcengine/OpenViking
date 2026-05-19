@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronRight, FileText, Folder, Loader2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  ChevronRight,
+  FileText,
+  Folder,
+  Loader2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
@@ -29,8 +35,16 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
 
   const leftParent = parentUri(focusUri)
   const isRootFocus = focusUri === VIKING_ROOT_URI
-  const leftQuery = useVikingFsList(leftParent, { output: 'agent', showAllHidden: true, nodeLimit: 200 })
-  const rightQuery = useVikingFsList(focusUri, { output: 'agent', showAllHidden: true, nodeLimit: 200 })
+  const leftQuery = useVikingFsList(leftParent, {
+    output: 'agent',
+    showAllHidden: true,
+    nodeLimit: 200,
+  })
+  const rightQuery = useVikingFsList(focusUri, {
+    output: 'agent',
+    showAllHidden: true,
+    nodeLimit: 200,
+  })
 
   const leftDirs = useMemo(
     () => (leftQuery.data?.entries ?? []).filter((e) => e.isDir),
@@ -103,9 +117,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
         }
         case 'Enter': {
           const nextDir = rightDirs.at(leftIndex)
-          const selectedUri = nextDir
-            ? normalizeDirUri(nextDir.uri)
-            : focusUri
+          const selectedUri = nextDir ? normalizeDirUri(nextDir.uri) : focusUri
           onConfirm(selectedUri)
           return true
         }
@@ -158,11 +170,12 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
         return true
       }
       case 'Enter': {
-        const selectedUri = activeCol === 'left'
-          ? focusUri
-          : rightDirs[rightIndex]
-            ? normalizeDirUri(rightDirs[rightIndex].uri)
-            : focusUri
+        const selectedUri =
+          activeCol === 'left'
+            ? focusUri
+            : rightDirs[rightIndex]
+              ? normalizeDirUri(rightDirs[rightIndex].uri)
+              : focusUri
         onConfirm(selectedUri)
         return true
       }
@@ -187,7 +200,9 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
     return () => document.removeEventListener('keydown', handler)
   })
 
-  const isLoading = visibleSingleColumn ? rightQuery.isLoading : leftQuery.isLoading
+  const isLoading = visibleSingleColumn
+    ? rightQuery.isLoading
+    : leftQuery.isLoading
   const canGoBack = focusUri !== VIKING_ROOT_URI
 
   const handleGoBack = () => {
@@ -222,12 +237,11 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
         ref={containerRef}
         className="flex min-h-0 flex-1 min-w-0 justify-start overflow-hidden bg-[linear-gradient(180deg,color-mix(in_oklch,var(--muted)_35%,transparent),transparent_18%)]"
       >
-      {isLoading ? (
-        <div className="flex flex-1 items-center justify-center">
-          <Loader2 className="size-4 animate-spin text-muted-foreground" />
-        </div>
-      ) : (
-        visibleSingleColumn ? (
+        {isLoading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : visibleSingleColumn ? (
           <DirColumn
             className="min-w-0 flex-1"
             label={VIKING_ROOT_URI}
@@ -244,7 +258,11 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
           <>
             <DirColumn
               className="w-[clamp(15rem,28vw,18rem)] shrink-0"
-              label={leftParent === VIKING_ROOT_URI ? VIKING_ROOT_URI : fileNameFromUri(leftParent.replace(/\/$/, ''))}
+              label={
+                leftParent === VIKING_ROOT_URI
+                  ? VIKING_ROOT_URI
+                  : fileNameFromUri(leftParent.replace(/\/$/, ''))
+              }
               dirs={leftDirs}
               activeIndex={activeCol === 'left' ? leftIndex : -1}
               focusedUri={focusUri}
@@ -285,8 +303,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
               </div>
             )}
           </>
-        )
-      )}
+        )}
       </div>
     </div>
   )
@@ -320,10 +337,17 @@ function DirColumn({
   const { isScrolling, onScroll } = useTransientScrollbar()
 
   return (
-    <div className={cn('flex min-w-0 flex-col overflow-hidden border-r last:border-r-0', className)}>
+    <div
+      className={cn(
+        'flex min-w-0 flex-col overflow-hidden border-r last:border-r-0',
+        className,
+      )}
+    >
       <div className="flex min-h-11 items-center gap-1.5 border-b bg-blue-500/8 px-3 py-2 text-xs font-semibold tracking-[0.08em] text-blue-700/80 uppercase backdrop-blur-sm dark:text-blue-300/85">
         <Folder className="size-3.5 text-blue-600/75 dark:text-blue-300/75" />
-        <span className="truncate normal-case tracking-normal text-sm font-semibold text-blue-700/90 dark:text-blue-200">{label}</span>
+        <span className="truncate normal-case tracking-normal text-sm font-semibold text-blue-700/90 dark:text-blue-200">
+          {label}
+        </span>
       </div>
       <div
         className="scrollbar-fade min-h-0 flex-1 overflow-y-auto overscroll-contain"
@@ -343,7 +367,9 @@ function DirColumn({
               <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground/70 shadow-inner">
                 <Folder className="size-4" />
               </div>
-              <p className="text-sm font-medium text-foreground/70">{t('dirBrowser.empty.title')}</p>
+              <p className="text-sm font-medium text-foreground/70">
+                {t('dirBrowser.empty.title')}
+              </p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground/75">
                 {t('dirBrowser.empty.subtitle')}
               </p>
@@ -353,7 +379,8 @@ function DirColumn({
           <>
             {dirs.map((entry, i) => {
               const isActive = i === activeIndex
-              const isFocused = focusedUri != null && normalizeDirUri(entry.uri) === focusedUri
+              const isFocused =
+                focusedUri != null && normalizeDirUri(entry.uri) === focusedUri
 
               return (
                 <button
@@ -373,10 +400,11 @@ function DirColumn({
                   {isActive && (
                     <span className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-primary" />
                   )}
-                  <Folder className={cn(
-                    'size-3.5 shrink-0 transition-colors',
-                    isActive ? 'text-primary/80' : 'text-muted-foreground',
-                  )}
+                  <Folder
+                    className={cn(
+                      'size-3.5 shrink-0 transition-colors',
+                      isActive ? 'text-primary/80' : 'text-muted-foreground',
+                    )}
                   />
                   <span className="truncate font-medium">{entry.name}</span>
                   <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform group-hover:translate-x-0.5" />
@@ -392,20 +420,27 @@ function DirColumn({
               const isSelectedFile = selectedFileUri === entry.uri
 
               return (
-              <button
-                key={entry.uri}
-                type="button"
-                className={cn(
-                  'flex w-full items-center gap-2.5 border-b border-border/30 px-3 py-2 text-left text-sm last:border-b-0 transition-colors',
-                  isSelectedFile
-                    ? 'bg-blue-500/8 text-foreground'
-                    : 'text-muted-foreground/80 hover:bg-muted/25 hover:text-foreground/85',
-                )}
-                onClick={() => onSelectFile?.(entry)}
-              >
-                <FileText className={cn('size-3.5 shrink-0', isSelectedFile ? 'text-blue-600/75 dark:text-blue-300/75' : 'text-muted-foreground/65')} />
-                <span className="truncate">{entry.name}</span>
-              </button>
+                <button
+                  key={entry.uri}
+                  type="button"
+                  className={cn(
+                    'flex w-full items-center gap-2.5 border-b border-border/30 px-3 py-2 text-left text-sm last:border-b-0 transition-colors',
+                    isSelectedFile
+                      ? 'bg-blue-500/8 text-foreground'
+                      : 'text-muted-foreground/80 hover:bg-muted/25 hover:text-foreground/85',
+                  )}
+                  onClick={() => onSelectFile?.(entry)}
+                >
+                  <FileText
+                    className={cn(
+                      'size-3.5 shrink-0',
+                      isSelectedFile
+                        ? 'text-blue-600/75 dark:text-blue-300/75'
+                        : 'text-muted-foreground/65',
+                    )}
+                  />
+                  <span className="truncate">{entry.name}</span>
+                </button>
               )
             })}
           </>

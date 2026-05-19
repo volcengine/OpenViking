@@ -6,9 +6,18 @@ import { client as sdkClient } from '#/gen/ov-client/client.gen'
 
 import { normalizeOvClientError, OvClientError } from './errors'
 import { DEFAULT_API_KEY_STORAGE_KEY } from './types'
-import type { OvClientAdapter, OvClientOptions, OvConnectionState, OvErrorEnvelope } from './types'
+import type {
+  OvClientAdapter,
+  OvClientOptions,
+  OvConnectionState,
+  OvErrorEnvelope,
+} from './types'
 
-const DEFAULT_TELEMETRY_PATHS = new Set(['/api/v1/search/find', '/api/v1/search/search', '/api/v1/resources'])
+const DEFAULT_TELEMETRY_PATHS = new Set([
+  '/api/v1/search/find',
+  '/api/v1/search/search',
+  '/api/v1/resources',
+])
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
 const WEB_STUDIO_AGENT_ID = 'web-studio'
 
@@ -20,9 +29,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-const ENV_BASE_URL = typeof import.meta.env.VITE_OV_BASE_URL === 'string'
-  ? import.meta.env.VITE_OV_BASE_URL.trim()
-  : ''
+const ENV_BASE_URL =
+  typeof import.meta.env.VITE_OV_BASE_URL === 'string'
+    ? import.meta.env.VITE_OV_BASE_URL.trim()
+    : ''
 
 function normalizeBaseUrl(baseUrl?: string): string {
   const fallback = isBrowser() ? window.location.origin : ''
@@ -83,7 +93,11 @@ function readHeader(headers: unknown, name: string): string | undefined {
   return undefined
 }
 
-function setOptionalHeader(headers: AxiosHeaders, name: string, value: string): void {
+function setOptionalHeader(
+  headers: AxiosHeaders,
+  name: string,
+  value: string,
+): void {
   if (value.trim()) {
     headers.set(name, value)
     return
@@ -91,13 +105,18 @@ function setOptionalHeader(headers: AxiosHeaders, name: string, value: string): 
   headers.delete(name)
 }
 
-function shouldInjectTelemetry(config: InternalAxiosRequestConfig, defaultTelemetry: boolean): boolean {
+function shouldInjectTelemetry(
+  config: InternalAxiosRequestConfig,
+  defaultTelemetry: boolean,
+): boolean {
   if (!defaultTelemetry || config.method?.toUpperCase() !== 'POST') {
     return false
   }
 
   const pathname = resolvePathname(config.url)
-  return DEFAULT_TELEMETRY_PATHS.has(pathname) || SESSION_COMMIT_PATH.test(pathname)
+  return (
+    DEFAULT_TELEMETRY_PATHS.has(pathname) || SESSION_COMMIT_PATH.test(pathname)
+  )
 }
 
 function maybeInjectTelemetry(
@@ -118,9 +137,10 @@ function maybeInjectTelemetry(
   }
 }
 
-function isEnvelopeError(
-  value: unknown,
-): value is OvErrorEnvelope & { error: NonNullable<OvErrorEnvelope['error']>; status: 'error' } {
+function isEnvelopeError(value: unknown): value is OvErrorEnvelope & {
+  error: NonNullable<OvErrorEnvelope['error']>
+  status: 'error'
+} {
   return isRecord(value) && value.status === 'error' && isRecord(value.error)
 }
 
@@ -133,7 +153,9 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 
   let connection: OvConnectionState = {
-    apiKey: options.connection?.apiKey ?? readSessionStorage(runtimeOptions.apiKeyStorageKey),
+    apiKey:
+      options.connection?.apiKey ??
+      readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
     userId: options.connection?.userId ?? '',
   }
@@ -240,12 +262,19 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     return { ...runtimeOptions }
   }
 
-  function setOptions(next: Partial<typeof runtimeOptions>): Readonly<typeof runtimeOptions> {
+  function setOptions(
+    next: Partial<typeof runtimeOptions>,
+  ): Readonly<typeof runtimeOptions> {
     const previousStorageKey = runtimeOptions.apiKeyStorageKey
     runtimeOptions = {
-      apiKeyStorageKey: next.apiKeyStorageKey ?? runtimeOptions.apiKeyStorageKey,
-      baseUrl: next.baseUrl !== undefined ? normalizeBaseUrl(next.baseUrl) : runtimeOptions.baseUrl,
-      defaultTelemetry: next.defaultTelemetry ?? runtimeOptions.defaultTelemetry,
+      apiKeyStorageKey:
+        next.apiKeyStorageKey ?? runtimeOptions.apiKeyStorageKey,
+      baseUrl:
+        next.baseUrl !== undefined
+          ? normalizeBaseUrl(next.baseUrl)
+          : runtimeOptions.baseUrl,
+      defaultTelemetry:
+        next.defaultTelemetry ?? runtimeOptions.defaultTelemetry,
     }
 
     if (previousStorageKey !== runtimeOptions.apiKeyStorageKey) {

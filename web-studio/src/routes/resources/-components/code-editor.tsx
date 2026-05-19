@@ -1,42 +1,89 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react'
 import { EditorState } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  drawSelection,
+} from '@codemirror/view'
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from '@codemirror/commands'
+import {
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  bracketMatching,
+  foldGutter,
+  indentOnInput,
+} from '@codemirror/language'
 import type { LanguageSupport } from '@codemirror/language'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
-import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+} from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
 
-const languageLoaders: Partial<Record<string, () => Promise<LanguageSupport>>> = {
-  javascript: () => import('@codemirror/lang-javascript').then(m => m.javascript({ jsx: true, typescript: false })),
-  typescript: () => import('@codemirror/lang-javascript').then(m => m.javascript({ jsx: true, typescript: true })),
-  python: () => import('@codemirror/lang-python').then(m => m.python()),
-  json: () => import('@codemirror/lang-json').then(m => m.json()),
-  html: () => import('@codemirror/lang-html').then(m => m.html()),
-  css: () => import('@codemirror/lang-css').then(m => m.css()),
-  markdown: () => import('@codemirror/lang-markdown').then(m => m.markdown()),
-  rust: () => import('@codemirror/lang-rust').then(m => m.rust()),
-  cpp: () => import('@codemirror/lang-cpp').then(m => m.cpp()),
-  java: () => import('@codemirror/lang-java').then(m => m.java()),
-  sql: () => import('@codemirror/lang-sql').then(m => m.sql()),
-  xml: () => import('@codemirror/lang-xml').then(m => m.xml()),
-  yaml: () => import('@codemirror/lang-yaml').then(m => m.yaml()),
-}
+const languageLoaders: Partial<Record<string, () => Promise<LanguageSupport>>> =
+  {
+    javascript: () =>
+      import('@codemirror/lang-javascript').then((m) =>
+        m.javascript({ jsx: true, typescript: false }),
+      ),
+    typescript: () =>
+      import('@codemirror/lang-javascript').then((m) =>
+        m.javascript({ jsx: true, typescript: true }),
+      ),
+    python: () => import('@codemirror/lang-python').then((m) => m.python()),
+    json: () => import('@codemirror/lang-json').then((m) => m.json()),
+    html: () => import('@codemirror/lang-html').then((m) => m.html()),
+    css: () => import('@codemirror/lang-css').then((m) => m.css()),
+    markdown: () =>
+      import('@codemirror/lang-markdown').then((m) => m.markdown()),
+    rust: () => import('@codemirror/lang-rust').then((m) => m.rust()),
+    cpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+    java: () => import('@codemirror/lang-java').then((m) => m.java()),
+    sql: () => import('@codemirror/lang-sql').then((m) => m.sql()),
+    xml: () => import('@codemirror/lang-xml').then((m) => m.xml()),
+    yaml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
+  }
 
 const extMap: Record<string, string> = {
-  ts: 'typescript', tsx: 'typescript',
-  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  py: 'python', pyw: 'python',
+  ts: 'typescript',
+  tsx: 'typescript',
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  py: 'python',
+  pyw: 'python',
   rs: 'rust',
-  c: 'cpp', h: 'cpp', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+  c: 'cpp',
+  h: 'cpp',
+  cpp: 'cpp',
+  cc: 'cpp',
+  cxx: 'cpp',
+  hpp: 'cpp',
   java: 'java',
   json: 'json',
-  html: 'html', htm: 'html', svg: 'xml', xml: 'xml',
-  css: 'css', scss: 'css', less: 'css',
-  md: 'markdown', markdown: 'markdown',
+  html: 'html',
+  htm: 'html',
+  svg: 'xml',
+  xml: 'xml',
+  css: 'css',
+  scss: 'css',
+  less: 'css',
+  md: 'markdown',
+  markdown: 'markdown',
   sql: 'sql',
-  yml: 'yaml', yaml: 'yaml',
+  yml: 'yaml',
+  yaml: 'yaml',
 }
 
 function detectLanguage(filename: string): string | null {
@@ -92,7 +139,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           EditorView.theme({
             '&': { height: '100%' },
             '.cm-scroller': { overflow: 'auto' },
-            '.cm-content': { fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', fontSize: '13px' },
+            '.cm-content': {
+              fontFamily:
+                'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+              fontSize: '13px',
+            },
             '.cm-gutters': { fontSize: '13px' },
           }),
         ]
@@ -106,7 +157,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           try {
             const langSupport = await languageLoaders[lang]()
             if (!destroyed) extensions.push(langSupport)
-          } catch { /* fallback to no language support */ }
+          } catch {
+            /* fallback to no language support */
+          }
         }
 
         if (destroyed) return
@@ -133,6 +186,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       }
     }, [filename, isDark, initialContent])
 
-    return <div ref={containerRef} className="h-full min-h-0 overflow-hidden rounded-md border" />
+    return (
+      <div
+        ref={containerRef}
+        className="h-full min-h-0 overflow-hidden rounded-md border"
+      />
+    )
   },
 )

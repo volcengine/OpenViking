@@ -10,7 +10,11 @@ import {
   SelectValue,
 } from '#/components/ui/select'
 
-import { RESULT_COUNT_OPTIONS, RETRIEVAL_MODES, RETRIEVAL_SCOPES } from '../-constants/retrieval'
+import {
+  RESULT_COUNT_OPTIONS,
+  RETRIEVAL_MODES,
+  RETRIEVAL_SCOPES,
+} from '../-constants/retrieval'
 import type { RetrievalMode, RetrievalScope } from '../-types/retrieval'
 
 export function RetrievalControls({
@@ -42,29 +46,44 @@ export function RetrievalControls({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Select value={mode} onValueChange={(value) => onModeChange(value as RetrievalMode)}>
+      <Select
+        value={mode}
+        onValueChange={(value) => onModeChange(value as RetrievalMode)}
+      >
         <SelectTrigger size="sm" aria-label={t('controls.function')}>
           <SelectValue>{t(`controls.modes.${mode}`)}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {RETRIEVAL_MODES.map((item) => (
-            <SelectItem key={item} value={item}>{t(`controls.modes.${item}`)}</SelectItem>
+            <SelectItem key={item} value={item}>
+              {t(`controls.modes.${item}`)}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
 
-      <Select value={String(resultCount)} onValueChange={(value) => onResultCountChange(Number(value))}>
+      <Select
+        value={String(resultCount)}
+        onValueChange={(value) => onResultCountChange(Number(value))}
+      >
         <SelectTrigger size="sm" aria-label={t('controls.resultCount')}>
-          <SelectValue>{t('controls.resultCount')} {resultCount}</SelectValue>
+          <SelectValue>
+            {t('controls.resultCount')} {resultCount}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {RESULT_COUNT_OPTIONS.map((option) => (
-            <SelectItem key={option} value={String(option)}>{option}</SelectItem>
+            <SelectItem key={option} value={String(option)}>
+              {option}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
 
-      <Select value={scope} onValueChange={(value) => onScopeChange(value as RetrievalScope)}>
+      <Select
+        value={scope}
+        onValueChange={(value) => onScopeChange(value as RetrievalScope)}
+      >
         <SelectTrigger size="sm" aria-label={t('controls.scope')}>
           <SelectValue>{t(`controls.scopes.${scope}.label`)}</SelectValue>
         </SelectTrigger>

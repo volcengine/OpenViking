@@ -1,6 +1,10 @@
 import { getHealth } from '#/lib/ov-client'
 
-export type ServerMode = 'checking' | 'dev-implicit' | 'explicit-auth' | 'offline'
+export type ServerMode =
+  | 'checking'
+  | 'dev-implicit'
+  | 'explicit-auth'
+  | 'offline'
 
 export type ServerModeBadge = {
   labelKey: string

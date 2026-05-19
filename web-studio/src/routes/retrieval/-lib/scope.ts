@@ -23,7 +23,10 @@ export function normalizeScopeInput(value: string): string | undefined {
   return normalizeDirUri(`viking://${scopedPath}`)
 }
 
-export function resolveScopeTargetUri(scope: RetrievalScope, customPathInput: string): string | undefined {
+export function resolveScopeTargetUri(
+  scope: RetrievalScope,
+  customPathInput: string,
+): string | undefined {
   if (scope === 'all') {
     return undefined
   }

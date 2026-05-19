@@ -14,7 +14,13 @@ function normalizeHasEntries(result: FSListResult | unknown): boolean {
 
   if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
     const record = result as Record<string, unknown>
-    const buckets = [record.entries, record.items, record.children, record.results, record.nodes]
+    const buckets = [
+      record.entries,
+      record.items,
+      record.children,
+      record.results,
+      record.nodes,
+    ]
     return buckets.some((bucket) => Array.isArray(bucket) && bucket.length > 0)
   }
 

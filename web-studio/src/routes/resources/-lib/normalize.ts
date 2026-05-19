@@ -1,7 +1,18 @@
-import { fileNameFromUri, joinUri, normalizeDirUri, normalizeFileUri } from '#/lib/viking-uri'
+import {
+  fileNameFromUri,
+  joinUri,
+  normalizeDirUri,
+  normalizeFileUri,
+} from '#/lib/viking-uri'
 import type { VikingFileType, VikingFsEntry } from '../-types/viking-fm'
 
-export { fileNameFromUri, joinUri, normalizeDirUri, normalizeFileUri, parentUri } from '#/lib/viking-uri'
+export {
+  fileNameFromUri,
+  joinUri,
+  normalizeDirUri,
+  normalizeFileUri,
+  parentUri,
+} from '#/lib/viking-uri'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -23,20 +34,74 @@ const SIZE_MULTIPLIERS: Record<string, number> = {
   pib: 1024 ** 5,
 }
 
-const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif']
+const IMAGE_EXTS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'svg',
+  'ico',
+  'bmp',
+  'avif',
+]
 const MARKDOWN_EXTS = ['md', 'markdown', 'mdx']
 const CODE_EXTS = [
-  'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs',
-  'py', 'go', 'rs', 'java', 'kt', 'c', 'h', 'hpp', 'cpp',
-  'json', 'yaml', 'yml', 'toml', 'xml',
-  'html', 'css', 'scss', 'less',
-  'sh', 'bash', 'zsh', 'fish', 'sql', 'graphql', 'proto',
+  'js',
+  'ts',
+  'jsx',
+  'tsx',
+  'mjs',
+  'cjs',
+  'py',
+  'go',
+  'rs',
+  'java',
+  'kt',
+  'c',
+  'h',
+  'hpp',
+  'cpp',
+  'json',
+  'yaml',
+  'yml',
+  'toml',
+  'xml',
+  'html',
+  'css',
+  'scss',
+  'less',
+  'sh',
+  'bash',
+  'zsh',
+  'fish',
+  'sql',
+  'graphql',
+  'proto',
 ]
 const BINARY_EXTS = [
-  'pdf', 'zip', 'gz', 'tgz', 'tar', '7z', 'rar',
-  'mp3', 'wav', 'mp4', 'mov', 'avi', 'mkv',
-  'woff', 'woff2', 'ttf', 'otf',
-  'exe', 'dll', 'so', 'dylib', 'bin',
+  'pdf',
+  'zip',
+  'gz',
+  'tgz',
+  'tar',
+  '7z',
+  'rar',
+  'mp3',
+  'wav',
+  'mp4',
+  'mov',
+  'avi',
+  'mkv',
+  'woff',
+  'woff2',
+  'ttf',
+  'otf',
+  'exe',
+  'dll',
+  'so',
+  'dylib',
+  'bin',
 ]
 const TEXT_FILES = ['readme', 'license', 'dockerfile', 'makefile']
 
@@ -50,12 +115,14 @@ function pickFirstNonEmpty(values: Array<unknown>): unknown {
 }
 
 export function sameUri(left: string, right: string): boolean {
-  const leftNormalized = left.endsWith('/') || left === 'viking://'
-    ? normalizeDirUri(left)
-    : normalizeFileUri(left)
-  const rightNormalized = right.endsWith('/') || right === 'viking://'
-    ? normalizeDirUri(right)
-    : normalizeFileUri(right)
+  const leftNormalized =
+    left.endsWith('/') || left === 'viking://'
+      ? normalizeDirUri(left)
+      : normalizeFileUri(left)
+  const rightNormalized =
+    right.endsWith('/') || right === 'viking://'
+      ? normalizeDirUri(right)
+      : normalizeFileUri(right)
 
   return leftNormalized === rightNormalized
 }
@@ -160,7 +227,10 @@ export function isLikelyBinary(uri: string): boolean {
   return BINARY_EXTS.includes(ext)
 }
 
-export function shouldAutoRead(entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'sizeBytes'>, maxAutoReadBytes = 2 * 1024 * 1024): {
+export function shouldAutoRead(
+  entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'sizeBytes'>,
+  maxAutoReadBytes = 2 * 1024 * 1024,
+): {
   shouldRead: boolean
   reason?: 'binary' | 'too-large'
 } {
@@ -180,7 +250,10 @@ export function shouldAutoRead(entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'siz
   return { shouldRead: true }
 }
 
-export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEntry {
+export function normalizeFsEntry(
+  item: unknown,
+  currentUri: string,
+): VikingFsEntry {
   if (typeof item === 'string') {
     const isDir = item.endsWith('/')
     const uri = joinUri(currentUri, item)
@@ -200,7 +273,14 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
 
   if (isRecord(item)) {
     const label = String(
-      pickFirstNonEmpty([item.name, item.path, item.relative_path, item.uri, item.id, 'unknown']),
+      pickFirstNonEmpty([
+        item.name,
+        item.path,
+        item.relative_path,
+        item.uri,
+        item.id,
+        'unknown',
+      ]),
     )
 
     const isDir =
@@ -210,11 +290,20 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
       item.type === 'directory' ||
       label.endsWith('/')
 
-    const rawUri = String(pickFirstNonEmpty([item.uri, item.path, item.relative_path, label]))
+    const rawUri = String(
+      pickFirstNonEmpty([item.uri, item.path, item.relative_path, label]),
+    )
     const joinedUri = joinUri(currentUri, rawUri)
-    const normalizedUri = isDir ? normalizeDirUri(joinedUri) : normalizeFileUri(joinedUri)
+    const normalizedUri = isDir
+      ? normalizeDirUri(joinedUri)
+      : normalizeFileUri(joinedUri)
 
-    const sizeRaw = pickFirstNonEmpty([item.size, item.size_bytes, item.content_length, item.contentLength])
+    const sizeRaw = pickFirstNonEmpty([
+      item.size,
+      item.size_bytes,
+      item.content_length,
+      item.contentLength,
+    ])
     const modRaw = pickFirstNonEmpty([
       item.modTime,
       item.mod_time,
@@ -226,13 +315,17 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
 
     return {
       uri: normalizedUri,
-      name: String(pickFirstNonEmpty([item.name, fileNameFromUri(normalizedUri)])),
+      name: String(
+        pickFirstNonEmpty([item.name, fileNameFromUri(normalizedUri)]),
+      ),
       isDir,
       size: String(sizeRaw ?? ''),
       sizeBytes: parseSizeToBytes(sizeRaw),
       modTime: formatModTime(modRaw),
       modTimestamp: parseModTimeToTs(modRaw),
-      abstract: String(pickFirstNonEmpty([item.abstract, item.summary, item.description])),
+      abstract: String(
+        pickFirstNonEmpty([item.abstract, item.summary, item.description]),
+      ),
     }
   }
 
@@ -249,7 +342,10 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
   }
 }
 
-export function normalizeFsEntries(result: unknown, currentUri: string): Array<VikingFsEntry> {
+export function normalizeFsEntries(
+  result: unknown,
+  currentUri: string,
+): Array<VikingFsEntry> {
   const normalizedCurrentUri = normalizeDirUri(currentUri)
 
   if (Array.isArray(result)) {
@@ -257,10 +353,18 @@ export function normalizeFsEntries(result: unknown, currentUri: string): Array<V
   }
 
   if (isRecord(result)) {
-    const buckets = [result.entries, result.items, result.children, result.results, result.nodes]
+    const buckets = [
+      result.entries,
+      result.items,
+      result.children,
+      result.results,
+      result.nodes,
+    ]
     for (const bucket of buckets) {
       if (Array.isArray(bucket)) {
-        return bucket.map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+        return bucket.map((item) =>
+          normalizeFsEntry(item, normalizedCurrentUri),
+        )
       }
     }
   }
@@ -268,7 +372,10 @@ export function normalizeFsEntries(result: unknown, currentUri: string): Array<V
   return []
 }
 
-export function formatSize(value: unknown, options?: { maximumFractionDigits?: number; fallback?: string }): string {
+export function formatSize(
+  value: unknown,
+  options?: { maximumFractionDigits?: number; fallback?: string },
+): string {
   const maximumFractionDigits = options?.maximumFractionDigits ?? 1
   const fallback = options?.fallback ?? '-'
   const bytes = parseSizeToBytes(value)
@@ -307,7 +414,13 @@ export function normalizeReadContent(result: unknown): string {
   }
 
   if (isRecord(result)) {
-    const content = pickFirstNonEmpty([result.content, result.text, result.body, result.value, result.data])
+    const content = pickFirstNonEmpty([
+      result.content,
+      result.text,
+      result.body,
+      result.value,
+      result.data,
+    ])
     if (typeof content === 'string') {
       return content
     }

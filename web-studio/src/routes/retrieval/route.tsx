@@ -34,7 +34,10 @@ function RetrievalPage() {
   const navigate = useNavigate({ from: Route.fullPath })
   const search = Route.useSearch()
   const hasUrlSearch = hasRetrievalSearch(search)
-  const restoredSearch = useMemo(() => (hasUrlSearch ? undefined : readLastRetrievalSearch()), [hasUrlSearch])
+  const restoredSearch = useMemo(
+    () => (hasUrlSearch ? undefined : readLastRetrievalSearch()),
+    [hasUrlSearch],
+  )
   const activeSearch = hasUrlSearch ? search : (restoredSearch ?? search)
 
   const initialQuery = activeSearch.q ?? ''
@@ -48,7 +51,8 @@ function RetrievalPage() {
   const [query, setQuery] = useState(initialQuery)
   const [submittedQuery, setSubmittedQuery] = useState(initialQuery)
   const [resultCount, setResultCount] = useState<number>(initialResultCount)
-  const [retrievalScope, setRetrievalScope] = useState<RetrievalScope>(initialScope)
+  const [retrievalScope, setRetrievalScope] =
+    useState<RetrievalScope>(initialScope)
   const [customPathInput, setCustomPathInput] = useState(initialCustomPath)
   const [sessionIdInput, setSessionIdInput] = useState(initialSessionId)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -96,7 +100,15 @@ function RetrievalPage() {
       replace: true,
       search: nextSearch,
     })
-  }, [customPathInput, navigate, query, resultCount, retrievalMode, retrievalScope, sessionIdInput])
+  }, [
+    customPathInput,
+    navigate,
+    query,
+    resultCount,
+    retrievalMode,
+    retrievalScope,
+    sessionIdInput,
+  ])
 
   const handleUploadClick = useCallback(() => {
     void navigate({ to: '/resources', search: { upload: true } })
@@ -142,7 +154,16 @@ function RetrievalPage() {
         search: nextSearch,
       })
     }
-  }, [activeSearch.count, activeSearch.mode, activeSearch.path, activeSearch.q, activeSearch.scope, activeSearch.session, hasUrlSearch, navigate])
+  }, [
+    activeSearch.count,
+    activeSearch.mode,
+    activeSearch.path,
+    activeSearch.q,
+    activeSearch.scope,
+    activeSearch.session,
+    hasUrlSearch,
+    navigate,
+  ])
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">

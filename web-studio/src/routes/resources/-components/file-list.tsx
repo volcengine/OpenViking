@@ -91,7 +91,9 @@ export function FileList({
             )}
             <span className="min-w-0 truncate">{entry.name}</span>
             <span className="ml-auto flex shrink-0 items-center gap-4 text-xs text-muted-foreground">
-              <span>{entry.isDir ? '-' : formatSize(entry.sizeBytes ?? entry.size)}</span>
+              <span>
+                {entry.isDir ? '-' : formatSize(entry.sizeBytes ?? entry.size)}
+              </span>
               <span className="w-20 text-right">{entry.modTime || '-'}</span>
             </span>
           </button>

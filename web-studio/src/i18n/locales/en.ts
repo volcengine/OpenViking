@@ -41,7 +41,8 @@ const en = {
       showAdvancedIdentityFields: 'Show Advanced Identity Fields',
     },
     errorBoundary: {
-      description: 'An unhandled exception occurred while rendering the route. Try again first; if it persists, inspect the error details below.',
+      description:
+        'An unhandled exception occurred while rendering the route. Try again first; if it persists, inspect the error details below.',
       reload: 'Reload Page',
       retry: 'Retry',
       title: 'Something went wrong',
@@ -62,7 +63,8 @@ const en = {
   },
   connection: {
     devMode: {
-      description: 'This server is using implicit identity, so account, user, and API key are usually not required.',
+      description:
+        'This server is using implicit identity, so account, user, and API key are usually not required.',
       title: 'Development Mode Detected',
     },
     dialog: {
@@ -97,12 +99,14 @@ const en = {
   },
   home: {
     agentAccess: {
-      description: 'Deduplicates agents that accessed OpenViking today and shows the latest visit time.',
+      description:
+        'Deduplicates agents that accessed OpenViking today and shows the latest visit time.',
       empty: 'No agent visits today',
       title: 'Agent Visits',
     },
     contextCommits: {
-      description: 'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',
+      description:
+        'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',
       empty: 'No context commits in the last year',
       hourRange: '{{start}}-{{end}}',
       legend: {
@@ -133,14 +137,16 @@ const en = {
       },
     },
     contextData: {
-      description: 'Includes files, skills, user memories, and agent memories to show the current context resource scale.',
+      description:
+        'Includes files, skills, user memories, and agent memories to show the current context resource scale.',
       files: 'Files',
       memories: 'Memories',
       skills: 'Skills',
       title: 'Context Data Volume',
     },
     menuIntro: {
-      description: 'The left navigation is collapsible. Primary entries include overview, context management, recursive retrieval, request logs, settings, GitHub, and docs.',
+      description:
+        'The left navigation is collapsible. Primary entries include overview, context management, recursive retrieval, request logs, settings, GitHub, and docs.',
       items: {
         github: {
           description: 'Open the OpenViking source repository.',
@@ -174,31 +180,36 @@ const en = {
       title: 'Overview + Menu Guide',
     },
     page: {
-      description: 'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
+      description:
+        'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
       eyebrow: 'OpenViking Studio',
       settings: 'Connection & Settings',
       title: 'Overview',
     },
     requestFailed: 'Request failed',
     todayRetrievals: {
-      description: 'Shows successful semantic retrieval calls for find() and search() today. Resets at midnight.',
+      description:
+        'Shows successful semantic retrieval calls for find() and search() today. Resets at midnight.',
       find: 'find()',
       search: 'search()',
       title: 'Retrievals Today',
     },
     todayTokens: {
-      description: 'Shows real-time token consumption today. Resets at midnight.',
+      description:
+        'Shows real-time token consumption today. Resets at midnight.',
       embeddingInput: 'Embedding input tokens',
       title: 'Tokens Today',
       vlmInput: 'VLM input tokens',
       vlmOutput: 'VLM output tokens',
     },
     tokenTrend: {
-      description: 'Shows daily token usage over the last 14 days, including VLM input, VLM output, and embedding input.',
+      description:
+        'Shows daily token usage over the last 14 days, including VLM input, VLM output, and embedding input.',
       empty: 'No token usage in the last 14 days',
       title: 'Total Token Consumption',
     },
-    usageDisabled: 'Usage/Audit is not initialized, so live usage stats are unavailable.',
+    usageDisabled:
+      'Usage/Audit is not initialized, so live usage stats are unavailable.',
   },
   operations: {
     page: {
@@ -207,14 +218,17 @@ const en = {
   },
   requestLogs: {
     clear: 'Clear',
-    description: 'Inspect server-side audited API requests, including status, latency, and request identifiers.',
+    description:
+      'Inspect server-side audited API requests, including status, latency, and request identifiers.',
     disabled: {
-      description: 'Usage/Audit is not initialized, so server-side request logs are unavailable.',
+      description:
+        'Usage/Audit is not initialized, so server-side request logs are unavailable.',
       title: 'Audit logs unavailable',
     },
     empty: {
       description: 'Start your first audited API call!',
-      filteredDescription: 'Adjust the query or status filter to broaden the visible log entries.',
+      filteredDescription:
+        'Adjust the query or status filter to broaden the visible log entries.',
       filteredTitle: 'No matching requests',
       title: 'No logs yet',
       upload: 'Upload File',
@@ -268,11 +282,13 @@ const en = {
   },
   addResource: {
     title: 'Add Resource',
-    description: 'Upload a local file to the server. File type is auto-detected via magic bytes.',
+    description:
+      'Upload a local file to the server. File type is auto-detected via magic bytes.',
     dropzone: {
       title: 'Drag & drop a file here, or click to select',
       hint: 'Up to 10 files at a time.',
-      supportedFormats: 'Supports PDF, Word, PPTX, Excel, Markdown, code files, images, and more',
+      supportedFormats:
+        'Supports PDF, Word, PPTX, Excel, Markdown, code files, images, and more',
     },
     fileInfo: {
       name: 'File',
@@ -283,7 +299,8 @@ const en = {
     },
     targetUri: 'Target URI',
     'targetUri.placeholder': 'viking://resources/',
-    'targetUri.hint': 'Choose where to store this resource. Defaults to viking://resources/.',
+    'targetUri.hint':
+      'Choose where to store this resource. Defaults to viking://resources/.',
     'targetUri.browse': 'Browse',
     advancedOptions: 'Advanced Options',
     upload: 'Upload File',
@@ -314,15 +331,19 @@ const en = {
     },
     remoteUrl: 'Remote URL',
     'remoteUrl.placeholder': 'https://github.com/org/repo',
-    'remoteUrl.hint': 'HTTP(S) URL, Git repository, or other remote resource address.',
+    'remoteUrl.hint':
+      'HTTP(S) URL, Git repository, or other remote resource address.',
     strict: 'Strict Mode',
-    'strict.hint': 'When enabled, the server will reject files with unsupported or unrecognized types instead of skipping them silently.',
+    'strict.hint':
+      'When enabled, the server will reject files with unsupported or unrecognized types instead of skipping them silently.',
     directlyUploadMedia: 'Directly Upload Media',
-    'directlyUploadMedia.hint': 'When enabled, media files (images, audio, video) are stored as-is. When disabled, media files are processed through AI vision/audio pipeline for content extraction first.',
+    'directlyUploadMedia.hint':
+      'When enabled, media files (images, audio, video) are stored as-is. When disabled, media files are processed through AI vision/audio pipeline for content extraction first.',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',
-    'instruction.placeholder': 'Special processing instructions for this resource.',
+    'instruction.placeholder':
+      'Special processing instructions for this resource.',
     directoryScan: {
       title: 'Directory Scan Options',
       ignoreDirs: 'Ignore Directories',
@@ -350,7 +371,8 @@ const en = {
     },
     uploadDialog: {
       title: 'Upload',
-      description: 'Add a local file or remote resource to the context resource library.',
+      description:
+        'Add a local file or remote resource to the context resource library.',
     },
     processingNotice: {
       prefix: 'Files are being processed.',
@@ -428,7 +450,8 @@ const en = {
       filesSection: 'Files',
       empty: {
         title: 'Empty directory',
-        subtitle: 'There are currently no subdirectories to expand at this level',
+        subtitle:
+          'There are currently no subdirectories to expand at this level',
       },
     },
     fileList: {

@@ -1,5 +1,14 @@
 import { Link } from '@tanstack/react-router'
-import { Brain, FileText, FolderOpen, Loader2, SearchIcon, Upload, Workflow, Wrench } from 'lucide-react'
+import {
+  Brain,
+  FileText,
+  FolderOpen,
+  Loader2,
+  SearchIcon,
+  Upload,
+  Workflow,
+  Wrench,
+} from 'lucide-react'
 import type { TFunction } from 'i18next'
 
 import { Button } from '#/components/ui/button'
@@ -10,10 +19,21 @@ import { LoadingHint } from './loading-hint'
 import { displayName, resourceSearchForResult } from '../-lib/results'
 import type { FlatRetrievalItem } from '../-types/retrieval'
 
-const TYPE_META: Record<FindContextType, { icon: typeof Brain; color: string; bgColor: string }> = {
-  resource: { icon: FileText, color: 'text-blue-500', bgColor: 'bg-blue-500/15' },
+const TYPE_META: Record<
+  FindContextType,
+  { icon: typeof Brain; color: string; bgColor: string }
+> = {
+  resource: {
+    icon: FileText,
+    color: 'text-blue-500',
+    bgColor: 'bg-blue-500/15',
+  },
   memory: { icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/15' },
-  skill: { icon: Wrench, color: 'text-emerald-500', bgColor: 'bg-emerald-500/15' },
+  skill: {
+    icon: Wrench,
+    color: 'text-emerald-500',
+    bgColor: 'bg-emerald-500/15',
+  },
 }
 
 export function RetrievalResults({
@@ -45,7 +65,9 @@ export function RetrievalResults({
     <div className="flex flex-col gap-3">
       <h2 className="text-base font-medium">
         {hasSubmitted && hasResults
-          ? t('results.topN', { count: Math.min(flatItems.length, resultCount) })
+          ? t('results.topN', {
+              count: Math.min(flatItems.length, resultCount),
+            })
           : t('results.title')}
       </h2>
 
@@ -66,11 +88,19 @@ export function RetrievalResults({
         ) : !hasResults ? (
           <div className="flex min-h-80 flex-col items-center justify-center gap-2 text-center">
             <SearchIcon className="size-8 text-muted-foreground/25" />
-            <p className="text-sm text-muted-foreground/60">{t('noResults.title')}</p>
-            <p className="text-xs text-muted-foreground/40">{t('noResults.subtitle')}</p>
+            <p className="text-sm text-muted-foreground/60">
+              {t('noResults.title')}
+            </p>
+            <p className="text-xs text-muted-foreground/40">
+              {t('noResults.subtitle')}
+            </p>
           </div>
         ) : (
-          <ResultList flatItems={flatItems} queryPlanItems={queryPlanItems} t={t} />
+          <ResultList
+            flatItems={flatItems}
+            queryPlanItems={queryPlanItems}
+            t={t}
+          />
         )}
       </div>
     </div>
@@ -98,14 +128,20 @@ function EmptyRetrievalState({
       ) : hasRetrievableContext ? (
         <>
           <SearchIcon className="size-10 text-muted-foreground/25" />
-          <p className="text-sm text-muted-foreground">{t('empty.readyTitle')}</p>
-          <p className="text-xs text-muted-foreground/60">{t('empty.readyDescription')}</p>
+          <p className="text-sm text-muted-foreground">
+            {t('empty.readyTitle')}
+          </p>
+          <p className="text-xs text-muted-foreground/60">
+            {t('empty.readyDescription')}
+          </p>
         </>
       ) : (
         <>
           <SearchIcon className="size-10 text-muted-foreground/25" />
           <p className="text-sm text-muted-foreground">{t('empty.title')}</p>
-          <p className="text-xs text-muted-foreground/60">{t('empty.description')}</p>
+          <p className="text-xs text-muted-foreground/60">
+            {t('empty.description')}
+          </p>
           <Button
             size="sm"
             variant="secondary"
@@ -136,7 +172,9 @@ function ResultList({
         <div className="border-b bg-muted/20 px-4 py-3">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <Workflow className="size-3.5" />
-            <span>{t('queryPlan.title', { count: queryPlanItems.length })}</span>
+            <span>
+              {t('queryPlan.title', { count: queryPlanItems.length })}
+            </span>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {queryPlanItems.slice(0, 4).map((plan, index) => (
@@ -145,7 +183,12 @@ function ResultList({
                 className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
               >
                 {plan.context_type && (
-                  <span className={cn('font-medium', TYPE_META[plan.context_type].color)}>
+                  <span
+                    className={cn(
+                      'font-medium',
+                      TYPE_META[plan.context_type].color,
+                    )}
+                  >
                     {t(`types.${plan.context_type}`)}
                   </span>
                 )}
@@ -187,7 +230,13 @@ function ResultRow({
       rel="noreferrer noopener"
       className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
     >
-      <div className={cn('mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide', meta.bgColor, meta.color)}>
+      <div
+        className={cn(
+          'mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide',
+          meta.bgColor,
+          meta.color,
+        )}
+      >
         <Icon className="size-3" />
         <span>{t(`types.${item.type}`)}</span>
       </div>
@@ -198,7 +247,9 @@ function ResultRow({
           <span className="truncate">{parent}</span>
         </div>
         {item.item.abstract && (
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/60">{item.item.abstract}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/60">
+            {item.item.abstract}
+          </p>
         )}
       </div>
       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">

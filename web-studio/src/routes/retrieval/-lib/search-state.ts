@@ -7,26 +7,47 @@ import {
   RETRIEVAL_MODES,
   RETRIEVAL_SCOPES,
 } from '../-constants/retrieval'
-import type { ResultCountOption, RetrievalMode, RetrievalScope, RetrievalSearch } from '../-types/retrieval'
+import type {
+  ResultCountOption,
+  RetrievalMode,
+  RetrievalScope,
+  RetrievalSearch,
+} from '../-types/retrieval'
 
 export function isRetrievalMode(value: unknown): value is RetrievalMode {
-  return typeof value === 'string' && (RETRIEVAL_MODES as readonly string[]).includes(value)
+  return (
+    typeof value === 'string' &&
+    (RETRIEVAL_MODES as readonly string[]).includes(value)
+  )
 }
 
 export function isRetrievalScope(value: unknown): value is RetrievalScope {
-  return typeof value === 'string' && (RETRIEVAL_SCOPES as readonly string[]).includes(value)
+  return (
+    typeof value === 'string' &&
+    (RETRIEVAL_SCOPES as readonly string[]).includes(value)
+  )
 }
 
 export function parseResultCount(value: unknown): number | undefined {
-  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  return RESULT_COUNT_OPTIONS.includes(numeric as ResultCountOption) ? numeric : undefined
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN
+  return RESULT_COUNT_OPTIONS.includes(numeric as ResultCountOption)
+    ? numeric
+    : undefined
 }
 
-export function validateRetrievalSearch(search: Record<string, unknown>): RetrievalSearch {
+export function validateRetrievalSearch(
+  search: Record<string, unknown>,
+): RetrievalSearch {
   const q = typeof search.q === 'string' ? search.q.trim() : undefined
   const count = parseResultCount(search.count)
   const path = typeof search.path === 'string' ? search.path.trim() : undefined
-  const session = typeof search.session === 'string' ? search.session.trim() : undefined
+  const session =
+    typeof search.session === 'string' ? search.session.trim() : undefined
 
   return {
     ...(q && { q }),
@@ -39,7 +60,14 @@ export function validateRetrievalSearch(search: Record<string, unknown>): Retrie
 }
 
 export function hasRetrievalSearch(search: RetrievalSearch): boolean {
-  return Boolean(search.q || search.mode || search.count || search.scope || search.path || search.session)
+  return Boolean(
+    search.q ||
+    search.mode ||
+    search.count ||
+    search.scope ||
+    search.path ||
+    search.session,
+  )
 }
 
 export function readLastRetrievalSearch(): RetrievalSearch | undefined {
@@ -71,7 +99,10 @@ export function writeLastRetrievalSearch(search: RetrievalSearch) {
   }
 
   try {
-    window.sessionStorage.setItem(LAST_RETRIEVAL_SEARCH_KEY, JSON.stringify(search))
+    window.sessionStorage.setItem(
+      LAST_RETRIEVAL_SEARCH_KEY,
+      JSON.stringify(search),
+    )
   } catch {
     // Ignore storage failures in restricted environments.
   }

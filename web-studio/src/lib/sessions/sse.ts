@@ -1,8 +1,16 @@
-import type { ChatStreamEvent, ChatStreamEventType } from '@ov-server/bot/v1/chat'
+import type {
+  ChatStreamEvent,
+  ChatStreamEventType,
+} from '@ov-server/bot/v1/chat'
 
 const VALID_EVENT_TYPES = new Set<string>([
-  'response', 'tool_call', 'tool_result', 'reasoning', 'iteration',
-  'content_delta', 'reasoning_delta',
+  'response',
+  'tool_call',
+  'tool_result',
+  'reasoning',
+  'iteration',
+  'content_delta',
+  'reasoning_delta',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,13 +49,19 @@ function parseSseLine(line: string): ChatStreamEvent | null {
 
   try {
     const parsed = JSON.parse(jsonStr) as Record<string, unknown>
-    if (typeof parsed.event !== 'string' || !VALID_EVENT_TYPES.has(parsed.event)) {
+    if (
+      typeof parsed.event !== 'string' ||
+      !VALID_EVENT_TYPES.has(parsed.event)
+    ) {
       return null
     }
     return {
       event: parsed.event as ChatStreamEventType,
       data: parsed.data,
-      timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString(),
+      timestamp:
+        typeof parsed.timestamp === 'string'
+          ? parsed.timestamp
+          : new Date().toISOString(),
     }
   } catch {
     return null
@@ -65,7 +79,9 @@ function parseSseLine(line: string): ChatStreamEvent | null {
  * browser may receive `data:` lines without the blank separator. Parse each
  * complete data line immediately to keep the chat UI live during streaming.
  */
-export async function* parseSseStream(response: Response): AsyncGenerator<ChatStreamEvent> {
+export async function* parseSseStream(
+  response: Response,
+): AsyncGenerator<ChatStreamEvent> {
   const body = response.body
   if (!body) return
 

@@ -5,10 +5,7 @@ import {
   getOvResult,
 } from '#/lib/ov-client'
 
-import {
-  COMMIT_SERIES_DAYS,
-  TOKEN_SERIES_DAYS,
-} from '../-constants/dashboard'
+import { COMMIT_SERIES_DAYS, TOKEN_SERIES_DAYS } from '../-constants/dashboard'
 import type {
   ConsoleSeriesQuery,
   ConsoleContextCommitsResult,
@@ -30,9 +27,7 @@ export function fetchConsoleTokenSeries(): Promise<ConsoleTokenSeriesResult> {
     end_date: range.endDate,
     start_date: range.startDate,
   }
-  return getOvResult<ConsoleTokenSeriesResult>(
-    getConsoleTokens({ query }),
-  )
+  return getOvResult<ConsoleTokenSeriesResult>(getConsoleTokens({ query }))
 }
 
 export function fetchConsoleContextCommits(): Promise<ConsoleContextCommitsResult> {

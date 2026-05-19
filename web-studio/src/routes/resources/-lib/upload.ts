@@ -2,11 +2,30 @@ export const MAX_UPLOAD_FILES = 10
 export const MAX_UPLOAD_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 const BLOCKED_EXTENSIONS = new Set([
-  '.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib', '.exe', '.bin',
-  '.iso', '.img', '.db', '.sqlite',
-  '.tar', '.gz', '.rar', '.7z',
-  '.class', '.jar', '.war', '.ear',
-  '.ico', '.wma', '.mid', '.midi',
+  '.pyc',
+  '.pyo',
+  '.pyd',
+  '.so',
+  '.dll',
+  '.dylib',
+  '.exe',
+  '.bin',
+  '.iso',
+  '.img',
+  '.db',
+  '.sqlite',
+  '.tar',
+  '.gz',
+  '.rar',
+  '.7z',
+  '.class',
+  '.jar',
+  '.war',
+  '.ear',
+  '.ico',
+  '.wma',
+  '.mid',
+  '.midi',
 ])
 
 const ERROR_CODE_PREFIX_RE = /^([A-Z][A-Z0-9_]{2,})\s*:\s*(.+)$/s
@@ -15,7 +34,8 @@ const ERROR_CODE_RE = /\b([A-Z][A-Z0-9_]{2,})\b/
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
@@ -49,4 +69,3 @@ export function parseUploadError(message: string): {
     errorMessage: trimmed,
   }
 }
-

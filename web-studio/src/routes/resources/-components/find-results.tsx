@@ -4,7 +4,11 @@ import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
-import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
+import type {
+  FindContextType,
+  FindResultItem,
+  GroupedFindResult,
+} from '../-types/viking-fm'
 import { fileNameFromUri, parentUri } from '../-lib/normalize'
 
 interface FindResultsProps {
@@ -19,25 +23,54 @@ const GROUP_CONFIG: Array<{
   type: FindContextType
   accent: string
 }> = [
-  { key: 'resources', labelKey: 'findResults.groups.resources', icon: FileText, type: 'resource', accent: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
-  { key: 'memories', labelKey: 'findResults.groups.memories', icon: Brain, type: 'memory', accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  { key: 'skills', labelKey: 'findResults.groups.skills', icon: Wrench, type: 'skill', accent: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+  {
+    key: 'resources',
+    labelKey: 'findResults.groups.resources',
+    icon: FileText,
+    type: 'resource',
+    accent: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  },
+  {
+    key: 'memories',
+    labelKey: 'findResults.groups.memories',
+    icon: Brain,
+    type: 'memory',
+    accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  },
+  {
+    key: 'skills',
+    labelKey: 'findResults.groups.skills',
+    icon: Wrench,
+    type: 'skill',
+    accent: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  },
 ]
 
 function formatDisplayUri(uri: string): { name: string; parent: string } {
   const name = fileNameFromUri(uri)
   const dir = parentUri(uri)
-  const parent = dir === 'viking://' ? 'viking://' : dir.replace(/\/$/, '').split('/').slice(-2).join('/')
+  const parent =
+    dir === 'viking://'
+      ? 'viking://'
+      : dir.replace(/\/$/, '').split('/').slice(-2).join('/')
   return { name, parent }
 }
 
 function ScoreIndicator({ score }: { score: number }) {
   const width = Math.max(Math.min(Math.round(score * 100), 100), 8)
-  const hue = score > 0.7 ? 'bg-emerald-500/70' : score > 0.4 ? 'bg-amber-500/60' : 'bg-zinc-400/50'
+  const hue =
+    score > 0.7
+      ? 'bg-emerald-500/70'
+      : score > 0.4
+        ? 'bg-amber-500/60'
+        : 'bg-zinc-400/50'
   return (
     <div className="flex items-center gap-1.5">
       <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
-        <div className={cn('h-full rounded-full transition-all', hue)} style={{ width: `${width}%` }} />
+        <div
+          className={cn('h-full rounded-full transition-all', hue)}
+          style={{ width: `${width}%` }}
+        />
       </div>
     </div>
   )
@@ -97,12 +130,24 @@ function FindResultGroup({
         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
         onClick={() => setCollapsed(!collapsed)}
       >
-        <ChevronDown className={cn('size-3 transition-transform', collapsed && '-rotate-90')} />
-        <span className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold', accent)}>
+        <ChevronDown
+          className={cn(
+            'size-3 transition-transform',
+            collapsed && '-rotate-90',
+          )}
+        />
+        <span
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold',
+            accent,
+          )}
+        >
           <Icon className="size-3" />
           {label}
         </span>
-        <span className="text-[10px] tabular-nums text-muted-foreground/60">{items.length}</span>
+        <span className="text-[10px] tabular-nums text-muted-foreground/60">
+          {items.length}
+        </span>
       </button>
 
       {!collapsed && (
@@ -154,10 +199,14 @@ function FindResultRow({
           </div>
           <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground/70">
             <FolderOpen className="size-3 shrink-0" />
-            <span className="truncate" title={item.uri}>{parent}</span>
+            <span className="truncate" title={item.uri}>
+              {parent}
+            </span>
           </div>
           {!expanded && item.abstract && (
-            <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{item.abstract}</p>
+            <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+              {item.abstract}
+            </p>
           )}
         </div>
         {hasDetail && (
@@ -165,9 +214,18 @@ function FindResultRow({
             type="button"
             className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
             onClick={() => setExpanded(!expanded)}
-            title={expanded ? t('findResults.collapse') : t('findResults.expandDetails')}
+            title={
+              expanded
+                ? t('findResults.collapse')
+                : t('findResults.expandDetails')
+            }
           >
-            <ChevronDown className={cn('size-3.5 transition-transform', expanded && 'rotate-180')} />
+            <ChevronDown
+              className={cn(
+                'size-3.5 transition-transform',
+                expanded && 'rotate-180',
+              )}
+            />
           </button>
         )}
       </div>

@@ -39,7 +39,9 @@ export async function fetchSession(sessionId: string): Promise<SessionMeta> {
   )
 }
 
-export async function createSession(sessionId?: string): Promise<CreateSessionResult> {
+export async function createSession(
+  sessionId?: string,
+): Promise<CreateSessionResult> {
   return getOvResult<CreateSessionResult>(
     postSessions({
       body: sessionId ? { session_id: sessionId } : undefined,
@@ -47,7 +49,9 @@ export async function createSession(sessionId?: string): Promise<CreateSessionRe
   )
 }
 
-export async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
+export async function deleteSession(
+  sessionId: string,
+): Promise<DeleteSessionResult> {
   return getOvResult<DeleteSessionResult>(
     deleteSessionBySessionId({
       path: { session_id: sessionId },
@@ -60,7 +64,9 @@ export async function deleteSession(sessionId: string): Promise<DeleteSessionRes
 // ---------------------------------------------------------------------------
 
 /** Fetch message history for a session via the /context endpoint. */
-export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
+export async function fetchSessionMessages(
+  sessionId: string,
+): Promise<Message[]> {
   const result = await getOvResult<SessionContextResult>(
     getSessionIdContext({
       path: { session_id: sessionId },
@@ -71,7 +77,11 @@ export async function fetchSessionMessages(sessionId: string): Promise<Message[]
   // Each item is Message.to_dict() — { id, role, parts, created_at }
   return raw.filter(
     (m): m is Message =>
-      typeof m === 'object' && m !== null && 'id' in m && 'role' in m && 'parts' in m,
+      typeof m === 'object' &&
+      m !== null &&
+      'id' in m &&
+      'role' in m &&
+      'parts' in m,
   )
 }
 
@@ -93,7 +103,9 @@ export async function addMessage(
   )
 }
 
-export async function commitSession(sessionId: string): Promise<CommitSessionResult> {
+export async function commitSession(
+  sessionId: string,
+): Promise<CommitSessionResult> {
   return getOvResult<CommitSessionResult>(
     postSessionIdCommit({
       path: { session_id: sessionId },
@@ -142,7 +154,9 @@ export async function sendChatStream(
 }
 
 /** Send a non-streaming chat request. */
-export async function sendChat(request: BotChatRequest): Promise<BotChatResponse> {
+export async function sendChat(
+  request: BotChatRequest,
+): Promise<BotChatResponse> {
   const response = await postBotV1Chat({
     body: request,
     throwOnError: true,
@@ -155,13 +169,20 @@ export async function sendChat(request: BotChatRequest): Promise<BotChatResponse
 // Part serialization helpers (Message → API request format)
 // ---------------------------------------------------------------------------
 
-export function serializeParts(parts: MessagePart[]): Array<Record<string, unknown>> {
+export function serializeParts(
+  parts: MessagePart[],
+): Array<Record<string, unknown>> {
   return parts.map((part) => {
     if (part.type === 'text') {
       return { type: 'text', text: part.text }
     }
     if (part.type === 'context') {
-      return { type: 'context', uri: part.uri, context_type: part.context_type, abstract: part.abstract }
+      return {
+        type: 'context',
+        uri: part.uri,
+        context_type: part.context_type,
+        abstract: part.abstract,
+      }
     }
     // tool
     const d: Record<string, unknown> = {
@@ -176,7 +197,8 @@ export function serializeParts(parts: MessagePart[]): Array<Record<string, unkno
     if (part.tool_output) d.tool_output = part.tool_output
     if (part.duration_ms != null) d.duration_ms = part.duration_ms
     if (part.prompt_tokens != null) d.prompt_tokens = part.prompt_tokens
-    if (part.completion_tokens != null) d.completion_tokens = part.completion_tokens
+    if (part.completion_tokens != null)
+      d.completion_tokens = part.completion_tokens
     return d
   })
 }

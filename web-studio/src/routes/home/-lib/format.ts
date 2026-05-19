@@ -35,7 +35,10 @@ export function parseDateKey(value: string | undefined): Date {
   return new Date(year, month - 1, day)
 }
 
-export function getLastDaysRange(days: number): { endDate: string; startDate: string } {
+export function getLastDaysRange(days: number): {
+  endDate: string
+  startDate: string
+} {
   const end = new Date()
   const start = new Date(end)
   start.setDate(end.getDate() - days + 1)
@@ -49,7 +52,10 @@ export function formatShortDate(value: string): string {
   if (!value) return '--'
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' })
+  return date.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: '2-digit',
+  })
 }
 
 export function formatTimestamp(value: string): string {

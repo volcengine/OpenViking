@@ -25,11 +25,21 @@ export interface OvClientAdapter {
   instance: AxiosInstance
   clearConnection: () => OvConnectionState
   getConnection: () => Readonly<OvConnectionState>
-  getOptions: () => Readonly<Required<Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>>>
+  getOptions: () => Readonly<
+    Required<
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+    >
+  >
   setConnection: (next: Partial<OvConnectionState>) => OvConnectionState
   setOptions: (
-    next: Partial<Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>>,
-  ) => Readonly<Required<Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>>>
+    next: Partial<
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+    >,
+  ) => Readonly<
+    Required<
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+    >
+  >
 }
 
 export interface OvErrorEnvelope {

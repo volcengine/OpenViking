@@ -5,15 +5,15 @@ const VIKING_URI_PREFIX = 'viking://'
 
 export type ResourceSearchSpec =
   | {
-    mode: 'name'
-    query: string
-    rootUri: string
-  }
+      mode: 'name'
+      query: string
+      rootUri: string
+    }
   | {
-    mode: 'path'
-    query: string
-    rootUri: string
-  }
+      mode: 'path'
+      query: string
+      rootUri: string
+    }
 
 export function isVikingPathSearchQuery(query: string): boolean {
   return query.trimStart().toLowerCase().startsWith(VIKING_URI_PREFIX)
@@ -36,7 +36,10 @@ export function normalizeVikingPathSearchQuery(query: string): string {
   return `${VIKING_URI_PREFIX}${normalizedPath}${hasTrailingSlash ? '/' : ''}`
 }
 
-export function getResourceSearchSpec(query: string, scopeUri: string): ResourceSearchSpec | null {
+export function getResourceSearchSpec(
+  query: string,
+  scopeUri: string,
+): ResourceSearchSpec | null {
   const trimmed = query.trim()
   if (!trimmed) {
     return null
@@ -57,7 +60,10 @@ export function getResourceSearchSpec(query: string, scopeUri: string): Resource
   }
 }
 
-export function matchesResourceSearch(entry: VikingFsEntry, spec: ResourceSearchSpec): boolean {
+export function matchesResourceSearch(
+  entry: VikingFsEntry,
+  spec: ResourceSearchSpec,
+): boolean {
   if (!entry.uri.startsWith(spec.rootUri)) {
     return false
   }

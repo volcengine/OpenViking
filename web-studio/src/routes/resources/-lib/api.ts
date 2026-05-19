@@ -1,9 +1,30 @@
 import { fetchFind, fetchFindAllTypes, fetchSearch } from '#/lib/retrieval'
-import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postContentWrite } from '#/lib/ov-client'
-import type { ContentReadResult, ContentWriteResult } from '@ov-server/api/v1/content'
-import type { FSListResult, FSStatResult, FSTreeResult } from '@ov-server/api/v1/fs'
+import {
+  getContentRead,
+  getFsLs,
+  getFsStat,
+  getFsTree,
+  getOvResult,
+  normalizeOvClientError,
+  postContentWrite,
+} from '#/lib/ov-client'
+import type {
+  ContentReadResult,
+  ContentWriteResult,
+} from '@ov-server/api/v1/content'
+import type {
+  FSListResult,
+  FSStatResult,
+  FSTreeResult,
+} from '@ov-server/api/v1/fs'
 
-import { fileNameFromUri, formatModTime, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
+import {
+  fileNameFromUri,
+  formatModTime,
+  normalizeDirUri,
+  normalizeFsEntries,
+  normalizeReadContent,
+} from './normalize'
 import type {
   VikingApiError,
   VikingFsEntry,
@@ -25,7 +46,10 @@ function toVikingApiError(error: unknown): VikingApiError {
   }
 }
 
-export async function fetchFsList(uri: string, options: VikingListQueryOptions = {}): Promise<VikingListResult> {
+export async function fetchFsList(
+  uri: string,
+  options: VikingListQueryOptions = {},
+): Promise<VikingListResult> {
   const normalizedUri = normalizeDirUri(uri)
 
   try {
@@ -53,7 +77,10 @@ export async function fetchFsList(uri: string, options: VikingListQueryOptions =
   }
 }
 
-export async function fetchFsTree(rootUri: string, options: VikingTreeQueryOptions = {}): Promise<VikingTreeResult> {
+export async function fetchFsTree(
+  rootUri: string,
+  options: VikingTreeQueryOptions = {},
+): Promise<VikingTreeResult> {
   const normalizedRootUri = normalizeDirUri(rootUri)
 
   try {
@@ -80,7 +107,10 @@ export async function fetchFsTree(rootUri: string, options: VikingTreeQueryOptio
   }
 }
 
-export async function fetchFileContent(uri: string, options: VikingReadQueryOptions = {}): Promise<VikingReadResult> {
+export async function fetchFileContent(
+  uri: string,
+  options: VikingReadQueryOptions = {},
+): Promise<VikingReadResult> {
   const offset = options.offset ?? 0
   const limit = options.limit ?? -1
 
@@ -121,8 +151,12 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       name: fileNameFromUri(uri),
       isDir: Boolean(data.is_dir ?? data.isDir ?? uri.endsWith('/')),
       size: String(data.size ?? ''),
-      sizeBytes: typeof data.size_bytes === 'number' ? data.size_bytes
-        : typeof data.size === 'number' ? data.size : null,
+      sizeBytes:
+        typeof data.size_bytes === 'number'
+          ? data.size_bytes
+          : typeof data.size === 'number'
+            ? data.size
+            : null,
       modTime: formatModTime(rawModTime),
       modTimestamp: null,
       abstract: String(data.abstract ?? ''),
@@ -141,7 +175,10 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
   }
 }
 
-export async function saveFileContent(uri: string, content: string): Promise<void> {
+export async function saveFileContent(
+  uri: string,
+  content: string,
+): Promise<void> {
   try {
     await getOvResult<ContentWriteResult>(
       postContentWrite({

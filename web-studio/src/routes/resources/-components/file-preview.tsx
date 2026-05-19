@@ -14,13 +14,23 @@ import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
 import { formatSize } from '../-lib/normalize'
 import { saveFileContent } from '../-lib/api'
-import { useVikingFilePreview, useInvalidateVikingFs } from '../-hooks/viking-fm'
+import {
+  useVikingFilePreview,
+  useInvalidateVikingFs,
+} from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import type { CodeEditorHandle } from './code-editor'
 
-const LazyCodeEditor = lazy(() => import('./code-editor').then(m => ({ default: m.CodeEditor })))
+const LazyCodeEditor = lazy(() =>
+  import('./code-editor').then((m) => ({ default: m.CodeEditor })),
+)
 
-const languageLoaders: Partial<Record<string, () => Promise<{ default: Parameters<typeof hljs.registerLanguage>[1] }>>> = {
+const languageLoaders: Partial<
+  Record<
+    string,
+    () => Promise<{ default: Parameters<typeof hljs.registerLanguage>[1] }>
+  >
+> = {
   bash: () => import('highlight.js/lib/languages/bash'),
   c: () => import('highlight.js/lib/languages/c'),
   cpp: () => import('highlight.js/lib/languages/cpp'),
@@ -83,7 +93,8 @@ interface FilePreviewProps {
 }
 
 const vikingPrefix = 'viking://'
-const contentDownloadUrl: GetContentDownloadData['url'] = '/api/v1/content/download'
+const contentDownloadUrl: GetContentDownloadData['url'] =
+  '/api/v1/content/download'
 
 function toDownloadUrl(vikingUri: string): string {
   const query: ContentDownloadQuery = { uri: vikingUri }
@@ -112,7 +123,10 @@ function dirnameVikingUri(fileUri: string): string {
   return `${trimmed.slice(0, idx + 1)}`
 }
 
-function resolveRelativeVikingUri(baseFileUri: string, rawPath: string): string {
+function resolveRelativeVikingUri(
+  baseFileUri: string,
+  rawPath: string,
+): string {
   const baseDir = dirnameVikingUri(baseFileUri)
   const baseBody = baseDir.slice(vikingPrefix.length, -1)
 
@@ -161,54 +175,93 @@ function detectCodeLanguage(filename: string): string | null {
   const ext = lower.includes('.') ? lower.split('.').pop() || '' : ''
 
   const extMap: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript',
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    py: 'python', pyw: 'python',
+    ts: 'typescript',
+    tsx: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    py: 'python',
+    pyw: 'python',
     go: 'go',
     rs: 'rust',
     java: 'java',
-    c: 'c', h: 'c',
-    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    hpp: 'cpp',
+    hxx: 'cpp',
     cs: 'csharp',
     json: 'json',
-    yml: 'yaml', yaml: 'yaml',
-    md: 'markdown', markdown: 'markdown',
-    html: 'xml', xml: 'xml', svg: 'xml', xhtml: 'xml',
+    yml: 'yaml',
+    yaml: 'yaml',
+    md: 'markdown',
+    markdown: 'markdown',
+    html: 'xml',
+    xml: 'xml',
+    svg: 'xml',
+    xhtml: 'xml',
     css: 'css',
     scss: 'scss',
     less: 'less',
     sql: 'sql',
-    sh: 'bash', bash: 'bash', zsh: 'bash',
-    toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    toml: 'ini',
+    ini: 'ini',
+    cfg: 'ini',
+    conf: 'ini',
     dockerfile: 'dockerfile',
     dart: 'dart',
-    kt: 'kotlin', kts: 'kotlin',
+    kt: 'kotlin',
+    kts: 'kotlin',
     swift: 'swift',
-    rb: 'ruby', rake: 'ruby', gemspec: 'ruby',
+    rb: 'ruby',
+    rake: 'ruby',
+    gemspec: 'ruby',
     php: 'php',
     lua: 'lua',
-    r: 'r', rmd: 'r',
+    r: 'r',
+    rmd: 'r',
     scala: 'scala',
-    ex: 'elixir', exs: 'elixir',
-    erl: 'erlang', hrl: 'erlang',
-    hs: 'haskell', lhs: 'haskell',
-    m: 'objectivec', mm: 'objectivec',
-    pl: 'perl', pm: 'perl',
+    ex: 'elixir',
+    exs: 'elixir',
+    erl: 'erlang',
+    hrl: 'erlang',
+    hs: 'haskell',
+    lhs: 'haskell',
+    m: 'objectivec',
+    mm: 'objectivec',
+    pl: 'perl',
+    pm: 'perl',
     proto: 'protobuf',
-    graphql: 'graphql', gql: 'graphql',
-    tex: 'latex', latex: 'latex',
+    graphql: 'graphql',
+    gql: 'graphql',
+    tex: 'latex',
+    latex: 'latex',
     makefile: 'makefile',
     nginx: 'nginx',
-    wasm: 'wasm', wat: 'wasm',
-    diff: 'diff', patch: 'diff',
+    wasm: 'wasm',
+    wat: 'wasm',
+    diff: 'diff',
+    patch: 'diff',
   }
 
   if (ext && extMap[ext]) return extMap[ext]
 
   const basename = lower.split('/').pop() || ''
-  if (basename === 'dockerfile' || basename.startsWith('dockerfile.')) return 'dockerfile'
+  if (basename === 'dockerfile' || basename.startsWith('dockerfile.'))
+    return 'dockerfile'
   if (basename === 'makefile' || basename === 'gnumakefile') return 'makefile'
-  if (basename === '.bashrc' || basename === '.zshrc' || basename === '.bash_profile') return 'bash'
+  if (
+    basename === '.bashrc' ||
+    basename === '.zshrc' ||
+    basename === '.bash_profile'
+  )
+    return 'bash'
 
   return null
 }
@@ -217,20 +270,30 @@ function escapeHtml(raw: string): string {
   return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function FilePreview({ file, onClose, showCloseButton = true }: FilePreviewProps) {
+export function FilePreview({
+  file,
+  onClose,
+  showCloseButton = true,
+}: FilePreviewProps) {
   const { t } = useTranslation('resources')
   const previewQuery = useVikingFilePreview(file, {
     maxAutoReadBytes: 2 * 1024 * 1024,
     defaultReadLimit: -1,
   })
   const preview = previewQuery.preview
-  const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>('preview')
+  const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>(
+    'preview',
+  )
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const editorRef = useRef<CodeEditorHandle>(null)
   const { invalidatePreview } = useInvalidateVikingFs()
 
-  const canEdit = preview?.shouldAutoRead && (preview.fileType === 'code' || preview.fileType === 'markdown' || preview.fileType === 'text')
+  const canEdit =
+    preview?.shouldAutoRead &&
+    (preview.fileType === 'code' ||
+      preview.fileType === 'markdown' ||
+      preview.fileType === 'text')
 
   useEffect(() => {
     setMarkdownMode('preview')
@@ -245,12 +308,17 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
     if (!file || preview?.fileType !== 'image') {
       return null
     }
-    return withCacheBust(toDownloadUrl(file.uri), file.modTime || Date.now().toString())
+    return withCacheBust(
+      toDownloadUrl(file.uri),
+      file.modTime || Date.now().toString(),
+    )
   }, [file, preview?.fileType])
 
   const [highlightedCodeHtml, setHighlightedCodeHtml] = useState('')
 
-  const needsHighlight = preview?.fileType === 'code' || (preview?.fileType === 'markdown' && markdownMode === 'source')
+  const needsHighlight =
+    preview?.fileType === 'code' ||
+    (preview?.fileType === 'markdown' && markdownMode === 'source')
 
   useEffect(() => {
     if (!preview || !needsHighlight) {
@@ -282,7 +350,9 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
     }
 
     void run()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [preview, file?.name, needsHighlight])
 
   useEffect(() => {
@@ -356,7 +426,11 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
   }
 
   if (!file) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('filePreview.emptyPrompt')}</div>
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        {t('filePreview.emptyPrompt')}
+      </div>
+    )
   }
 
   const isMarkdown = preview?.fileType === 'markdown'
@@ -375,18 +449,36 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
           </div>
           {editing ? (
             <div className="flex items-center gap-1">
-              <Button size="sm" variant="ghost" disabled={saving} onClick={() => setEditing(false)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => setEditing(false)}
+              >
                 <XCircle className="mr-1 size-3.5" />
                 {t('filePreview.cancel')}
               </Button>
-              <Button size="sm" className="active:scale-[0.96] transition-transform" disabled={saving} onClick={handleSave}>
-                {saving ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Save className="mr-1 size-3.5" />}
+              <Button
+                size="sm"
+                className="active:scale-[0.96] transition-transform"
+                disabled={saving}
+                onClick={handleSave}
+              >
+                {saving ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : (
+                  <Save className="mr-1 size-3.5" />
+                )}
                 {t('filePreview.save')}
               </Button>
             </div>
           ) : (
             canEdit && (
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setEditing(true)}
+              >
                 <Pencil className="mr-1 size-3.5" />
                 {t('filePreview.edit')}
               </Button>
@@ -394,7 +486,12 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
           )}
         </div>
         {showCloseButton ? (
-          <Button size="icon" variant="ghost" className="size-10" onClick={onClose}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-10"
+            onClick={onClose}
+          >
             <X className="size-4" />
           </Button>
         ) : null}
@@ -402,7 +499,14 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
 
       {editing && preview?.content != null ? (
         <div className="h-full min-h-0 p-2">
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />{t('filePreview.loadingEditor')}</div>}>
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                <Loader2 className="mr-2 size-4 animate-spin" />
+                {t('filePreview.loadingEditor')}
+              </div>
+            }
+          >
             <LazyCodeEditor
               ref={editorRef}
               initialContent={preview.content}
@@ -434,9 +538,15 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
 
           {preview?.fileType === 'image' ? (
             imageLoading ? (
-              <div className="text-sm text-muted-foreground">{t('filePreview.imageLoading')}</div>
+              <div className="text-sm text-muted-foreground">
+                {t('filePreview.imageLoading')}
+              </div>
             ) : imageUrl ? (
-              <img src={imageUrl} alt={file.name} className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
+              <img
+                src={imageUrl}
+                alt={file.name}
+                className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+              />
             ) : imageSrc ? (
               <div className="space-y-3">
                 <img
@@ -445,40 +555,73 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
                   className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
                   onError={() => setImageError('direct img failed')}
                 />
-                {imageError ? <div className="text-xs text-muted-foreground">{imageError}</div> : null}
+                {imageError ? (
+                  <div className="text-xs text-muted-foreground">
+                    {imageError}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-1 text-sm text-muted-foreground">
                 <div>{t('filePreview.imageFailed')}</div>
-                {imageError ? <div className="text-xs">{imageError}</div> : null}
+                {imageError ? (
+                  <div className="text-xs">{imageError}</div>
+                ) : null}
               </div>
             )
           ) : null}
 
           {previewQuery.isLoading && preview?.fileType !== 'image' ? (
-            <div className="text-sm text-muted-foreground">{t('filePreview.loadingContent')}</div>
-          ) : null}
-
-          {!previewQuery.isLoading && preview && preview.fileType !== 'image' && !preview.shouldAutoRead ? (
             <div className="text-sm text-muted-foreground">
-              {preview.reason === 'binary' ? t('filePreview.unsupportedBinary') : t('filePreview.largeFileSkipped')}
+              {t('filePreview.loadingContent')}
             </div>
           ) : null}
 
-          {!previewQuery.isLoading && preview?.fileType === 'markdown' && preview.shouldAutoRead && markdownMode === 'preview' ? (
+          {!previewQuery.isLoading &&
+          preview &&
+          preview.fileType !== 'image' &&
+          !preview.shouldAutoRead ? (
+            <div className="text-sm text-muted-foreground">
+              {preview.reason === 'binary'
+                ? t('filePreview.unsupportedBinary')
+                : t('filePreview.largeFileSkipped')}
+            </div>
+          ) : null}
+
+          {!previewQuery.isLoading &&
+          preview?.fileType === 'markdown' &&
+          preview.shouldAutoRead &&
+          markdownMode === 'preview' ? (
             <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
                   img: ({ src, alt }) => {
-                    const resolvedSrc = src ? resolveMarkdownAssetUrl(String(src), file.uri) : String(src || '')
-                    return <img src={resolvedSrc} alt={alt || ''} loading="lazy" className="max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
+                    const resolvedSrc = src
+                      ? resolveMarkdownAssetUrl(String(src), file.uri)
+                      : String(src || '')
+                    return (
+                      <img
+                        src={resolvedSrc}
+                        alt={alt || ''}
+                        loading="lazy"
+                        className="max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+                      />
+                    )
                   },
                   a: ({ href, children }) => {
-                    const resolvedHref = href ? resolveMarkdownAssetUrl(String(href), file.uri) : String(href || '')
-                    const isExternal = /^(https?:|mailto:|tel:)/i.test(resolvedHref)
+                    const resolvedHref = href
+                      ? resolveMarkdownAssetUrl(String(href), file.uri)
+                      : String(href || '')
+                    const isExternal = /^(https?:|mailto:|tel:)/i.test(
+                      resolvedHref,
+                    )
                     return (
-                      <a href={resolvedHref} target={isExternal ? '_blank' : undefined} rel={isExternal ? 'noreferrer noopener' : undefined}>
+                      <a
+                        href={resolvedHref}
+                        target={isExternal ? '_blank' : undefined}
+                        rel={isExternal ? 'noreferrer noopener' : undefined}
+                      >
                         {children}
                       </a>
                     )
@@ -490,20 +633,44 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
             </article>
           ) : null}
 
-          {!previewQuery.isLoading && preview?.fileType === 'markdown' && preview.shouldAutoRead && markdownMode === 'source' ? (
+          {!previewQuery.isLoading &&
+          preview?.fileType === 'markdown' &&
+          preview.shouldAutoRead &&
+          markdownMode === 'source' ? (
             <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
-              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(preview.content || emptyFileText) }} />
+              <code
+                className="hljs block"
+                dangerouslySetInnerHTML={{
+                  __html:
+                    highlightedCodeHtml ||
+                    escapeHtml(preview.content || emptyFileText),
+                }}
+              />
             </pre>
           ) : null}
 
-          {!previewQuery.isLoading && preview?.fileType === 'code' && preview.shouldAutoRead ? (
+          {!previewQuery.isLoading &&
+          preview?.fileType === 'code' &&
+          preview.shouldAutoRead ? (
             <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
-              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(emptyFileText) }} />
+              <code
+                className="hljs block"
+                dangerouslySetInnerHTML={{
+                  __html: highlightedCodeHtml || escapeHtml(emptyFileText),
+                }}
+              />
             </pre>
           ) : null}
 
-          {!previewQuery.isLoading && preview && preview.fileType !== 'image' && preview.fileType !== 'markdown' && preview.fileType !== 'code' && preview.shouldAutoRead ? (
-            <pre className="whitespace-pre-wrap break-words text-xs leading-6">{preview.content || emptyFileText}</pre>
+          {!previewQuery.isLoading &&
+          preview &&
+          preview.fileType !== 'image' &&
+          preview.fileType !== 'markdown' &&
+          preview.fileType !== 'code' &&
+          preview.shouldAutoRead ? (
+            <pre className="whitespace-pre-wrap break-words text-xs leading-6">
+              {preview.content || emptyFileText}
+            </pre>
           ) : null}
         </ScrollArea>
       )}

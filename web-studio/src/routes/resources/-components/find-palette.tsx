@@ -1,13 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FileIcon, FolderIcon, FolderOpen, Loader2, Search, X } from 'lucide-react'
+import {
+  FileIcon,
+  FolderIcon,
+  FolderOpen,
+  Loader2,
+  Search,
+  X,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 
-import { fileNameFromUri, normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
-import { filterResourceSearchEntries, getResourceSearchSpec } from '../-lib/find-search'
-import { useVikingFsList, useVikingFsStat, useVikingFsTree } from '../-hooks/viking-fm'
+import {
+  fileNameFromUri,
+  normalizeDirUri,
+  parentUri as getParentUri,
+} from '../-lib/normalize'
+import {
+  filterResourceSearchEntries,
+  getResourceSearchSpec,
+} from '../-lib/find-search'
+import {
+  useVikingFsList,
+  useVikingFsStat,
+  useVikingFsTree,
+} from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
@@ -53,7 +71,13 @@ function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
-export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
+export function FindPalette({
+  open,
+  onClose,
+  onNavigate,
+  onNavigateDir,
+  scopeUri,
+}: FindPaletteProps) {
   const { t } = useTranslation('resources')
   const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
   const [findTargetUri, setFindTargetUri] = useState(() =>
@@ -79,9 +103,9 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     { output: 'agent', showAllHidden: true, nodeLimit: 1 },
     Boolean(scopeCommandUri && scopeCommandUri !== 'viking://'),
   )
-  const isScopeCommandValid = Boolean(scopeCommandUri) && (
-    scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess
-  )
+  const isScopeCommandValid =
+    Boolean(scopeCommandUri) &&
+    (scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess)
 
   const treeQuery = useVikingFsTree(
     searchSpec?.rootUri || 'viking://',
@@ -95,13 +119,19 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
   }, [hasQuery, treeQuery.data?.nodes, searchSpec])
 
   const hasResults = filteredEntries.length > 0
-  const activeEntry = activeIndex >= 0 ? (filteredEntries[activeIndex] ?? null) : null
+  const activeEntry =
+    activeIndex >= 0 ? (filteredEntries[activeIndex] ?? null) : null
 
   const statQuery = useVikingFsStat(activeEntry?.uri)
   const previewEntry = useMemo(() => {
     if (!activeEntry) return null
     if (statQuery.data) {
-      return { ...activeEntry, size: statQuery.data.size, sizeBytes: statQuery.data.sizeBytes, modTime: statQuery.data.modTime }
+      return {
+        ...activeEntry,
+        size: statQuery.data.size,
+        sizeBytes: statQuery.data.sizeBytes,
+        modTime: statQuery.data.modTime,
+      }
     }
     return activeEntry
   }, [activeEntry, statQuery.data])
@@ -138,7 +168,10 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     (e: React.KeyboardEvent) => {
       if (composingRef.current) return
       if (isDirMode) {
-        if (e.key === 'Escape') { e.preventDefault(); onClose() }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onClose()
+        }
         return
       }
       if (scopeCommandUri) {
@@ -157,7 +190,10 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
         }
       }
       if (!hasQuery || filteredEntries.length === 0) {
-        if (e.key === 'Escape') { e.preventDefault(); onClose() }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onClose()
+        }
         return
       }
       switch (e.key) {
@@ -184,7 +220,17 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           break
       }
     },
-    [query, hasQuery, filteredEntries, activeEntry, onNavigate, onClose, isDirMode, scopeCommandUri, isScopeCommandValid],
+    [
+      query,
+      hasQuery,
+      filteredEntries,
+      activeEntry,
+      onNavigate,
+      onClose,
+      isDirMode,
+      scopeCommandUri,
+      isScopeCommandValid,
+    ],
   )
 
   if (!open) return null
@@ -195,8 +241,17 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     : 'w-[min(90vw,45rem)]'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6" role="dialog" aria-modal="true" aria-label={t('searchPalette.ariaLabel')}>
-      <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" role="presentation" onClick={onClose} />
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('searchPalette.ariaLabel')}
+    >
+      <div
+        className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm"
+        role="presentation"
+        onClick={onClose}
+      />
 
       <div
         className={cn(
@@ -214,8 +269,12 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             placeholder={t('searchPalette.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onCompositionStart={() => { composingRef.current = true }}
-            onCompositionEnd={() => { composingRef.current = false }}
+            onCompositionStart={() => {
+              composingRef.current = true
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false
+            }}
             className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
           />
           {query && (
@@ -231,8 +290,15 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             </button>
           )}
           <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
-            {isRoot ? t('searchPalette.scope.global') : (
-              <><FolderOpen className="size-3" />{t('searchPalette.scope.current', { name: findTargetUri.split('/').filter(Boolean).pop() })}</>
+            {isRoot ? (
+              t('searchPalette.scope.global')
+            ) : (
+              <>
+                <FolderOpen className="size-3" />
+                {t('searchPalette.scope.current', {
+                  name: findTargetUri.split('/').filter(Boolean).pop(),
+                })}
+              </>
             )}
           </span>
         </div>
@@ -255,42 +321,61 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           ) : (
             <>
               {/* Results area */}
-              <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
+              <div
+                className={cn(
+                  'min-h-0 flex-1 overflow-hidden',
+                  showPreview && 'border-r',
+                )}
+              >
                 {scopeCommandUri ? (
                   <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                    <FolderOpen className={cn('size-6', isScopeCommandValid ? 'text-blue-500/50' : 'text-destructive/60')} />
+                    <FolderOpen
+                      className={cn(
+                        'size-6',
+                        isScopeCommandValid
+                          ? 'text-blue-500/50'
+                          : 'text-destructive/60',
+                      )}
+                    />
                     {scopeValidationQuery.isLoading ? (
                       <div>
-                        <p className="text-sm font-medium text-foreground/80">{t('searchPalette.scopeState.validatingTitle')}</p>
+                        <p className="text-sm font-medium text-foreground/80">
+                          {t('searchPalette.scopeState.validatingTitle')}
+                        </p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.validatingPrefix')}
-                          {' '}
-                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
-                          {' '}
+                          {t('searchPalette.scopeState.validatingPrefix')}{' '}
+                          <span className="font-medium text-foreground/80">
+                            {scopeCommandUri}
+                          </span>{' '}
                           {t('searchPalette.scopeState.validatingSuffix')}
                         </p>
                       </div>
                     ) : isScopeCommandValid ? (
                       <div>
-                        <p className="text-sm font-medium text-foreground/80">{t('searchPalette.scopeState.switchTitle')}</p>
+                        <p className="text-sm font-medium text-foreground/80">
+                          {t('searchPalette.scopeState.switchTitle')}
+                        </p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.switchPrefix')}
-                          {' '}
-                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ENTER_LABEL}</kbd>
-                          {' '}
-                          {t('searchPalette.scopeState.switchMiddle')}
-                          {' '}
-                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
+                          {t('searchPalette.scopeState.switchPrefix')}{' '}
+                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
+                            {KEY_ENTER_LABEL}
+                          </kbd>{' '}
+                          {t('searchPalette.scopeState.switchMiddle')}{' '}
+                          <span className="font-medium text-foreground/80">
+                            {scopeCommandUri}
+                          </span>
                         </p>
                       </div>
                     ) : (
                       <div>
-                        <p className="text-sm font-medium text-destructive">{t('searchPalette.scopeState.invalidTitle')}</p>
+                        <p className="text-sm font-medium text-destructive">
+                          {t('searchPalette.scopeState.invalidTitle')}
+                        </p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.invalidPrefix')}
-                          {' '}
-                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
-                          {' '}
+                          {t('searchPalette.scopeState.invalidPrefix')}{' '}
+                          <span className="font-medium text-foreground/80">
+                            {scopeCommandUri}
+                          </span>{' '}
                           {t('searchPalette.scopeState.invalidSuffix')}
                         </p>
                       </div>
@@ -300,19 +385,21 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                   <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
                     <Search className="size-6 text-muted-foreground/30" />
                     <div>
-                      <p className="text-sm text-muted-foreground/70">{t('searchPalette.empty.title')}</p>
+                      <p className="text-sm text-muted-foreground/70">
+                        {t('searchPalette.empty.title')}
+                      </p>
                       <p className="mt-1 text-xs text-muted-foreground/50">
-                        {t('searchPalette.browseDirHint.before')}
-                        {' '}
-                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd>
-                        {' '}
+                        {t('searchPalette.browseDirHint.before')}{' '}
+                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
+                          /
+                        </kbd>{' '}
                         {t('searchPalette.browseDirHint.after')}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground/50">
-                        {t('searchPalette.globalScopeHint.before')}
-                        {' '}
-                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">//</kbd>
-                        {' '}
+                        {t('searchPalette.globalScopeHint.before')}{' '}
+                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
+                          //
+                        </kbd>{' '}
                         {t('searchPalette.globalScopeHint.after')}
                       </p>
                     </div>
@@ -325,20 +412,32 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                     </p>
                   </div>
                 ) : treeQuery.error ? (
-                  <div className="px-4 py-6 text-center text-xs text-destructive">{t('searchPalette.error')}</div>
+                  <div className="px-4 py-6 text-center text-xs text-destructive">
+                    {t('searchPalette.error')}
+                  </div>
                 ) : !hasResults ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
                     <Search className="size-5 text-muted-foreground/25" />
-                    <p className="text-sm text-muted-foreground/60">{t('searchPalette.emptyResults.title')}</p>
-                    <p className="text-xs text-muted-foreground/40">{t('searchPalette.emptyResults.subtitle')}</p>
+                    <p className="text-sm text-muted-foreground/60">
+                      {t('searchPalette.emptyResults.title')}
+                    </p>
+                    <p className="text-xs text-muted-foreground/40">
+                      {t('searchPalette.emptyResults.subtitle')}
+                    </p>
                   </div>
                 ) : (
                   <DirResultList
                     className="h-full"
                     items={filteredEntries}
                     activeIndex={activeIndex}
-                    onSelect={(entry) => { onNavigate(entry.uri); onClose() }}
-                    onOpenDir={(entry) => { onNavigateDir(getParentUri(entry.uri)); onClose() }}
+                    onSelect={(entry) => {
+                      onNavigate(entry.uri)
+                      onClose()
+                    }}
+                    onOpenDir={(entry) => {
+                      onNavigateDir(getParentUri(entry.uri))
+                      onClose()
+                    }}
                   />
                 )}
               </div>
@@ -360,18 +459,59 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
         {/* Footer */}
         {isDirMode ? (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.dirMode.select')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> {t('searchPalette.footer.dirMode.level')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.dirMode.confirm')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ESCAPE_LABEL}</kbd> {t('searchPalette.footer.dirMode.cancel')}</span>
+            <span>
+              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                ↑↓
+              </kbd>{' '}
+              {t('searchPalette.footer.dirMode.select')}
+            </span>
+            <span>
+              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                ←→
+              </kbd>{' '}
+              {t('searchPalette.footer.dirMode.level')}
+            </span>
+            <span>
+              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                ↵
+              </kbd>{' '}
+              {t('searchPalette.footer.dirMode.confirm')}
+            </span>
+            <span>
+              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                {KEY_ESCAPE_LABEL}
+              </kbd>{' '}
+              {t('searchPalette.footer.dirMode.cancel')}
+            </span>
           </div>
-        ) : hasResults && (
-          <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.resultMode.navigate')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.resultMode.open')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ESCAPE_LABEL}</kbd> {t('searchPalette.footer.resultMode.close')}</span>
-            <span className="ml-auto tabular-nums">{t('searchPalette.footer.resultMode.count', { count: filteredEntries.length })}</span>
-          </div>
+        ) : (
+          hasResults && (
+            <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
+              <span>
+                <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                  ↑↓
+                </kbd>{' '}
+                {t('searchPalette.footer.resultMode.navigate')}
+              </span>
+              <span>
+                <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                  ↵
+                </kbd>{' '}
+                {t('searchPalette.footer.resultMode.open')}
+              </span>
+              <span>
+                <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                  {KEY_ESCAPE_LABEL}
+                </kbd>{' '}
+                {t('searchPalette.footer.resultMode.close')}
+              </span>
+              <span className="ml-auto tabular-nums">
+                {t('searchPalette.footer.resultMode.count', {
+                  count: filteredEntries.length,
+                })}
+              </span>
+            </div>
+          )
         )}
       </div>
     </div>
@@ -396,7 +536,10 @@ function DirResultList({
 
   return (
     <div
-      className={cn('scrollbar-fade min-h-0 flex-1 overflow-y-auto overscroll-contain', className)}
+      className={cn(
+        'scrollbar-fade min-h-0 flex-1 overflow-y-auto overscroll-contain',
+        className,
+      )}
       data-scrolling={isScrolling || undefined}
       onScroll={onScroll}
     >
@@ -412,7 +555,9 @@ function DirResultList({
             data-active={isActive}
             className={cn(
               'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
-              isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
+              isActive
+                ? 'bg-primary/8 text-foreground'
+                : 'text-foreground/80 hover:bg-muted/40',
             )}
             style={{ animationDelay: `${i * 24}ms` }}
             onClick={() => onSelect(entry)}
@@ -420,13 +565,22 @@ function DirResultList({
             {isActive && (
               <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
             )}
-            <EntryIcon className={cn('mt-0.5 size-4 shrink-0', entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70')} />
+            <EntryIcon
+              className={cn(
+                'mt-0.5 size-4 shrink-0',
+                entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
+              )}
+            />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{name}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
+                {parent}
+              </div>
             </div>
             {entry.size && (
-              <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">{entry.size}</span>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">
+                {entry.size}
+              </span>
             )}
             <span
               role="button"
@@ -434,8 +588,16 @@ function DirResultList({
               title={t('searchPalette.openContainingDirectory')}
               className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
-              onClick={(e) => { e.stopPropagation(); onOpenDir(entry) }}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(entry) } }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenDir(entry)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  onOpenDir(entry)
+                }
+              }}
             >
               <FolderOpen className="size-3.5" />
             </span>

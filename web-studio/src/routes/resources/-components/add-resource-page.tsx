@@ -1,5 +1,15 @@
 import { fileTypeFromBlob } from 'file-type'
-import { AlertTriangle, CheckCircle2, ChevronRight, FileIcon, FolderOpen, Globe, Info, Loader2Icon, Upload } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  FileIcon,
+  FolderOpen,
+  Globe,
+  Info,
+  Loader2Icon,
+  Upload,
+} from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useTranslation } from 'react-i18next'
@@ -7,11 +17,19 @@ import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
 import { Checkbox } from '#/components/ui/checkbox'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#/components/ui/collapsible'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '#/components/ui/collapsible'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
-import { Tooltip, TooltipContent, TooltipTrigger } from '#/components/ui/tooltip'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '#/components/ui/tooltip'
 import { cn } from '#/lib/utils'
 import { useResourceUpload } from '../-hooks/use-resource-upload'
 import {
@@ -31,7 +49,10 @@ type SelectedUploadFile = {
 }
 
 function createLocalFileId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return crypto.randomUUID()
   }
   return `local-file-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -46,14 +67,12 @@ async function detectFileType(file: File): Promise<string | null> {
   }
 }
 
-export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = {}) {
+export function AddResourceForm({
+  onSubmitted,
+}: { onSubmitted?: () => void } = {}) {
   const { t } = useTranslation('addResource')
-  const {
-    enqueueUploads,
-    startRemote,
-    resetRemote,
-    remoteState,
-  } = useResourceUpload()
+  const { enqueueUploads, startRemote, resetRemote, remoteState } =
+    useResourceUpload()
 
   const [mode, setMode] = useState<Mode>('upload')
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -71,60 +90,71 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
 
   const remotePhase = remoteState.phase
   const activeMode = mode
-  const displayRemoteUrl = remotePhase === 'processing' ? remoteState.remoteUrl : remoteUrl
+  const displayRemoteUrl =
+    remotePhase === 'processing' ? remoteState.remoteUrl : remoteUrl
   const skippedFiles = remoteState.skippedFiles
 
-  const addFiles = useCallback((files: File[]) => {
-    void (async () => {
-      const nextItems: SelectedUploadFile[] = []
+  const addFiles = useCallback(
+    (files: File[]) => {
+      void (async () => {
+        const nextItems: SelectedUploadFile[] = []
 
-      for (const file of files) {
-        if (isBlockedFile(file.name)) {
-          toast.error(t('fileBlocked', { name: file.name }), { duration: 2500 })
-          continue
+        for (const file of files) {
+          if (isBlockedFile(file.name)) {
+            toast.error(t('fileBlocked', { name: file.name }), {
+              duration: 2500,
+            })
+            continue
+          }
+
+          if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) {
+            toast.error(
+              t('fileTooLarge', {
+                name: file.name,
+                size: formatFileSize(MAX_UPLOAD_FILE_SIZE_BYTES),
+              }),
+              { duration: 2500 },
+            )
+            continue
+          }
+
+          nextItems.push({
+            id: createLocalFileId(),
+            file,
+            fileType: await detectFileType(file),
+          })
         }
 
-        if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) {
-          toast.error(
-            t('fileTooLarge', {
-              name: file.name,
-              size: formatFileSize(MAX_UPLOAD_FILE_SIZE_BYTES),
-            }),
-            { duration: 2500 },
-          )
-          continue
-        }
+        if (nextItems.length === 0) return
 
-        nextItems.push({
-          id: createLocalFileId(),
-          file,
-          fileType: await detectFileType(file),
+        setSelectedFiles((prev) => {
+          const remainingSlots = Math.max(MAX_UPLOAD_FILES - prev.length, 0)
+          const kept = nextItems.slice(0, remainingSlots)
+          if (nextItems.length > remainingSlots) {
+            toast(t('tooManyFiles', { count: MAX_UPLOAD_FILES }), {
+              duration: 2500,
+            })
+          }
+          return [...prev, ...kept]
         })
-      }
-
-      if (nextItems.length === 0) return
-
-      setSelectedFiles((prev) => {
-        const remainingSlots = Math.max(MAX_UPLOAD_FILES - prev.length, 0)
-        const kept = nextItems.slice(0, remainingSlots)
-        if (nextItems.length > remainingSlots) {
-          toast(t('tooManyFiles', { count: MAX_UPLOAD_FILES }), { duration: 2500 })
-        }
-        return [...prev, ...kept]
-      })
-    })()
-  }, [t])
+      })()
+    },
+    [t],
+  )
 
   const removeFile = useCallback((id: string) => {
     setSelectedFiles((prev) => prev.filter((file) => file.id !== id))
   }, [])
 
-  const handleRemoteUrlChange = useCallback((value: string) => {
-    if (remotePhase === 'done') {
-      resetRemote()
-    }
-    setRemoteUrl(value)
-  }, [remotePhase, resetRemote])
+  const handleRemoteUrlChange = useCallback(
+    (value: string) => {
+      if (remotePhase === 'done') {
+        resetRemote()
+      }
+      setRemoteUrl(value)
+    },
+    [remotePhase, resetRemote],
+  )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: addFiles,
@@ -184,9 +214,8 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
     setMode('upload')
   }
 
-  const canSubmit = activeMode === 'upload'
-    ? selectedFiles.length > 0
-    : !!remoteUrl.trim()
+  const canSubmit =
+    activeMode === 'upload' ? selectedFiles.length > 0 : !!remoteUrl.trim()
 
   return (
     <div className="flex flex-col gap-6">
@@ -233,20 +262,29 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
               <div className="space-y-2">
                 <Upload className="mx-auto size-10 text-muted-foreground/60" />
                 <p className="text-sm font-medium">{t('dropzone.title')}</p>
-                <p className="text-xs text-muted-foreground">{t('dropzone.hint')}</p>
-                <p className="text-xs text-muted-foreground/70">{t('dropzone.supportedFormats')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t('dropzone.hint')}
+                </p>
+                <p className="text-xs text-muted-foreground/70">
+                  {t('dropzone.supportedFormats')}
+                </p>
               </div>
             </div>
 
             {selectedFiles.length > 0 ? (
               <div className="overflow-hidden rounded-lg border border-border/60 bg-muted/10">
                 {selectedFiles.map(({ id, file }) => (
-                  <div key={id} className="flex items-center gap-3 border-b border-border/50 px-4 py-3 last:border-b-0">
+                  <div
+                    key={id}
+                    className="flex items-center gap-3 border-b border-border/50 px-4 py-3 last:border-b-0"
+                  >
                     <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                       <FileIcon className="size-5 text-muted-foreground" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{file.name}</p>
+                      <p className="truncate text-sm font-medium">
+                        {file.name}
+                      </p>
                     </div>
                     <div className="shrink-0 text-xs text-muted-foreground">
                       {formatFileSize(file.size)}
@@ -275,7 +313,9 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
               onChange={(e) => handleRemoteUrlChange(e.target.value)}
               disabled={remotePhase === 'processing'}
             />
-            <p className="text-xs text-muted-foreground">{t('remoteUrl.hint')}</p>
+            <p className="text-xs text-muted-foreground">
+              {t('remoteUrl.hint')}
+            </p>
           </div>
         )}
 
@@ -310,12 +350,14 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
                 <CollapsibleContent>
                   <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
                     {skippedFiles.map((file) => (
-                      <li key={file} className="truncate">- {file}</li>
+                      <li key={file} className="truncate">
+                        - {file}
+                      </li>
                     ))}
                   </ul>
                 </CollapsibleContent>
-                </Collapsible>
-              ) : null}
+              </Collapsible>
+            ) : null}
           </div>
         ) : null}
 
@@ -354,19 +396,37 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
             <div className="mt-3 space-y-4 rounded-lg border border-border/50 bg-muted/10 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <Label className="flex items-center gap-2">
-                  <Checkbox checked={strict} onCheckedChange={(checked) => setStrict(Boolean(checked))} />
+                  <Checkbox
+                    checked={strict}
+                    onCheckedChange={(checked) => setStrict(Boolean(checked))}
+                  />
                   <span>{t('strict')}</span>
                   <Tooltip>
-                    <TooltipTrigger render={<Info className="size-3.5 text-muted-foreground" />} />
+                    <TooltipTrigger
+                      render={
+                        <Info className="size-3.5 text-muted-foreground" />
+                      }
+                    />
                     <TooltipContent>{t('strict.hint')}</TooltipContent>
                   </Tooltip>
                 </Label>
                 <Label className="flex items-center gap-2">
-                  <Checkbox checked={directlyUploadMedia} onCheckedChange={(checked) => setDirectlyUploadMedia(Boolean(checked))} />
+                  <Checkbox
+                    checked={directlyUploadMedia}
+                    onCheckedChange={(checked) =>
+                      setDirectlyUploadMedia(Boolean(checked))
+                    }
+                  />
                   <span>{t('directlyUploadMedia')}</span>
                   <Tooltip>
-                    <TooltipTrigger render={<Info className="size-3.5 text-muted-foreground" />} />
-                    <TooltipContent>{t('directlyUploadMedia.hint')}</TooltipContent>
+                    <TooltipTrigger
+                      render={
+                        <Info className="size-3.5 text-muted-foreground" />
+                      }
+                    />
+                    <TooltipContent>
+                      {t('directlyUploadMedia.hint')}
+                    </TooltipContent>
                   </Tooltip>
                 </Label>
               </div>
@@ -374,7 +434,9 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
               {activeMode === 'remote' ? (
                 <div className="space-y-4 border-t border-border/50 pt-4">
                   <div className="space-y-2">
-                    <Label htmlFor="add-resource-ignore-dirs">{t('directoryScan.ignoreDirs')}</Label>
+                    <Label htmlFor="add-resource-ignore-dirs">
+                      {t('directoryScan.ignoreDirs')}
+                    </Label>
                     <Input
                       id="add-resource-ignore-dirs"
                       placeholder={t('directoryScan.ignoreDirs.placeholder')}
@@ -383,7 +445,9 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="add-resource-include">{t('directoryScan.include')}</Label>
+                    <Label htmlFor="add-resource-include">
+                      {t('directoryScan.include')}
+                    </Label>
                     <Input
                       id="add-resource-include"
                       placeholder={t('directoryScan.include.placeholder')}
@@ -392,7 +456,9 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="add-resource-exclude">{t('directoryScan.exclude')}</Label>
+                    <Label htmlFor="add-resource-exclude">
+                      {t('directoryScan.exclude')}
+                    </Label>
                     <Input
                       id="add-resource-exclude"
                       placeholder={t('directoryScan.exclude.placeholder')}
@@ -414,7 +480,9 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="add-resource-instruction">{t('instruction')}</Label>
+                <Label htmlFor="add-resource-instruction">
+                  {t('instruction')}
+                </Label>
                 <Textarea
                   id="add-resource-instruction"
                   placeholder={t('instruction.placeholder')}
@@ -428,9 +496,14 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
 
         <Button
           onClick={handleSubmit}
-          disabled={!canSubmit || (activeMode === 'remote' && remotePhase === 'processing')}
+          disabled={
+            !canSubmit ||
+            (activeMode === 'remote' && remotePhase === 'processing')
+          }
         >
-          {activeMode === 'remote' && remotePhase === 'processing' ? t('uploading') : t('startProcessing')}
+          {activeMode === 'remote' && remotePhase === 'processing'
+            ? t('uploading')
+            : t('startProcessing')}
         </Button>
       </div>
 

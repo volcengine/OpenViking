@@ -9,7 +9,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function truncateText(value: unknown, maxLength = MAX_ERROR_TEXT_LENGTH): string {
+function truncateText(
+  value: unknown,
+  maxLength = MAX_ERROR_TEXT_LENGTH,
+): string {
   const text = String(value || '')
   if (text.length <= maxLength) {
     return text
@@ -18,7 +21,10 @@ function truncateText(value: unknown, maxLength = MAX_ERROR_TEXT_LENGTH): string
 }
 
 function withMissingApiKeyHint(code: string, message: string): string {
-  if (code === 'UNAUTHENTICATED' && message.toLowerCase().includes('missing api key')) {
+  if (
+    code === 'UNAUTHENTICATED' &&
+    message.toLowerCase().includes('missing api key')
+  ) {
     return `${message}${MISSING_API_KEY_HINT}`
   }
   return message
@@ -58,7 +64,10 @@ export class OvClientError extends Error {
   statusCode?: number
 
   constructor(options: OvClientErrorOptions, cause?: unknown) {
-    super(withMissingApiKeyHint(options.code, options.message), cause ? { cause } : undefined)
+    super(
+      withMissingApiKeyHint(options.code, options.message),
+      cause ? { cause } : undefined,
+    )
     this.name = 'OvClientError'
     this.code = options.code
     this.details = options.details
@@ -118,7 +127,10 @@ export function normalizeOvClientError(error: unknown): OvClientError {
 
     const normalized = new OvClientError(
       {
-        code: axiosError.code === AxiosError.ERR_NETWORK ? 'NETWORK_ERROR' : 'HTTP_ERROR',
+        code:
+          axiosError.code === AxiosError.ERR_NETWORK
+            ? 'NETWORK_ERROR'
+            : 'HTTP_ERROR',
         message:
           axiosError.message ||
           `Request failed with status ${statusCode ?? 'unknown'}`,
@@ -177,7 +189,9 @@ export function unwrapOvResponse<TResult>(response: unknown): TResult {
   return payload as TResult
 }
 
-export async function getOvResult<TResult>(request: Promise<unknown>): Promise<TResult> {
+export async function getOvResult<TResult>(
+  request: Promise<unknown>,
+): Promise<TResult> {
   try {
     return unwrapOvResponse(await request)
   } catch (error) {

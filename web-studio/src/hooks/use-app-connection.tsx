@@ -37,7 +37,8 @@ const DEFAULT_CONNECTION: ConnectionDraft = {
   userId: '',
 }
 
-const AppConnectionContext = React.createContext<AppConnectionContextValue | null>(null)
+const AppConnectionContext =
+  React.createContext<AppConnectionContextValue | null>(null)
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
@@ -54,7 +55,9 @@ function readStoredConnection(): Partial<ConnectionDraft> {
       return {}
     }
     const parsed: unknown = JSON.parse(raw)
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Partial<ConnectionDraft>) : {}
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Partial<ConnectionDraft>)
+      : {}
   } catch {
     return {}
   }
@@ -66,7 +69,10 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 
   try {
-    window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(connection))
+    window.localStorage.setItem(
+      CONNECTION_STORAGE_KEY,
+      JSON.stringify(connection),
+    )
   } catch {
     // Ignore localStorage failures in restricted environments.
   }
@@ -96,20 +102,30 @@ export function summarizeConnectionIdentity(
 export function useAppConnection(): AppConnectionContextValue {
   const context = React.useContext(AppConnectionContext)
   if (!context) {
-    throw new Error('useAppConnection must be used within AppConnectionProvider.')
+    throw new Error(
+      'useAppConnection must be used within AppConnectionProvider.',
+    )
   }
 
   return context
 }
 
-export function AppConnectionProvider({ children }: { children: React.ReactNode }) {
+export function AppConnectionProvider({
+  children,
+}: {
+  children: React.ReactNode
+}) {
   const storedConnection = React.useMemo(() => readStoredConnection(), [])
   const [connection, setConnection] = React.useState<ConnectionDraft>({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
-    apiKey: ovClient.getConnection().apiKey || storedConnection.apiKey || DEFAULT_CONNECTION.apiKey,
+    apiKey:
+      ovClient.getConnection().apiKey ||
+      storedConnection.apiKey ||
+      DEFAULT_CONNECTION.apiKey,
   })
-  const [isConnectionDialogOpen, setConnectionDialogOpen] = React.useState(false)
+  const [isConnectionDialogOpen, setConnectionDialogOpen] =
+    React.useState(false)
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
   React.useEffect(() => {
@@ -143,7 +159,10 @@ export function AppConnectionProvider({ children }: { children: React.ReactNode 
     const interceptorId = ovClient.instance.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (isOvClientError(error) && (error.statusCode === 401 || error.statusCode === 403)) {
+        if (
+          isOvClientError(error) &&
+          (error.statusCode === 401 || error.statusCode === 403)
+        ) {
           setConnectionDialogOpen(true)
         }
         return Promise.reject(error)
@@ -155,19 +174,23 @@ export function AppConnectionProvider({ children }: { children: React.ReactNode 
     }
   }, [])
 
-  const value = React.useMemo<AppConnectionContextValue>(() => ({
-    connection,
-    isConnectionDialogOpen,
-    openConnectionDialog: () => setConnectionDialogOpen(true),
-    saveConnection: (next) => setConnection({
-      accountId: next.accountId.trim(),
-      apiKey: next.apiKey.trim(),
-      baseUrl: normalizeBaseUrl(next.baseUrl),
-      userId: next.userId.trim(),
+  const value = React.useMemo<AppConnectionContextValue>(
+    () => ({
+      connection,
+      isConnectionDialogOpen,
+      openConnectionDialog: () => setConnectionDialogOpen(true),
+      saveConnection: (next) =>
+        setConnection({
+          accountId: next.accountId.trim(),
+          apiKey: next.apiKey.trim(),
+          baseUrl: normalizeBaseUrl(next.baseUrl),
+          userId: next.userId.trim(),
+        }),
+      serverMode,
+      setConnectionDialogOpen,
     }),
-    serverMode,
-    setConnectionDialogOpen,
-  }), [connection, isConnectionDialogOpen, serverMode])
+    [connection, isConnectionDialogOpen, serverMode],
+  )
 
   return (
     <AppConnectionContext.Provider value={value}>
