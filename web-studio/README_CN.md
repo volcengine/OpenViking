@@ -382,8 +382,5 @@ openviking-server --with-bot
 
 ## 相关文档
 
-- [AGENTS.md](AGENTS.md)：Web Studio 本地实现规则。
-- [WORKSPACE_IA.md](WORKSPACE_IA.md)：Web Studio 信息架构和产品规划。
-- [VIKINGBOT_STATUS.md](VIKINGBOT_STATUS.md)：sessions/chat 实现说明。
 - [OpenViking server deployment](../docs/en/guides/03-deployment.md)：服务端部署说明。
 - [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md)：Bot proxy 验证流程。

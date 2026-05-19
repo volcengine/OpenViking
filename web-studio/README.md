@@ -382,8 +382,5 @@ The API key is missing or invalid, the key belongs to a different server, or the
 
 ## Related Docs
 
-- [AGENTS.md](AGENTS.md): local implementation rules for this workspace.
-- [WORKSPACE_IA.md](WORKSPACE_IA.md): Web Studio information architecture and product planning.
-- [VIKINGBOT_STATUS.md](VIKINGBOT_STATUS.md): sessions/chat implementation notes.
 - [OpenViking server deployment](../docs/en/guides/03-deployment.md): server-side deployment details.
 - [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md): bot proxy validation flow.
