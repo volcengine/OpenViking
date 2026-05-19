@@ -9,19 +9,32 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '#/components/ui/pagination'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '#/components/ui/select'
 import { cn } from '#/lib/utils'
+
+import { PAGE_SIZE_OPTIONS } from '../-constants/audit'
 
 type RequestLogPaginationProps = {
   onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
   page: number
   pageCount: number
+  pageSize: number
   total: number
 }
 
 export function RequestLogPagination({
   onPageChange,
+  onPageSizeChange,
   page,
   pageCount,
+  pageSize,
   total,
 }: RequestLogPaginationProps) {
   const { t } = useTranslation('requestLogs')
@@ -33,9 +46,28 @@ export function RequestLogPagination({
 
   return (
     <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-sm text-muted-foreground">
-        {t('pagination.summary', { page, pageCount, total })}
-      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">
+          {t('pagination.summary', { page, pageCount, total })}
+        </p>
+        <Select
+          value={String(pageSize)}
+          onValueChange={(value) => onPageSizeChange(Number(value))}
+        >
+          <SelectTrigger size="sm" aria-label={t('pagination.pageSize')}>
+            <SelectValue>
+              {t('pagination.pageSizeValue', { count: pageSize })}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {PAGE_SIZE_OPTIONS.map((option) => (
+              <SelectItem key={option} value={String(option)}>
+                {t('pagination.pageSizeValue', { count: option })}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <Pagination className="mx-0 w-auto justify-start sm:justify-end">
         <PaginationContent>
           <PaginationItem>

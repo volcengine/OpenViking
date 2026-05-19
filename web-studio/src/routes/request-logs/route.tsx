@@ -5,8 +5,8 @@ import { ActivityIcon, BarChart3Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { MetricCard } from './-components/metric-card'
-import { RequestLogPanel } from './-components/request-log-panel'
-import { DEFAULT_FILTERS, PAGE_SIZE } from './-constants/audit'
+import { RequestLogPanel } from './-components/panel'
+import { DEFAULT_FILTERS, DEFAULT_PAGE_SIZE } from './-constants/audit'
 import { fetchAuditLogs, isZeroResultCombination } from './-lib/api'
 import { formatPercent } from './-lib/format'
 import type { AuditFilters, LogTypeFilter } from './-types/audit'
@@ -21,19 +21,20 @@ function RequestLogsRoute() {
     React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [filters, setFilters] = React.useState<AuditFilters>(DEFAULT_FILTERS)
   const [page, setPage] = React.useState(1)
+  const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
   const zeroResult = isZeroResultCombination(filters)
 
   const audit = useQuery({
     enabled: !zeroResult,
-    queryFn: () => fetchAuditLogs(filters, page),
-    queryKey: ['console-audit-logs', filters, page],
+    queryFn: () => fetchAuditLogs(filters, page, pageSize),
+    queryKey: ['console-audit-logs', filters, page, pageSize],
     refetchInterval: 30_000,
   })
 
   const logs = zeroResult ? [] : (audit.data?.items ?? [])
   const disabled = audit.data?.enabled === false
   const total = zeroResult ? 0 : (audit.data?.total ?? 0)
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
 
   const handleSearch = () => {
     setFilters({ ...draftFilters })
@@ -56,6 +57,11 @@ function RequestLogsRoute() {
   const handleRefresh = () => {
     if (zeroResult) return
     void audit.refetch()
+  }
+
+  const handlePageSizeChange = (nextPageSize: number) => {
+    setPageSize(nextPageSize)
+    setPage(1)
   }
 
   return (
@@ -85,11 +91,13 @@ function RequestLogsRoute() {
         onDraftFiltersChange={setDraftFilters}
         onLogTypeChange={handleLogTypeChange}
         onPageChange={setPage}
+        onPageSizeChange={handlePageSizeChange}
         onRefresh={handleRefresh}
         onReset={handleReset}
         onSearch={handleSearch}
         page={page}
         pageCount={pageCount}
+        pageSize={pageSize}
         total={total}
         zeroResult={zeroResult}
       />

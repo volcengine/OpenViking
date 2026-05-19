@@ -13,9 +13,9 @@ import {
 import type { ConsoleAuditLogItem } from '@ov-server/api/v1/console'
 
 import { EmptyLogsState } from './empty-logs-state'
-import { RequestLogFilters } from './request-log-filters'
-import { RequestLogPagination } from './request-log-pagination'
-import { RequestLogRow } from './request-log-row'
+import { RequestLogFilters } from './filters'
+import { RequestLogPagination } from './pagination'
+import { RequestLogRow } from './row'
 import type { AuditFilters, LogTypeFilter } from '../-types/audit'
 
 type RequestLogPanelProps = {
@@ -30,11 +30,13 @@ type RequestLogPanelProps = {
   onDraftFiltersChange: React.Dispatch<React.SetStateAction<AuditFilters>>
   onLogTypeChange: (logType: LogTypeFilter) => void
   onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
   onRefresh: () => void
   onReset: () => void
   onSearch: () => void
   page: number
   pageCount: number
+  pageSize: number
   total: number
   zeroResult: boolean
 }
@@ -51,11 +53,13 @@ export function RequestLogPanel({
   onDraftFiltersChange,
   onLogTypeChange,
   onPageChange,
+  onPageSizeChange,
   onRefresh,
   onReset,
   onSearch,
   page,
   pageCount,
+  pageSize,
   total,
   zeroResult,
 }: RequestLogPanelProps) {
@@ -140,8 +144,10 @@ export function RequestLogPanel({
             <RequestLogPagination
               page={page}
               pageCount={pageCount}
+              pageSize={pageSize}
               total={total}
               onPageChange={onPageChange}
+              onPageSizeChange={onPageSizeChange}
             />
           </>
         )}

@@ -4,16 +4,16 @@ import type {
   ConsoleAuditResult,
 } from '@ov-server/api/v1/console'
 
-import { PAGE_SIZE } from '../-constants/audit'
 import type { AuditFilters } from '../-types/audit'
 
 export function buildAuditQuery(
   filters: AuditFilters,
   page: number,
+  pageSize: number,
 ): ConsoleAuditQuery {
   const query: ConsoleAuditQuery = {
     page,
-    page_size: PAGE_SIZE,
+    page_size: pageSize,
   }
 
   const requestId = filters.requestId.trim()
@@ -48,10 +48,11 @@ export function isZeroResultCombination(filters: AuditFilters): boolean {
 export function fetchAuditLogs(
   filters: AuditFilters,
   page: number,
+  pageSize: number,
 ): Promise<ConsoleAuditResult> {
   return getOvResult<ConsoleAuditResult>(
     getConsoleAudit({
-      query: buildAuditQuery(filters, page),
+      query: buildAuditQuery(filters, page, pageSize),
     }),
   )
 }

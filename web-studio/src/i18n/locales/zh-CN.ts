@@ -238,6 +238,8 @@ const zhCN = {
     },
     pagination: {
       next: '下一页',
+      pageSize: '每页条数',
+      pageSizeValue: '每页 {{count}} 条',
       previous: '上一页',
       summary: '共 {{total}} 条，第 {{page}} / {{pageCount}} 页',
     },

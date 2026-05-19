@@ -238,6 +238,8 @@ const en = {
     },
     pagination: {
       next: 'Next',
+      pageSize: 'Rows per page',
+      pageSizeValue: '{{count}} / page',
       previous: 'Previous',
       summary: '{{total}} total, page {{page}} / {{pageCount}}',
     },
