@@ -174,21 +174,9 @@ def get_session_file_path(sessions_root: Path, session: Session) -> Path:
 
 
 def is_chat_session_key(key: str) -> bool:
-    # OpenClaw session keys include cron/subagent/tool routes; only chat routes should be synced.
+    # OpenClaw chat session keys can vary by channel, so only filter known non-chat routes.
     blocked = (":cron:", ":heartbeat", ":subagent:", ":acp:", ":hook:")
-    if not key.startswith("agent:main:"):
-        return False
-    if any(part in key for part in blocked):
-        return False
-    return key.endswith(":main") or any(
-        marker in key
-        for marker in (
-            ":direct:",
-            ":channel:",
-            ":group:",
-            ":room:",
-        )
-    )
+    return bool(key) and not any(part in key for part in blocked)
 
 
 def _session_from_file(path: Path, session_key: str = "") -> Session | None:

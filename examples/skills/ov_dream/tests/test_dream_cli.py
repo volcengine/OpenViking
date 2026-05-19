@@ -180,18 +180,20 @@ def test_get_active_sessions_does_not_fallback_to_raw_jsonl(tmp_path: Path) -> N
 
 def test_is_chat_session_key_filters_non_chat_openclaw_sessions() -> None:
     assert dream.is_chat_session_key("agent:main:main")
+    assert dream.is_chat_session_key("agent:main:web-abc")
     assert dream.is_chat_session_key("agent:main:telegram:direct:123")
     assert dream.is_chat_session_key("agent:main:discord:channel:456")
     assert dream.is_chat_session_key("agent:main:chat:group:789")
     assert dream.is_chat_session_key("agent:main:chat:room:abc")
+    assert dream.is_chat_session_key("agent:other:main")
+    assert dream.is_chat_session_key("plain:main")
 
     assert not dream.is_chat_session_key("agent:main:cron:daily")
     assert not dream.is_chat_session_key("agent:main:heartbeat")
     assert not dream.is_chat_session_key("agent:main:subagent:child")
     assert not dream.is_chat_session_key("agent:main:acp:tool")
     assert not dream.is_chat_session_key("agent:main:hook:event")
-    assert not dream.is_chat_session_key("agent:other:main")
-    assert not dream.is_chat_session_key("plain:main")
+    assert not dream.is_chat_session_key("")
 
 
 def test_get_active_sessions_filters_index_entries(tmp_path: Path) -> None:
