@@ -6,6 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import httpx
+
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.volcengine_embedders import VolcengineDenseEmbedder
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
@@ -112,9 +113,7 @@ def test_volcengine_embedders_disable_env_proxy_clients(monkeypatch):
         created.append(("sync", kwargs["http_client"]))
         return SimpleNamespace(
             multimodal_embeddings=SimpleNamespace(
-                create=lambda **_: SimpleNamespace(
-                    data=SimpleNamespace(embedding=[0.4, 0.5, 0.6])
-                )
+                create=lambda **_: SimpleNamespace(data=SimpleNamespace(embedding=[0.4, 0.5, 0.6]))
             ),
         )
 
