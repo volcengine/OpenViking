@@ -37,6 +37,9 @@ export function Composer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      const isComposing = e.nativeEvent.isComposing || e.keyCode === 229
+      if (isComposing) return
+
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
         if (!isStreaming) handleSend()
