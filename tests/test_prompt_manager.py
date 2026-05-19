@@ -87,6 +87,8 @@ def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences(
     assert "migrate" in text
     assert "preferences" in text
     assert "Do not keep concrete preference examples" in text
+    assert "patch" in text
+    assert "rewrite the whole profile" in text
 
 
 def test_preferences_memory_template_limits_topics_and_splits_when_too_large():

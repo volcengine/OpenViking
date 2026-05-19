@@ -190,6 +190,10 @@ class ExtractLoop:
 {self.context_provider.instruction()}
 {page_id_rules}
 {link_rules}
+## Read Format Rules
+- The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
+- Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
+- When you copy text from read results into SEARCH/REPLACE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search` or `replace`.
 ## Output Format
 The final output of the model must strictly follow the JSON Schema format shown below:
 ```json
@@ -754,6 +758,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             "SEARCH/REPLACE patch could not be applied to the target memory file. "
             "The SEARCH text must be copied exactly from the read result of the file bound to that operation's page_id. "
             "Do not use SEARCH text from the conversation or from another page. "
+            "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH and REPLACE text. "
             "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "
             "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
             "Output ONLY the complete JSON object matching the required schema.\n\n"

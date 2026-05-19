@@ -33,6 +33,8 @@ fields:
       Keep only the most important high-level identity facts, with 5-8 bullets total.
       Only record objective statuses, do not record events or similar information.
       If reusable preference-oriented details overflow profile scope, migrate them to preferences instead.
+      Even though this field uses patch semantics, you may use patch to rewrite the whole profile into a shorter minimal version when needed.
+      Prefer large-scale replacement over local edits when compressing an oversized profile.
       [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
       Example:
       # Caroline

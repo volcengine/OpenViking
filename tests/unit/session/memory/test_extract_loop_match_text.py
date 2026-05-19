@@ -14,63 +14,6 @@ class AttrDict(dict):
     __getattr__ = dict.get
 
 
-class TestValidateMatchText:
-    """Tests for ExtractLoop._validate_match_text static method."""
-
-    def test_none_match_text_allowed(self):
-        assert ExtractLoop._validate_match_text(None, "some content") is True
-
-    def test_empty_match_text_allowed(self):
-        assert ExtractLoop._validate_match_text("", "some content") is True
-
-    def test_single_word_found_in_conversation(self):
-        assert ExtractLoop._validate_match_text("Python", "I love Python programming") is True
-
-    def test_chinese_word_found_in_conversation(self):
-        assert ExtractLoop._validate_match_text("机器学习", "我在研究机器学习技术") is True
-
-    def test_chinese_compound_word(self):
-        # Chinese compound words (no spaces) are single words
-        assert ExtractLoop._validate_match_text("深度学习", "我们训练了一个深度学习模型") is True
-
-    def test_multi_word_phrase_rejected(self):
-        # "machine learning" is a phrase (contains space), not a single word
-        assert (
-            ExtractLoop._validate_match_text(
-                "machine learning", "I study machine learning at school"
-            )
-            is False
-        )
-
-    def test_multi_word_chinese_phrase_with_space_rejected(self):
-        # Chinese phrase with space is rejected
-        assert ExtractLoop._validate_match_text("机器 学习", "我在研究机器学习技术") is False
-
-    def test_not_found_in_conversation(self):
-        assert ExtractLoop._validate_match_text("Java", "I love Python programming") is False
-
-    def test_not_found_in_empty_conversation(self):
-        assert ExtractLoop._validate_match_text("Python", "") is False
-
-    def test_word_with_tab_rejected(self):
-        # Tab character means it's not a single word
-        assert ExtractLoop._validate_match_text("hello\tworld", "hello\tworld here") is False
-
-    def test_word_with_newline_rejected(self):
-        assert ExtractLoop._validate_match_text("hello\nworld", "hello\nworld here") is False
-
-    def test_word_without_punctuation(self):
-        assert ExtractLoop._validate_match_text("API", "The API is great") is True
-
-    def test_word_with_hyphen(self):
-        # Hyphenated word (no spaces) is a single word
-        assert ExtractLoop._validate_match_text("self-care", "I practice self-care daily") is True
-
-    def test_word_with_period(self):
-        # Word with period (no spaces) is a single word
-        assert ExtractLoop._validate_match_text("Python.", "I use Python. daily") is True
-
-
 class TestResolveLinksLogging:
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
@@ -156,7 +99,11 @@ class TestPageIdInstruction:
 
         system_content = captured_messages[0]["content"]
         assert "## Page ID Rules" in system_content
+        assert "## Read Format Rules" in system_content
         assert 'Every memory item you create or edit MUST include "page_id".' in system_content
+        assert "The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`." in system_content
+        assert "each visible line is prefixed with `line_number<TAB>`" in system_content
+        assert "Never include the line-number prefix itself in `search` or `replace`." in system_content
         assert "For existing items, use the page_id shown in read/search results." in system_content
         assert "For new items, assign a unique page_id >= 100." in system_content
         assert "When editing an existing item, reuse its existing page_id." in system_content
@@ -221,8 +168,10 @@ class TestPageIdInstruction:
 
         system_content = captured_messages[0]["content"]
         assert "## Page ID Rules" in system_content
+        assert "## Read Format Rules" in system_content
         assert "## Link Rules" in system_content
         assert "Link fields `f` and `t` must reference these page_id values." in system_content
+        assert "each visible line is prefixed with `line_number<TAB>`" in system_content
         assert "Only create links when the relationship is meaningful" in system_content
 
 

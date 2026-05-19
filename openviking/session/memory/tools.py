@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
@@ -156,6 +157,18 @@ class MemoryReadTool(MemoryTool):
                     "type": "string",
                     "description": "Memory URI to read, e.g., 'viking://user/user123/memories/profile.md'",
                 },
+                "offset": {
+                    "type": "integer",
+                    "description": "Starting line number to read from (0-indexed)",
+                    "default": 0,
+                    "minimum": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of lines to read. -1 means read to end",
+                    "default": -1,
+                    "minimum": -1,
+                },
             },
             "required": ["uri"],
         }
@@ -166,6 +179,8 @@ class MemoryReadTool(MemoryTool):
         **kwargs: Any,
     ) -> Any:
         uri = kwargs.get("uri", "")
+        offset = kwargs.get("offset", 0)
+        limit = kwargs.get("limit", -1)
         try:
             content = await ctx.viking_fs.read_file(
                 uri,
@@ -183,12 +198,19 @@ class MemoryReadTool(MemoryTool):
                 page_id = ctx.page_id_map.get_page_id(uri)
                 if page_id is not None:
                     llm_result["page_id"] = page_id
-            # Add 1-based line numbers to content for LLM readability & link extraction
-            plain_content = mf.plain_content()
-            if plain_content:
-                lines = plain_content.split("\n")
-                numbered = "\n".join(f"{i + 1} | {line}" for i, line in enumerate(lines))
-                llm_result["content"] = numbered
+            plain_content = mf.plain_content() or ""
+            visible_content = slice_content_lines(plain_content, offset=offset, limit=limit)
+            if visible_content:
+                llm_result["content"] = add_line_numbers(visible_content, start_line=offset + 1)
+            elif line_count(plain_content) == 0:
+                llm_result["content"] = (
+                    "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+                )
+            else:
+                llm_result["content"] = (
+                    "<system-reminder>Warning: the file exists but is shorter than the provided "
+                    f"offset ({offset + 1}). The file has {line_count(plain_content)} lines.</system-reminder>"
+                )
             return llm_result
         except NotFoundError as e:
             tracer.info(f"read not found: {uri}")

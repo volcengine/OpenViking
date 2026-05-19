@@ -24,6 +24,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.utils.line_numbers import (
+    add_line_numbers,
+    every_line_has_line_numbers,
+    extract_start_line_number,
+    strip_line_numbers,
+)
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -219,43 +225,6 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
         best_content = line
 
     return best_score, best_content
-
-
-# ============================================================================
-# Line Number Utilities (from RooCode)
-# ============================================================================
-
-
-def add_line_numbers(content: str, start_line: int = 1) -> str:
-    """Add line numbers to content."""
-    lines = content.split("\n")
-    numbered_lines = [f"{start_line + i} | {line}" for i, line in enumerate(lines)]
-    return "\n".join(numbered_lines)
-
-
-def strip_line_numbers(content: str, aggressive: bool = False) -> str:
-    """
-    Strip line numbers from content.
-
-    Args:
-        content: Content with line numbers
-        aggressive: If True, strip all line numbers regardless of format
-    """
-    if aggressive:
-        # Aggressive: remove anything that looks like a line number at the start
-        return re.sub(r"^\s*\d+\s*[|:]\s*", "", content, flags=re.MULTILINE)
-    else:
-        # Standard: only strip "N | " format
-        return re.sub(r"^\d+\s*\|\s*", "", content, flags=re.MULTILINE)
-
-
-def every_line_has_line_numbers(content: str) -> bool:
-    """Check if every line in content has a line number."""
-    lines = content.split("\n")
-    if not lines:
-        return False
-    # Check if all lines match the pattern "N | " at the start
-    return all(re.match(r"^\d+\s*\|\s*", line) for line in lines)
 
 
 # ============================================================================
@@ -574,10 +543,9 @@ class MultiSearchReplaceDiffStrategy:
             ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
             if has_all_line_numbers and start_line == 0:
-                # Extract start line from first line
-                first_line = search_content.split("\n")[0]
-                if "|" in first_line:
-                    start_line = int(first_line.split("|")[0].strip())
+                inferred_start_line = extract_start_line_number(search_content)
+                if inferred_start_line is not None:
+                    start_line = inferred_start_line
 
             if has_all_line_numbers:
                 search_content = strip_line_numbers(search_content)
@@ -968,10 +936,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
         if has_all_line_numbers and start_line == 0:
-            # Extract start line from first line
-            first_line = search_content.split("\n")[0]
-            if "|" in first_line:
-                start_line = int(first_line.split("|")[0].strip())
+            inferred_start_line = extract_start_line_number(search_content)
+            if inferred_start_line is not None:
+                start_line = inferred_start_line
 
         if has_all_line_numbers:
             search_content = strip_line_numbers(search_content)

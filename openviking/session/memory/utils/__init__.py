@@ -21,7 +21,15 @@ from openviking.session.memory.utils.language import (
     resolve_output_language_from_conversation,
     resolve_with_override,
 )
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.line_numbers import (
+    add_line_numbers,
+    every_line_has_line_numbers,
+    extract_start_line_number,
+    line_count,
+    slice_content_lines,
+    split_content_lines,
+    strip_line_numbers,
+)
 from openviking.session.memory.utils.messages import (
     parse_memory_file_with_fields,
     pretty_print_messages,
@@ -29,12 +37,6 @@ from openviking.session.memory.utils.messages import (
 from openviking.session.memory.utils.model import (
     flat_model_to_dict,
     model_to_dict,
-)
-from openviking.session.memory.utils.uri import (
-    ResolvedOperations,
-    generate_uri,
-    is_uri_allowed,
-    validate_uri_template,
 )
 
 __all__ = [
@@ -45,6 +47,13 @@ __all__ = [
     "resolve_output_language",
     "resolve_output_language_from_conversation",
     "resolve_with_override",
+    "add_line_numbers",
+    "every_line_has_line_numbers",
+    "extract_start_line_number",
+    "line_count",
+    "slice_content_lines",
+    "split_content_lines",
+    "strip_line_numbers",
     # Messages
     "pretty_print_messages",
     "parse_memory_file_with_fields",
@@ -67,3 +76,25 @@ __all__ = [
     "model_to_dict",
     "flat_model_to_dict",
 ]
+
+
+def __getattr__(name: str):
+    if name == "MemoryFileUtils":
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        return MemoryFileUtils
+    if name in {"ResolvedOperations", "generate_uri", "is_uri_allowed", "validate_uri_template"}:
+        from openviking.session.memory.utils.uri import (
+            ResolvedOperations,
+            generate_uri,
+            is_uri_allowed,
+            validate_uri_template,
+        )
+
+        return {
+            "ResolvedOperations": ResolvedOperations,
+            "generate_uri": generate_uri,
+            "is_uri_allowed": is_uri_allowed,
+            "validate_uri_template": validate_uri_template,
+        }[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
