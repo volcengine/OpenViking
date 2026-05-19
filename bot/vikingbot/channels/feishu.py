@@ -8,6 +8,8 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -29,10 +31,13 @@ except ImportError:
     BeautifulSoup = None
     Document = None
 
-from vikingbot.bus.events import OutboundMessage
+from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import BotMode, FeishuChannelConfig
+from vikingbot.config.schema import BotMode, FeishuChannelConfig, SessionKey
+from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.session.manager import Session, SessionManager
 
 try:
     import lark_oapi as lark
@@ -102,6 +107,9 @@ class FeishuChannel(BaseChannel):
         "OnIt",
         "EatingFood",
     ]
+    REACTION_MESSAGE_MAP_KEY = "feishu_message_to_response_id"
+    POSITIVE_REACTION_TYPES = {"THUMBSUP", "+1", "赞"}
+    NEGATIVE_REACTION_TYPES = {"THUMBSDOWN", "-1", "踩"}
 
     def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
         super().__init__(config, bus, **kwargs)
@@ -125,6 +133,7 @@ class FeishuChannel(BaseChannel):
         self._CHAT_MEMBER_FETCH_COOLDOWN_SEC = 60
         self._CHAT_MEMBER_FETCH_PAGE_SIZE = 100
         self._CHAT_MEMBER_FETCH_MAX_PAGES = 500
+        self._session_manager = SessionManager(Path(load_config().bot_data_path))
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
@@ -275,15 +284,8 @@ class FeishuChannel(BaseChannel):
             .build()
         )
 
-        # Create event handler (only register message receive, ignore other events)
-        event_handler = (
-            lark.EventDispatcherHandler.builder(
-                self.config.encrypt_key or "",
-                self.config.verification_token or "",
-            )
-            .register_p2_im_message_receive_v1(self._on_message_sync)
-            .build()
-        )
+        # Create event handler and register optional reaction callbacks when the SDK supports them.
+        event_handler = self._build_event_handler()
 
         # Create WebSocket client for long connection
         self._ws_client = lark.ws.Client(
@@ -314,6 +316,23 @@ class FeishuChannel(BaseChannel):
         # Keep running until stopped
         while self._running:
             await asyncio.sleep(1)
+
+    def _build_event_handler(self) -> Any:
+        builder = lark.EventDispatcherHandler.builder(
+            self.config.encrypt_key or "",
+            self.config.verification_token or "",
+        ).register_p2_im_message_receive_v1(self._on_message_sync)
+
+        reaction_register = getattr(builder, "register_p2_im_message_reaction_created_v1", None)
+        if callable(reaction_register):
+            builder = reaction_register(self._on_message_reaction_created_sync)
+        else:
+            logger.warning(
+                "Current Feishu SDK does not expose register_p2_im_message_reaction_created_v1; "
+                "reaction feedback stays disabled until the SDK is upgraded"
+            )
+
+        return builder.build()
 
     async def stop(self) -> None:
         """Stop the Feishu bot."""
@@ -555,6 +574,9 @@ class FeishuChannel(BaseChannel):
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
+            if not isinstance(reply_to, str) or not reply_to:
+                logger.warning("Feishu outbound message missing reply_to target")
+                return
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
@@ -666,9 +688,25 @@ class FeishuChannel(BaseChannel):
                         f"Failed to send Feishu message: code={response.code}, "
                         f"msg={response.msg}, log_id={response.get_log_id()}"
                     )
+                return
+
+            response_message_id = self._extract_sent_message_id(response)
+            if response_message_id and msg.response_id:
+                await self._store_response_message_mapping(
+                    session_key=msg.session_key,
+                    response_id=msg.response_id,
+                    platform_message_id=response_message_id,
+                )
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+
+    @staticmethod
+    def _extract_sent_message_id(response: Any) -> str | None:
+        data = getattr(response, "data", None)
+        if data is None:
+            return None
+        return getattr(data, "message_id", None)
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
@@ -677,6 +715,305 @@ class FeishuChannel(BaseChannel):
         """
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+
+    def _on_message_reaction_created_sync(self, data: Any) -> None:
+        """Sync wrapper for message reaction callbacks from the websocket thread."""
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._on_message_reaction_created(data), self._loop)
+
+    async def _on_message_reaction_created(self, data: Any) -> None:
+        """Translate Feishu thumbs-up/thumbs-down reactions into feedback events."""
+        try:
+            event = data.get("event", data) if isinstance(data, dict) else getattr(data, "event", data)
+            message_id = self._first_present(
+                event,
+                ("message_id",),
+                ("message", "message_id"),
+                ("message", "id"),
+            )
+            emoji_type = self._first_present(
+                event,
+                ("reaction_type", "emoji_type"),
+                ("reaction", "reaction_type", "emoji_type"),
+                ("emoji_type",),
+            )
+            chat_id = self._first_present(event, ("chat_id",), ("message", "chat_id"))
+            chat_type = self._first_present(event, ("chat_type",), ("message", "chat_type"))
+            root_id = self._first_present(event, ("root_id",), ("message", "root_id"))
+            operator_type = self._first_present(
+                event,
+                ("operator", "operator_type"),
+                ("operator_type",),
+            )
+            user_id = self._first_present(
+                event,
+                ("operator", "operator_id"),
+                ("operator_id",),
+                ("user_id",),
+            )
+
+            if operator_type and operator_type != "user":
+                return
+            if not all(isinstance(value, str) and value for value in (message_id, emoji_type, chat_id, chat_type, user_id)):
+                return
+
+            feedback_type = self._reaction_feedback_type(emoji_type)
+            if feedback_type is None:
+                return
+
+            await self._submit_reaction_feedback(
+                chat_id=chat_id,
+                chat_type=chat_type,
+                root_id=root_id if isinstance(root_id, str) and root_id else None,
+                platform_message_id=message_id,
+                user_id=user_id,
+                emoji_type=emoji_type,
+                feedback_type=feedback_type,
+            )
+        except Exception:
+            logger.exception("Error processing Feishu reaction feedback")
+
+    @staticmethod
+    def _first_present(source: Any, *paths: tuple[str, ...]) -> Any:
+        for path in paths:
+            current = source
+            for part in path:
+                if isinstance(current, dict):
+                    current = current.get(part)
+                else:
+                    current = getattr(current, part, None)
+                if current is None:
+                    break
+            if current is not None:
+                return current
+        return None
+
+    def _reaction_feedback_type(self, emoji_type: str) -> str | None:
+        if emoji_type in self.POSITIVE_REACTION_TYPES or emoji_type.upper() in self.POSITIVE_REACTION_TYPES:
+            return "thumb_up"
+        if emoji_type in self.NEGATIVE_REACTION_TYPES or emoji_type.upper() in self.NEGATIVE_REACTION_TYPES:
+            return "thumb_down"
+        return None
+
+    async def _store_response_message_mapping(
+        self,
+        *,
+        session_key: SessionKey,
+        response_id: str,
+        platform_message_id: str,
+    ) -> None:
+        def updater(session: Session) -> None:
+            mapping = session.metadata.setdefault(self.REACTION_MESSAGE_MAP_KEY, {})
+            mapping[platform_message_id] = response_id
+
+            response_facts = session.metadata.setdefault("response_facts", {})
+            response_fact = response_facts.get(response_id)
+            if isinstance(response_fact, dict):
+                response_fact["platform_message_id"] = platform_message_id
+
+            for message in reversed(session.messages):
+                if message.get("role") == "assistant" and message.get("response_id") == response_id:
+                    message["platform_message_id"] = platform_message_id
+                    break
+
+        await self._session_manager.update_session(session_key, updater, skip_heartbeat=True)
+
+    async def _submit_reaction_feedback(
+        self,
+        *,
+        chat_id: str,
+        chat_type: str,
+        root_id: str | None,
+        platform_message_id: str,
+        user_id: str,
+        emoji_type: str,
+        feedback_type: str,
+    ) -> None:
+        for session_key in self._candidate_session_keys(chat_id, chat_type, root_id):
+            try:
+                session, feedback_update = await self._session_manager.update_session(
+                    session_key,
+                    lambda session: self._apply_reaction_feedback(
+                        session,
+                        session_key=session_key,
+                        platform_message_id=platform_message_id,
+                        user_id=user_id,
+                        emoji_type=emoji_type,
+                        feedback_type=feedback_type,
+                    ),
+                    skip_heartbeat=True,
+                )
+            except LookupError:
+                continue
+
+            if feedback_update is None:
+                return
+
+            response_id, feedback_event, outcome_payload = feedback_update
+            if outcome_payload is not None:
+                LangfuseClient.get_instance().update_response_outcome(
+                    response_id,
+                    outcome_payload["outcome_label"],
+                    outcome_payload,
+                )
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        session_key=session.key,
+                        content="",
+                        event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                        response_id=response_id,
+                        metadata={"response_outcome_evaluated": outcome_payload},
+                    )
+                )
+
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    session_key=session.key,
+                    content="",
+                    event_type=OutboundEventType.FEEDBACK_SUBMITTED,
+                    response_id=response_id,
+                    metadata={"feedback_submitted": feedback_event},
+                )
+            )
+            return
+
+    def _apply_reaction_feedback(
+        self,
+        session: Session,
+        *,
+        session_key: SessionKey,
+        platform_message_id: str,
+        user_id: str,
+        emoji_type: str,
+        feedback_type: str,
+    ) -> tuple[str, dict[str, Any], dict[str, Any] | None] | None:
+        response_id = self._find_response_id_for_platform_message(session, platform_message_id)
+        if response_id is None:
+            raise LookupError(platform_message_id)
+
+        response_message = self._find_response_message(session.messages, response_id)
+        if response_message is None:
+            raise LookupError(response_id)
+
+        feedback_timestamp = datetime.now()
+        feedback_delay_sec = None
+        response_timestamp = self._parse_message_timestamp(response_message)
+        if response_timestamp is not None:
+            feedback_delay_sec = round((feedback_timestamp - response_timestamp).total_seconds(), 3)
+
+        feedback_events = session.metadata.setdefault("feedback_events", [])
+        for event in reversed(feedback_events):
+            if (
+                event.get("response_id") == response_id
+                and event.get("user_id") == user_id
+                and event.get("feedback_reason") == "feishu_reaction"
+            ):
+                if event.get("feedback_type") == feedback_type:
+                    return None
+                event.update(
+                    {
+                        "feedback_type": feedback_type,
+                        "feedback_score": 1.0 if feedback_type == "thumb_up" else -1.0,
+                        "feedback_text": emoji_type,
+                        "feedback_delay_sec": feedback_delay_sec,
+                        "created_at": feedback_timestamp.isoformat(),
+                    }
+                )
+                outcome_payload = self._build_outcome_payload(session, response_id)
+                return response_id, event, outcome_payload
+
+        feedback_event = {
+            "response_id": response_id,
+            "session_id": session_key.safe_name(),
+            "user_id": user_id,
+            "feedback_type": feedback_type,
+            "feedback_score": 1.0 if feedback_type == "thumb_up" else -1.0,
+            "feedback_reason": "feishu_reaction",
+            "feedback_text": emoji_type,
+            "feedback_delay_sec": feedback_delay_sec,
+            "channel": session_key.channel_key(),
+            "created_at": feedback_timestamp.isoformat(),
+        }
+        feedback_events.append(feedback_event)
+        outcome_payload = self._build_outcome_payload(session, response_id)
+        return response_id, feedback_event, outcome_payload
+
+    def _candidate_session_keys(self, chat_id: str, chat_type: str, root_id: str | None) -> list[SessionKey]:
+        chat_ids = []
+        if chat_type == "group" and root_id:
+            chat_ids.append(f"{chat_id}#{root_id}")
+        chat_ids.append(chat_id)
+
+        seen = set()
+        result = []
+        for candidate_chat_id in chat_ids:
+            if candidate_chat_id in seen:
+                continue
+            seen.add(candidate_chat_id)
+            result.append(
+                SessionKey(
+                    type=str(getattr(self.channel_type, "value", self.channel_type)),
+                    channel_id=self.channel_id,
+                    chat_id=candidate_chat_id,
+                )
+            )
+        return result
+
+    @classmethod
+    def _find_response_id_for_platform_message(
+        cls, session: Session, platform_message_id: str
+    ) -> str | None:
+        mapping = session.metadata.get(cls.REACTION_MESSAGE_MAP_KEY, {})
+        response_id = mapping.get(platform_message_id)
+        if isinstance(response_id, str) and response_id:
+            return response_id
+
+        for message in reversed(session.messages):
+            if (
+                message.get("role") == "assistant"
+                and message.get("platform_message_id") == platform_message_id
+                and message.get("response_id")
+            ):
+                return message["response_id"]
+        return None
+
+    @staticmethod
+    def _find_response_message(
+        messages: list[dict[str, Any]], response_id: str
+    ) -> dict[str, Any] | None:
+        for message in reversed(messages):
+            if message.get("role") == "assistant" and message.get("response_id") == response_id:
+                return message
+        return None
+
+    @staticmethod
+    def _parse_message_timestamp(message: dict[str, Any]) -> datetime | None:
+        timestamp = message.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp:
+            return None
+        try:
+            return datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _build_outcome_payload(session: Session, response_id: str) -> dict[str, Any] | None:
+        evaluation = evaluate_response_outcome(
+            session.messages,
+            response_id,
+            feedback_events=session.metadata.get("feedback_events", []),
+        )
+        if evaluation is None:
+            return None
+
+        outcomes = session.metadata.setdefault("response_outcomes", {})
+        previous = outcomes.get(response_id)
+        if not should_update_outcome(previous, evaluation):
+            return None
+
+        outcome_payload = evaluation.to_dict()
+        outcomes[response_id] = outcome_payload
+        return outcome_payload
 
     async def _download_and_save_image(self, image_key: str, message_id: str) -> str | None:
         """Download single Feishu image and save to local, return file path or None if failed."""
