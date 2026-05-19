@@ -15,6 +15,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { spawn } from "child_process"
 import * as fs from "fs"
+import { homedir } from "os"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
@@ -606,9 +607,14 @@ function unwrapResponse<T>(response: OpenVikingResponse<T>): T {
   return response.result as T
 }
 
+function buildEndpointUrl(endpoint: string, endpointPath: string): string {
+  const base = endpoint.endsWith("/") ? endpoint : `${endpoint}/`
+  return new URL(endpointPath.replace(/^\/+/, ""), base).toString()
+}
+
 async function checkServiceHealth(config: OpenVikingConfig, logFailure = true): Promise<boolean> {
   try {
-    const response = await fetch(`${config.endpoint}/health`, {
+    const response = await fetch(buildEndpointUrl(config.endpoint, "health"), {
       method: "GET",
       signal: AbortSignal.timeout(3000),
     })
@@ -627,6 +633,8 @@ async function checkServiceHealth(config: OpenVikingConfig, logFailure = true): 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
 const SERVER_STARTUP_TIMEOUT_MS = 30_000
 const SERVER_STARTUP_POLL_MS = 3_000
+const SERVER_STARTUP_EXIT_GRACE_MS = 1_500
+const OPENVIKING_SERVER_COMMAND = "openviking-server"
 
 function isLocalEndpoint(endpoint: string): boolean {
   try {
@@ -641,16 +649,80 @@ function isLocalEndpoint(endpoint: string): boolean {
   }
 }
 
-function buildOpenVikingServerArgs(endpoint: string): string[] {
+function expandHomePath(filePath: string): string {
+  if (filePath === "~") return homedir()
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return path.join(homedir(), filePath.slice(2))
+  }
+  return filePath
+}
+
+function getOpenVikingConfigPath(): string {
+  const configured = process.env.OPENVIKING_CONFIG_FILE?.trim()
+  return expandHomePath(configured || path.join(homedir(), ".openviking", "ov.conf"))
+}
+
+function executableExists(command: string): boolean {
+  const hasPathSeparator = command.includes("/") || command.includes("\\")
+  const searchDirs = hasPathSeparator ? [""] : (process.env.PATH ?? "").split(path.delimiter)
+  const extensions = process.platform === "win32" && !path.extname(command)
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""]
+
+  for (const dir of searchDirs) {
+    if (!dir && !hasPathSeparator) continue
+    for (const extension of extensions) {
+      const candidate = hasPathSeparator ? `${command}${extension}` : path.join(dir, `${command}${extension}`)
+      try {
+        if (fs.statSync(candidate).isFile()) {
+          return true
+        }
+      } catch {
+        // Keep searching PATH.
+      }
+    }
+  }
+
+  return false
+}
+
+function checkAutoStartPrerequisites(): string | null {
+  if (!executableExists(OPENVIKING_SERVER_COMMAND)) {
+    log("ERROR", "health", "Skipping auto-start because openviking-server was not found on PATH")
+    return null
+  }
+
+  const configPath = getOpenVikingConfigPath()
+  if (!fs.existsSync(configPath)) {
+    log("ERROR", "health", "Skipping auto-start because OpenViking config file was not found", {
+      config_path: configPath,
+    })
+    return null
+  }
+
+  return configPath
+}
+
+function normalizeServerHost(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname
+}
+
+function buildOpenVikingServerArgs(endpoint: string, configPath: string): string[] {
   try {
     const url = new URL(endpoint)
-    return url.port ? ["--port", url.port] : []
+    const args = ["--host", normalizeServerHost(url.hostname), "--config", configPath]
+    if (url.port) {
+      args.push("--port", url.port)
+    }
+    return args
   } catch {
-    return []
+    return ["--config", configPath]
   }
 }
 
-async function startOpenVikingServerProcess(endpoint: string): Promise<boolean> {
+async function startOpenVikingServerProcess(endpoint: string, configPath: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     let settled = false
     const settle = (ok: boolean) => {
@@ -660,20 +732,18 @@ async function startOpenVikingServerProcess(endpoint: string): Promise<boolean> 
     }
 
     try {
-      const args = buildOpenVikingServerArgs(endpoint)
-      const child = spawn("openviking-server", args, {
+      const args = buildOpenVikingServerArgs(endpoint, configPath)
+      const child = spawn(OPENVIKING_SERVER_COMMAND, args, {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
       })
 
       child.once("spawn", () => {
-        child.unref()
         log("INFO", "health", "Started local openviking-server process", {
           pid: child.pid,
           args,
         })
-        settle(true)
       })
 
       child.once("error", (error) => {
@@ -682,6 +752,22 @@ async function startOpenVikingServerProcess(endpoint: string): Promise<boolean> 
         })
         settle(false)
       })
+
+      child.once("exit", (code, signal) => {
+        if (settled) return
+        log("ERROR", "health", "Local openviking-server process exited early", {
+          pid: child.pid,
+          code,
+          signal,
+        })
+        settle(false)
+      })
+
+      setTimeout(() => {
+        if (settled) return
+        child.unref()
+        settle(true)
+      }, SERVER_STARTUP_EXIT_GRACE_MS)
     } catch (error: any) {
       log("ERROR", "health", "Failed to start local openviking-server process", {
         error: error.message,
@@ -705,7 +791,7 @@ async function waitForServiceHealth(config: OpenVikingConfig): Promise<boolean> 
 }
 
 async function checkOrStartLocalService(config: OpenVikingConfig): Promise<boolean> {
-  if (await checkServiceHealth(config)) {
+  if (await checkServiceHealth(config, !config.autoStartServer)) {
     return true
   }
 
@@ -720,11 +806,17 @@ async function checkOrStartLocalService(config: OpenVikingConfig): Promise<boole
     return false
   }
 
+  const configPath = checkAutoStartPrerequisites()
+  if (!configPath) {
+    return false
+  }
+
   log("INFO", "health", "OpenViking is unavailable; attempting local auto-start", {
     endpoint: config.endpoint,
+    config_path: configPath,
   })
 
-  if (!(await startOpenVikingServerProcess(config.endpoint))) {
+  if (!(await startOpenVikingServerProcess(config.endpoint, configPath))) {
     return false
   }
 
