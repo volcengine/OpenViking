@@ -5,6 +5,33 @@ const VALID_EVENT_TYPES = new Set<string>([
   'content_delta', 'reasoning_delta',
 ])
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function streamEventDataToText(data: unknown): string {
+  if (typeof data === 'string') return data
+  if (data == null) return ''
+  if (typeof data === 'number' || typeof data === 'boolean') return String(data)
+
+  if (isRecord(data)) {
+    const content = data.content
+    if (typeof content === 'string') return content
+
+    const error = data.error
+    if (typeof error === 'string') return error
+
+    const message = data.message
+    if (typeof message === 'string') return message
+  }
+
+  try {
+    return JSON.stringify(data)
+  } catch {
+    return String(data)
+  }
+}
+
 function parseSseLine(line: string): ChatStreamEvent | null {
   const trimmed = line.trim()
   if (!trimmed || !trimmed.startsWith('data:')) return null

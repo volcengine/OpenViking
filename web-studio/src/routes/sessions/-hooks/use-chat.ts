@@ -4,7 +4,7 @@ import type { ChatStatus, StreamToolCall } from '../-types/chat'
 import type { Message, MessagePart, TextPart, ToolPart } from '../-types/message'
 import { addMessage, sendChatStream, serializeParts } from '../-lib/api'
 import { generateTitle } from '../-lib/generate-title'
-import { parseSseStream } from '../-lib/sse'
+import { parseSseStream, streamEventDataToText } from '../-lib/sse'
 import { setSessionTitle } from './use-session-titles'
 
 function generateId(): string {
@@ -165,20 +165,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
         switch (event.event) {
           case 'iteration': {
-            const data = String(event.data)
+            const data = streamEventDataToText(event.data)
             const match = data.match(/(\d+)/)
             if (match) setIteration(Number(match[1]))
             break
           }
 
           case 'content_delta': {
-            accContent += String(event.data)
+            accContent += streamEventDataToText(event.data)
             setStreamingContent(accContent)
             break
           }
 
           case 'reasoning_delta': {
-            accReasoning += String(event.data)
+            accReasoning += streamEventDataToText(event.data)
             setStreamingReasoning(accReasoning)
             break
           }
@@ -186,7 +186,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           case 'reasoning': {
             // Complete reasoning block (fallback if no deltas were sent)
             if (!accReasoning) {
-              accReasoning = String(event.data)
+              accReasoning = streamEventDataToText(event.data)
               setStreamingReasoning(accReasoning)
             }
             break
@@ -194,7 +194,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
           case 'tool_call': {
             // Format: "tool_name({...args})"
-            const raw = String(event.data)
+            const raw = streamEventDataToText(event.data)
             const parenIdx = raw.indexOf('(')
             const name = parenIdx > 0 ? raw.slice(0, parenIdx) : raw
             const args = parenIdx > 0 ? raw.slice(parenIdx + 1, -1) : ''
@@ -206,7 +206,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
           case 'tool_result': {
             if (lastToolCall) {
-              lastToolCall.result = String(event.data)
+              lastToolCall.result = streamEventDataToText(event.data)
               setStreamingToolCalls([...accToolCalls])
             }
             break
@@ -214,7 +214,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
           case 'response': {
             // Final complete response — overrides accumulated deltas
-            accContent = String(event.data)
+            accContent = streamEventDataToText(event.data)
             setStreamingContent(accContent)
             break
           }
