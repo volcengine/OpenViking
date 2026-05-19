@@ -3,9 +3,9 @@ import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
+import type { StreamToolCall } from '#/lib/sessions/types/chat'
+import type { Message } from '#/lib/sessions/types/message'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
-import type { StreamToolCall } from '../-types/chat'
-import type { Message } from '../-types/message'
 
 const OPENVIKING_ICON_SRC = resolvePublicAsset('openviking-icon.png')
 

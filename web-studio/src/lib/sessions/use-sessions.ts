@@ -6,8 +6,8 @@ import {
   fetchSession,
   fetchSessionMessages,
   fetchSessions,
-} from '../-lib/api'
-import type { Message } from '../-types/message'
+} from './api'
+import type { Message } from './types/message'
 
 const SESSIONS_KEY = ['sessions'] as const
 

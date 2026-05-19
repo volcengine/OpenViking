@@ -3,9 +3,9 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useCreateSession } from '#/lib/sessions/use-sessions'
+import { setSessionTitle } from '#/lib/sessions/use-session-titles'
 import { Thread } from './-components/thread'
-import { useCreateSession } from './-hooks/use-sessions'
-import { setSessionTitle } from './-hooks/use-session-titles'
 
 const COMMAND_KEY_LABEL = '⌘'
 const NEW_SESSION_KEY_LABEL = 'N'

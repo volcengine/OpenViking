@@ -2,11 +2,11 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useChat } from '#/lib/sessions/use-chat'
+import { useSessionMessages } from '#/lib/sessions/use-sessions'
+import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
 import { Composer } from './composer'
-import { useChat } from '../-hooks/use-chat'
-import { useSessionMessages } from '../-hooks/use-sessions'
-import { useSessionTitles } from '../-hooks/use-session-titles'
 
 const PixelBlast = lazy(() => import('#/components/ui/pixel-blast'))
 const PRODUCT_NAME = 'OpenViking'

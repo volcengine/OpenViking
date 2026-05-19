@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ChatStatus, StreamToolCall } from '../-types/chat'
-import type { Message, MessagePart, TextPart, ToolPart } from '../-types/message'
-import { addMessage, sendChatStream, serializeParts } from '../-lib/api'
-import { generateTitle } from '../-lib/generate-title'
-import { parseSseStream, streamEventDataToText } from '../-lib/sse'
+import type { ChatStatus, StreamToolCall } from './types/chat'
+import type { Message, MessagePart, TextPart, ToolPart } from './types/message'
+import { addMessage, sendChatStream, serializeParts } from './api'
+import { generateTitle } from './generate-title'
+import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
 
 function generateId(): string {

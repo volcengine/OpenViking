@@ -11,9 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import { useResourceUpload } from '#/hooks/use-resource-upload'
 
 import { normalizeDirUri, normalizeFileUri, parentUri } from '../-lib/normalize'
+import { useResourceUpload } from '../-hooks/use-resource-upload'
 import { useInvalidateVikingFs, useVikingFsList } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { AddResourceForm } from './add-resource-page'

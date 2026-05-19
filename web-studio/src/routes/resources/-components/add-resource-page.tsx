@@ -12,8 +12,8 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '#/components/ui/tooltip'
-import { useResourceUpload } from '#/hooks/use-resource-upload'
 import { cn } from '#/lib/utils'
+import { useResourceUpload } from '../-hooks/use-resource-upload'
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_SIZE_BYTES,

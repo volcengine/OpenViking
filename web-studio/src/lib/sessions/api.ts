@@ -11,7 +11,7 @@ import {
 import { getOvResult, normalizeOvClientError, ovClient } from '#/lib/ov-client'
 
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
-import type { Message, MessagePart } from '../-types/message'
+import type { Message, MessagePart } from './types/message'
 import type {
   AddMessageResult,
   CommitSessionResult,

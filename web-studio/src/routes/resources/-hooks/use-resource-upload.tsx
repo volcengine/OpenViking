@@ -8,7 +8,7 @@ import {
   postResources,
   postResourcesTempUpload,
 } from '#/lib/ov-client'
-import { parseUploadError } from '#/routes/resources/-lib/upload'
+import { parseUploadError } from '../-lib/upload'
 import type { AddResourceResult, TempUploadResult } from '@ov-server/api/v1/resources'
 import type { TaskListResult, TaskRecord } from '@ov-server/api/v1/tasks'
 

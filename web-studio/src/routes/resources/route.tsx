@@ -1,5 +1,7 @@
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 
+import { ResourceUploadProvider } from './-hooks/use-resource-upload'
+
 export const Route = createFileRoute('/resources')({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.uri === 'string' && { uri: search.uri }),
@@ -10,5 +12,9 @@ export const Route = createFileRoute('/resources')({
 })
 
 function ResourcesLayout() {
-  return <Outlet />
+  return (
+    <ResourceUploadProvider>
+      <Outlet />
+    </ResourceUploadProvider>
+  )
 }

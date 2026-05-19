@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
-import type { ResourceUploadTask } from '#/hooks/use-resource-upload'
+import type { ResourceUploadTask } from '../-hooks/use-resource-upload'
 import { formatFileSize } from '../-lib/upload'
 
 function TaskStatusBadge({ status }: { status: ResourceUploadTask['status'] }) {

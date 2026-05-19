@@ -53,10 +53,9 @@ import {
   SidebarTrigger,
 } from '#/components/ui/sidebar'
 import { AppConnectionProvider, useAppConnection } from '#/hooks/use-app-connection'
-import { ResourceUploadProvider } from '#/hooks/use-resource-upload'
 import { describeServerMode } from '#/hooks/use-server-mode'
-import { useSessionList, useCreateSession, useDeleteSession } from '#/routes/sessions/-hooks/use-sessions'
-import { useSessionTitles, setSessionTitle, removeSessionTitle } from '#/routes/sessions/-hooks/use-session-titles'
+import { useSessionList, useCreateSession, useDeleteSession } from '#/lib/sessions/use-sessions'
+import { useSessionTitles, setSessionTitle, removeSessionTitle } from '#/lib/sessions/use-session-titles'
 
 type NavItem = {
   icon: React.ComponentType
@@ -292,9 +291,7 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppConnectionProvider>
-      <ResourceUploadProvider>
-        <AppShellInner>{children}</AppShellInner>
-      </ResourceUploadProvider>
+      <AppShellInner>{children}</AppShellInner>
     </AppConnectionProvider>
   )
 }
