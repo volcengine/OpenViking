@@ -240,9 +240,12 @@ class SessionCompressor:
                     end = boundary + 2  # Include the double newline
 
             chunks.append(text[start:end].strip())
-            start = end - overlap
-            if start >= len(text):
+            next_start = end - overlap
+            if next_start <= start:
+                next_start = end
+            if next_start >= len(text):
                 break
+            start = next_start
 
         return [c for c in chunks if c]
 
