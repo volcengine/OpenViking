@@ -93,7 +93,7 @@ ov system health
     "         325 function calls (310 primitive calls) in 0.004 seconds",
     "",
     "   Ordered by: cumulative time",
-    "   List reduced from 87 to 40 due to restriction <40>",
+    "   List reduced from 87 to 87 due to restriction <100>",
     "",
     "   ncalls  tottime  percall  cumtime  percall filename:lineno(function)",
     "        1    0.000    0.000    0.003    0.003 starlette/middleware/base.py:112(call_next)",

@@ -8,7 +8,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
-from openviking.server.profile_middleware import _sanitize_profile_path
+from openviking.server.profile_middleware import PROFILE_TOP_N, _sanitize_profile_path
 
 
 def _make_test_app():
@@ -114,3 +114,7 @@ def test_sanitize_profile_path_prefers_package_root_over_project_root_for_venv_p
     )
 
     assert _sanitize_profile_path(path) == "starlette/middleware/base.py"
+
+
+def test_profile_default_top_n_is_100():
+    assert PROFILE_TOP_N == 100

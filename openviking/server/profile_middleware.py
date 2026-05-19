@@ -18,7 +18,7 @@ from starlette.responses import StreamingResponse
 
 PROFILE_TRUE_VALUES = {"1", "true", "yes", "on"}
 PROFILE_SORT_BY = "cumulative"
-PROFILE_TOP_N = 40
+PROFILE_TOP_N = 100
 PROFILE_MAX_CHARS = 16 * 1024
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
