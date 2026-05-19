@@ -5,17 +5,9 @@ import csv
 import os
 import sqlite3
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
-TOKEN_GROUPS = {
-    "QA": [
-        "qa_input_tokens",
-        "qa_output_tokens",
-        "qa_cache_read_tokens",
-        "qa_cache_write_tokens",
-        "qa_total_tokens",
-    ],
-}
 HERMES_USAGE_KEYS = [
     "input_tokens",
     "output_tokens",
@@ -49,6 +41,14 @@ def summary_title(suite: str) -> str:
     return "Hermes + OpenViking (pre-ingest)"
 
 
+def format_optional_int(value: int | None) -> str:
+    return "unavailable" if value is None else f"{value:,}"
+
+
+def format_optional_float(value: float | None) -> str:
+    return "unavailable" if value is None else f"{value:,.2f}"
+
+
 def read_int(row: dict, key: str) -> int:
     try:
         return int(float(row.get(key, 0) or 0))
@@ -63,18 +63,75 @@ def read_float(row: dict, key: str) -> float:
         return 0.0
 
 
-def format_token_block(rows: list[dict], label: str, keys: list[str]) -> list[str]:
-    totals = dict.fromkeys(keys, 0)
-    for row in rows:
-        for key in keys:
-            totals[key] += read_int(row, key)
+def read_first_int(row: dict, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        if key in row and row.get(key) not in {None, ""}:
+            return read_int(row, key)
+    return 0
 
-    count = len(rows) or 1
-    return [
-        f"{label} tokens:",
-        *(f"  {key}: {totals[key]:,}" for key in keys),
-        *(f"  avg_{key}: {totals[key] / count:,.2f}" for key in keys),
-    ]
+
+@dataclass
+class HermesUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    api_call_count: int = 0
+    tool_call_count: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
+
+    @property
+    def cache_tokens(self) -> int:
+        return self.cache_read_tokens + self.cache_write_tokens
+
+    @property
+    def no_cache_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @classmethod
+    def from_mapping(cls, values: dict[str, int]) -> "HermesUsage":
+        return cls(**{key: int(values.get(key, 0) or 0) for key in HERMES_USAGE_KEYS})
+
+
+@dataclass
+class HermesUsageSummary:
+    usage: HermesUsage
+    source: str
+    matched_sessions: int
+    expected_sessions: int
+    authoritative: bool
+
+
+@dataclass
+class OpenVikingUsage:
+    embedding_input_tokens: int = 0
+    embedding_output_tokens: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+
+    @property
+    def embedding_tokens(self) -> int:
+        return self.embedding_input_tokens + self.embedding_output_tokens
+
+    @property
+    def has_tokens(self) -> bool:
+        return any(
+            [
+                self.embedding_input_tokens,
+                self.embedding_output_tokens,
+                self.llm_input_tokens,
+                self.llm_output_tokens,
+            ]
+        )
 
 
 def read_true_token_csv(csv_path: Path) -> tuple[int, int, int, int]:
@@ -161,24 +218,16 @@ def hermes_total_tokens(usage: dict[str, int]) -> int:
     )
 
 
-def format_hermes_usage_block(
-    label: str,
-    usage: dict[str, int],
-    matched_count: int,
-    expected_count: int,
-) -> list[str]:
-    count = matched_count or 1
-    lines = [
-        "",
-        f"{label}:",
-        f"  matched_sessions: {matched_count:,}/{expected_count:,}",
-        f"  total_tokens: {hermes_total_tokens(usage):,}",
-    ]
-    for key in HERMES_USAGE_KEYS:
-        lines.append(f"  {key}: {usage.get(key, 0):,}")
-    for key in HERMES_USAGE_KEYS:
-        lines.append(f"  avg_{key}: {usage.get(key, 0) / count:,.2f}")
-    return lines
+def read_csv_rows(csv_path: str | Path) -> list[dict]:
+    path = Path(csv_path)
+    if not path.exists():
+        return []
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def valid_qa_rows(input_path: str | Path) -> list[dict]:
+    return [row for row in read_csv_rows(input_path) if str(row.get("category", "")) != "5"]
 
 
 def qa_state_session_ids(rows: list[dict], state_sessions: dict[str, dict[str, int]]) -> list[str]:
@@ -192,78 +241,78 @@ def qa_state_session_ids(rows: list[dict], state_sessions: dict[str, dict[str, i
     return matched
 
 
-def process_qa_results(
-    input_path: str, suite: str, state_sessions: dict[str, dict[str, int]]
-) -> tuple[list[str], int]:
-    with open(input_path, "r", encoding="utf-8", newline="") as f:
-        rows = [row for row in csv.DictReader(f) if str(row.get("category", "")) != "5"]
-
+def summarize_score(rows: list[dict]) -> dict:
     correct = 0
     wrong = 0
-    category_totals = defaultdict(int)
+    category_rows = defaultdict(int)
+    category_graded = defaultdict(int)
     category_correct = defaultdict(int)
     total_qa_latency = 0.0
 
     for row in rows:
         category = str(row.get("category", ""))
-        category_totals[category] += 1
+        category_rows[category] += 1
         if str(row.get("result", "")).upper() == "CORRECT":
             correct += 1
             category_correct[category] += 1
+            category_graded[category] += 1
         elif str(row.get("result", "")).upper() == "WRONG":
             wrong += 1
+            category_graded[category] += 1
         total_qa_latency += read_float(row, "qa_latency_sec")
 
     graded = correct + wrong
-    accuracy = correct / graded if graded else 0.0
-    csv_total_qa_tokens = sum(read_int(row, "qa_total_tokens") for row in rows)
-    matched_state_ids = qa_state_session_ids(rows, state_sessions)
-    state_usage = sum_hermes_usage(state_sessions, matched_state_ids) if matched_state_ids else {}
-    state_total_qa_tokens = hermes_total_tokens(state_usage) if matched_state_ids else 0
-    total_qa_tokens = (
-        state_total_qa_tokens
-        if matched_state_ids and len(matched_state_ids) == len(rows)
-        else csv_total_qa_tokens
-    )
-    accuracy_per_1k = (correct / total_qa_tokens * 1000) if total_qa_tokens else 0.0
-    avg_qa_latency = total_qa_latency / len(rows) if rows else 0.0
-
-    output = [
-        f"=== {summary_title(suite)} Summary ===",
-        f"Total rows: {len(rows):,}",
-        f"Graded rows: {graded:,}",
-        f"Correct: {correct:,}",
-        f"Wrong: {wrong:,}",
-        f"Accuracy: {accuracy:.2%}",
-        f"Accuracy per 1K QA tokens: {accuracy_per_1k:.4f}",
-        f"Avg QA latency (sec): {avg_qa_latency:.4f}",
-        "",
-        "Category accuracy:",
-    ]
-
-    for category in sorted(
-        category_totals.keys(), key=lambda value: int(value) if value.isdigit() else value
-    ):
-        total = category_totals[category]
+    category_stats = {}
+    for category, row_count in category_rows.items():
+        cat_graded = category_graded[category]
         cat_correct = category_correct[category]
-        cat_accuracy = cat_correct / total if total else 0.0
-        output.append(f"  category {category}: {cat_correct}/{total} ({cat_accuracy:.2%})")
+        category_stats[category] = {
+            "rows": row_count,
+            "graded": cat_graded,
+            "correct": cat_correct,
+            "accuracy": cat_correct / cat_graded if cat_graded else 0.0,
+        }
+    return {
+        "rows": len(rows),
+        "graded": graded,
+        "correct": correct,
+        "wrong": wrong,
+        "ungraded": len(rows) - graded,
+        "accuracy": correct / graded if graded else 0.0,
+        "avg_qa_latency": total_qa_latency / len(rows) if rows else 0.0,
+        "categories": category_stats,
+    }
 
-    if matched_state_ids:
-        output.extend(
-            format_hermes_usage_block(
-                "Hermes state.db QA usage (authoritative when fully matched)",
-                state_usage,
-                len(set(matched_state_ids)),
-                len(rows),
-            )
+
+def sum_qa_csv_usage(rows: list[dict]) -> HermesUsage:
+    return HermesUsage(
+        input_tokens=sum(read_int(row, "qa_input_tokens") for row in rows),
+        output_tokens=sum(read_int(row, "qa_output_tokens") for row in rows),
+        cache_read_tokens=sum(read_int(row, "qa_cache_read_tokens") for row in rows),
+        cache_write_tokens=sum(read_int(row, "qa_cache_write_tokens") for row in rows),
+    )
+
+
+def summarize_qa_hermes_usage(
+    rows: list[dict], state_sessions: dict[str, dict[str, int]]
+) -> HermesUsageSummary:
+    matched_ids = qa_state_session_ids(rows, state_sessions)
+    matched_count = len(set(matched_ids))
+    if rows and matched_count == len(rows):
+        return HermesUsageSummary(
+            usage=HermesUsage.from_mapping(sum_hermes_usage(state_sessions, matched_ids)),
+            source="state.db",
+            matched_sessions=matched_count,
+            expected_sessions=len(rows),
+            authoritative=True,
         )
-
-    for label, keys in TOKEN_GROUPS.items():
-        output.append("")
-        output.extend(format_token_block(rows, f"{label} CSV/gateway", keys))
-
-    return output, total_qa_tokens
+    return HermesUsageSummary(
+        usage=sum_qa_csv_usage(rows),
+        source="qa_results.csv fallback",
+        matched_sessions=matched_count,
+        expected_sessions=len(rows),
+        authoritative=False,
+    )
 
 
 def import_state_session_ids(
@@ -272,6 +321,15 @@ def import_state_session_ids(
     state_sessions: dict[str, dict[str, int]],
 ) -> list[str]:
     if suite == "e2e":
+        row_ids = []
+        for row in rows:
+            for key in ("session_id", "conversation"):
+                session_id = row.get(key, "")
+                if session_id in state_sessions:
+                    row_ids.append(session_id)
+                    break
+        if row_ids:
+            return row_ids
         ids = [
             session_id
             for session_id in state_sessions
@@ -293,125 +351,197 @@ def import_state_session_ids(
     ]
 
 
-def summarize_import_success(
-    import_csv: Path, suite: str, state_sessions: dict[str, dict[str, int]]
-) -> tuple[list[str], int]:
-    if not import_csv.exists():
-        return [], 0
-
-    with open(import_csv, "r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f))
-
+def sum_import_csv_usage(rows: list[dict], suite: str) -> HermesUsage:
     if suite == "baseline":
         total_tokens = sum(read_int(row, "total_tokens") for row in rows)
-        output = [
-            "",
-            "Import CSV/gateway tokens:",
-            f"  total_tokens: {total_tokens:,}",
-        ]
-        matched_ids = import_state_session_ids(rows, suite, state_sessions)
-        if matched_ids:
-            usage = sum_hermes_usage(state_sessions, matched_ids)
-            output.extend(
-                format_hermes_usage_block(
-                    "Hermes state.db import usage (authoritative)",
-                    usage,
-                    len(set(matched_ids)),
-                    len(set(matched_ids)),
-                )
+        input_tokens = sum(read_first_int(row, ("input_tokens",)) for row in rows)
+        output_tokens = sum(read_first_int(row, ("output_tokens",)) for row in rows)
+        cache_read = sum(read_first_int(row, ("cache_read", "cache_read_tokens")) for row in rows)
+        cache_write = sum(
+            read_first_int(row, ("cache_write", "cache_write_tokens")) for row in rows
+        )
+        if input_tokens or output_tokens or cache_read or cache_write:
+            return HermesUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
             )
-            total_tokens = hermes_total_tokens(usage)
-        return output, total_tokens
+        return HermesUsage(input_tokens=total_tokens)
 
     if suite == "e2e":
-        input_tokens = sum(read_int(row, "input_tokens") for row in rows)
-        output_tokens = sum(read_int(row, "output_tokens") for row in rows)
-        cache_read = sum(read_int(row, "cache_read") for row in rows)
-        cache_write = sum(read_int(row, "cache_write") for row in rows)
-        total_tokens = sum(read_int(row, "total_tokens") for row in rows)
-        output = [
-            "",
-            "Import CSV/gateway tokens:",
-            f"  input_tokens: {input_tokens:,}",
-            f"  output_tokens: {output_tokens:,}",
-            f"  cache_read_tokens: {cache_read:,}",
-            f"  cache_write_tokens: {cache_write:,}",
-            f"  total_tokens: {total_tokens:,}",
-        ]
-        matched_ids = import_state_session_ids(rows, suite, state_sessions)
-        if matched_ids:
-            usage = sum_hermes_usage(state_sessions, matched_ids)
-            output.extend(
-                format_hermes_usage_block(
-                    "Hermes state.db import usage (authoritative)",
-                    usage,
-                    len(set(matched_ids)),
-                    len(set(matched_ids)),
-                )
-            )
-            total_tokens = hermes_total_tokens(usage)
-        return output, total_tokens
+        return HermesUsage(
+            input_tokens=sum(read_int(row, "input_tokens") for row in rows),
+            output_tokens=sum(read_int(row, "output_tokens") for row in rows),
+            cache_read_tokens=sum(
+                read_first_int(row, ("cache_read", "cache_read_tokens")) for row in rows
+            ),
+            cache_write_tokens=sum(
+                read_first_int(row, ("cache_write", "cache_write_tokens")) for row in rows
+            ),
+        )
 
-    total_embedding = sum(read_int(row, "embedding_tokens") for row in rows)
-    total_llm = sum(
-        read_int(row, "llm_total_tokens") or read_int(row, "vlm_tokens") for row in rows
+    return HermesUsage()
+
+
+def summarize_import_hermes_usage(
+    import_csv: Path, suite: str, state_sessions: dict[str, dict[str, int]]
+) -> HermesUsageSummary | None:
+    if suite == "preingest" or not import_csv.exists():
+        return None
+
+    rows = read_csv_rows(import_csv)
+    if not rows:
+        return None
+
+    matched_ids = import_state_session_ids(rows, suite, state_sessions)
+    matched_count = len(set(matched_ids))
+    state_is_complete = bool(matched_ids) and (suite != "e2e" or matched_count == len(rows))
+    if state_is_complete:
+        expected_count = len(rows) if suite == "e2e" else matched_count
+        return HermesUsageSummary(
+            usage=HermesUsage.from_mapping(sum_hermes_usage(state_sessions, matched_ids)),
+            source="state.db",
+            matched_sessions=matched_count,
+            expected_sessions=expected_count,
+            authoritative=True,
+        )
+
+    return HermesUsageSummary(
+        usage=sum_import_csv_usage(rows, suite),
+        source="import_success.csv fallback",
+        matched_sessions=0,
+        expected_sessions=len(rows),
+        authoritative=False,
     )
-    total_tokens = sum(read_int(row, "total_tokens") for row in rows)
-    valid_rows = len(rows)
-    avg_embedding = total_embedding / valid_rows if valid_rows else 0.0
-    avg_llm = total_llm / valid_rows if valid_rows else 0.0
-    avg_total = total_tokens / valid_rows if valid_rows else 0.0
-    return [
-        "",
-        "OpenViking import token statistics:",
-        f"  total_sessions: {valid_rows:,}",
-        f"  total_embedding_tokens: {total_embedding:,}",
-        f"  total_llm_tokens: {total_llm:,}",
-        f"  total_tokens: {total_tokens:,}",
-        f"  avg_embedding_tokens: {avg_embedding:,.2f}",
-        f"  avg_llm_tokens: {avg_llm:,.2f}",
-        f"  avg_total_tokens: {avg_total:,.2f}",
-    ], total_tokens
 
 
-def summarize_true_tokens(result_dir: Path) -> list[str]:
-    import_emb_in, import_emb_out, import_vlm_in, import_vlm_out = read_true_token_csv(
+def read_openviking_usage(result_dir: Path) -> tuple[OpenVikingUsage, OpenVikingUsage]:
+    import_emb_in, import_emb_out, import_llm_in, import_llm_out = read_true_token_csv(
         result_dir / "import_true_tokens.csv"
     )
-    eval_emb_in, eval_emb_out, eval_vlm_in, eval_vlm_out = read_true_token_csv(
+    eval_emb_in, eval_emb_out, eval_llm_in, eval_llm_out = read_true_token_csv(
         result_dir / "eval_true_tokens.csv"
     )
+    return (
+        OpenVikingUsage(import_emb_in, import_emb_out, import_llm_in, import_llm_out),
+        OpenVikingUsage(eval_emb_in, eval_emb_out, eval_llm_in, eval_llm_out),
+    )
 
-    if not any(
-        [
-            import_emb_in,
-            import_emb_out,
-            import_vlm_in,
-            import_vlm_out,
-            eval_emb_in,
-            eval_emb_out,
-            eval_vlm_in,
-            eval_vlm_out,
-        ]
-    ):
-        return []
 
-    return [
-        "",
-        "OpenViking true tokens:",
-        f"  import_embedding_input_tokens: {import_emb_in:,}",
-        f"  import_embedding_output_tokens: {import_emb_out:,}",
-        f"  import_vlm_llm_input_tokens: {import_vlm_in:,}",
-        f"  import_vlm_llm_output_tokens: {import_vlm_out:,}",
-        f"  eval_embedding_input_tokens: {eval_emb_in:,}",
-        f"  eval_embedding_output_tokens: {eval_emb_out:,}",
-        f"  eval_vlm_llm_input_tokens: {eval_vlm_in:,}",
-        f"  eval_vlm_llm_output_tokens: {eval_vlm_out:,}",
-        f"  total_embedding_input_tokens: {import_emb_in + eval_emb_in:,}",
-        f"  total_embedding_output_tokens: {import_emb_out + eval_emb_out:,}",
-        f"  total_vlm_llm_input_tokens: {import_vlm_in + eval_vlm_in:,}",
-        f"  total_vlm_llm_output_tokens: {import_vlm_out + eval_vlm_out:,}",
+def format_usage_pair(label: str, qa_value: int, import_value: int | None) -> str:
+    if import_value is None:
+        return f"  {label}: {qa_value:,} (QA)"
+    return f"  {label}: {qa_value:,} (QA), {import_value:,} (Ingest)"
+
+
+def format_source(summary: HermesUsageSummary) -> str:
+    if summary.source == "state.db":
+        return (
+            f"{summary.source}, matched {summary.matched_sessions:,}/"
+            f"{summary.expected_sessions:,} sessions"
+        )
+    if summary.matched_sessions:
+        return (
+            f"{summary.source}, state.db matched {summary.matched_sessions:,}/"
+            f"{summary.expected_sessions:,} sessions"
+        )
+    return summary.source
+
+
+def format_score_lines(score: dict) -> list[str]:
+    lines = [
+        "Score",
+        (f"  overall_accuracy: {score['accuracy']:.2%} ({score['correct']:,}/{score['graded']:,})"),
     ]
+    if score["ungraded"]:
+        lines.append(f"  ungraded_rows: {score['ungraded']:,}")
+
+    lines.append("  category_accuracy:")
+    for category in sorted(
+        score["categories"].keys(),
+        key=lambda value: int(value) if value.isdigit() else value,
+    ):
+        item = score["categories"][category]
+        lines.append(
+            f"    category {category}: {item['correct']:,}/{item['graded']:,} "
+            f"({item['accuracy']:.2%})"
+        )
+        ungraded = item["rows"] - item["graded"]
+        if ungraded:
+            lines.append(f"      ungraded_rows: {ungraded:,}")
+    return lines
+
+
+def format_summary(
+    suite: str,
+    score: dict,
+    qa_usage: HermesUsageSummary,
+    import_usage: HermesUsageSummary | None,
+    ov_import: OpenVikingUsage,
+    ov_eval: OpenVikingUsage,
+) -> list[str]:
+    import_hermes = import_usage.usage if import_usage is not None else None
+    llm_calls = qa_usage.usage.api_call_count if qa_usage.authoritative else None
+    llm_calls_per_qa = (
+        llm_calls / qa_usage.expected_sessions
+        if llm_calls is not None and qa_usage.expected_sessions
+        else None
+    )
+
+    lines = [
+        f"=== {summary_title(suite)} Summary ===",
+        "",
+        *format_score_lines(score),
+        "",
+        "Hermes Usage",
+        f"  qa_source: {format_source(qa_usage)}",
+    ]
+    if import_usage is not None:
+        lines.append(f"  ingest_source: {format_source(import_usage)}")
+    lines.extend(
+        [
+            format_usage_pair(
+                "total_tokens",
+                qa_usage.usage.total_tokens,
+                import_hermes.total_tokens if import_hermes is not None else None,
+            ),
+            format_usage_pair(
+                "cache_tokens",
+                qa_usage.usage.cache_tokens,
+                import_hermes.cache_tokens if import_hermes is not None else None,
+            ),
+            format_usage_pair(
+                "no_cache_tokens",
+                qa_usage.usage.no_cache_tokens,
+                import_hermes.no_cache_tokens if import_hermes is not None else None,
+            ),
+            "",
+            "OpenViking Usage",
+        ]
+    )
+
+    if ov_import.has_tokens or ov_eval.has_tokens:
+        lines.extend(
+            [
+                f"  embedding: {ov_import.embedding_tokens:,} (Ingest), {ov_eval.embedding_tokens:,} (QA)",
+                f"  llm_input: {ov_import.llm_input_tokens:,} (Ingest), {ov_eval.llm_input_tokens:,} (QA)",
+                f"  llm_output: {ov_import.llm_output_tokens:,} (Ingest), {ov_eval.llm_output_tokens:,} (QA)",
+            ]
+        )
+    else:
+        lines.append("  unavailable")
+
+    lines.extend(
+        [
+            "",
+            "Runtime",
+            f"  avg_seconds_per_qa: {score['avg_qa_latency']:.4f}",
+            f"  hermes_qa_llm_calls: {format_optional_int(llm_calls)} total",
+            f"  hermes_qa_llm_calls_per_qa: {format_optional_float(llm_calls_per_qa)}",
+        ]
+    )
+    return lines
 
 
 def main() -> None:
@@ -437,31 +567,16 @@ def main() -> None:
     state_db = resolve_hermes_state_db(args.hermes_state_db)
     state_sessions = read_hermes_sessions(state_db)
 
-    output_lines = []
-    qa_total_tokens = 0
+    if not os.path.exists(args.input):
+        print(f"Warning: QA result file not found: {args.input}")
+        return
 
-    if os.path.exists(args.input):
-        qa_lines, qa_total_tokens = process_qa_results(args.input, args.suite, state_sessions)
-        output_lines.extend(qa_lines)
-    else:
-        output_lines.append(f"Warning: QA result file not found: {args.input}")
-
-    true_token_lines = summarize_true_tokens(result_dir)
-    if true_token_lines:
-        output_lines.extend(true_token_lines)
-
-    import_lines, import_total_tokens = summarize_import_success(
-        Path(args.import_csv), args.suite, state_sessions
-    )
-    if import_lines:
-        output_lines.extend(import_lines)
-        if args.suite in {"baseline", "e2e"}:
-            output_lines.extend(
-                [
-                    "",
-                    f"Grand Total Agent Tokens (Import + QA): {import_total_tokens + qa_total_tokens:,}",
-                ]
-            )
+    rows = valid_qa_rows(args.input)
+    score = summarize_score(rows)
+    qa_usage = summarize_qa_hermes_usage(rows, state_sessions)
+    import_usage = summarize_import_hermes_usage(Path(args.import_csv), args.suite, state_sessions)
+    ov_import, ov_eval = read_openviking_usage(result_dir)
+    output_lines = format_summary(args.suite, score, qa_usage, import_usage, ov_import, ov_eval)
 
     for line in output_lines:
         print(line)

@@ -37,6 +37,7 @@ DEFAULT_OPENVIKING_URL = os.getenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:1933
 DEFAULT_DATASET_LOCATION = "benchmark/locomo/data/locomo10.json"
 MAX_HTTP_ATTEMPTS = 2
 DEFAULT_ERROR_RETRIES = int(os.getenv("QA_ERROR_RETRIES", "2"))
+QA_INSTRUCTIONS = "Answer to the best of your ability and reasonable inference."
 
 csv_lock = Lock()
 
@@ -209,6 +210,7 @@ def send_gateway_request(
     model: str,
     conversation: str,
     input_text: str,
+    instructions: str = QA_INSTRUCTIONS,
     timeout: int = 600,
 ) -> tuple[dict, float, str]:
     url = f"{base_url.rstrip('/')}/v1/responses"
@@ -223,6 +225,8 @@ def send_gateway_request(
         "session_id": conversation,
         "store": False,
     }
+    if instructions:
+        payload["instructions"] = instructions
 
     last_error: requests.RequestException | None = None
     total_elapsed = 0.0
@@ -258,11 +262,9 @@ def build_question_prompt(
     question_time: str | None,
     sample_id: str,
 ) -> str:
-    base_instruction = f"Answer to the best of your ability and reasonable inference: {question}"
-
     if question_time:
-        return f"Current date: {question_time}. {base_instruction}"
-    return base_instruction
+        return f"Current date: {question_time}. {question}"
+    return question
 
 
 def process_single_question(
