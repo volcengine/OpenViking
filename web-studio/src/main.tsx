@@ -6,9 +6,11 @@ import { ThemeProvider } from 'next-themes'
 import { routeTree } from './routeTree.gen'
 import { TooltipProvider } from './components/ui/tooltip'
 import { queryClient } from './lib/query-client'
+import { getRouterBasePath } from './lib/public-path'
 
 const router = createRouter({
   routeTree,
+  basepath: getRouterBasePath(),
   defaultPreload: 'intent',
   scrollRestoration: true,
 })

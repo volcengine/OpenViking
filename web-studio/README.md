@@ -268,7 +268,80 @@ server {
 VITE_OV_BASE_URL=https://ov.example.com npm run build
 ```
 
-### 4. Docker 服务端依赖
+### 4. 同 host 子路径部署
+
+如果希望 Web Studio 部署在同一个 host 的某个路径下，例如：
+
+```text
+https://ov.example.com/web-studio/
+```
+
+API 仍然由同一个 host 的根路径代理到 OpenViking Server：
+
+```text
+https://ov.example.com/api/*
+https://ov.example.com/bot/*
+https://ov.example.com/health
+https://ov.example.com/ready
+```
+
+构建时需要同时设置：
+
+- `VITE_OV_BASE_URL=https://ov.example.com`：浏览器请求 OpenViking API 的根地址。
+- `--base=/web-studio/`：Vite 静态资源和前端 Router 的挂载路径。
+
+构建命令：
+
+```bash
+cd web-studio
+npm ci
+VITE_OV_BASE_URL=https://ov.example.com npm run build -- --base=/web-studio/
+```
+
+把 `dist/` 发布到服务器目录，例如：
+
+```text
+/srv/web-studio
+```
+
+nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name ov.example.com;
+
+    root /srv;
+
+    location = /web-studio {
+        return 301 /web-studio/;
+    }
+
+    location /web-studio/ {
+        try_files $uri $uri/ /web-studio/index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /bot/ {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:1933;
+    }
+
+    location /ready {
+        proxy_pass http://127.0.0.1:1933;
+    }
+}
+```
+
+这个模式下，不要把 `VITE_OV_BASE_URL` 设置成 `https://ov.example.com/web-studio`。`/web-studio/` 只是前端静态页面的挂载路径；OpenViking API 仍应从 `https://ov.example.com/api/*` 和 `https://ov.example.com/bot/*` 访问。
+
+### 5. Docker 服务端依赖
 
 官方 OpenViking 镜像可以作为 Web Studio 依赖的 API server：
 

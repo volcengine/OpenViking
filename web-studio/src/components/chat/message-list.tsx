@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next'
 
 import type { Message } from '#/routes/sessions/-types/message'
 import type { StreamToolCall } from '#/routes/sessions/-types/chat'
+import { resolvePublicAsset } from '#/lib/public-path'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
+
+const OPENVIKING_ICON_SRC = resolvePublicAsset('openviking-icon.png')
 
 // ---------------------------------------------------------------------------
 // CopyButton
@@ -75,7 +78,7 @@ function TypingIndicator() {
 function BotAvatar() {
   return (
     <div className="flex size-7 shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden">
-      <img src="/openviking-icon.png" alt="OpenViking" className="size-7" />
+      <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className="size-7" />
     </div>
   )
 }
