@@ -358,7 +358,6 @@ const en = {
     processingTasks: {
       title: 'File Processing Tasks',
       empty: 'No processing tasks',
-      refresh: 'Refresh tasks',
       toggleError: 'Toggle error details',
       columns: {
         fileName: 'File Name',

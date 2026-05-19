@@ -63,8 +63,6 @@ export function VikingFileManager({
   const {
     tasks,
     hasActiveTasks,
-    refreshTasks,
-    isRefreshingTasks,
   } = useResourceUpload()
   const [currentUri, setCurrentUri] = useState(
     normalizeDirUri(initialUri || 'viking://'),
@@ -454,8 +452,6 @@ export function VikingFileManager({
       <UploadTaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
-        onRefresh={refreshTasks}
-        isRefreshing={isRefreshingTasks}
         tasks={tasks}
       />
     </div>

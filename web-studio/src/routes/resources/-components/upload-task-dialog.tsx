@@ -1,9 +1,8 @@
-import { ChevronDown, ChevronUp, FileIcon, RefreshCcw } from 'lucide-react'
+import { ChevronDown, ChevronUp, FileIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -43,16 +42,12 @@ function TaskStatusBadge({ status }: { status: ResourceUploadTask['status'] }) {
 type UploadTaskDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onRefresh: () => Promise<void>
-  isRefreshing: boolean
   tasks: ResourceUploadTask[]
 }
 
 export function UploadTaskDialog({
   open,
   onOpenChange,
-  onRefresh,
-  isRefreshing,
   tasks,
 }: UploadTaskDialogProps) {
   const { t } = useTranslation('resources')
@@ -78,22 +73,10 @@ export function UploadTaskDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[min(80vh,640px)] gap-0 overflow-hidden p-0 sm:max-w-3xl">
-        <DialogHeader className="border-b px-6 py-5">
-          <div className="flex items-center justify-between gap-3">
-            <DialogTitle className="text-xl">
-              {t('processingTasks.title')}
-            </DialogTitle>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => { void onRefresh() }}
-              disabled={isRefreshing}
-              aria-label={t('processingTasks.refresh')}
-            >
-              <RefreshCcw className={cn('size-4', isRefreshing && 'animate-spin')} />
-            </Button>
-          </div>
+        <DialogHeader className="border-b px-6 py-5 pr-16">
+          <DialogTitle className="truncate text-xl">
+            {t('processingTasks.title')}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="max-h-[calc(min(80vh,640px)-5.5rem)] overflow-y-auto px-6 py-5">
