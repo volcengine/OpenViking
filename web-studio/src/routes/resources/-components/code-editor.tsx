@@ -3,13 +3,12 @@ import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
+import type { LanguageSupport } from '@codemirror/language'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
 
-type LanguageSupport = Awaited<ReturnType<typeof import('@codemirror/lang-javascript')['javascript']>>
-
-const languageLoaders: Record<string, () => Promise<LanguageSupport>> = {
+const languageLoaders: Partial<Record<string, () => Promise<LanguageSupport>>> = {
   javascript: () => import('@codemirror/lang-javascript').then(m => m.javascript({ jsx: true, typescript: false })),
   typescript: () => import('@codemirror/lang-javascript').then(m => m.javascript({ jsx: true, typescript: true })),
   python: () => import('@codemirror/lang-python').then(m => m.python()),

@@ -92,7 +92,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
         case 'ArrowLeft':
           return true
         case 'ArrowRight': {
-          const nextDir = rightDirs[leftIndex]
+          const nextDir = rightDirs.at(leftIndex)
           if (nextDir) {
             setFocusUri(normalizeDirUri(nextDir.uri))
             setActiveCol('left')
@@ -100,8 +100,9 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
           return true
         }
         case 'Enter': {
-          const selectedUri = rightDirs[leftIndex]
-            ? normalizeDirUri(rightDirs[leftIndex].uri)
+          const nextDir = rightDirs.at(leftIndex)
+          const selectedUri = nextDir
+            ? normalizeDirUri(nextDir.uri)
             : focusUri
           onConfirm(selectedUri)
           return true

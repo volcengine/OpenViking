@@ -159,10 +159,11 @@ export function unwrapOvResponse<TResult>(response: unknown): TResult {
   const envelope = getEnvelope(payload)
 
   if (envelope?.status === 'error') {
+    const error = envelope.error
     throw new OvClientError({
-      code: envelope.error.code || 'ERROR',
-      details: envelope.error.details ?? envelope.error.detail,
-      message: envelope.error.message || 'OpenViking request failed',
+      code: error?.code || 'ERROR',
+      details: error?.details ?? error?.detail,
+      message: error?.message || 'OpenViking request failed',
       requestId: getRequestId(response.headers),
       responseBody: payload,
       statusCode: response.status,
