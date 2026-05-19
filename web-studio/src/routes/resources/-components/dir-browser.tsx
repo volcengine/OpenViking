@@ -10,6 +10,8 @@ import { useVikingFsList } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 
+const VIKING_ROOT_URI = 'viking://'
+
 interface DirBrowserProps {
   startUri: string
   onConfirm: (uri: string) => void
@@ -26,7 +28,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   const leftParent = parentUri(focusUri)
-  const isRootFocus = focusUri === 'viking://'
+  const isRootFocus = focusUri === VIKING_ROOT_URI
   const leftQuery = useVikingFsList(leftParent, { output: 'agent', showAllHidden: true, nodeLimit: 200 })
   const rightQuery = useVikingFsList(focusUri, { output: 'agent', showAllHidden: true, nodeLimit: 200 })
 
@@ -186,7 +188,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
   })
 
   const isLoading = visibleSingleColumn ? rightQuery.isLoading : leftQuery.isLoading
-  const canGoBack = focusUri !== 'viking://'
+  const canGoBack = focusUri !== VIKING_ROOT_URI
 
   const handleGoBack = () => {
     if (!canGoBack) return
@@ -228,7 +230,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
         visibleSingleColumn ? (
           <DirColumn
             className="min-w-0 flex-1"
-            label="viking://"
+            label={VIKING_ROOT_URI}
             dirs={rightDirs}
             activeIndex={leftIndex}
             t={t}
@@ -242,7 +244,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
           <>
             <DirColumn
               className="w-[clamp(15rem,28vw,18rem)] shrink-0"
-              label={leftParent === 'viking://' ? 'viking://' : fileNameFromUri(leftParent.replace(/\/$/, ''))}
+              label={leftParent === VIKING_ROOT_URI ? VIKING_ROOT_URI : fileNameFromUri(leftParent.replace(/\/$/, ''))}
               dirs={leftDirs}
               activeIndex={activeCol === 'left' ? leftIndex : -1}
               focusedUri={focusUri}

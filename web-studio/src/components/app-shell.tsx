@@ -184,6 +184,7 @@ function NavGroupItem({ item, pathname, title, t }: NavGroupItemProps) {
 }
 
 function NavSessionsItem({ pathname, title }: { pathname: string; title: string }) {
+  const { t } = useTranslation(['appShell', 'sessions'])
   const navigate = useNavigate()
   const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
   const [open, setOpen] = React.useState(isActive)
@@ -206,9 +207,9 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
 
   const handleNewSession = React.useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
-    setSessionTitle(result.session_id, '新会话')
+    setSessionTitle(result.session_id, t('threadList.newSession', { ns: 'sessions' }))
     void navigate({ to: '/sessions', search: { s: result.session_id } })
-  }, [createSession, navigate])
+  }, [createSession, navigate, t])
 
   const handleDeleteSession = React.useCallback(
     async (e: React.MouseEvent, id: string) => {
@@ -240,7 +241,7 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
             </SidebarMenuButton>
           }
         />
-        <SidebarMenuAction onClick={handleNewSession} title='新建会话'>
+        <SidebarMenuAction onClick={handleNewSession} title={t('threadList.newSession', { ns: 'sessions' })}>
           <PlusIcon className='size-4' />
         </SidebarMenuAction>
         <CollapsibleContent>
@@ -249,12 +250,12 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
               <SidebarMenuSubItem>
                 <div className='flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground'>
                   <LoaderIcon className='size-3 animate-spin' />
-                  <span>加载中...</span>
+                  <span>{t('sidebar.loadingSessions', { ns: 'appShell' })}</span>
                 </div>
               </SidebarMenuSubItem>
             ) : reversedSessions.length === 0 ? (
               <SidebarMenuSubItem>
-                <div className='px-2 py-1.5 text-xs text-muted-foreground'>暂无会话</div>
+                <div className='px-2 py-1.5 text-xs text-muted-foreground'>{t('sidebar.noSessions', { ns: 'appShell' })}</div>
               </SidebarMenuSubItem>
             ) : (
               reversedSessions.map((s) => {
@@ -415,7 +416,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
             <button
               type='button'
-              aria-label='Toggle theme'
+              aria-label={t('theme.toggle', { ns: 'common' })}
               className={buttonVariants({ size: 'sm', variant: 'ghost' })}
               onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
             >

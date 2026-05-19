@@ -1,5 +1,6 @@
 import { memo, useCallback, useRef } from 'react'
 import { File } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
@@ -64,6 +65,7 @@ function TreeNode({
   onSelectFile,
   prefetch,
 }: TreeNodeProps) {
+  const { t } = useTranslation('resources')
   const isOpen = expandedKeys.has(entry.uri)
   const isDirSelected = entry.isDir && currentUri === entry.uri
   const isFileSelected = !entry.isDir && selectedFileUri === entry.uri
@@ -126,7 +128,7 @@ function TreeNode({
           onMouseEnter={handleMouseEnter}
         >
           {(!data || children.length > 0) ? (
-            <button type="button" className="inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); handleToggle() }} aria-label={isOpen ? '收起' : '展开'}>
+            <button type="button" className="inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); handleToggle() }} aria-label={isOpen ? t('fileTree.collapse') : t('fileTree.expand')}>
               <ChevronIcon isOpen={isOpen} />
             </button>
           ) : (
@@ -138,7 +140,7 @@ function TreeNode({
       </div>
       <div className={cn('grid transition-[grid-template-rows] duration-300 ease-in-out', isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
         <div className="overflow-hidden">
-          {isOpen && !data && <div className="px-2 py-1 text-xs text-muted-foreground" style={{ marginLeft: `${(level + 1) * 16}px` }}>加载中...</div>}
+          {isOpen && !data && <div className="px-2 py-1 text-xs text-muted-foreground" style={{ marginLeft: `${(level + 1) * 16}px` }}>{t('fileTree.loading')}</div>}
           {isOpen && children.map((child) => (
             <TreeNodeMemo
               key={child.uri}

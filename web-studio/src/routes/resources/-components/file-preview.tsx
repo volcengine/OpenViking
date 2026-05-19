@@ -3,6 +3,7 @@ import hljs from 'highlight.js/lib/core'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
@@ -217,6 +218,7 @@ function escapeHtml(raw: string): string {
 }
 
 export function FilePreview({ file, onClose, showCloseButton = true }: FilePreviewProps) {
+  const { t } = useTranslation('resources')
   const previewQuery = useVikingFilePreview(file, {
     maxAutoReadBytes: 2 * 1024 * 1024,
     defaultReadLimit: -1,
@@ -354,11 +356,12 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
   }
 
   if (!file) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">选择文件后在这里预览</div>
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('filePreview.emptyPrompt')}</div>
   }
 
   const isMarkdown = preview?.fileType === 'markdown'
   const isDark = document.documentElement.classList.contains('dark')
+  const emptyFileText = t('filePreview.emptyFile')
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -374,18 +377,18 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
             <div className="flex items-center gap-1">
               <Button size="sm" variant="ghost" disabled={saving} onClick={() => setEditing(false)}>
                 <XCircle className="mr-1 size-3.5" />
-                取消
+                {t('filePreview.cancel')}
               </Button>
               <Button size="sm" className="active:scale-[0.96] transition-transform" disabled={saving} onClick={handleSave}>
                 {saving ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Save className="mr-1 size-3.5" />}
-                保存
+                {t('filePreview.save')}
               </Button>
             </div>
           ) : (
             canEdit && (
               <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
                 <Pencil className="mr-1 size-3.5" />
-                编辑
+                {t('filePreview.edit')}
               </Button>
             )
           )}
@@ -399,7 +402,7 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
 
       {editing && preview?.content != null ? (
         <div className="h-full min-h-0 p-2">
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />加载编辑器...</div>}>
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />{t('filePreview.loadingEditor')}</div>}>
             <LazyCodeEditor
               ref={editorRef}
               initialContent={preview.content}
@@ -417,21 +420,21 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
                 className={`px-3 py-1.5 text-xs ${markdownMode === 'preview' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'}`}
                 onClick={() => setMarkdownMode('preview')}
               >
-                预览
+                {t('filePreview.markdownPreview')}
               </button>
               <button
                 type="button"
                 className={`px-3 py-1.5 text-xs ${markdownMode === 'source' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'}`}
                 onClick={() => setMarkdownMode('source')}
               >
-                源码
+                {t('filePreview.markdownSource')}
               </button>
             </div>
           ) : null}
 
           {preview?.fileType === 'image' ? (
             imageLoading ? (
-              <div className="text-sm text-muted-foreground">正在加载图片...</div>
+              <div className="text-sm text-muted-foreground">{t('filePreview.imageLoading')}</div>
             ) : imageUrl ? (
               <img src={imageUrl} alt={file.name} className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
             ) : imageSrc ? (
@@ -446,19 +449,19 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
               </div>
             ) : (
               <div className="space-y-1 text-sm text-muted-foreground">
-                <div>图片加载失败。</div>
+                <div>{t('filePreview.imageFailed')}</div>
                 {imageError ? <div className="text-xs">{imageError}</div> : null}
               </div>
             )
           ) : null}
 
           {previewQuery.isLoading && preview?.fileType !== 'image' ? (
-            <div className="text-sm text-muted-foreground">正在读取内容...</div>
+            <div className="text-sm text-muted-foreground">{t('filePreview.loadingContent')}</div>
           ) : null}
 
           {!previewQuery.isLoading && preview && preview.fileType !== 'image' && !preview.shouldAutoRead ? (
             <div className="text-sm text-muted-foreground">
-              {preview.reason === 'binary' ? '二进制文件不支持文本预览。' : '文件较大，默认不自动加载。'}
+              {preview.reason === 'binary' ? t('filePreview.unsupportedBinary') : t('filePreview.largeFileSkipped')}
             </div>
           ) : null}
 
@@ -482,25 +485,25 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
                   },
                 }}
               >
-                {preview.content || '(empty file)'}
+                {preview.content || emptyFileText}
               </ReactMarkdown>
             </article>
           ) : null}
 
           {!previewQuery.isLoading && preview?.fileType === 'markdown' && preview.shouldAutoRead && markdownMode === 'source' ? (
             <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
-              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(preview.content || '(empty file)') }} />
+              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(preview.content || emptyFileText) }} />
             </pre>
           ) : null}
 
           {!previewQuery.isLoading && preview?.fileType === 'code' && preview.shouldAutoRead ? (
             <pre className="overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-6">
-              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || '(empty file)' }} />
+              <code className="hljs block" dangerouslySetInnerHTML={{ __html: highlightedCodeHtml || escapeHtml(emptyFileText) }} />
             </pre>
           ) : null}
 
           {!previewQuery.isLoading && preview && preview.fileType !== 'image' && preview.fileType !== 'markdown' && preview.fileType !== 'code' && preview.shouldAutoRead ? (
-            <pre className="whitespace-pre-wrap break-words text-xs leading-6">{preview.content || '(empty file)'}</pre>
+            <pre className="whitespace-pre-wrap break-words text-xs leading-6">{preview.content || emptyFileText}</pre>
           ) : null}
         </ScrollArea>
       )}

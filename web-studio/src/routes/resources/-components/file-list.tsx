@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { File, Folder } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
@@ -44,6 +45,7 @@ export function FileList({
   onOpenDirectory,
   onOpenFile,
 }: FileListProps) {
+  const { t } = useTranslation('resources')
   const sortKey: SortKey = 'name'
   const sortDirection: SortDirection = 'asc'
 
@@ -59,7 +61,7 @@ export function FileList({
     <div>
       {!sortedEntries.length ? (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-          当前目录为空
+          {t('fileList.empty')}
         </div>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { ChevronDown, Brain, FileText, Wrench, FolderOpen } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
@@ -13,14 +14,14 @@ interface FindResultsProps {
 
 const GROUP_CONFIG: Array<{
   key: keyof Pick<GroupedFindResult, 'memories' | 'resources' | 'skills'>
-  label: string
+  labelKey: string
   icon: typeof Brain
   type: FindContextType
   accent: string
 }> = [
-  { key: 'resources', label: 'Resources', icon: FileText, type: 'resource', accent: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
-  { key: 'memories', label: 'Memories', icon: Brain, type: 'memory', accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  { key: 'skills', label: 'Skills', icon: Wrench, type: 'skill', accent: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+  { key: 'resources', labelKey: 'findResults.groups.resources', icon: FileText, type: 'resource', accent: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+  { key: 'memories', labelKey: 'findResults.groups.memories', icon: Brain, type: 'memory', accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  { key: 'skills', labelKey: 'findResults.groups.skills', icon: Wrench, type: 'skill', accent: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
 ]
 
 function formatDisplayUri(uri: string): { name: string; parent: string } {
@@ -43,11 +44,13 @@ function ScoreIndicator({ score }: { score: number }) {
 }
 
 export function FindResults({ data, onNavigate }: FindResultsProps) {
+  const { t } = useTranslation('resources')
+
   if (data.total === 0) {
     return (
       <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
         <FileText className="size-8 opacity-30" />
-        <p className="text-sm">未找到相关结果</p>
+        <p className="text-sm">{t('findResults.noResults')}</p>
       </div>
     )
   }
@@ -60,7 +63,7 @@ export function FindResults({ data, onNavigate }: FindResultsProps) {
         return (
           <FindResultGroup
             key={group.key}
-            label={group.label}
+            label={t(group.labelKey)}
             icon={group.icon}
             accent={group.accent}
             items={items}
@@ -124,6 +127,7 @@ function FindResultRow({
   item: FindResultItem
   onNavigate: (uri: string) => void
 }) {
+  const { t } = useTranslation('resources')
   const [expanded, setExpanded] = useState(false)
   const { name, parent } = formatDisplayUri(item.uri)
   const hasDetail = item.abstract || item.overview
@@ -161,7 +165,7 @@ function FindResultRow({
             type="button"
             className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
             onClick={() => setExpanded(!expanded)}
-            title={expanded ? '收起' : '展开详情'}
+            title={expanded ? t('findResults.collapse') : t('findResults.expandDetails')}
           >
             <ChevronDown className={cn('size-3.5 transition-transform', expanded && 'rotate-180')} />
           </button>

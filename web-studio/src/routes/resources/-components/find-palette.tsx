@@ -24,6 +24,8 @@ const findPaletteSession = {
   inputQuery: '',
   targetUri: undefined as string | undefined,
 }
+const KEY_ENTER_LABEL = 'Enter'
+const KEY_ESCAPE_LABEL = 'esc'
 
 function parseScopeCommand(query: string): string | null {
   const trimmed = query.trim()
@@ -193,7 +195,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
     : 'w-[min(90vw,45rem)]'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6" role="dialog" aria-modal="true" aria-label="搜索">
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6" role="dialog" aria-modal="true" aria-label={t('searchPalette.ariaLabel')}>
       <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" role="presentation" onClick={onClose} />
 
       <div
@@ -274,7 +276,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                         <p className="mt-1 text-xs text-muted-foreground/75">
                           {t('searchPalette.scopeState.switchPrefix')}
                           {' '}
-                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">Enter</kbd>
+                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ENTER_LABEL}</kbd>
                           {' '}
                           {t('searchPalette.scopeState.switchMiddle')}
                           {' '}
@@ -361,13 +363,13 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.dirMode.select')}</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> {t('searchPalette.footer.dirMode.level')}</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.dirMode.confirm')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> {t('searchPalette.footer.dirMode.cancel')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ESCAPE_LABEL}</kbd> {t('searchPalette.footer.dirMode.cancel')}</span>
           </div>
         ) : hasResults && (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.resultMode.navigate')}</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.resultMode.open')}</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> {t('searchPalette.footer.resultMode.close')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">{KEY_ESCAPE_LABEL}</kbd> {t('searchPalette.footer.resultMode.close')}</span>
             <span className="ml-auto tabular-nums">{t('searchPalette.footer.resultMode.count', { count: filteredEntries.length })}</span>
           </div>
         )}
@@ -389,6 +391,7 @@ function DirResultList({
   onSelect: (entry: VikingFsEntry) => void
   onOpenDir: (entry: VikingFsEntry) => void
 }) {
+  const { t } = useTranslation('resources')
   const { isScrolling, onScroll } = useTransientScrollbar()
 
   return (
@@ -428,7 +431,7 @@ function DirResultList({
             <span
               role="button"
               tabIndex={-1}
-              title="打开所在目录"
+              title={t('searchPalette.openContainingDirectory')}
               className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
               onClick={(e) => { e.stopPropagation(); onOpenDir(entry) }}

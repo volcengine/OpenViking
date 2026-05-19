@@ -1,6 +1,7 @@
 import { Streamdown } from 'streamdown'
 import { code } from '@streamdown/code'
 import { cjk } from '@streamdown/cjk'
+import { useTranslation } from 'react-i18next'
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
@@ -70,13 +71,15 @@ interface ReasoningBlockProps {
 }
 
 export function ReasoningBlock({ reasoning, isRunning }: ReasoningBlockProps) {
+  const { t } = useTranslation('sessions')
+
   if (!reasoning) return null
 
   return (
     <details className="mb-3 rounded-lg border border-border/30 bg-muted/20" open={isRunning}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-muted-foreground select-none">
         {isRunning && <LoaderIcon className="size-3 animate-spin" />}
-        <span>{isRunning ? '思考中...' : '思考过程'}</span>
+        <span>{isRunning ? t('chat.thinking') : t('chat.reasoning')}</span>
       </summary>
       <div className="border-t border-border/30 px-3 py-2 text-xs text-muted-foreground/80 leading-relaxed whitespace-pre-wrap">
         {reasoning}
@@ -98,6 +101,8 @@ interface ToolCallBlockProps {
 }
 
 export function ToolCallBlock({ toolName, args, result, isError, isRunning }: ToolCallBlockProps) {
+  const { t } = useTranslation('sessions')
+
   return (
     <details className="my-2 rounded-lg border border-border/30 bg-muted/20">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs select-none">
@@ -105,14 +110,14 @@ export function ToolCallBlock({ toolName, args, result, isError, isRunning }: To
         <WrenchIcon className="size-3 text-muted-foreground/60" />
         <span className="font-mono font-medium text-foreground/80">{toolName}</span>
         <span className="ml-auto text-muted-foreground/60 text-[11px]">
-          {isRunning ? '执行中...' : isError ? '失败' : '完成'}
+          {isRunning ? t('chat.toolStatus.running') : isError ? t('chat.toolStatus.failed') : t('chat.toolStatus.completed')}
         </span>
       </summary>
       <div className="space-y-2 border-t border-border/30 px-3 py-2">
         {args && Object.keys(args).length > 0 && (
           <div>
             <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
-              输入
+              {t('chat.toolInput')}
             </div>
             <pre className="overflow-x-auto rounded-md bg-muted/50 p-2 text-xs leading-relaxed">
               {JSON.stringify(args, null, 2)}
@@ -122,7 +127,7 @@ export function ToolCallBlock({ toolName, args, result, isError, isRunning }: To
         {result !== undefined && (
           <div>
             <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/50">
-              结果
+              {t('chat.toolResult')}
             </div>
             <pre
               className={cn(

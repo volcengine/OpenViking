@@ -29,6 +29,8 @@ const en = {
       },
     },
     sidebar: {
+      loadingSessions: 'Loading...',
+      noSessions: 'No sessions',
       workspaceGroupLabel: 'Workspace',
     },
   },
@@ -47,6 +49,9 @@ const en = {
     language: {
       current: 'Current',
       label: 'Language',
+    },
+    theme: {
+      toggle: 'Toggle theme',
     },
     serverMode: {
       checking: 'Detecting',
@@ -366,6 +371,8 @@ const en = {
       },
     },
     searchPalette: {
+      ariaLabel: 'Search',
+      openContainingDirectory: 'Open containing directory',
       placeholder: 'Search files and directories...',
       scope: {
         global: 'Search scope: Global',
@@ -421,6 +428,39 @@ const en = {
         title: 'Empty directory',
         subtitle: 'There are currently no subdirectories to expand at this level',
       },
+    },
+    fileList: {
+      empty: 'This directory is empty',
+    },
+    filePreview: {
+      cancel: 'Cancel',
+      edit: 'Edit',
+      emptyFile: '(empty file)',
+      emptyPrompt: 'Select a file to preview it here',
+      imageFailed: 'Image failed to load.',
+      imageLoading: 'Loading image...',
+      largeFileSkipped: 'This file is large and was not loaded automatically.',
+      loadingContent: 'Reading content...',
+      loadingEditor: 'Loading editor...',
+      markdownPreview: 'Preview',
+      markdownSource: 'Source',
+      save: 'Save',
+      unsupportedBinary: 'Binary files do not support text preview.',
+    },
+    fileTree: {
+      collapse: 'Collapse',
+      expand: 'Expand',
+      loading: 'Loading...',
+    },
+    findResults: {
+      collapse: 'Collapse',
+      expandDetails: 'Expand details',
+      groups: {
+        memories: 'Memories',
+        resources: 'Resources',
+        skills: 'Skills',
+      },
+      noResults: 'No matching results',
     },
   },
   retrieval: {
@@ -497,12 +537,27 @@ const en = {
       newSession: 'New Session',
     },
     chat: {
+      copy: 'Copy',
+      emptyDescription: 'Explore your knowledge base and start a conversation.',
       placeholder: 'Type a message...',
       emptyState: 'Select or create a session to start chatting.',
       thinking: 'Thinking...',
+      reasoning: 'Reasoning',
+      iteration: 'Round {{count}}',
       toolCall: 'Tool call',
+      toolInput: 'Input',
+      toolResult: 'Result',
+      toolStatus: {
+        completed: 'Completed',
+        failed: 'Failed',
+        running: 'Running...',
+      },
       send: 'Send',
       cancel: 'Stop',
+    },
+    empty: {
+      description: 'Select a session from the sidebar or create a new one.',
+      title: 'No session selected',
     },
   },
 } as const

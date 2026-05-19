@@ -1,5 +1,6 @@
 import { memo, useCallback, useState } from 'react'
 import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import type { Message } from '#/routes/sessions/-types/message'
 import type { StreamToolCall } from '#/routes/sessions/-types/chat'
@@ -10,6 +11,7 @@ import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
 // ---------------------------------------------------------------------------
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation('sessions')
   const [copied, setCopied] = useState(false)
 
   const handleCopy = useCallback(async () => {
@@ -23,7 +25,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={handleCopy}
       className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-accent hover:text-accent-foreground"
-      title="复制"
+      title={t('chat.copy')}
     >
       {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
     </button>
@@ -209,6 +211,7 @@ function StreamingAssistantMessage({
   reasoning: string
   iteration: number
 }) {
+  const { t } = useTranslation('sessions')
   const hasContent = content || toolCalls.length > 0 || reasoning
 
   return (
@@ -218,7 +221,7 @@ function StreamingAssistantMessage({
         {iteration > 1 && (
           <div className="mb-2">
             <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
-              第 {iteration} 轮
+              {t('chat.iteration', { count: iteration })}
             </span>
           </div>
         )}

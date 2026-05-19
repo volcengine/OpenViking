@@ -29,6 +29,8 @@ const zhCN = {
       },
     },
     sidebar: {
+      loadingSessions: '加载中...',
+      noSessions: '暂无会话',
       workspaceGroupLabel: 'OpenViking',
     },
   },
@@ -47,6 +49,9 @@ const zhCN = {
     language: {
       current: '当前',
       label: '语言',
+    },
+    theme: {
+      toggle: '切换主题',
     },
     serverMode: {
       checking: '检测中',
@@ -366,6 +371,8 @@ const zhCN = {
       },
     },
     searchPalette: {
+      ariaLabel: '搜索',
+      openContainingDirectory: '打开所在目录',
       placeholder: '搜索文件和目录...',
       scope: {
         global: '搜索范围: 全局',
@@ -421,6 +428,39 @@ const zhCN = {
         title: '空目录',
         subtitle: '这一层目前没有可继续展开的子目录',
       },
+    },
+    fileList: {
+      empty: '当前目录为空',
+    },
+    filePreview: {
+      cancel: '取消',
+      edit: '编辑',
+      emptyFile: '(空文件)',
+      emptyPrompt: '选择文件后在这里预览',
+      imageFailed: '图片加载失败。',
+      imageLoading: '正在加载图片...',
+      largeFileSkipped: '文件较大，默认不自动加载。',
+      loadingContent: '正在读取内容...',
+      loadingEditor: '加载编辑器...',
+      markdownPreview: '预览',
+      markdownSource: '源码',
+      save: '保存',
+      unsupportedBinary: '二进制文件不支持文本预览。',
+    },
+    fileTree: {
+      collapse: '收起',
+      expand: '展开',
+      loading: '加载中...',
+    },
+    findResults: {
+      collapse: '收起',
+      expandDetails: '展开详情',
+      groups: {
+        memories: '记忆',
+        resources: '资源',
+        skills: '技能',
+      },
+      noResults: '未找到相关结果',
     },
   },
   retrieval: {
@@ -497,12 +537,27 @@ const zhCN = {
       newSession: '新建会话',
     },
     chat: {
+      copy: '复制',
+      emptyDescription: '探索你的知识库，开始一段对话。',
       placeholder: '输入消息...',
       emptyState: '选择或创建一个会话开始聊天。',
       thinking: '思考中...',
+      reasoning: '思考过程',
+      iteration: '第 {{count}} 轮',
       toolCall: '工具调用',
+      toolInput: '输入',
+      toolResult: '结果',
+      toolStatus: {
+        completed: '完成',
+        failed: '失败',
+        running: '执行中...',
+      },
       send: '发送',
       cancel: '停止',
+    },
+    empty: {
+      description: '从侧边栏选择一个会话，或创建新会话。',
+      title: '未选择会话',
     },
   },
 } as const

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { useChat } from '#/routes/sessions/-hooks/use-chat'
 import { useSessionMessages } from '#/routes/sessions/-hooks/use-sessions'
@@ -8,6 +9,7 @@ import { MessageList } from './message-list'
 import { Composer } from './composer'
 
 const PixelBlast = lazy(() => import('#/components/ui/pixel-blast'))
+const PRODUCT_NAME = 'OpenViking'
 
 interface ThreadProps {
   sessionId: string
@@ -128,15 +130,17 @@ export function Thread({ sessionId }: ThreadProps) {
 }
 
 function ThreadEmpty() {
+  const { t } = useTranslation('sessions')
+
   return (
     <div className="flex grow flex-col items-center justify-center gap-3">
       <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/10">
         <CompassIcon className="size-7 text-primary/70" />
       </div>
       <div className="text-center">
-        <h3 className="text-base font-medium text-foreground">OpenViking</h3>
+        <h3 className="text-base font-medium text-foreground">{PRODUCT_NAME}</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          探索你的知识库，开始一段对话。
+          {t('chat.emptyDescription')}
         </p>
       </div>
     </div>
