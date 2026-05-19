@@ -113,7 +113,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (initialMessages && initialMessages.length > 0 && status !== 'streaming') {
       setMessages(initialMessages)
     }
-  }, [initialMessages]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialMessages])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()

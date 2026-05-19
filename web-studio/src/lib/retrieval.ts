@@ -1,6 +1,7 @@
 import { getOvResult, normalizeOvClientError, postSearchFind, postSearchSearch } from '#/lib/ov-client'
+import type { FindContextType, SearchResult } from '@ov-server/api/v1/search'
 
-export type FindContextType = 'memory' | 'resource' | 'skill'
+export type { FindContextType } from '@ov-server/api/v1/search'
 
 export interface FindResultItem {
   uri: string
@@ -11,7 +12,6 @@ export interface FindResultItem {
   overview?: string | null
   category: string
   match_reason: string
-  tags?: string
   relations: Array<{ uri: string; abstract: string }>
 }
 
@@ -91,11 +91,6 @@ function normalizeFindItems(value: unknown, fallbackType: FindContextType): Find
           }))
         : [],
       score: typeof item.score === 'number' ? item.score : 0,
-      tags: typeof item.tags === 'string'
-        ? item.tags
-        : Array.isArray(item.tags)
-          ? item.tags.filter((tag): tag is string => typeof tag === 'string').join(', ')
-          : undefined,
       uri: typeof item.uri === 'string' ? item.uri : '',
     }))
 }
@@ -123,7 +118,7 @@ function normalizeQueryPlan(value: unknown): FindQueryPlan | null {
   }
 }
 
-function normalizeGroupedFindResult(result: unknown): GroupedFindResult {
+function normalizeGroupedFindResult(result: SearchResult | unknown): GroupedFindResult {
   const data = result !== null && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
     : {}
@@ -146,7 +141,7 @@ function normalizeGroupedFindResult(result: unknown): GroupedFindResult {
 
 export async function fetchFind(query: string, options: FetchFindOptions = {}): Promise<GroupedFindResult> {
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<SearchResult>(
       postSearchFind({
         body: {
           filter: options.filter,
@@ -166,7 +161,7 @@ export async function fetchFind(query: string, options: FetchFindOptions = {}): 
 
 export async function fetchSearch(query: string, options: FetchSearchOptions = {}): Promise<GroupedFindResult> {
   try {
-    const result = await getOvResult(
+    const result = await getOvResult<SearchResult>(
       postSearchSearch({
         body: {
           filter: options.filter,

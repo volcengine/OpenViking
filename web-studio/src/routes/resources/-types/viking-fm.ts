@@ -9,7 +9,6 @@ export interface VikingFsEntry {
   modTime: string
   modTimestamp: number | null
   abstract: string
-  tags?: string
 }
 
 export interface VikingListQueryOptions {

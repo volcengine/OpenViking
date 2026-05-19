@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { File, Folder } from 'lucide-react'
 
-import { Badge } from '#/components/ui/badge'
 import { cn } from '#/lib/utils'
 
 import { formatSize } from '../-lib/normalize'
@@ -15,17 +14,6 @@ interface FileListProps {
   selectedFileUri: string | null
   onOpenDirectory: (uri: string) => void
   onOpenFile: (file: VikingFsEntry) => void
-}
-
-function parseTags(tags?: string): Array<string> {
-  if (!tags) {
-    return []
-  }
-
-  return tags
-    .split(/[;,]+|\s+/)
-    .map((tag) => tag.trim())
-    .filter(Boolean)
 }
 
 function compareEntries(
@@ -77,7 +65,6 @@ export function FileList({
 
       {sortedEntries.map((entry) => {
         const isSelected = selectedFileUri === entry.uri
-        const tags = parseTags(entry.tags)
 
         return (
           <button
@@ -101,19 +88,6 @@ export function FileList({
               <File className="size-4 shrink-0 text-muted-foreground" />
             )}
             <span className="min-w-0 truncate">{entry.name}</span>
-            {tags.length ? (
-              <span className="flex shrink-0 flex-wrap items-center gap-1">
-                {tags.map((tag) => (
-                  <Badge
-                    key={`${entry.uri}-${tag}`}
-                    variant="secondary"
-                    className="bg-muted/60 text-muted-foreground"
-                  >
-                    {tag}
-                  </Badge>
-                ))}
-              </span>
-            ) : null}
             <span className="ml-auto flex shrink-0 items-center gap-4 text-xs text-muted-foreground">
               <span>{entry.isDir ? '-' : formatSize(entry.sizeBytes ?? entry.size)}</span>
               <span className="w-20 text-right">{entry.modTime || '-'}</span>

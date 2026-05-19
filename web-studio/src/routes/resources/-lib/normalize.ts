@@ -195,7 +195,6 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
       modTime: '',
       modTimestamp: null,
       abstract: '',
-      tags: undefined,
     }
   }
 
@@ -234,7 +233,6 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
       modTime: formatModTime(modRaw),
       modTimestamp: parseModTimeToTs(modRaw),
       abstract: String(pickFirstNonEmpty([item.abstract, item.summary, item.description])),
-      tags: String(pickFirstNonEmpty([item.tags, item.tag, ''])) || undefined,
     }
   }
 
@@ -248,7 +246,6 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
     modTime: '',
     modTimestamp: null,
     abstract: '',
-    tags: undefined,
   }
 }
 

@@ -1,5 +1,5 @@
 import { memo, useCallback, useState } from 'react'
-import { CheckIcon, CopyIcon, FileIcon, ImageIcon, UserIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 
 import type { Message } from '#/routes/sessions/-types/message'
 import type { StreamToolCall } from '#/routes/sessions/-types/chat'
@@ -79,32 +79,11 @@ function BotAvatar() {
 }
 
 // ---------------------------------------------------------------------------
-// Attachment tag parsing
-// ---------------------------------------------------------------------------
-
-const ATTACHMENT_RE = /^\[uploaded_file:\s*(.+?),\s*temp_file_id:\s*(.+?)\]\n?/
-
-function parseAttachment(text: string): {
-  fileName: string
-  tempFileId: string
-  rest: string
-} | null {
-  const match = text.match(ATTACHMENT_RE)
-  if (!match) return null
-  return { fileName: match[1], tempFileId: match[2], rest: text.slice(match[0].length) }
-}
-
-function isImageFile(name: string): boolean {
-  return /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i.test(name)
-}
-
-// ---------------------------------------------------------------------------
 // MessageList
 // ---------------------------------------------------------------------------
 
 interface MessageListProps {
   messages: Message[]
-  attachmentPreviews?: Map<string, string>
   streaming?: {
     content: string
     toolCalls: StreamToolCall[]
@@ -113,14 +92,14 @@ interface MessageListProps {
   }
 }
 
-export function MessageList({ messages, attachmentPreviews, streaming }: MessageListProps) {
+export function MessageList({ messages, streaming }: MessageListProps) {
   return (
     <>
       {messages.map((msg, idx) => {
         const prev = idx > 0 ? messages[idx - 1] : null
         const sameRole = prev?.role === msg.role
         return msg.role === 'user' ? (
-          <UserMessage key={msg.id} message={msg} compact={sameRole} attachmentPreviews={attachmentPreviews} />
+          <UserMessage key={msg.id} message={msg} compact={sameRole} />
         ) : (
           <AssistantMessage key={msg.id} message={msg} compact={sameRole} />
         )
@@ -137,17 +116,11 @@ export function MessageList({ messages, attachmentPreviews, streaming }: Message
 const UserMessage = memo(function UserMessage({
   message,
   compact,
-  attachmentPreviews,
 }: {
   message: Message
   compact?: boolean
-  attachmentPreviews?: Map<string, string>
 }) {
-  const rawText = getTextFromParts(message)
-
-  const parsed = parseAttachment(rawText)
-  const text = parsed ? parsed.rest : rawText
-  const previewUrl = parsed ? attachmentPreviews?.get(parsed.tempFileId) : undefined
+  const text = getTextFromParts(message)
 
   return (
     <div className={`group/msg flex w-full max-w-3xl gap-3 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}>
@@ -155,28 +128,9 @@ const UserMessage = memo(function UserMessage({
         <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
           {formatRelativeTime(message.created_at)}
         </span>
-        <CopyButton text={text || rawText} />
+        <CopyButton text={text} />
       </div>
       <div className="max-w-[75%] space-y-1.5">
-        {parsed && (
-          <div className="overflow-hidden rounded-2xl rounded-tr-sm border border-primary/20 bg-primary/90 shadow-sm">
-            {previewUrl && isImageFile(parsed.fileName) ? (
-              <img
-                src={previewUrl}
-                alt={parsed.fileName}
-                className="max-h-64 w-full object-cover"
-              />
-            ) : null}
-            <div className="flex items-center gap-2 px-3 py-2 text-xs text-primary-foreground/80">
-              {isImageFile(parsed.fileName) ? (
-                <ImageIcon className="size-3.5 shrink-0" />
-              ) : (
-                <FileIcon className="size-3.5 shrink-0" />
-              )}
-              <span className="min-w-0 flex-1 truncate">{parsed.fileName}</span>
-            </div>
-          </div>
-        )}
         {text && (
           <div className="rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
             {text}

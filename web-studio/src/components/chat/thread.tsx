@@ -4,7 +4,6 @@ import { CompassIcon } from 'lucide-react'
 import { useChat } from '#/routes/sessions/-hooks/use-chat'
 import { useSessionMessages } from '#/routes/sessions/-hooks/use-sessions'
 import { useSessionTitles } from '#/routes/sessions/-hooks/use-session-titles'
-import { useFileAttachment } from '#/routes/sessions/-hooks/use-file-attachment'
 import { MessageList } from './message-list'
 import { Composer } from './composer'
 
@@ -28,25 +27,11 @@ export function Thread({ sessionId }: ThreadProps) {
 
   const isStreaming = chat.status === 'streaming'
 
-  // ---- File attachment ----
-  const { attachment, attach, clear: clearAttachment } = useFileAttachment()
-  const attachmentPreviewsRef = useRef<Map<string, string>>(new Map())
-
   const handleSend = useCallback(
     (message: string) => {
-      let text = message
-      if (attachment.phase === 'ready' && attachment.tempFileId) {
-        const prefix = `[uploaded_file: ${attachment.fileName}, temp_file_id: ${attachment.tempFileId}]`
-        text = text ? `${prefix}\n${text}` : prefix
-        // Store preview URL for this temp_file_id (survives attachment clear)
-        if (attachment.previewUrl) {
-          attachmentPreviewsRef.current.set(attachment.tempFileId, attachment.previewUrl)
-        }
-        clearAttachment()
-      }
-      if (text.trim()) chat.send(text)
+      if (message.trim()) chat.send(message)
     },
-    [attachment, clearAttachment, chat],
+    [chat],
   )
 
   // ---- Auto-scroll ----
@@ -74,7 +59,7 @@ export function Thread({ sessionId }: ThreadProps) {
   useEffect(() => {
     const id = 'requestIdleCallback' in window
       ? window.requestIdleCallback(() => setShowBackground(true))
-      : window.setTimeout(() => setShowBackground(true), 200)
+      : globalThis.setTimeout(() => setShowBackground(true), 200)
     return () => {
       if ('requestIdleCallback' in window) window.cancelIdleCallback(id as number)
       else clearTimeout(id)
@@ -116,7 +101,6 @@ export function Thread({ sessionId }: ThreadProps) {
         ) : (
           <MessageList
             messages={chat.messages}
-            attachmentPreviews={attachmentPreviewsRef.current}
             streaming={
               isStreaming
                 ? {
@@ -137,9 +121,6 @@ export function Thread({ sessionId }: ThreadProps) {
           onSend={handleSend}
           onCancel={chat.abort}
           isStreaming={isStreaming}
-          attachment={attachment}
-          onAttach={attach}
-          onClearAttachment={clearAttachment}
         />
       </div>
     </div>
