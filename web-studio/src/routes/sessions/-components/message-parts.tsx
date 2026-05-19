@@ -22,7 +22,10 @@ interface MarkdownContentProps {
   isStreaming?: boolean
 }
 
-export function MarkdownContent({ content, isStreaming }: MarkdownContentProps) {
+export function MarkdownContent({
+  content,
+  isStreaming,
+}: MarkdownContentProps) {
   if (!content) return null
 
   return (
@@ -76,7 +79,10 @@ export function ReasoningBlock({ reasoning, isRunning }: ReasoningBlockProps) {
   if (!reasoning) return null
 
   return (
-    <details className="mb-3 rounded-lg border border-border/30 bg-muted/20" open={isRunning}>
+    <details
+      className="mb-3 rounded-lg border border-border/30 bg-muted/20"
+      open={isRunning}
+    >
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-muted-foreground select-none">
         {isRunning && <LoaderIcon className="size-3 animate-spin" />}
         <span>{isRunning ? t('chat.thinking') : t('chat.reasoning')}</span>
@@ -100,7 +106,13 @@ interface ToolCallBlockProps {
   isRunning: boolean
 }
 
-export function ToolCallBlock({ toolName, args, result, isError, isRunning }: ToolCallBlockProps) {
+export function ToolCallBlock({
+  toolName,
+  args,
+  result,
+  isError,
+  isRunning,
+}: ToolCallBlockProps) {
   const { t } = useTranslation('sessions')
 
   return (
@@ -108,9 +120,15 @@ export function ToolCallBlock({ toolName, args, result, isError, isRunning }: To
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs select-none">
         <ToolStatusIcon isRunning={isRunning} isError={isError} />
         <WrenchIcon className="size-3 text-muted-foreground/60" />
-        <span className="font-mono font-medium text-foreground/80">{toolName}</span>
+        <span className="font-mono font-medium text-foreground/80">
+          {toolName}
+        </span>
         <span className="ml-auto text-muted-foreground/60 text-[11px]">
-          {isRunning ? t('chat.toolStatus.running') : isError ? t('chat.toolStatus.failed') : t('chat.toolStatus.completed')}
+          {isRunning
+            ? t('chat.toolStatus.running')
+            : isError
+              ? t('chat.toolStatus.failed')
+              : t('chat.toolStatus.completed')}
         </span>
       </summary>
       <div className="space-y-2 border-t border-border/30 px-3 py-2">
@@ -144,8 +162,15 @@ export function ToolCallBlock({ toolName, args, result, isError, isRunning }: To
   )
 }
 
-function ToolStatusIcon({ isRunning, isError }: { isRunning: boolean; isError?: boolean }) {
-  if (isRunning) return <LoaderIcon className="size-3 animate-spin text-muted-foreground" />
+function ToolStatusIcon({
+  isRunning,
+  isError,
+}: {
+  isRunning: boolean
+  isError?: boolean
+}) {
+  if (isRunning)
+    return <LoaderIcon className="size-3 animate-spin text-muted-foreground" />
   if (isError) return <CircleAlertIcon className="size-3 text-destructive" />
   return <CheckCircle2Icon className="size-3 text-primary/70" />
 }

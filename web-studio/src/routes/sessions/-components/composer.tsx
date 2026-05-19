@@ -9,11 +9,7 @@ interface ComposerProps {
   isStreaming: boolean
 }
 
-export function Composer({
-  onSend,
-  onCancel,
-  isStreaming,
-}: ComposerProps) {
+export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 

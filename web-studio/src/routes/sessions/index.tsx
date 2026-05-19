@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { Thread } from '#/components/chat/thread'
+import { Thread } from './-components/thread'
 import { useCreateSession } from './-hooks/use-sessions'
 import { setSessionTitle } from './-hooks/use-session-titles'
 
@@ -12,9 +12,10 @@ const NEW_SESSION_KEY_LABEL = 'N'
 
 export const Route = createFileRoute('/sessions/')({
   component: SessionsPage,
-  validateSearch: (search: Record<string, unknown>) => ({
-    s: (search.s as string) || undefined,
-  }) as { s?: string },
+  validateSearch: (search: Record<string, unknown>) =>
+    ({
+      s: (search.s as string) || undefined,
+    }) as { s?: string },
 })
 
 function SessionsPage() {
@@ -64,14 +65,20 @@ function SessionsEmpty() {
         <CompassIcon className="size-7 text-muted-foreground" />
       </div>
       <div className="text-center">
-        <h3 className="text-sm font-medium text-foreground">{t('empty.title')}</h3>
+        <h3 className="text-sm font-medium text-foreground">
+          {t('empty.title')}
+        </h3>
         <p className="mt-1 text-sm text-muted-foreground">
           {t('empty.description')}
         </p>
       </div>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">{COMMAND_KEY_LABEL}</kbd>
-        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">{NEW_SESSION_KEY_LABEL}</kbd>
+        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+          {COMMAND_KEY_LABEL}
+        </kbd>
+        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+          {NEW_SESSION_KEY_LABEL}
+        </kbd>
         <span>{t('threadList.newSession')}</span>
       </div>
     </div>

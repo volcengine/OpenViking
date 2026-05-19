@@ -2,11 +2,11 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { useChat } from '#/routes/sessions/-hooks/use-chat'
-import { useSessionMessages } from '#/routes/sessions/-hooks/use-sessions'
-import { useSessionTitles } from '#/routes/sessions/-hooks/use-session-titles'
 import { MessageList } from './message-list'
 import { Composer } from './composer'
+import { useChat } from '../-hooks/use-chat'
+import { useSessionMessages } from '../-hooks/use-sessions'
+import { useSessionTitles } from '../-hooks/use-session-titles'
 
 const PixelBlast = lazy(() => import('#/components/ui/pixel-blast'))
 const PRODUCT_NAME = 'OpenViking'
@@ -45,7 +45,8 @@ export function Thread({ sessionId }: ThreadProps) {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 100
   }, [])
 
   useEffect(() => {
@@ -54,16 +55,23 @@ export function Thread({ sessionId }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [chat.messages.length, chat.streamingContent, chat.streamingToolCalls, chat.streamingReasoning])
+  }, [
+    chat.messages.length,
+    chat.streamingContent,
+    chat.streamingToolCalls,
+    chat.streamingReasoning,
+  ])
 
   const [showBackground, setShowBackground] = useState(false)
 
   useEffect(() => {
-    const id = 'requestIdleCallback' in window
-      ? window.requestIdleCallback(() => setShowBackground(true))
-      : globalThis.setTimeout(() => setShowBackground(true), 200)
+    const id =
+      'requestIdleCallback' in window
+        ? window.requestIdleCallback(() => setShowBackground(true))
+        : globalThis.setTimeout(() => setShowBackground(true), 200)
     return () => {
-      if ('requestIdleCallback' in window) window.cancelIdleCallback(id as number)
+      if ('requestIdleCallback' in window)
+        window.cancelIdleCallback(id as number)
       else clearTimeout(id)
     }
   }, [])
@@ -89,7 +97,9 @@ export function Thread({ sessionId }: ThreadProps) {
 
       {title && (
         <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/95 px-6">
-          <h2 className="text-sm font-medium truncate text-foreground">{title}</h2>
+          <h2 className="text-sm font-medium truncate text-foreground">
+            {title}
+          </h2>
         </div>
       )}
 
@@ -138,7 +148,9 @@ function ThreadEmpty() {
         <CompassIcon className="size-7 text-primary/70" />
       </div>
       <div className="text-center">
-        <h3 className="text-base font-medium text-foreground">{PRODUCT_NAME}</h3>
+        <h3 className="text-base font-medium text-foreground">
+          {PRODUCT_NAME}
+        </h3>
         <p className="mt-1 text-sm text-muted-foreground">
           {t('chat.emptyDescription')}
         </p>
