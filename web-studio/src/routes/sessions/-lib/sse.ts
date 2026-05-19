@@ -61,6 +61,9 @@ function parseSseLine(line: string): ChatStreamEvent | null {
  *   data: {"event":"response","data":"...","timestamp":"..."}\n\n
  *
  * All events use `data:` prefix. Event type is inside the JSON payload.
+ * The OpenViking bot proxy currently forwards non-empty SSE lines, so the
+ * browser may receive `data:` lines without the blank separator. Parse each
+ * complete data line immediately to keep the chat UI live during streaming.
  */
 export async function* parseSseStream(response: Response): AsyncGenerator<ChatStreamEvent> {
   const body = response.body
@@ -77,18 +80,15 @@ export async function* parseSseStream(response: Response): AsyncGenerator<ChatSt
 
       buffer += decoder.decode(value, { stream: true })
 
-      // SSE events are separated by double newlines
-      const parts = buffer.split('\n\n')
-      // Keep the last incomplete part in the buffer
-      buffer = parts.pop() ?? ''
+      let newlineIndex = buffer.indexOf('\n')
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex)
+        buffer = buffer.slice(newlineIndex + 1)
 
-      for (const part of parts) {
-        // Each part may contain multiple lines (e.g. "data: ...\ndata: ...")
-        // but our backend sends single-line data events
-        for (const line of part.split('\n')) {
-          const event = parseSseLine(line)
-          if (event) yield event
-        }
+        const event = parseSseLine(line)
+        if (event) yield event
+
+        newlineIndex = buffer.indexOf('\n')
       }
     }
 
