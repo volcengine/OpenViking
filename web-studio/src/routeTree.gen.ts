@@ -9,21 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as RequestLogsRouteImport } from './routes/request-logs'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
+import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
 import { Route as OperationsRouteRouteImport } from './routes/operations/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
 
-const RequestLogsRoute = RequestLogsRouteImport.update({
-  id: '/request-logs',
-  path: '/request-logs',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SessionsRouteRoute = SessionsRouteRouteImport.update({
   id: '/sessions',
   path: '/sessions',
@@ -37,6 +32,11 @@ const RetrievalRouteRoute = RetrievalRouteRouteImport.update({
 const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
   id: '/resources',
   path: '/resources',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
+  id: '/request-logs',
+  path: '/request-logs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OperationsRouteRoute = OperationsRouteRouteImport.update({
@@ -69,10 +69,10 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
+  '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
-  '/request-logs': typeof RequestLogsRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -80,8 +80,8 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
+  '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
-  '/request-logs': typeof RequestLogsRoute
   '/resources': typeof ResourcesIndexRoute
   '/sessions': typeof SessionsIndexRoute
 }
@@ -90,10 +90,10 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
   '/operations': typeof OperationsRouteRoute
+  '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
-  '/request-logs': typeof RequestLogsRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -103,10 +103,10 @@ export interface FileRouteTypes {
     | '/'
     | '/home'
     | '/operations'
+    | '/request-logs'
     | '/resources'
     | '/retrieval'
     | '/sessions'
-    | '/request-logs'
     | '/resources/'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
@@ -114,8 +114,8 @@ export interface FileRouteTypes {
     | '/'
     | '/home'
     | '/operations'
-    | '/retrieval'
     | '/request-logs'
+    | '/retrieval'
     | '/resources'
     | '/sessions'
   id:
@@ -123,10 +123,10 @@ export interface FileRouteTypes {
     | '/'
     | '/home'
     | '/operations'
+    | '/request-logs'
     | '/resources'
     | '/retrieval'
     | '/sessions'
-    | '/request-logs'
     | '/resources/'
     | '/sessions/'
   fileRoutesById: FileRoutesById
@@ -135,21 +135,14 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HomeRouteRoute: typeof HomeRouteRoute
   OperationsRouteRoute: typeof OperationsRouteRoute
+  RequestLogsRouteRoute: typeof RequestLogsRouteRoute
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
-  RequestLogsRoute: typeof RequestLogsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/request-logs': {
-      id: '/request-logs'
-      path: '/request-logs'
-      fullPath: '/request-logs'
-      preLoaderRoute: typeof RequestLogsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/sessions': {
       id: '/sessions'
       path: '/sessions'
@@ -169,6 +162,13 @@ declare module '@tanstack/react-router' {
       path: '/resources'
       fullPath: '/resources'
       preLoaderRoute: typeof ResourcesRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/request-logs': {
+      id: '/request-logs'
+      path: '/request-logs'
+      fullPath: '/request-logs'
+      preLoaderRoute: typeof RequestLogsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/operations': {
@@ -237,10 +237,10 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HomeRouteRoute: HomeRouteRoute,
   OperationsRouteRoute: OperationsRouteRoute,
+  RequestLogsRouteRoute: RequestLogsRouteRoute,
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
-  RequestLogsRoute: RequestLogsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
