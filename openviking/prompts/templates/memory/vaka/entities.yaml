@@ -1,0 +1,59 @@
+memory_type: entities
+description: |
+  Wikipedia article - manages page using Zettelkasten method.
+  Each page represents an article with relative path links to events.
+  Entity should be rich and distributed - avoid putting all info in one entity.
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ category }}/{{ name }}.md"
+enabled: true
+
+overview_template: |-
+  # Entities Overview
+  {% if items %}**Category:** {{ items[0].file_content.category }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.name }}](./{{ item.file_name }})
+  {% endfor %}
+
+fields:
+  - name: category
+    type: string
+    description: |
+      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
+  - name: name
+    type: string
+    description: |
+      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      - Detailed Zettelkasten card content in markdown format.
+      - Keep the card self-contained, factual, neutral, and useful after retrieval.
+      - For people or evaluative content, do not output only a "问题" field. Pair any evaluation, risk, weakness, or recommendation with "依据/证据".
+      - Prefer objective facts, metrics, dates, user-provided context, or quoted requirements over labels.
+      - If evidence is missing or weak, omit the judgment or write "信息不足，需核实"; do not overgeneralize.
+      - Avoid hostile or blaming wording such as "拖后腿", "很差", "不行", or "无法胜任"; prefer neutral wording such as "产出低于目标/同组水平" or "需要进一步观察".
+
+      Preferred shape for evaluative person entities:
+      # <Entity Name>
+      - 评估结论：<neutral conclusion, if supported by evidence>
+      - 依据：
+        - <objective fact, metric, date/context, or quoted requirement>
+      - 待关注/风险：<neutral risk statement, optional; include only if supported>
+
+      Bad example:
+      # Kevin D. Wallace
+      - 评估等级：待改进
+      - 问题：第四季度以来工作效率明显下滑，同组其他同事产出稳定，其状态波动较大，拖了团队后腿
+
+      Good example:
+      # Kevin D. Wallace
+      - 评估结论：当前表现需进一步关注
+      - 依据：
+        - 用户提到其第四季度以来工作效率明显下滑
+        - 用户提到同组其他同事产出稳定，而其状态波动较大
+      - 待关注/风险：团队产出节奏可能受影响，需结合最新绩效数据复核
+    merge_op: patch
