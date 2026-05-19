@@ -26,7 +26,6 @@ Basic health check endpoint. No authentication required. Returns service version
 - `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
 - The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
 - The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
-- Function locations are trimmed to the package/module root when possible, such as `openviking/server/...`, `starlette/...`, or `asyncio/...`, instead of leaking absolute filesystem paths. Entries like `~:0(...)` represent builtin or native-extension calls rather than normal `.py` source files.
 
 **`profile` column meanings**:
 - `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
