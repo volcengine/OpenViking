@@ -542,8 +542,10 @@ class MemoryExtractor:
                 else ""
             )
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
-        except Exception:
-            pass
+        except FileNotFoundError:
+            logger.debug("Profile %s does not exist yet, will create", uri)
+        except Exception as e:
+            logger.warning("Failed to stat/read profile %s: %s", uri, e)
 
         if not existing.strip():
             await viking_fs.write_file(uri=uri, content=candidate.content, ctx=ctx)
