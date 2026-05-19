@@ -136,7 +136,7 @@ export function AddResourceForm({ onSubmitted }: { onSubmitted?: () => void } = 
       parent: targetUri.trim() || undefined,
       strict,
       telemetry: true,
-      wait: true,
+      wait: false,
       directly_upload_media: directlyUploadMedia,
     }
     if (reason.trim()) {

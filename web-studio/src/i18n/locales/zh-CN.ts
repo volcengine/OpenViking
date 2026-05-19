@@ -358,6 +358,7 @@ const zhCN = {
     processingTasks: {
       title: '文件处理任务',
       empty: '暂无处理任务',
+      refresh: '刷新任务',
       toggleError: '展开或收起错误详情',
       columns: {
         fileName: '文件名',
