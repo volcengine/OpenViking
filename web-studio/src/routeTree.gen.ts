@@ -13,7 +13,6 @@ import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
-import { Route as OperationsRouteRouteImport } from './routes/operations/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
@@ -37,11 +36,6 @@ const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
 const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
   id: '/request-logs',
   path: '/request-logs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OperationsRouteRoute = OperationsRouteRouteImport.update({
-  id: '/operations',
-  path: '/operations',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HomeRouteRoute = HomeRouteRouteImport.update({
@@ -68,7 +62,6 @@ const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
-  '/operations': typeof OperationsRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
@@ -79,7 +72,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
-  '/operations': typeof OperationsRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/resources': typeof ResourcesIndexRoute
@@ -89,7 +81,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
-  '/operations': typeof OperationsRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
@@ -102,7 +93,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/home'
-    | '/operations'
     | '/request-logs'
     | '/resources'
     | '/retrieval'
@@ -113,7 +103,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/home'
-    | '/operations'
     | '/request-logs'
     | '/retrieval'
     | '/resources'
@@ -122,7 +111,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/home'
-    | '/operations'
     | '/request-logs'
     | '/resources'
     | '/retrieval'
@@ -134,7 +122,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HomeRouteRoute: typeof HomeRouteRoute
-  OperationsRouteRoute: typeof OperationsRouteRoute
   RequestLogsRouteRoute: typeof RequestLogsRouteRoute
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
@@ -169,13 +156,6 @@ declare module '@tanstack/react-router' {
       path: '/request-logs'
       fullPath: '/request-logs'
       preLoaderRoute: typeof RequestLogsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/operations': {
-      id: '/operations'
-      path: '/operations'
-      fullPath: '/operations'
-      preLoaderRoute: typeof OperationsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/home': {
@@ -236,7 +216,6 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HomeRouteRoute: HomeRouteRoute,
-  OperationsRouteRoute: OperationsRouteRoute,
   RequestLogsRouteRoute: RequestLogsRouteRoute,
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
