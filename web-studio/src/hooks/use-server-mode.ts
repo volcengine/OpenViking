@@ -1,3 +1,5 @@
+import { getHealth } from '#/lib/ov-client'
+
 export type ServerMode = 'checking' | 'dev-implicit' | 'explicit-auth' | 'offline'
 
 export type ServerModeBadge = {
@@ -16,17 +18,15 @@ export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
   }
 
   try {
-    const response = await fetch(`${normalizedBaseUrl}/health`, {
+    const response = await getHealth({
+      baseURL: normalizedBaseUrl,
       headers: {
         Accept: 'application/json',
       },
+      throwOnError: true,
     })
 
-    if (!response.ok) {
-      return 'offline'
-    }
-
-    const data = await response.json() as { user_id?: string }
+    const data = response.data as { user_id?: string }
     return typeof data.user_id === 'string' && data.user_id.length > 0
       ? 'dev-implicit'
       : 'explicit-auth'

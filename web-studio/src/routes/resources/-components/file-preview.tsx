@@ -6,7 +6,10 @@ import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
-import { ovClient } from '#/lib/ov-client'
+import { client } from '#/gen/ov-client/client.gen'
+import { getContentDownload, ovClient } from '#/lib/ov-client'
+import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
+import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
 import { formatSize } from '../-lib/normalize'
 import { saveFileContent } from '../-lib/api'
@@ -16,7 +19,7 @@ import type { CodeEditorHandle } from './code-editor'
 
 const LazyCodeEditor = lazy(() => import('./code-editor').then(m => ({ default: m.CodeEditor })))
 
-const languageLoaders: Record<string, () => Promise<{ default: Parameters<typeof hljs.registerLanguage>[1] }>> = {
+const languageLoaders: Partial<Record<string, () => Promise<{ default: Parameters<typeof hljs.registerLanguage>[1] }>>> = {
   bash: () => import('highlight.js/lib/languages/bash'),
   c: () => import('highlight.js/lib/languages/c'),
   cpp: () => import('highlight.js/lib/languages/cpp'),
@@ -79,10 +82,20 @@ interface FilePreviewProps {
 }
 
 const vikingPrefix = 'viking://'
+const contentDownloadUrl: GetContentDownloadData['url'] = '/api/v1/content/download'
 
 function toDownloadUrl(vikingUri: string): string {
-  const baseUrl = ovClient.getOptions().baseUrl
-  return `${baseUrl}/api/v1/content/download?uri=${encodeURIComponent(vikingUri)}`
+  const query: ContentDownloadQuery = { uri: vikingUri }
+  return client.buildUrl({
+    baseURL: ovClient.getOptions().baseUrl,
+    query,
+    url: contentDownloadUrl,
+  })
+}
+
+function withCacheBust(url: string, cacheKey: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}_t=${encodeURIComponent(cacheKey)}`
 }
 
 function dirnameVikingUri(fileUri: string): string {
@@ -230,7 +243,7 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
     if (!file || preview?.fileType !== 'image') {
       return null
     }
-    return `${toDownloadUrl(file.uri)}&_t=${encodeURIComponent(file.modTime || Date.now().toString())}`
+    return withCacheBust(toDownloadUrl(file.uri), file.modTime || Date.now().toString())
   }, [file, preview?.fileType])
 
   const [highlightedCodeHtml, setHighlightedCodeHtml] = useState('')
@@ -285,21 +298,11 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
       setImageError(null)
 
       try {
-        const response = await ovClient.instance.get(
-          `${ovClient.getOptions().baseUrl}/api/v1/content/download`,
-          {
-            params: {
-              uri: file.uri,
-              _t: Date.now().toString(),
-            },
-            headers: {
-              'Cache-Control': 'no-cache, no-store, max-age=0',
-              Pragma: 'no-cache',
-            },
-            responseType: 'blob',
-            validateStatus: (status) => status >= 200 && status < 300,
-          },
-        )
+        const response = await getContentDownload({
+          query: { uri: file.uri },
+          responseType: 'blob',
+          throwOnError: true,
+        })
 
         if (!alive) {
           return

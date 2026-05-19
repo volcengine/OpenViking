@@ -3,22 +3,24 @@ import {
   getSessions,
   getSessionBySessionId,
   getSessionIdContext,
+  postBotV1Chat,
   postSessions,
   postSessionIdCommit,
   postSessionIdMessages,
 } from '#/gen/ov-client/sdk.gen'
 import { getOvResult, normalizeOvClientError, ovClient } from '#/lib/ov-client'
 
-import type { BotChatRequest, BotChatResponse } from '../-types/chat'
+import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 import type { Message, MessagePart } from '../-types/message'
 import type {
   AddMessageResult,
   CommitSessionResult,
   CreateSessionResult,
   DeleteSessionResult,
+  SessionContextResult,
   SessionListItem,
   SessionMeta,
-} from '../-types/session'
+} from '@ov-server/api/v1/sessions'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -59,12 +61,12 @@ export async function deleteSession(sessionId: string): Promise<DeleteSessionRes
 
 /** Fetch message history for a session via the /context endpoint. */
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  const result = await getOvResult<{ messages?: unknown[] }>(
+  const result = await getOvResult<SessionContextResult>(
     getSessionIdContext({
       path: { session_id: sessionId },
     }),
   )
-  const raw = result?.messages
+  const raw = result.messages
   if (!Array.isArray(raw)) return []
   // Each item is Message.to_dict() — { id, role, parts, created_at }
   return raw.filter(
@@ -141,21 +143,12 @@ export async function sendChatStream(
 
 /** Send a non-streaming chat request. */
 export async function sendChat(request: BotChatRequest): Promise<BotChatResponse> {
-  const baseUrl = ovClient.getOptions().baseUrl
-  const response = await fetch(`${baseUrl}/bot/v1/chat`, {
-    method: 'POST',
-    headers: buildFetchHeaders(),
-    body: JSON.stringify(request),
-  })
+  const response = await postBotV1Chat({
+    body: request,
+    throwOnError: true,
+  } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw normalizeOvClientError(
-      new Error(`Chat request failed (${response.status}): ${text}`),
-    )
-  }
-
-  return response.json() as Promise<BotChatResponse>
+  return response.data as BotChatResponse
 }
 
 // ---------------------------------------------------------------------------

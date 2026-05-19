@@ -1,48 +1,48 @@
-import { client } from '#/gen/ov-client/client.gen'
-import { getOvResult } from '#/lib/ov-client'
+import {
+  getConsoleContextCommits,
+  getConsoleDashboardSummary,
+  getConsoleTokens,
+  getOvResult,
+} from '#/lib/ov-client'
 
 import {
   COMMIT_SERIES_DAYS,
   TOKEN_SERIES_DAYS,
 } from '../-constants/dashboard'
 import type {
-  ConsoleDashboardSummary,
-  ConsoleSeries,
-  ContextCommitItem,
-  TokenSeriesItem,
-} from '../-types/dashboard'
+  ConsoleSeriesQuery,
+  ConsoleContextCommitsResult,
+  ConsoleDashboardSummaryResult,
+  ConsoleTokenSeriesResult,
+} from '@ov-server/api/v1/console'
 import { getLastDaysRange } from './format'
 
-export function fetchConsoleDashboardSummary(): Promise<ConsoleDashboardSummary> {
-  return getOvResult<ConsoleDashboardSummary>(
-    client.get({ url: '/api/v1/console/dashboard/summary' }),
+export function fetchConsoleDashboardSummary(): Promise<ConsoleDashboardSummaryResult> {
+  return getOvResult<ConsoleDashboardSummaryResult>(
+    getConsoleDashboardSummary(),
   )
 }
 
-export function fetchConsoleTokenSeries(): Promise<ConsoleSeries<TokenSeriesItem>> {
+export function fetchConsoleTokenSeries(): Promise<ConsoleTokenSeriesResult> {
   const range = getLastDaysRange(TOKEN_SERIES_DAYS)
-  return getOvResult<ConsoleSeries<TokenSeriesItem>>(
-    client.get({
-      query: {
-        bucket: 'day',
-        end_date: range.endDate,
-        start_date: range.startDate,
-      },
-      url: '/api/v1/console/tokens',
-    }),
+  const query: ConsoleSeriesQuery = {
+    bucket: 'day',
+    end_date: range.endDate,
+    start_date: range.startDate,
+  }
+  return getOvResult<ConsoleTokenSeriesResult>(
+    getConsoleTokens({ query }),
   )
 }
 
-export function fetchConsoleContextCommits(): Promise<ConsoleSeries<ContextCommitItem>> {
+export function fetchConsoleContextCommits(): Promise<ConsoleContextCommitsResult> {
   const range = getLastDaysRange(COMMIT_SERIES_DAYS)
-  return getOvResult<ConsoleSeries<ContextCommitItem>>(
-    client.get({
-      query: {
-        bucket: '4h',
-        end_date: range.endDate,
-        start_date: range.startDate,
-      },
-      url: '/api/v1/console/context-commits',
-    }),
+  const query: ConsoleSeriesQuery = {
+    bucket: '4h',
+    end_date: range.endDate,
+    start_date: range.startDate,
+  }
+  return getOvResult<ConsoleContextCommitsResult>(
+    getConsoleContextCommits({ query }),
   )
 }

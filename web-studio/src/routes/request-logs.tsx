@@ -24,38 +24,19 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { client } from '#/gen/ov-client/client.gen'
-import { getOvResult } from '#/lib/ov-client'
+import { getConsoleAudit, getOvResult } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
+import type {
+  ConsoleAuditQuery,
+  ConsoleAuditLogItem,
+  ConsoleAuditResult,
+} from '@ov-server/api/v1/console'
 
 export const Route = createFileRoute('/request-logs')({
   component: RequestLogsRoute,
 })
 
 type LogTypeFilter = 'all' | 'error'
-
-type AuditLogItem = {
-  account_id?: string | null
-  agent_id?: string | null
-  api_type?: string
-  created_at?: string
-  duration_ms?: number
-  method?: string
-  request_id?: string | null
-  route?: string
-  status_code?: number
-  user_id?: string | null
-}
-
-type AuditLogResponse = {
-  enabled?: boolean
-  items?: AuditLogItem[]
-  message?: string
-  page?: number
-  page_size?: number
-  success_rate?: number
-  total?: number
-}
 
 type RequestLogStatus = 'success' | 'error'
 
@@ -76,8 +57,8 @@ const DEFAULT_FILTERS: AuditFilters = {
 const LOG_TYPE_FILTERS: LogTypeFilter[] = ['all', 'error']
 const PAGE_SIZE = 10
 
-function buildAuditQuery(filters: AuditFilters, page: number): Record<string, string | number> {
-  const query: Record<string, string | number> = {
+function buildAuditQuery(filters: AuditFilters, page: number): ConsoleAuditQuery {
+  const query: ConsoleAuditQuery = {
     page,
     page_size: PAGE_SIZE,
   }
@@ -91,13 +72,13 @@ function buildAuditQuery(filters: AuditFilters, page: number): Record<string, st
   }
 
   if (apiType) {
-    query.api_type = apiType
+    query.api_type = [apiType]
   }
 
   if (statusCode) {
-    query.status = statusCode
+    query.status = [statusCode]
   } else if (filters.logType === 'error') {
-    query.status = 'error'
+    query.status = ['error']
   }
 
   return query
@@ -111,11 +92,10 @@ function isZeroResultCombination(filters: AuditFilters): boolean {
   return Number.isFinite(statusCode) && statusCode < 400
 }
 
-function fetchAuditLogs(filters: AuditFilters, page: number): Promise<AuditLogResponse> {
-  return getOvResult<AuditLogResponse>(
-    client.get({
+function fetchAuditLogs(filters: AuditFilters, page: number): Promise<ConsoleAuditResult> {
+  return getOvResult<ConsoleAuditResult>(
+    getConsoleAudit({
       query: buildAuditQuery(filters, page),
-      url: '/api/v1/console/audit',
     }),
   )
 }
@@ -379,7 +359,7 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
   )
 }
 
-function RequestLogRow({ log }: { log: AuditLogItem }) {
+function RequestLogRow({ log }: { log: ConsoleAuditLogItem }) {
   const { t } = useTranslation('requestLogs')
   const status = normalizeStatus(log.status_code)
   const method = log.method ?? '-'
