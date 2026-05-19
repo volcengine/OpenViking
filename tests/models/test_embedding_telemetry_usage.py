@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.volcengine_embedders import VolcengineDenseEmbedder
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
@@ -102,3 +103,37 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage_from_dict_u
     assert result.dense_vector == [0.4, 0.5, 0.6]
     summary = telemetry.finish().summary
     assert summary["tokens"]["embedding"] == {"total": 16}
+
+
+def test_volcengine_embedders_disable_env_proxy_clients(monkeypatch):
+    created = []
+
+    def fake_ark(**kwargs):
+        created.append(("sync", kwargs["http_client"]))
+        return SimpleNamespace(
+            multimodal_embeddings=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    data=SimpleNamespace(embedding=[0.4, 0.5, 0.6])
+                )
+            ),
+        )
+
+    def fake_async_ark(**kwargs):
+        created.append(("async", kwargs["http_client"]))
+        return SimpleNamespace()
+
+    monkeypatch.setattr("volcenginesdkarkruntime.Ark", fake_ark)
+    monkeypatch.setattr("volcenginesdkarkruntime.AsyncArk", fake_async_ark)
+
+    embedder = VolcengineDenseEmbedder(
+        model_name="doubao-embedding-vision-251215",
+        api_key="test",
+        input_type="multimodal",
+        dimension=3,
+    )
+    embedder._get_async_client()
+
+    assert len(created) == 2
+    for kind, client in created:
+        assert isinstance(client, (httpx.Client, httpx.AsyncClient)), kind
+        assert client._trust_env is False

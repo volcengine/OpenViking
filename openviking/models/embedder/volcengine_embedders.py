@@ -4,6 +4,7 @@
 
 from typing import Any, Dict, List, Optional
 
+import httpx
 import volcenginesdkarkruntime
 
 from openviking.models.embedder.base import (
@@ -95,9 +96,12 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
-        self._ark_kwargs = ark_kwargs
-        self._async_client = None
+        self._sync_http_client = httpx.Client(trust_env=False)
+        self._async_http_client = None
+        self.client = volcenginesdkarkruntime.Ark(
+            **ark_kwargs,
+            http_client=self._sync_http_client,
+        )
         self._ark_kwargs = ark_kwargs
         self._async_client = None
 
@@ -185,7 +189,11 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            self._async_http_client = httpx.AsyncClient(trust_env=False)
+            self._async_client = volcenginesdkarkruntime.AsyncArk(
+                **self._ark_kwargs,
+                http_client=self._async_http_client,
+            )
         return self._async_client
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -338,7 +346,12 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self._sync_http_client = httpx.Client(trust_env=False)
+        self._async_http_client = None
+        self.client = volcenginesdkarkruntime.Ark(
+            **ark_kwargs,
+            http_client=self._sync_http_client,
+        )
         self._ark_kwargs = ark_kwargs
         self._async_client = None
 
@@ -408,7 +421,11 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
     def _get_async_client(self):
         if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            self._async_http_client = httpx.AsyncClient(trust_env=False)
+            self._async_client = volcenginesdkarkruntime.AsyncArk(
+                **self._ark_kwargs,
+                http_client=self._async_http_client,
+            )
         return self._async_client
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -526,7 +543,12 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self._sync_http_client = httpx.Client(trust_env=False)
+        self._async_http_client = None
+        self.client = volcenginesdkarkruntime.Ark(
+            **ark_kwargs,
+            http_client=self._sync_http_client,
+        )
         self._ark_kwargs = ark_kwargs
         self._async_client = None
         self._dimension = dimension or 2048
@@ -602,7 +624,11 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
 
     def _get_async_client(self):
         if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            self._async_http_client = httpx.AsyncClient(trust_env=False)
+            self._async_client = volcenginesdkarkruntime.AsyncArk(
+                **self._ark_kwargs,
+                http_client=self._async_http_client,
+            )
         return self._async_client
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
