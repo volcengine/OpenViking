@@ -162,6 +162,7 @@ pub async fn add_memory(
 
     // 1. Create a new session
     let session_response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
+    let mut profile_lines: Vec<serde_json::Value> = extract_profile_lines(&session_response);
     let session_id = session_response["session_id"].as_str().ok_or_else(|| {
         crate::error::Error::Api("Failed to get session_id from new session response".to_string())
     })?;
@@ -173,15 +174,33 @@ pub async fn add_memory(
             "role": role,
             "content": content
         });
-        let _: serde_json::Value = client.post(&path, &body).await?;
+        let response: serde_json::Value = client.post(&path, &body).await?;
+        profile_lines.extend(extract_profile_lines(&response));
     }
 
     // 3. Commit (async — don't read response)
     let commit_path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
-    let _: serde_json::Value = client.post(&commit_path, &json!({})).await?;
+    let commit_response: serde_json::Value = client.post(&commit_path, &json!({})).await?;
+    profile_lines.extend(extract_profile_lines(&commit_response));
 
-    output_success(&json!("OK"), output_format, compact);
+    let result = if profile_lines.is_empty() {
+        json!("OK")
+    } else {
+        json!({
+            "result": "OK",
+            "profile": profile_lines,
+        })
+    };
+    output_success(&result, output_format, compact);
     Ok(())
+}
+
+fn extract_profile_lines(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    value
+        .get("profile")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn url_encode(s: &str) -> String {
@@ -189,4 +208,37 @@ fn url_encode(s: &str) -> String {
     s.replace('/', "%2F")
         .replace(':', "%3A")
         .replace(' ', "%20")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn add_memory_ok_output_can_include_profile_section() {
+        let result = json!({
+            "result": "OK",
+            "profile": [
+                "create session 1ms",
+                "commit 2ms"
+            ]
+        });
+
+        let rendered = crate::output::render_profiled_scalar_result(&result);
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "OK",
+                    "",
+                    "profile",
+                    "create session 1ms",
+                    "commit 2ms",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
+    }
 }
