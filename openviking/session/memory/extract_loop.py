@@ -115,6 +115,7 @@ class ExtractLoop:
         tools_used: List[Dict[str, Any]] = []
         # Reset format retry counter for each run
         self._format_retry_count = 0
+        patch_repair_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -258,6 +259,19 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         max_iterations += 1
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
+                    continue
+                patch_errors = self._validate_patch_operations(final_operations)
+                if patch_errors and patch_repair_count == 0:
+                    patch_repair_count += 1
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_patch_repair_instruction(patch_errors),
+                        }
+                    )
+                    tracer.info(f"Extended max_iterations to {max_iterations} for patch repair")
                     continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
@@ -548,7 +562,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 tools=tools,
                 tool_choice=tool_choice,
             )
-        tracer.info(f"response={response}")
+        tracer.info(f"llm_response={response}")
         # print(f'response={response}')
         # Log cache hit info
         if hasattr(response, "usage") and response.usage:
@@ -618,7 +632,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 logger.exception(f"Error parsing operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
-        print("No tool calls or operations parsed")
+        tracer.error("No tool calls or operations parsed")
         return (None, None)
 
     async def _execute_in_parallel(
@@ -679,6 +693,71 @@ The final output of the model must strictly follow the JSON Schema format shown 
             "matching the required schema. Do not include explanations or markdown. "
             "If there are no memory changes, return this exact empty-shape JSON with all fields present:\n"
             f"{skeleton}"
+        )
+
+    def _validate_patch_operations(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
+        from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
+        from openviking.session.memory.merge_op.patch_handler import apply_str_patch
+
+        errors = []
+        read_files = self.context_provider.read_file_contents or {}
+        for operation in operations.upsert_operations:
+            if operation.old_memory_file_content is None:
+                continue
+            current_content = operation.old_memory_file_content.content or ""
+            target_uri = operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
+            for field_name, patch_value in operation.memory_fields.items():
+                blocks = []
+                if isinstance(patch_value, StrPatch):
+                    blocks = patch_value.blocks
+                elif isinstance(patch_value, dict) and "blocks" in patch_value:
+                    for raw_block in patch_value.get("blocks", []):
+                        if isinstance(raw_block, SearchReplaceBlock):
+                            blocks.append(raw_block)
+                        elif isinstance(raw_block, dict):
+                            blocks.append(SearchReplaceBlock(**raw_block))
+                if not blocks:
+                    continue
+                patch = StrPatch(blocks=blocks)
+                try:
+                    applied_content = apply_str_patch(current_content, patch)
+                except Exception:
+                    applied_content = current_content
+                if applied_content != current_content:
+                    continue
+                for block in blocks:
+                    search = block.search or ""
+                    if not search:
+                        continue
+                    found_in = [
+                        uri
+                        for uri, memory_file in read_files.items()
+                        if uri != target_uri and search in (memory_file.content or "")
+                    ]
+                    errors.append(
+                        {
+                            "uri": target_uri,
+                            "page_id": operation.page_id,
+                            "field": field_name,
+                            "search": search,
+                            "found_in_other_uris": found_in,
+                        }
+                    )
+                    break
+        if errors:
+            tracer.error(f"SEARCH/REPLACE patch validation failed before apply: {errors}")
+        return errors
+
+    def _build_patch_repair_instruction(self, patch_errors: List[Dict[str, Any]]) -> str:
+        details = json.dumps(patch_errors, ensure_ascii=False, indent=2)
+        return (
+            "SEARCH/REPLACE patch could not be applied to the target memory file. "
+            "The SEARCH text must be copied exactly from the read result of the file bound to that operation's page_id. "
+            "Do not use SEARCH text from the conversation or from another page. "
+            "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "
+            "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
+            "Output ONLY the complete JSON object matching the required schema.\n\n"
+            f"Failed patch operations:\n{details}"
         )
 
     async def _add_refetch_results_to_messages(
