@@ -5,6 +5,16 @@ export type ClientOptions = {
 };
 
 /**
+ * ActivatePrivacyConfigVersionRequest
+ */
+export type ActivatePrivacyConfigVersionRequest = {
+    /**
+     * Version
+     */
+    version: number;
+};
+
+/**
  * AddMessageRequest
  *
  * Request model for adding a message.
@@ -21,6 +31,10 @@ export type AddMessageRequest = {
      */
     role: string;
     /**
+     * Role Id
+     */
+    role_id?: string | null;
+    /**
      * Content
      */
     content?: string | null;
@@ -34,6 +48,12 @@ export type AddMessageRequest = {
      * Created At
      */
     created_at?: string | null;
+    /**
+     * Telemetry
+     */
+    telemetry?: boolean | {
+        [key: string]: boolean;
+    };
 };
 
 /**
@@ -50,6 +70,8 @@ export type AddMessageRequest = {
  * If not specified, an auto-generated URI will be used.
  * parent: Parent URI under which the resource will be stored.
  * Cannot be used together with 'to'.
+ * create_parent: Whether to automatically create the parent directory if it doesn't exist.
+ * Default is False.
  * reason: Reason for adding the resource. Used for documentation and monitoring.
  * instruction: Processing instruction for semantic extraction.
  * Provides hints for how the resource should be processed.
@@ -91,6 +113,10 @@ export type AddResourceRequest = {
      * Parent
      */
     parent?: string | null;
+    /**
+     * Create Parent
+     */
+    create_parent?: boolean;
     /**
      * Reason
      */
@@ -185,6 +211,18 @@ export type AddSkillRequest = {
 };
 
 /**
+ * BackupRequest
+ *
+ * Request model for backup export.
+ */
+export type BackupRequest = {
+    /**
+     * Include Vectors
+     */
+    include_vectors?: boolean;
+};
+
+/**
  * Body_temp_upload_api_v1_resources_temp_upload_post
  */
 export type BodyTempUploadApiV1ResourcesTempUploadPost = {
@@ -196,6 +234,47 @@ export type BodyTempUploadApiV1ResourcesTempUploadPost = {
      * Telemetry
      */
     telemetry?: boolean;
+    /**
+     * Upload Mode
+     */
+    upload_mode?: string;
+};
+
+/**
+ * CommitRequest
+ *
+ * Commit request body.
+ *
+ * WM v2: ``keep_recent_count`` allows the plugin to retain a tail of recent
+ * messages in the live session after commit so the next turn still has
+ * immediate context. Default 0 preserves the pre-v2 "archive everything"
+ * behavior.
+ */
+export type CommitRequest = {
+    /**
+     * Keep Recent Count
+     *
+     * Number of most-recent messages to keep live after commit. Plugin's afterTurn path typically passes its configured value (default 10); compact path passes 0 to archive everything.
+     */
+    keep_recent_count?: number;
+    /**
+     * Telemetry
+     */
+    telemetry?: boolean | {
+        [key: string]: boolean;
+    };
+};
+
+/**
+ * ConsistencyRequest
+ *
+ * Request model for filesystem/vector-index consistency checks.
+ */
+export type ConsistencyRequest = {
+    /**
+     * Uri
+     */
+    uri: string;
 };
 
 /**
@@ -210,6 +289,14 @@ export type CreateAccountRequest = {
      * Admin User Id
      */
     admin_user_id: string;
+    /**
+     * Isolate User Scope By Agent
+     */
+    isolate_user_scope_by_agent?: boolean;
+    /**
+     * Isolate Agent Scope By User
+     */
+    isolate_agent_scope_by_user?: boolean;
 };
 
 /**
@@ -222,6 +309,12 @@ export type CreateSessionRequest = {
      * Session Id
      */
     session_id?: string | null;
+    /**
+     * Telemetry
+     */
+    telemetry?: boolean | {
+        [key: string]: boolean;
+    };
 };
 
 /**
@@ -235,9 +328,9 @@ export type ExportRequest = {
      */
     uri: string;
     /**
-     * To
+     * Include Vectors
      */
-    to: string;
+    include_vectors?: boolean;
 };
 
 /**
@@ -253,7 +346,7 @@ export type FindRequest = {
     /**
      * Target Uri
      */
-    target_uri?: string;
+    target_uri?: string | Array<string>;
     /**
      * Limit
      */
@@ -276,6 +369,22 @@ export type FindRequest = {
      * Include Provenance
      */
     include_provenance?: boolean;
+    /**
+     * Since
+     */
+    since?: string | null;
+    /**
+     * Until
+     */
+    until?: string | null;
+    /**
+     * Time Field
+     */
+    time_field?: 'updated_at' | 'created_at' | null;
+    /**
+     * Level
+     */
+    level?: number | string | Array<number> | null;
     /**
      * Telemetry
      */
@@ -330,6 +439,10 @@ export type GrepRequest = {
      * Node Limit
      */
     node_limit?: number | null;
+    /**
+     * Level Limit
+     */
+    level_limit?: number;
 };
 
 /**
@@ -350,8 +463,7 @@ export type HttpValidationError = {
  * Attributes:
  * temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
  * parent: Parent URI under which the imported pack will be placed.
- * force: Whether to overwrite existing content if needed.
- * vectorize: Whether to build vectors for imported content.
+ * on_conflict: Conflict policy: fail, overwrite, or skip.
  */
 export type ImportRequest = {
     /**
@@ -363,13 +475,13 @@ export type ImportRequest = {
      */
     parent: string;
     /**
-     * Force
+     * On Conflict
      */
-    force?: boolean;
+    on_conflict?: 'fail' | 'overwrite' | 'skip' | null;
     /**
-     * Vectorize
+     * Vector Mode
      */
-    vectorize?: boolean;
+    vector_mode?: 'auto' | 'recompute' | 'require' | null;
 };
 
 /**
@@ -402,6 +514,10 @@ export type MkdirRequest = {
      * Uri
      */
     uri: string;
+    /**
+     * Description
+     */
+    description?: string | null;
 };
 
 /**
@@ -436,8 +552,6 @@ export type RegisterUserRequest = {
 
 /**
  * ReindexRequest
- *
- * Request to reindex content at a URI.
  */
 export type ReindexRequest = {
     /**
@@ -445,13 +559,33 @@ export type ReindexRequest = {
      */
     uri: string;
     /**
-     * Regenerate
+     * Mode
      */
-    regenerate?: boolean;
+    mode?: string;
     /**
      * Wait
      */
     wait?: boolean;
+};
+
+/**
+ * RestoreRequest
+ *
+ * Request model for backup restore.
+ */
+export type RestoreRequest = {
+    /**
+     * Temp File Id
+     */
+    temp_file_id: string;
+    /**
+     * On Conflict
+     */
+    on_conflict?: 'fail' | 'overwrite' | 'skip' | null;
+    /**
+     * Vector Mode
+     */
+    vector_mode?: 'auto' | 'recompute' | 'require' | null;
 };
 
 /**
@@ -467,7 +601,7 @@ export type SearchRequest = {
     /**
      * Target Uri
      */
-    target_uri?: string;
+    target_uri?: string | Array<string>;
     /**
      * Session Id
      */
@@ -494,6 +628,22 @@ export type SearchRequest = {
      * Include Provenance
      */
     include_provenance?: boolean;
+    /**
+     * Since
+     */
+    since?: string | null;
+    /**
+     * Until
+     */
+    until?: string | null;
+    /**
+     * Time Field
+     */
+    time_field?: 'updated_at' | 'created_at' | null;
+    /**
+     * Level
+     */
+    level?: number | string | Array<number> | null;
     /**
      * Telemetry
      */
@@ -526,6 +676,28 @@ export type UnlinkRequest = {
      * To Uri
      */
     to_uri: string;
+};
+
+/**
+ * UpsertPrivacyConfigRequest
+ */
+export type UpsertPrivacyConfigRequest = {
+    /**
+     * Values
+     */
+    values: {
+        [key: string]: unknown;
+    };
+    /**
+     * Change Reason
+     */
+    change_reason?: string;
+    /**
+     * Labels
+     */
+    labels?: {
+        [key: string]: unknown;
+    } | null;
 };
 
 /**
@@ -589,7 +761,7 @@ export type WaitRequest = {
 /**
  * WriteContentRequest
  *
- * Request to write or append text content to an existing file.
+ * Request to write, append, or create text content to a file.
  */
 export type WriteContentRequest = {
     /**
@@ -732,6 +904,51 @@ export type PostSystemWaitErrors = {
 export type PostSystemWaitError = PostSystemWaitErrors[keyof PostSystemWaitErrors];
 
 export type PostSystemWaitResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostSystemConsistencyData = {
+    body: ConsistencyRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/system/consistency';
+};
+
+export type PostSystemConsistencyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostSystemConsistencyError = PostSystemConsistencyErrors[keyof PostSystemConsistencyErrors];
+
+export type PostSystemConsistencyResponses = {
     /**
      * Successful Response
      */
@@ -912,7 +1129,20 @@ export type GetAdminAccountIdUsersData = {
          */
         account_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Name
+         */
+        name?: string | null;
+        /**
+         * Role
+         */
+        role?: string | null;
+    };
     url: '/api/v1/admin/accounts/{account_id}/users';
 };
 
@@ -978,6 +1208,58 @@ export type PostAdminAccountIdUsersErrors = {
 export type PostAdminAccountIdUsersError = PostAdminAccountIdUsersErrors[keyof PostAdminAccountIdUsersErrors];
 
 export type PostAdminAccountIdUsersResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetAdminAccountIdAgentsData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Account Id
+         *
+         * Account ID
+         */
+        account_id: string;
+    };
+    query?: never;
+    url: '/api/v1/admin/accounts/{account_id}/agents';
+};
+
+export type GetAdminAccountIdAgentsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAdminAccountIdAgentsError = GetAdminAccountIdAgentsErrors[keyof GetAdminAccountIdAgentsErrors];
+
+export type GetAdminAccountIdAgentsResponses = {
     /**
      * Successful Response
      */
@@ -1985,6 +2267,241 @@ export type PostContentReindexResponses = {
     200: unknown;
 };
 
+export type GetConsoleDashboardSummaryData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/console/dashboard/summary';
+};
+
+export type GetConsoleDashboardSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleDashboardSummaryError = GetConsoleDashboardSummaryErrors[keyof GetConsoleDashboardSummaryErrors];
+
+export type GetConsoleDashboardSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetConsoleTokensData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Start Date
+         *
+         * Start date in YYYY-MM-DD format
+         */
+        start_date: string;
+        /**
+         * End Date
+         *
+         * End date in YYYY-MM-DD format
+         */
+        end_date: string;
+        /**
+         * Bucket
+         */
+        bucket?: string;
+    };
+    url: '/api/v1/console/tokens';
+};
+
+export type GetConsoleTokensErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleTokensError = GetConsoleTokensErrors[keyof GetConsoleTokensErrors];
+
+export type GetConsoleTokensResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetConsoleContextCommitsData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Start Date
+         *
+         * Start date in YYYY-MM-DD format
+         */
+        start_date: string;
+        /**
+         * End Date
+         *
+         * End date in YYYY-MM-DD format
+         */
+        end_date: string;
+        /**
+         * Bucket
+         */
+        bucket?: string;
+    };
+    url: '/api/v1/console/context-commits';
+};
+
+export type GetConsoleContextCommitsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleContextCommitsError = GetConsoleContextCommitsErrors[keyof GetConsoleContextCommitsErrors];
+
+export type GetConsoleContextCommitsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetConsoleAuditData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Page
+         */
+        page?: number;
+        /**
+         * Page Size
+         */
+        page_size?: number;
+        /**
+         * Request Id
+         */
+        request_id?: string | null;
+        /**
+         * Status
+         */
+        status?: Array<string> | null;
+        /**
+         * Api Type
+         */
+        api_type?: Array<string> | null;
+    };
+    url: '/api/v1/console/audit';
+};
+
+export type GetConsoleAuditErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleAuditError = GetConsoleAuditErrors[keyof GetConsoleAuditErrors];
+
+export type GetConsoleAuditResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type PostSearchFindData = {
     body: FindRequest;
     headers?: {
@@ -2307,6 +2824,399 @@ export type PostRelationsLinkResponses = {
     200: unknown;
 };
 
+export type GetPrivacyConfigsData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/privacy-configs';
+};
+
+export type GetPrivacyConfigsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPrivacyConfigsError = GetPrivacyConfigsErrors[keyof GetPrivacyConfigsErrors];
+
+export type GetPrivacyConfigsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetPrivacyConfigsByCategoryData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}';
+};
+
+export type GetPrivacyConfigsByCategoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPrivacyConfigsByCategoryError = GetPrivacyConfigsByCategoryErrors[keyof GetPrivacyConfigsByCategoryErrors];
+
+export type GetPrivacyConfigsByCategoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetPrivacyConfigsByCategoryAndTargetKeyData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+        /**
+         * Target Key
+         *
+         * Privacy config target key
+         */
+        target_key: string;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}/{target_key}';
+};
+
+export type GetPrivacyConfigsByCategoryAndTargetKeyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPrivacyConfigsByCategoryAndTargetKeyError = GetPrivacyConfigsByCategoryAndTargetKeyErrors[keyof GetPrivacyConfigsByCategoryAndTargetKeyErrors];
+
+export type GetPrivacyConfigsByCategoryAndTargetKeyResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostPrivacyConfigsByCategoryAndTargetKeyData = {
+    body: UpsertPrivacyConfigRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+        /**
+         * Target Key
+         *
+         * Privacy config target key
+         */
+        target_key: string;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}/{target_key}';
+};
+
+export type PostPrivacyConfigsByCategoryAndTargetKeyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostPrivacyConfigsByCategoryAndTargetKeyError = PostPrivacyConfigsByCategoryAndTargetKeyErrors[keyof PostPrivacyConfigsByCategoryAndTargetKeyErrors];
+
+export type PostPrivacyConfigsByCategoryAndTargetKeyResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetPrivacyConfigsVersionsByCategoryAndTargetKeyData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+        /**
+         * Target Key
+         *
+         * Privacy config target key
+         */
+        target_key: string;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}/{target_key}/versions';
+};
+
+export type GetPrivacyConfigsVersionsByCategoryAndTargetKeyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPrivacyConfigsVersionsByCategoryAndTargetKeyError = GetPrivacyConfigsVersionsByCategoryAndTargetKeyErrors[keyof GetPrivacyConfigsVersionsByCategoryAndTargetKeyErrors];
+
+export type GetPrivacyConfigsVersionsByCategoryAndTargetKeyResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+        /**
+         * Target Key
+         *
+         * Privacy config target key
+         */
+        target_key: string;
+        /**
+         * Version
+         *
+         * Privacy config version
+         */
+        version: number;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}/{target_key}/versions/{version}';
+};
+
+export type GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionError = GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionErrors[keyof GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionErrors];
+
+export type GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostPrivacyConfigsActivateByCategoryAndTargetKeyData = {
+    body: ActivatePrivacyConfigVersionRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Category
+         *
+         * Privacy config category
+         */
+        category: string;
+        /**
+         * Target Key
+         *
+         * Privacy config target key
+         */
+        target_key: string;
+    };
+    query?: never;
+    url: '/api/v1/privacy-configs/{category}/{target_key}/activate';
+};
+
+export type PostPrivacyConfigsActivateByCategoryAndTargetKeyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostPrivacyConfigsActivateByCategoryAndTargetKeyError = PostPrivacyConfigsActivateByCategoryAndTargetKeyErrors[keyof PostPrivacyConfigsActivateByCategoryAndTargetKeyErrors];
+
+export type PostPrivacyConfigsActivateByCategoryAndTargetKeyResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type GetSessionsData = {
     body?: never;
     headers?: {
@@ -2353,10 +3263,7 @@ export type GetSessionsResponses = {
 };
 
 export type PostSessionsData = {
-    /**
-     * Request
-     */
-    body?: CreateSessionRequest | null;
+    body?: CreateSessionRequest;
     headers?: {
         /**
          * X-Api-Key
@@ -2629,7 +3536,7 @@ export type GetSessionIdArchiveByArchiveIdResponses = {
 };
 
 export type PostSessionIdCommitData = {
-    body?: never;
+    body?: CommitRequest;
     headers?: {
         /**
          * X-Api-Key
@@ -2985,6 +3892,54 @@ export type PostPackExportResponses = {
     200: unknown;
 };
 
+export type PostPackBackupData = {
+    /**
+     * Body
+     */
+    body?: BackupRequest | null;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/pack/backup';
+};
+
+export type PostPackBackupErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostPackBackupError = PostPackBackupErrors[keyof PostPackBackupErrors];
+
+export type PostPackBackupResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type PostPackImportData = {
     body: ImportRequest;
     headers?: {
@@ -3024,6 +3979,51 @@ export type PostPackImportErrors = {
 export type PostPackImportError = PostPackImportErrors[keyof PostPackImportErrors];
 
 export type PostPackImportResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostPackRestoreData = {
+    body: RestoreRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/pack/restore';
+};
+
+export type PostPackRestoreErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostPackRestoreError = PostPackRestoreErrors[keyof PostPackRestoreErrors];
+
+export type PostPackRestoreResponses = {
     /**
      * Successful Response
      */
@@ -3412,6 +4412,51 @@ export type GetObserverRetrievalResponses = {
     200: unknown;
 };
 
+export type GetObserverFilesystemData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/observer/filesystem';
+};
+
+export type GetObserverFilesystemErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetObserverFilesystemError = GetObserverFilesystemErrors[keyof GetObserverFilesystemErrors];
+
+export type GetObserverFilesystemResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type GetObserverSystemData = {
     body?: never;
     headers?: {
@@ -3591,6 +4636,462 @@ export type GetTasksResponses = {
     200: unknown;
 };
 
+export type DeleteWebdavResourceByResourcePathData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Resource Path
+         */
+        resource_path: string;
+    };
+    query?: never;
+    url: '/webdav/resources/{resource_path}';
+};
+
+export type DeleteWebdavResourceByResourcePathErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteWebdavResourceByResourcePathError = DeleteWebdavResourceByResourcePathErrors[keyof DeleteWebdavResourceByResourcePathErrors];
+
+export type DeleteWebdavResourceByResourcePathResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetWebdavResourceByResourcePathData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Resource Path
+         */
+        resource_path: string;
+    };
+    query?: never;
+    url: '/webdav/resources/{resource_path}';
+};
+
+export type GetWebdavResourceByResourcePathErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetWebdavResourceByResourcePathError = GetWebdavResourceByResourcePathErrors[keyof GetWebdavResourceByResourcePathErrors];
+
+export type GetWebdavResourceByResourcePathResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type HeadWebdavResourceByResourcePathData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Resource Path
+         */
+        resource_path: string;
+    };
+    query?: never;
+    url: '/webdav/resources/{resource_path}';
+};
+
+export type HeadWebdavResourceByResourcePathErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type HeadWebdavResourceByResourcePathError = HeadWebdavResourceByResourcePathErrors[keyof HeadWebdavResourceByResourcePathErrors];
+
+export type HeadWebdavResourceByResourcePathResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type OptionsWebdavResourceByResourcePathData = {
+    body?: never;
+    path: {
+        /**
+         * Resource Path
+         */
+        resource_path: string;
+    };
+    query?: never;
+    url: '/webdav/resources/{resource_path}';
+};
+
+export type OptionsWebdavResourceByResourcePathErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OptionsWebdavResourceByResourcePathError = OptionsWebdavResourceByResourcePathErrors[keyof OptionsWebdavResourceByResourcePathErrors];
+
+export type OptionsWebdavResourceByResourcePathResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PutWebdavResourceByResourcePathData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path: {
+        /**
+         * Resource Path
+         */
+        resource_path: string;
+    };
+    query?: never;
+    url: '/webdav/resources/{resource_path}';
+};
+
+export type PutWebdavResourceByResourcePathErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutWebdavResourceByResourcePathError = PutWebdavResourceByResourcePathErrors[keyof PutWebdavResourceByResourcePathErrors];
+
+export type PutWebdavResourceByResourcePathResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type DeleteWebdavResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Resource Path
+         */
+        resource_path?: string;
+    };
+    url: '/webdav/resources';
+};
+
+export type DeleteWebdavResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteWebdavResourcesError = DeleteWebdavResourcesErrors[keyof DeleteWebdavResourcesErrors];
+
+export type DeleteWebdavResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetWebdavResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Resource Path
+         */
+        resource_path?: string;
+    };
+    url: '/webdav/resources';
+};
+
+export type GetWebdavResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetWebdavResourcesError = GetWebdavResourcesErrors[keyof GetWebdavResourcesErrors];
+
+export type GetWebdavResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type HeadWebdavResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Resource Path
+         */
+        resource_path?: string;
+    };
+    url: '/webdav/resources';
+};
+
+export type HeadWebdavResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type HeadWebdavResourcesError = HeadWebdavResourcesErrors[keyof HeadWebdavResourcesErrors];
+
+export type HeadWebdavResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type OptionsWebdavResourcesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Resource Path
+         */
+        resource_path?: string;
+    };
+    url: '/webdav/resources';
+};
+
+export type OptionsWebdavResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OptionsWebdavResourcesError = OptionsWebdavResourcesErrors[keyof OptionsWebdavResourcesErrors];
+
+export type OptionsWebdavResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PutWebdavResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Resource Path
+         */
+        resource_path?: string;
+    };
+    url: '/webdav/resources';
+};
+
+export type PutWebdavResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutWebdavResourcesError = PutWebdavResourcesErrors[keyof PutWebdavResourcesErrors];
+
+export type PutWebdavResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type GetBotV1HealthData = {
     body?: never;
     path?: never;
@@ -3644,6 +5145,51 @@ export type PostBotV1ChatErrors = {
 export type PostBotV1ChatError = PostBotV1ChatErrors[keyof PostBotV1ChatErrors];
 
 export type PostBotV1ChatResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostBotV1FeedbackData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+        /**
+         * X-Openviking-Agent
+         */
+        'X-OpenViking-Agent'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/bot/v1/feedback';
+};
+
+export type PostBotV1FeedbackErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBotV1FeedbackError = PostBotV1FeedbackErrors[keyof PostBotV1FeedbackErrors];
+
+export type PostBotV1FeedbackResponses = {
     /**
      * Successful Response
      */
