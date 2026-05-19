@@ -281,6 +281,10 @@ def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
     return {key: str(openviking[key]) for key in required}
 
 
+def _search_uri(agent_id: str, search_memory_type: str) -> str:
+    return f"viking://agent/{agent_id}/memories/{search_memory_type}"
+
+
 def _metrics_from_tau2_results(results_path: Path) -> dict[str, Any]:
     data = json.loads(results_path.read_text(encoding="utf-8"))
     assert_tau2_results_complete(data, context=str(results_path))
@@ -341,7 +345,7 @@ def _tau2_command(
             account = reuse_identity["account"]
             agent_id = reuse_identity["agent_id"]
             user = reuse_identity["user"]
-            search_uri = reuse_identity["search_uri"]
+            search_uri = ""
         elif openviking.get("reuse_corpus_across_runs", False):
             account = f"{openviking['account']}-{corpus_key}"
             agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
@@ -358,7 +362,7 @@ def _tau2_command(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
         if not search_uri:
-            search_uri = f"viking://agent/{agent_id}/memories/{search_memory_type}"
+            search_uri = _search_uri(agent_id, search_memory_type)
         budget = _retrieval_budget(config, strategy)
         command = [
             sys.executable,
