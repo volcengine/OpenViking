@@ -3,12 +3,15 @@
 
 """Unit tests for TaskTracker."""
 
+import json
 import time
 
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
+from openviking.service.task_store import InMemoryTaskStore, PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskStatus,
     TaskTracker,
@@ -34,8 +37,8 @@ def tracker() -> TaskTracker:
 
 def _owner_kwargs(account_id: str = "acme", user_id: str = "alice"):
     return {
-        "owner_account_id": account_id,
-        "owner_user_id": user_id,
+        "account_id": account_id,
+        "user_id": user_id,
     }
 
 
@@ -44,6 +47,60 @@ def _make_ctx(account_id: str = "acme", user_id: str = "alice") -> RequestContex
         user=UserIdentifier(account_id, user_id, "agent-1"),
         role=Role.ADMIN,
     )
+
+
+class _FakeAgfs:
+    def __init__(self):
+        self.files = {}
+        self.dirs = {"/", "/local"}
+
+    def mkdir(self, path: str, mode: str = "755"):
+        self.dirs.add(path.rstrip("/") or "/")
+        return {"message": "created", "mode": mode}
+
+    def write(self, path: str, data):
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        self.files[path] = data
+        parent = path.rsplit("/", 1)[0] or "/"
+        self.dirs.add(parent)
+        return "OK"
+
+    def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        data = self.files[path]
+        if size >= 0:
+            return data[offset : offset + size]
+        return data[offset:]
+
+    def ls(self, path: str = "/"):
+        prefix = path.rstrip("/") or "/"
+        if prefix not in self.dirs:
+            return []
+        children = {}
+        for directory in self.dirs:
+            if directory in {prefix, "/"}:
+                continue
+            if directory.startswith(prefix + "/"):
+                name = directory[len(prefix) + 1 :].split("/", 1)[0]
+                if name:
+                    children[name] = {"name": name, "path": f"{prefix}/{name}", "is_dir": True}
+        for file_path in self.files:
+            if file_path.startswith(prefix + "/"):
+                name = file_path[len(prefix) + 1 :].split("/", 1)[0]
+                if name and "/" not in file_path[len(prefix) + 1 :]:
+                    children[name] = {"name": name, "path": f"{prefix}/{name}", "is_dir": False}
+        return list(children.values())
+
+
+class _FakeAgfsExistingDir(_FakeAgfs):
+    def mkdir(self, path: str, mode: str = "755"):
+        normalized = path.rstrip("/") or "/"
+        if normalized in self.dirs:
+            raise AGFSAlreadyExistsError(f"already exists: {path}")
+        self.dirs.add(normalized)
+        return {"message": "created", "mode": mode}
 
 
 # ── Basic CRUD ──
@@ -131,15 +188,15 @@ def test_get_hides_task_from_other_owner(tracker: TaskTracker):
     task = tracker.create(
         "session_commit",
         resource_id="s1",
-        owner_account_id="acme",
-        owner_user_id="alice",
+        account_id="acme",
+        user_id="alice",
     )
 
     assert (
         tracker.get(
             task.task_id,
-            owner_account_id="acme",
-            owner_user_id="bob",
+            account_id="acme",
+            user_id="bob",
         )
         is None
     )
@@ -149,17 +206,17 @@ def test_list_tasks_filters_by_owner(tracker: TaskTracker):
     tracker.create(
         "session_commit",
         resource_id="alice-task",
-        owner_account_id="acme",
-        owner_user_id="alice",
+        account_id="acme",
+        user_id="alice",
     )
     tracker.create(
         "session_commit",
         resource_id="bob-task",
-        owner_account_id="acme",
-        owner_user_id="bob",
+        account_id="acme",
+        user_id="bob",
     )
 
-    tasks = tracker.list_tasks(owner_account_id="acme", owner_user_id="alice")
+    tasks = tracker.list_tasks(account_id="acme", user_id="alice")
 
     assert len(tasks) == 1
     assert tasks[0].resource_id == "alice-task"
@@ -212,14 +269,14 @@ def test_create_if_no_running_isolated_by_owner(tracker: TaskTracker):
     alice_task = tracker.create_if_no_running(
         "reindex",
         "viking://resources/demo",
-        owner_account_id="acme",
-        owner_user_id="alice",
+        account_id="acme",
+        user_id="alice",
     )
     bob_task = tracker.create_if_no_running(
         "reindex",
         "viking://resources/demo",
-        owner_account_id="acme",
-        owner_user_id="bob",
+        account_id="acme",
+        user_id="bob",
     )
 
     assert alice_task is not None
@@ -246,8 +303,8 @@ def test_to_dict(tracker: TaskTracker):
     assert isinstance(d["created_at_iso"], str)
     assert "T" in d["created_at_iso"]
     assert isinstance(d["updated_at_iso"], str)
-    assert "owner_account_id" not in d
-    assert "owner_user_id" not in d
+    assert "account_id" not in d
+    assert "user_id" not in d
 
 
 # ── Sanitization ──
@@ -328,6 +385,71 @@ def test_singleton_reset():
     assert t1 is not t2
 
 
+def test_persistent_store_cross_tracker_visibility():
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    tracker1 = TaskTracker(store=store)
+    tracker2 = TaskTracker(store=store)
+
+    task = tracker1.create("session_commit", resource_id="sess-123", **_owner_kwargs())
+    tracker1.start(task.task_id, account_id="acme", user_id="alice")
+    tracker1.complete(task.task_id, {"ok": True}, account_id="acme", user_id="alice")
+
+    loaded = tracker2.get(task.task_id, account_id="acme", user_id="alice")
+
+    assert loaded is not None
+    assert loaded.status == TaskStatus.COMPLETED
+    assert loaded.result == {"ok": True}
+
+
+def test_persistent_store_writes_task_record_json():
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    tracker = TaskTracker(store=store)
+
+    task = tracker.create("add_resource", resource_id="viking://resources/demo", **_owner_kwargs())
+
+    raw = agfs.files[f"/local/acme/tasks/alice/{task.task_id}.json"]
+    payload = json.loads(raw.decode("utf-8"))
+
+    assert payload["task_id"] == task.task_id
+    assert payload["task_type"] == "add_resource"
+    assert payload["account_id"] == "acme"
+    assert payload["user_id"] == "alice"
+    assert "schema_version" not in payload
+
+
+def test_inmemory_store_keeps_tasktracker_tasks_dict():
+    tracker = TaskTracker(store=InMemoryTaskStore())
+    task = tracker.create("session_commit", **_owner_kwargs())
+    assert task.task_id in tracker._tasks
+
+
+def test_persistent_store_survives_tracker_reset():
+    agfs = _FakeAgfs()
+    tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
+    task = tracker1.create("session_commit", resource_id="sess-123", **_owner_kwargs())
+    tracker1.start(task.task_id, account_id="acme", user_id="alice")
+
+    tracker2 = TaskTracker(store=PersistentTaskStore(agfs))
+    loaded = tracker2.get(task.task_id, account_id="acme", user_id="alice")
+
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+
+
+def test_persistent_store_ignores_existing_task_dirs():
+    agfs = _FakeAgfsExistingDir()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+
+    first = tracker.create("session_commit", resource_id="sess-1", **_owner_kwargs())
+    second = tracker.create("session_commit", resource_id="sess-2", **_owner_kwargs())
+
+    assert first.task_id != second.task_id
+    assert agfs.files[f"/local/acme/tasks/alice/{first.task_id}.json"]
+    assert agfs.files[f"/local/acme/tasks/alice/{second.task_id}.json"]
+
+
 def test_create_requires_owner(tracker: TaskTracker):
     with pytest.raises(TypeError):
         tracker.create("session_commit", resource_id="sess-123")
@@ -343,8 +465,8 @@ def test_create_rejects_blank_owner_values(tracker: TaskTracker):
         tracker.create(
             "session_commit",
             resource_id="sess-123",
-            owner_account_id="",
-            owner_user_id="alice",
+            account_id="",
+            user_id="alice",
         )
 
 
@@ -361,3 +483,17 @@ async def test_session_service_get_commit_task_is_owner_scoped():
     assert owner_result["task_id"] == task.task_id
     assert owner_result["resource_id"] == "sess-123"
     assert other_result is None
+
+
+@pytest.mark.asyncio
+async def test_session_service_get_commit_task_also_filters_account():
+    tracker = get_task_tracker()
+    task = tracker.create("session_commit", resource_id="sess-123", **_owner_kwargs())
+    service = SessionService()
+
+    other_account_result = await service.get_commit_task(
+        task.task_id,
+        _make_ctx(account_id="other-acme", user_id="alice"),
+    )
+
+    assert other_account_result is None

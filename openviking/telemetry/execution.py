@@ -53,7 +53,7 @@ def build_telemetry_payload(
 def _log_telemetry_summary(snapshot: Optional[TelemetrySnapshot]) -> None:
     if snapshot is None:
         return
-    logger.info(
+    logger.debug(
         "Telemetry summary (id=%s): %s",
         snapshot.telemetry_id,
         snapshot.summary,

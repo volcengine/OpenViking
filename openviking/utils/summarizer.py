@@ -107,9 +107,25 @@ class Summarizer:
                     lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                     is_code_repo=kwargs.get("is_code_repo", False),
                 )
-                await semantic_queue.enqueue(msg)
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+                try:
+                    enqueue_id = await semantic_queue.enqueue(msg)
+                except Exception as e:
+                    if msg.telemetry_id:
+                        get_request_wait_tracker().mark_semantic_failed(
+                            msg.telemetry_id, msg.id, str(e)
+                        )
+                    raise
+                if enqueue_id == "deduplicated":
+                    if msg.telemetry_id:
+                        get_request_wait_tracker().mark_semantic_done(
+                            msg.telemetry_id,
+                            msg.id,
+                            processed_delta=0,
+                        )
+                    logger.info("Semantic generation already queued for: %s", target_uri)
+                    continue
                 enqueued_count += 1
                 logger.info(
                     f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"

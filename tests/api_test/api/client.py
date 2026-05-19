@@ -428,13 +428,18 @@ class OpenVikingAPIClient:
         return response
 
     def import_ovpack(
-        self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        parent: str,
+        on_conflict: str | None = None,
     ) -> requests.Response:
         endpoint = "/api/v1/pack/import"
         url = self._build_url(self.server_url, endpoint)
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
-        payload = {"parent": parent, "force": force, "vectorize": vectorize}
+        payload = {"parent": parent}
+        if on_conflict is not None:
+            payload["on_conflict"] = on_conflict
         payload["temp_file_id"] = self._upload_temp_file(file_path)
         return self._request_with_retry(
             "POST",

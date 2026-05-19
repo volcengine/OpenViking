@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use ragfs::core::{
-    ConfigValue, FileInfo, FileSystem, GrepResult, MountableFS, PluginConfig, WriteFlag,
+    ConfigValue, FileInfo, FileSystem, FilesystemStats, FsOperation, GrepResult, MountableFS,
+    OperationStats, PluginConfig, WriteFlag,
 };
 #[cfg(feature = "s3")]
 use ragfs::plugins::S3FSPlugin;
@@ -116,6 +117,32 @@ fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<Py
     dict.set_item("matches", matches_list)?;
     dict.set_item("count", result.count)?;
 
+    Ok(dict.into())
+}
+
+/// Convert OperationStats to a Python dict.
+fn operation_stats_to_py_dict(py: Python<'_>, stats: &OperationStats) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("count", stats.count)?;
+    dict.set_item("total_time_us", stats.total_time_us)?;
+    dict.set_item("min_time_us", stats.min_time_us)?;
+    dict.set_item("max_time_us", stats.max_time_us)?;
+    dict.set_item("avg_time_us", stats.avg_time_us())?;
+    Ok(dict.into())
+}
+
+/// Convert FilesystemStats to a Python dict.
+fn filesystem_stats_to_py_dict(py: Python<'_>, stats: &FilesystemStats) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    let ops_dict = PyDict::new(py);
+
+    for op in FsOperation::all() {
+        let op_stats = stats.get(*op);
+        let op_dict = operation_stats_to_py_dict(py, op_stats)?;
+        ops_dict.set_item(op.as_str(), op_dict)?;
+    }
+
+    dict.set_item("operations", ops_dict)?;
     Ok(dict.into())
 }
 
@@ -346,6 +373,23 @@ impl RAGFSBindingClient {
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "created".to_string());
+        Ok(m)
+    }
+
+    /// Ensure all parent directories exist for the given path.
+    #[pyo3(signature = (path, mode="755"))]
+    fn ensure_parent_dirs(&self, path: String, mode: &str) -> PyResult<HashMap<String, String>> {
+        let mode_int = u32::from_str_radix(mode, 8)
+            .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
+
+        let fs = self.fs.clone();
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.ensure_parent_dirs(&path, mode_int).await }))
+        })
+        .map_err(to_py_err)?;
+
+        let mut m = HashMap::new();
+        m.insert("message".to_string(), "parent directories ensured".to_string());
         Ok(m)
     }
 
@@ -610,6 +654,66 @@ impl RAGFSBindingClient {
         Err(PyRuntimeError::new_err(
             "digest not yet implemented in ragfs-python",
         ))
+    }
+
+    /// Get filesystem statistics.
+    ///
+    /// Args:
+    ///     path: Optional mount path to get stats for. If None, get stats for all mounts.
+    ///
+    /// Returns:
+    ///     Statistics data as a dict.
+    #[pyo3(signature = (path=None))]
+    fn get_stats(&self, path: Option<String>) -> PyResult<Py<PyAny>> {
+        let fs = self.fs.clone();
+
+        Python::attach(|py| {
+            if let Some(mount_path) = path {
+                // Get stats for a specific mount
+                let fs2 = fs.clone();
+                let mount_path_clone = mount_path.clone();
+                let stats = py_detach_blocking(py, move || {
+                    self.rt.block_on(async move { fs.get_mount_stats(&mount_path_clone).await })
+                })
+                .map_err(to_py_err)?;
+
+                let mounts = py_detach_blocking(py, move || {
+                    self.rt.block_on(async move { fs2.list_mounts().await })
+                });
+
+                let plugin_name = mounts
+                    .into_iter()
+                    .find(|(p, _)| p == &mount_path)
+                    .map(|(_, plugin)| plugin)
+                    .unwrap_or_default();
+
+                let result = PyDict::new(py);
+                result.set_item("path", mount_path)?;
+                result.set_item("plugin", plugin_name)?;
+                let stats_dict = filesystem_stats_to_py_dict(py, &stats)?;
+                result.set_item("stats", stats_dict)?;
+                Ok(result.into())
+            } else {
+                // Get stats for all mounts
+                let all_stats = py_detach_blocking(py, move || {
+                    self.rt.block_on(async move { fs.get_all_stats().await })
+                });
+
+                let mounts_list = PyList::empty(py);
+                for (path, (plugin, stats)) in all_stats {
+                    let mount_dict = PyDict::new(py);
+                    mount_dict.set_item("path", path)?;
+                    mount_dict.set_item("plugin", plugin)?;
+                    let stats_dict = filesystem_stats_to_py_dict(py, &stats)?;
+                    mount_dict.set_item("stats", stats_dict)?;
+                    mounts_list.append(mount_dict)?;
+                }
+
+                let result = PyDict::new(py);
+                result.set_item("mounts", mounts_list)?;
+                Ok(result.into())
+            }
+        })
     }
 }
 

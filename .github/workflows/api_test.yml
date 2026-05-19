@@ -1,4 +1,4 @@
-name: 06. API Integration Tests
+name: 06. API & CLI Integration Tests
 
 on:
   workflow_dispatch:
@@ -19,6 +19,8 @@ on:
       - '**.svg'
       - '.gitignore'
       - '.editorconfig'
+  release:
+    types: [published, prereleased]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -26,7 +28,7 @@ concurrency:
 
 jobs:
   api-tests:
-    name: API Integration Tests (${{ matrix.os }})
+    name: API & CLI Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.repository == 'volcengine/OpenViking'
@@ -34,7 +36,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
+        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6
@@ -445,15 +447,20 @@ jobs:
           export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
           
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
-            echo "Running full test suite with VLM/Embedding"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
-              --ignore=scenarios/resources_retrieval_slow/
+            echo "Running serial tests (filesystem + resource operations)..."
+            uv run python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short
+            echo "Running full test suite with VLM/Embedding (parallel, excluding serial tests)..."
+            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
+              --ignore=scenarios/resources_retrieval_slow/ --ignore=filesystem/ --ignore=scenarios/resources_retrieval/
           else
-            echo "Running basic tests only (no VLM/Embedding)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+            echo "Running filesystem tests (serial)..."
+            uv run python -m pytest filesystem/ -v --tb=short \
+              --ignore=retrieval/ --ignore=resources/ --ignore=admin/ --ignore=skills/ --ignore=system/ --ignore=scenarios/
+            echo "Running basic tests only (parallel, excluding filesystem)..."
+            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
-              --ignore=scenarios/ -k "not test_observer"
+              --ignore=scenarios/ --ignore=filesystem/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -468,11 +475,79 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/
+            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
+            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
+        continue-on-error: true
+
+      - name: Install OpenViking CLI (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Installing OpenViking CLI..."
+          curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash
+
+          echo "Verifying CLI installation..."
+          if command -v openviking &> /dev/null; then
+            openviking version
+            echo "OPENVIKING_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
+          elif command -v ov &> /dev/null; then
+            ov version
+            echo "OPENVIKING_CLI_BIN=$(which ov)" >> $GITHUB_ENV
+          else
+            echo "WARNING: CLI binary not found after installation, CLI tests will be skipped"
+          fi
+
+      - name: Run CLI Compatibility Tests (Unix)
+        if: runner.os != 'Windows'
+        id: run-cli-compat-tests
+        run: |
+          if [ -z "$OPENVIKING_CLI_BIN" ]; then
+            echo "CLI binary not available, skipping CLI compatibility tests"
+            echo "cli_compat_outcome=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          cd tests/cli
+          export OPENVIKING_CLI_BIN="${OPENVIKING_CLI_BIN}"
+          export OPENVIKING_URL="http://127.0.0.1:${{ env.SERVER_PORT }}"
+          export OPENVIKING_API_KEY="test-root-api-key"
+          export OPENVIKING_ACCOUNT="test-account"
+          export OPENVIKING_USER="test-user"
+
+          echo "Running CLI compatibility tests..."
+          uv run python -m pytest test_cli_compatibility.py -v -n 4 --tb=short -m cli_remote || true
+        continue-on-error: true
+
+      - name: Run CLI Integration Tests (Unix)
+        if: runner.os != 'Windows'
+        id: run-cli-tests
+        run: |
+          if [ -z "$OPENVIKING_CLI_BIN" ]; then
+            echo "CLI binary not available, skipping CLI integration tests"
+            echo "cli_tests_outcome=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          cd tests/cli
+          export OPENVIKING_CLI_BIN="${OPENVIKING_CLI_BIN}"
+          export OPENVIKING_URL="http://127.0.0.1:${{ env.SERVER_PORT }}"
+          export OPENVIKING_API_KEY="test-root-api-key"
+          export OPENVIKING_ACCOUNT="test-account"
+          export OPENVIKING_USER="test-user"
+
+          echo "Running CLI integration tests..."
+          uv run python -m pytest \
+            test_cli_filesystem.py \
+            test_cli_content.py \
+            test_cli_resources.py \
+            test_cli_search.py \
+            test_cli_sessions.py \
+            test_cli_relations.py \
+            test_cli_system.py \
+            test_cli_skills.py \
+            test_cli_observer.py \
+            -v -n 4 --tb=short -m cli_remote \
+            --html=cli-test-report.html --self-contained-html
         continue-on-error: true
 
       - name: Upload test reports
@@ -482,6 +557,7 @@ jobs:
           name: api-test-reports-${{ matrix.os }}-${{ github.run_id }}
           path: |
             tests/api_test/api-test-report.html
+            tests/cli/cli-test-report.html
             openviking-server.log
 
       - name: Stop OpenViking Server (Unix)
@@ -502,10 +578,20 @@ jobs:
           Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force
 
       - name: Check test results (Unix)
-        if: runner.os != 'Windows' && steps.run-tests-unix.outcome != 'success'
+        if: runner.os != 'Windows' && (steps.run-tests-unix.outcome != 'success' || steps.run-cli-tests.outcome == 'failure')
         run: |
-          echo "API tests failed!"
-          exit 1
+          FAILED=0
+          if [ "${{ steps.run-tests-unix.outcome }}" != "success" ]; then
+            echo "API tests failed!"
+            FAILED=1
+          fi
+          if [ "${{ steps.run-cli-tests.outcome }}" == "failure" ]; then
+            echo "CLI integration tests failed!"
+            FAILED=1
+          fi
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
 
       - name: Check test results (Windows)
         if: runner.os == 'Windows' && steps.run-tests-windows.outcome != 'success'

@@ -21,6 +21,7 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
 
+    backup: Optional["VLMConfig"] = Field(default=None, description="Backup VLM configuration for failover")
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
@@ -66,6 +67,14 @@ class VLMConfig(BaseModel):
 
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
+    )
+
+    extra_request_body: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields passed to OpenAI-compatible VLM completion requests. "
+            "Useful for provider-specific options such as Ollama's {'think': false}."
+        ),
     )
 
     stream: bool = Field(
@@ -125,6 +134,14 @@ class VLMConfig(BaseModel):
                 raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
+    @model_validator(mode="after")
+    def validate_no_recursive_backup(self):
+        """Prevent recursive backup configurations"""
+        if self.backup is not None:
+            if self.backup.backup is not None:
+                raise ValueError("Backup VLM configuration cannot have its own backup (recursive backups are not allowed)")
+        return self
+
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
         if self.api_key and self.provider:
@@ -136,6 +153,11 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["api_base"] = self.api_base
             if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
                 self.providers[self.provider]["extra_headers"] = self.extra_headers
+            if (
+                self.extra_request_body
+                and "extra_request_body" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
 
@@ -164,6 +186,8 @@ class VLMConfig(BaseModel):
             config["api_base"] = self.api_base
         if self.extra_headers and "extra_headers" not in config:
             config["extra_headers"] = self.extra_headers
+        if self.extra_request_body and "extra_request_body" not in config:
+            config["extra_request_body"] = self.extra_request_body
         if self.stream and "stream" not in config:
             config["stream"] = self.stream
         return config
@@ -222,9 +246,17 @@ class VLMConfig(BaseModel):
         """Get VLM instance."""
         if self._vlm_instance is None:
             config_dict = self._build_vlm_config_dict()
-            from openviking.models.vlm import VLMFactory
+            from openviking.models.vlm import VLMFactory, FailoverVLM
 
-            self._vlm_instance = VLMFactory.create(config_dict)
+            primary = VLMFactory.create(config_dict)
+
+            # If backup is configured, wrap with FailoverVLM
+            if self.backup is not None and self.backup._has_any_config():
+                backup_config_dict = self.backup._build_vlm_config_dict()
+                backup = VLMFactory.create(backup_config_dict)
+                self._vlm_instance = FailoverVLM(primary, backup)
+            else:
+                self._vlm_instance = primary
         return self._vlm_instance
 
     def _build_vlm_config_dict(self) -> Dict[str, Any]:
@@ -255,6 +287,8 @@ class VLMConfig(BaseModel):
                 result["api_base"] = config.get("api_base")
             if config.get("extra_headers"):
                 result["extra_headers"] = config.get("extra_headers")
+            if config.get("extra_request_body"):
+                result["extra_request_body"] = config.get("extra_request_body")
 
         return result
 
@@ -331,3 +365,7 @@ class VLMConfig(BaseModel):
             tools=tools,
             messages=messages,
         )
+
+
+# Resolve forward reference for backup field
+VLMConfig.model_rebuild()

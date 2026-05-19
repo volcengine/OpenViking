@@ -38,8 +38,9 @@ pub mod server;
 
 // Re-export core types for convenience
 pub use core::{
-    ConfigParameter, ConfigValue, Error, FileInfo, FileSystem, HealthStatus, MountableFS,
-    PluginConfig, PluginRegistry, Result, ServicePlugin, WriteFlag,
+    ConfigParameter, ConfigValue, Error, FileInfo, FileSystem, FilesystemStats, FsOperation,
+    HealthStatus, MountableFS, OperationStats, OperationTimer, PluginConfig, PluginRegistry,
+    Result, ServicePlugin, StatsCollector, StatsWrappedFS, WriteFlag,
 };
 
 /// Version of RAGFS

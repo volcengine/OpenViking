@@ -29,7 +29,7 @@ from openviking.server.mcp_endpoint import (
     search,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
-from openviking_cli.exceptions import UnauthenticatedError
+from openviking_cli.exceptions import FailedPreconditionError, UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -347,6 +347,28 @@ async def test_forget_by_uri_deletes_resource(service):
     await service.viking_fs.write(uri, "resource data", ctx=ctx)
 
     result = await forget(uri=uri)
+    assert "deleted" in result.lower()
+
+
+async def test_forget_directory_without_recursive_fails(service):
+    ctx = DEFAULT_CTX
+    dir_uri = "viking://resources/test_forget_dir"
+    child_uri = f"{dir_uri}/child.md"
+    await service.viking_fs.mkdir(dir_uri, ctx=ctx, exist_ok=True)
+    await service.viking_fs.write(child_uri, "child data", ctx=ctx)
+
+    with pytest.raises(FailedPreconditionError):
+        await forget(uri=dir_uri)
+
+
+async def test_forget_directory_with_recursive_succeeds(service):
+    ctx = DEFAULT_CTX
+    dir_uri = "viking://resources/test_forget_dir_recursive"
+    child_uri = f"{dir_uri}/child.md"
+    await service.viking_fs.mkdir(dir_uri, ctx=ctx, exist_ok=True)
+    await service.viking_fs.write(child_uri, "child data", ctx=ctx)
+
+    result = await forget(uri=dir_uri, recursive=True)
     assert "deleted" in result.lower()
 
 

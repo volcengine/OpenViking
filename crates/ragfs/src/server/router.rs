@@ -13,8 +13,9 @@ use tower_http::{
 use tracing::Level;
 
 use super::handlers::{
-    create_directory, create_file, delete_file, grep_content, health_check, list_directory,
-    list_mounts, mount_filesystem, read_file, stat_file, unmount_filesystem, write_file, AppState,
+    create_directory, create_file, delete_file, ensure_parent_dirs, get_stats, grep_content,
+    health_check, list_directory, list_mounts, mount_filesystem, read_file, stat_file,
+    unmount_filesystem, write_file, AppState,
 };
 
 /// Create the main application router
@@ -29,12 +30,15 @@ pub fn create_router(state: AppState, enable_cors: bool) -> Router {
         // Directory operations
         .route("/directories", get(list_directory))
         .route("/directories", post(create_directory))
+        .route("/directories/ensure-parent", post(ensure_parent_dirs))
         // Mount management
         .route("/mounts", get(list_mounts))
         .route("/mount", post(mount_filesystem))
         .route("/unmount", post(unmount_filesystem))
         // Search operations
         .route("/grep", post(grep_content))
+        // Statistics
+        .route("/stats", get(get_stats))
         // Health check
         .route("/health", get(health_check));
 

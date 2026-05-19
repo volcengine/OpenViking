@@ -62,6 +62,36 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
     assert client._timeout == 33.0
 
 
+@pytest.mark.asyncio
+async def test_async_http_client_user_id_sets_openviking_user_header(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="explicit-key",
+        account="explicit-account",
+        user_id="explicit-user",
+        agent_id="explicit-agent",
+        timeout=33.0,
+        extra_headers={},
+    )
+    await client.initialize()
+
+    assert client._user_id == "explicit-user"
+    assert captured["headers"] == {
+        "X-API-Key": "explicit-key",
+        "X-OpenViking-Agent": "explicit-agent",
+        "X-OpenViking-Account": "explicit-account",
+        "X-OpenViking-User": "explicit-user",
+    }
+
+
 def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(json.dumps({"ur": "http://localhost:1933"}))

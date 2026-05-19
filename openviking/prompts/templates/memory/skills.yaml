@@ -7,7 +7,7 @@ enabled: true
 content_template: |
   Skill: {{ skill_name }}
   
-  - Success rate: {{ ((success_count|default(0) / (total_executions|default(1) if total_executions|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0) }}/{{ total_executions|default(0) }})
+  - Success rate: {{ ((success_count|default(0, true) / (total_executions|default(1, true) if total_executions|default(0, true) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0, true) }}/{{ total_executions|default(0, true) }})
   - Best for: {{ best_for|default('N/A') }}
   - Recommended flow: {{ recommended_flow|default('N/A') }}
   - Key dependencies: {{ key_dependencies|default('N/A') }}
@@ -20,7 +20,8 @@ fields:
   - name: skill_name
     type: string
     description: |
-      Skill name, copied exactly from [ToolCall] if skill_name is present, otherwise inferred from conversation context.
+      Skill name, must be copied exactly from [ToolCall].
+      If no [ToolCall] contains a valid skill_name, do not generate a skills memory item.
       Used to uniquely identify this skill memory.
       Examples: "create_presentation", "analyze_code", "write_document"
     merge_op: immutable

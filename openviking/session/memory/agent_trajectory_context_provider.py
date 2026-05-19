@@ -28,15 +28,14 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Your job is to extract trajectory memories from agent conversations.
+        return f"""You are a memory extraction agent. Summarize this agent session as a trajectory record.
 
-Rules:
-- Strongly prefer ONE trajectory per conversation. Group all related tasks (e.g. booking, cancellation, refund) into a single trajectory if they share the same business domain.
-- Only output multiple trajectories when the conversation covers clearly unrelated domains.
-- Follow field descriptions in the schema.
-- Output JSON only.
+One session = one trajectory. Always output exactly one, no exceptions.
+Sub-tasks, pivots, errors, and follow-ups are numbered steps inside that one record — not separate trajectories.
 
-All memory content must be written in {output_language}.
+Output a JSON object with a `trajectories` array containing exactly one item.
+Follow field descriptions in the schema. JSON only, no explanation.
+All content fields must be written in {output_language}.
 """
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:

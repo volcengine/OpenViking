@@ -32,7 +32,7 @@ class _FakeLockManager:
         self._handles[handle.id] = handle
         return handle
 
-    async def acquire_subtree(self, handle, lock_path):
+    async def acquire_tree(self, handle, lock_path):
         del handle, lock_path
         return True
 

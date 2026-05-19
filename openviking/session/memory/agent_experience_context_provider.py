@@ -10,10 +10,11 @@ No tool calls — all context is prefetched. Top-3 candidates also include their
 source_trajectories as grounding material.
 """
 
-import jinja2
 from typing import Any, Dict, List
 
-from openviking.core.namespace import to_user_space, to_agent_space
+import jinja2
+
+from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.session_extract_context_provider import (
@@ -30,8 +31,8 @@ logger = get_logger(__name__)
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 SEARCH_TOP_K = 5
-SOURCE_TRAJ_TOP_K = 3   # only attach source_trajectories for the top-3 candidates
-MAX_SOURCE_TRAJS = 3    # max trajectories to load per experience
+SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
+MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
 
 
 class AgentExperienceContextProvider(SessionExtractContextProvider):
@@ -59,22 +60,24 @@ You are given:
 
 The source trajectories are for reference only — do NOT include or modify them in your output.
 
-Choose one of these strategies and output a JSON object matching the schema:
+## What to output
 
-- **Update**: the new trajectory fits an existing experience AND its `experience_name` still accurately describes the broader pattern.
-  → Write the updated experience (same `experience_name`) in the JSON output.
+For each distinct behavioral pattern in the trajectory, output an experience entry with:
+- `experience_name`: the name of the experience (new or existing)
+- `content`: the full experience content (rewrite holistically, incorporating old + new)
+- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
 
-- **Replace**: the new trajectory is related to an existing experience, but the `experience_name` no longer accurately captures the broader pattern after combining.
-  → Write one NEW experience with a better `experience_name` in the JSON output, AND add the old experience's `uri` to `delete_uris`.
+The system handles create vs update automatically:
+- Same `experience_name` as an existing one → updates it in place
+- New `experience_name` → creates a new experience
+- `supersedes` set → old experience is deleted and its history is inherited
 
-- **Create**: no existing experience is related to this trajectory.
-  → Write a new experience in the JSON output.
+## Rules
 
-- **Skip**: the trajectory has no transferable lesson.
-  → Output an empty JSON with no experiences.
-
-Rules:
-- Do not change the `experience_name` of an existing experience (use Replace instead).
+- **One experience per distinct pattern.** Multiple experiences are only valid for genuinely independent behavioral patterns with different triggers and action sequences.
+- **No near-duplicates.** Merge experiences that share the same trigger or approach into one.
+- **Consistent naming language.** All `experience_name` values in one output must use the same language.
+- **Do NOT use `delete_uris`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 

@@ -70,6 +70,11 @@ class ContextBuilder:
             ensure_workspace_templates(self.workspace)
             self._templates_ensured = True
 
+    def _get_workspace_id(self, session_key: SessionKey) -> str:
+        if self.sandbox_manager:
+            return self.sandbox_manager.to_workspace_id(session_key)
+        return session_key.safe_name()
+
     async def build_system_prompt(
         self,
         session_key: SessionKey,
@@ -89,7 +94,7 @@ class ContextBuilder:
         """
         # Ensure workspace templates exist only when first needed
         self._ensure_templates_once()
-        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
+        workspace_id = self._get_workspace_id(session_key)
 
         parts = []
 
@@ -189,7 +194,7 @@ Skills with available="false" need dependencies installed first - you can try in
                 )
         parts.append(session_context)
 
-        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
+        workspace_id = self._get_workspace_id(session_key)
 
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
@@ -197,7 +202,10 @@ Skills with available="false" need dependencies installed first - you can try in
             # Use provided memory_users or fall back to [sender_id]
             search_user_ids = memory_users if memory_users else [sender_id]
             viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message, workspace_id=workspace_id, sender_id=sender_id, user_ids=search_user_ids
+                current_message=current_message,
+                workspace_id=workspace_id,
+                sender_id=sender_id,
+                user_ids=search_user_ids,
             )
             logger.info(f"viking_memory={viking_memory}")
             cost = round(_time.time() - start, 2)

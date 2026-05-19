@@ -1,0 +1,53 @@
+benchmark:
+  name: tau2_openviking_baseline
+  domains:
+    - retail
+    - airline
+  train_split_name: train
+  eval_split_name: test
+  repeat_count: 8
+  task_max_concurrency: 10
+  max_steps: 200
+  seed: 300
+  agent: llm_agent
+  user: user_simulator
+  reasoning_effort: high
+
+paths:
+  tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
+  tau2_cli: ${TAU2_CLI:-tau2}
+  output_dir: benchmark/tau2/result
+
+eval:
+  # The runner default is official if this field is omitted. The OpenViking
+  # memory benchmark config opts into a confirmation-aware TAU-2 user simulator
+  # prompt; run_eval.py applies that small prompt patch idempotently when needed.
+  user_simulator_policy: confirmation_aware
+
+model:
+  agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
+  user_llm: ${TAU2_USER_LLM:-openai/doubao-seed-2-0-pro-260215}
+  temperature: 0.0
+
+openviking:
+  url: ${OPENVIKING_URL:-http://localhost:1933}
+  account: ${OPENVIKING_ACCOUNT:-default}
+  agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  retrieval_top_k: 4
+  replay_write_policy: read_only
+
+strategies:
+  - id: memory_v2_experience_only
+    label: OpenViking Memory V2 experience-only
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_experience_only
+    train_memory_mode: experience_only
+    retrieval_mode: first_user
+  - id: memory_v2_prewrite
+    label: OpenViking Memory V2 pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_experience_only
+    train_memory_mode: experience_only
+    retrieval_mode: first_user_prewrite

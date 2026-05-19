@@ -507,8 +507,8 @@ class CollectionAdapter(ABC):
             op="count",
             filters=self._compile_filter(filter),
         )
-        if "_total" in result.agg:
-            parsed_total = self._coerce_int(result.agg.get("_total"))
+        if "__TOTAL__" in result.agg:
+            parsed_total = self._coerce_int(result.agg.get("__TOTAL__"))
             if parsed_total is not None:
                 return parsed_total
 

@@ -15,7 +15,7 @@
 | 入口 | 适合看什么 | 典型场景 |
 | --- | --- | --- |
 | `/health`、`observer/*` | 服务是否健康、队列是否堆积、VikingDB/VLM 状态 | 部署验收、值班巡检 |
-| `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录 | 开发调试、核对资源是否真正落库 |
+| `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录、受支持图片文件的预览 | 开发调试、核对资源是否真正落库 |
 | `OpenViking Console` | Web UI 里的文件浏览、检索、资源导入、租户与系统状态 | 不想手敲命令时做交互式排查 |
 | `telemetry` | 单次请求耗时、token、向量检索、资源处理阶段 | 排查一次具体调用为什么慢、为什么结果异常 |
 | `/metrics` | 请求量趋势、错误率、时延分布、队列与探针状态 | Prometheus 抓取、Grafana 看板、告警规则 |
@@ -152,7 +152,7 @@ ov tui viking://resources
 一个常见排查流程是：
 
 1. 用 `ov tui viking://resources` 找到目标文档或目录。
-2. 确认右侧能看到 `abstract` / `overview` / 正文内容。
+2. 确认右侧能看到 `abstract` / `overview` / 正文内容（受支持的图片文件 —— `png` / `jpg` / `jpeg` / `gif` / `bmp` / `webp` / `tiff` / `tif` —— 会直接渲染预览）。
 3. 按 `v` 进入向量记录视图，确认该 URI 下是否已经有向量数据。
 4. 按 `c` 查看总量，必要时按 `n` 翻页继续核对。
 
@@ -276,6 +276,7 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
 - `server.observability.metrics`：metrics 子系统与 exporter 配置
 - `server.observability.traces`：trace 导出配置
 - `server.observability.logs`：log 导出配置
+- `server.observability.dump_body`：把 HTTP 请求/响应 body（按 content-type 过滤、按字节截断）作为属性挂到当前 trace span 上，便于在 trace UI 中调试。默认关闭，因为 body 可能含密钥/高基数内容
 
 示例：
 
@@ -321,6 +322,10 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
         "endpoint": "otel-collector:4317",
         "service_name": "openviking-server",
         "headers": {}
+      },
+      "dump_body": {
+        "enabled": false,
+        "max_bytes": 4096
       }
     }
   }
@@ -430,6 +435,8 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 ## 相关文档
 
+- [使用 Prometheus 和 Grafana 查看 OpenViking 指标](11-grafana-prometheus.md) - 从 `/metrics` 到 Prometheus、Grafana dashboard 的完整操作流程
+- [使用真实问答验证 Vikingbot 指标](12-vikingbot-metrics-validation.md) - 用 `/bot/v1/chat`、`/bot/v1/feedback` 和真实 follow-up 场景校验反馈与 outcome 指标
 - [部署](03-deployment.md) - 服务器设置
 - [认证](04-authentication.md) - API Key 设置
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪

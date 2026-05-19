@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -193,7 +194,9 @@ class _SingleAccountBackend:
             return False
 
     async def collection_exists(self) -> bool:
-        return self._adapter.collection_exists()
+        # Some adapters perform blocking HTTP requests (for example via
+        # requests), so move the existence check off the event loop.
+        return await asyncio.to_thread(self._adapter.collection_exists)
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         if not await self.collection_exists():
@@ -253,7 +256,7 @@ class _SingleAccountBackend:
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = self._adapter.get(ids)
+            records = await asyncio.to_thread(self._adapter.get, ids)
             if self._bound_account_id:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
@@ -330,7 +333,8 @@ class _SingleAccountBackend:
                     f"[_SingleAccountBackend.query] Applied account filter, final filter={filter}"
                 )
 
-            return self._adapter.query(
+            return await asyncio.to_thread(
+                self._adapter.query,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=filter,

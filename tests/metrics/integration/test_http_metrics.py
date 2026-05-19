@@ -21,7 +21,7 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.observability.http_observability_middleware import (
-    _INFLIGHT,
+    _INFLIGHT_COUNTER,
     _get_route_template,
     _inflight_delta,
     create_http_observability_middleware,
@@ -146,13 +146,13 @@ def test_get_route_template_uses_low_cardinality_fallback_for_unmatched_route():
 
 
 def test_inflight_delta_removes_zero_value_entries():
-    _INFLIGHT.clear()
+    _INFLIGHT_COUNTER.clear()
 
     assert _inflight_delta("/api/v1/resources", None, +1) == 1
-    assert _INFLIGHT[("/api/v1/resources", None)] == 1
+    assert _INFLIGHT_COUNTER.get("/api/v1/resources", None) == 1
 
     assert _inflight_delta("/api/v1/resources", None, -1) == 0
-    assert ("/api/v1/resources", None) not in _INFLIGHT
+    assert _INFLIGHT_COUNTER.get("/api/v1/resources", None) == 0
 
 
 def test_http_metrics_module_exposes_only_unified_middleware_entrypoint():
@@ -186,13 +186,12 @@ def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatch):
 
     request_events = [payload for event_name, payload in captured if event_name == "http.request"]
     assert request_events
-    assert request_events[0] == {
-        "method": "POST",
-        "route": "/api/v1/resources",
-        "status": "200",
-        "duration_seconds": request_events[0]["duration_seconds"],
-        "account_id": "acct-real",
-    }
+    assert request_events[0]["method"] == "POST"
+    assert request_events[0]["route"] == "/api/v1/resources"
+    assert request_events[0]["status"] == "200"
+    assert request_events[0]["account_id"] == "acct-real"
+    assert request_events[0]["request_id"]
+    assert request_events[0]["url_path"] == "/api/v1/resources"
     assert isinstance(request_events[0]["duration_seconds"], float)
     assert request_events[0]["duration_seconds"] >= 0.0
     assert any(
@@ -285,19 +284,19 @@ def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeypatch):
     assert request_events[0]["route"] == "/api/v1/sessions/{session_id}"
 
 
-def test_http_metrics_middleware_logs_debug_when_metrics_write_fails(monkeypatch):
+def test_http_metrics_middleware_logs_error_when_metrics_write_fails(monkeypatch):
     middleware = create_http_observability_middleware()
-    debug_calls: list[tuple[str, tuple, dict]] = []
+    error_calls: list[tuple[str, tuple, dict]] = []
 
     def _boom(**_kwargs):
         raise RuntimeError("metrics write failed")
 
-    def _debug(message, *args, **kwargs):
-        debug_calls.append((message, args, kwargs))
+    def _error(message, *args, **kwargs):
+        error_calls.append((message, args, kwargs))
 
     monkeypatch.setattr(HttpRequestLifecycleDataSource, "set_inflight", staticmethod(_boom))
     monkeypatch.setattr(http_middleware.logger, "isEnabledFor", lambda _level: True)
-    monkeypatch.setattr(http_middleware.logger, "debug", _debug)
+    monkeypatch.setattr(http_middleware.logger, "error", _error)
     monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
     async def resources_handler(request: Request):
@@ -316,9 +315,10 @@ def test_http_metrics_middleware_logs_debug_when_metrics_write_fails(monkeypatch
         assert resp.status_code == 200
 
     assert any(
-        message == "http metrics write failed: %s" for message, _args, _kwargs in debug_calls
+        message.startswith("Unexpected error in http.inflight")
+        for message, _args, _kwargs in error_calls
     )
-    assert any("http.inflight" in str(args) for _message, args, _kwargs in debug_calls)
+    assert any("metrics write failed" in str(args) for _message, args, _kwargs in error_calls)
 
 
 class _DummyVLM(VLMBase):

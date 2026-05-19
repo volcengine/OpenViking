@@ -44,8 +44,8 @@ Line 2 modified
         result = self.handler.apply_content_patch(original, patch)
         assert "Line 2 modified" in result
 
-    def test_apply_content_patch_not_found_fallback_append(self):
-        """Test that search not found falls back to append."""
+    def test_apply_content_patch_not_found_raises_error(self):
+        """Test that search not found raises PatchParseError."""
         original = "Original content"
         patch = """<<<<<<< SEARCH
 Non-existent content
@@ -54,9 +54,8 @@ New content
 >>>>>>> REPLACE
 """
 
-        result = self.handler.apply_content_patch(original, patch)
-        assert result.startswith(original)
-        assert "New content" in result
+        with pytest.raises(PatchParseError):
+            self.handler.apply_content_patch(original, patch)
 
     def test_parse_patch_invalid_missing_search(self):
         """Test invalid patch missing SEARCH marker."""

@@ -114,7 +114,7 @@ Once connected, OpenViking exposes 9 tools:
 | `add_resource` | Add a local file or URL as a resource | `path`, `description` (optional) |
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
-| `forget` | Delete any `viking://` URI (use `search` to find it first) | `uri` |
+| `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
 
 ## Troubleshooting

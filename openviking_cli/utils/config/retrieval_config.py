@@ -17,7 +17,7 @@ class RetrievalConfig(BaseModel):
         ),
     )
     score_propagation_alpha: float = Field(
-        default=0.0,
+        default=1.0,
         ge=0.0,
         le=1.0,
         description=(

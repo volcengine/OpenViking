@@ -102,8 +102,7 @@ def test_parse_code_hosting_url_https_with_port():
 
 def test_parse_code_hosting_url_azure_devops_repo():
     assert (
-        parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo")
-        == "org/project/repo"
+        parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo") == "org/project/repo"
     )
 
 
@@ -148,7 +147,10 @@ def test_parse_code_hosting_url_azure_devops_non_repo_page():
 
 
 def test_parse_code_hosting_url_azure_devops_pull_request_page():
-    assert parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo/pullrequest/123") is None
+    assert (
+        parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo/pullrequest/123")
+        is None
+    )
 
 
 # --- validate_git_ssh_uri ---
@@ -255,10 +257,7 @@ def test_is_git_repo_url_azure_devops_non_repo_page():
 
 
 def test_is_git_repo_url_azure_devops_browse_url_with_path_query():
-    assert (
-        is_git_repo_url("https://dev.azure.com/org/project/_git/repo?path=/README.md")
-        is False
-    )
+    assert is_git_repo_url("https://dev.azure.com/org/project/_git/repo?path=/README.md") is False
 
 
 def test_is_git_repo_url_azure_devops_pull_request_page():

@@ -41,6 +41,14 @@ OPENVIKING_CLI_CONFIG_FILE=ov_conf/ovcli.conf openviking-server --with-bot --con
 
 本文优先验证真实代理路径，而不是直接访问 `http://127.0.0.1:18790`。
 
+在执行本文前，建议先完成 Phase 1 与 Phase 2 的最小验证，至少确认以下前置条件已经成立：
+
+1. `/bot/v1/chat` 返回体中稳定包含 `response_id`
+2. session JSONL metadata 首行中已存在按 `response_id` 组织的 `response_facts`
+3. 显式 feedback 已能写入 `metadata.feedback_events`
+
+Phase 3 的 `response_outcomes` 评估与回写，默认建立在这几条 response identity / response facts / feedback persistence 基础链路已经打通之上。
+
 ---
 
 ## 3. 当前已验证结论

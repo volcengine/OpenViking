@@ -7,12 +7,14 @@ These tests target pure/static methods on Session and related helpers,
 so they don't need a running OpenViking server.
 """
 
-from openviking.session.session import Session, WM_SEVEN_SECTIONS
-
+from openviking.message.message import Message
+from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.session.session import WM_SEVEN_SECTIONS, Session
 
 # -----------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------
+
 
 def _make_wm(**section_bodies: str) -> str:
     """Build a valid WM v2 markdown document for test input.
@@ -40,13 +42,14 @@ def _calc_pending_tokens(tokens: list, keep_recent_count: int) -> int:
     if keep <= 0:
         return sum(int(m.estimated_tokens or 0) for m in msgs)
     elif total > keep:
-        return sum(int(m.estimated_tokens or 0) for m in msgs[:total - keep])
+        return sum(int(m.estimated_tokens or 0) for m in msgs[: total - keep])
     return 0
 
 
 # =======================================================================
 # _parse_wm_sections
 # =======================================================================
+
 
 class TestParseWmSections:
     def test_round_trip(self):
@@ -71,6 +74,7 @@ class TestParseWmSections:
 # =======================================================================
 # _wm_extract_bullet_items
 # =======================================================================
+
 
 class TestExtractBulletItems:
     def test_dash_bullets(self):
@@ -97,6 +101,7 @@ class TestExtractBulletItems:
 # =======================================================================
 # _wm_enforce_append_only (Key Facts, Errors & Corrections)
 # =======================================================================
+
 
 class TestEnforceAppendOnly:
     def test_keep_passes_through(self):
@@ -135,6 +140,7 @@ class TestEnforceAppendOnly:
 # _wm_enforce_files_no_regression
 # =======================================================================
 
+
 class TestEnforceFilesNoRegression:
     def test_keep_passes_through(self):
         result = Session._wm_enforce_files_no_regression({"op": "KEEP"}, "- src/main.py")
@@ -142,7 +148,10 @@ class TestEnforceFilesNoRegression:
 
     def test_update_preserving_all_paths(self):
         old = "- src/main.py\n- config.yaml"
-        op = {"op": "UPDATE", "content": "- src/main.py updated\n- config.yaml stays\n- new.ts added"}
+        op = {
+            "op": "UPDATE",
+            "content": "- src/main.py updated\n- config.yaml stays\n- new.ts added",
+        }
         result = Session._wm_enforce_files_no_regression(op, old)
         assert result["op"] == "UPDATE"
 
@@ -174,6 +183,7 @@ class TestEnforceFilesNoRegression:
 # =======================================================================
 # _wm_enforce_title_stability
 # =======================================================================
+
 
 class TestEnforceTitleStability:
     def test_keep_passes_through(self):
@@ -211,10 +221,13 @@ class TestEnforceTitleStability:
 # _wm_enforce_open_issues_resolved
 # =======================================================================
 
+
 class TestEnforceOpenIssuesResolved:
     def test_update_preserving_all_passes(self):
         old = "- bug in auth module\n- slow query on /api/users"
-        new_content = "- bug in auth module (investigating)\n- slow query on /api/users\n- new: memory leak"
+        new_content = (
+            "- bug in auth module (investigating)\n- slow query on /api/users\n- new: memory leak"
+        )
         op = {"op": "UPDATE", "content": new_content}
         result = Session._wm_enforce_open_issues_resolved(op, old)
         assert result["op"] == "UPDATE"
@@ -235,10 +248,7 @@ class TestEnforceOpenIssuesResolved:
     def test_already_restored_item_not_restored_again(self):
         """Items already tagged [silently dropped, restored] should NOT be
         restored a second time -- they had their chance."""
-        old = (
-            "- [silently dropped, restored] stale follow-up issue\n"
-            "- fresh unresolved bug"
-        )
+        old = "- [silently dropped, restored] stale follow-up issue\n- fresh unresolved bug"
         op = {"op": "UPDATE", "content": "- fresh unresolved bug"}
         result = Session._wm_enforce_open_issues_resolved(op, old)
         assert "stale follow-up" not in result["content"]
@@ -248,8 +258,7 @@ class TestEnforceOpenIssuesResolved:
         """Items with nested [silently dropped, restored] tags must not
         be restored again (regression guard for the old accumulation bug)."""
         old = (
-            "- [silently dropped, restored] [silently dropped, restored] old issue\n"
-            "- active issue"
+            "- [silently dropped, restored] [silently dropped, restored] old issue\n- active issue"
         )
         op = {"op": "UPDATE", "content": "- active issue"}
         result = Session._wm_enforce_open_issues_resolved(op, old)
@@ -269,6 +278,7 @@ class TestEnforceOpenIssuesResolved:
 # =======================================================================
 # _merge_wm_sections
 # =======================================================================
+
 
 class TestMergeWmSections:
     def test_all_keep(self):
@@ -339,6 +349,7 @@ class TestMergeWmSections:
 # _wm_recover_ops_from_raw
 # =======================================================================
 
+
 class TestWmRecoverOpsFromRaw:
     def test_recover_keep_ops(self):
         raw = '"Session Title": {"op": "KEEP"}, "Current State": {"op": "KEEP"}'
@@ -400,6 +411,7 @@ class TestWmRecoverOpsFromRaw:
 # _rebuild_pending_tokens (via SessionMeta simulation)
 # =======================================================================
 
+
 class TestRebuildPendingTokens:
     """Test the _rebuild_pending_tokens math using _calc_pending_tokens helper."""
 
@@ -426,12 +438,11 @@ class TestRebuildPendingTokens:
 # _is_wm_v2 detection (tests the condition in _generate_archive_summary_async)
 # =======================================================================
 
+
 class TestIsWmV2Detection:
     def _is_wm_v2(self, overview: str) -> bool:
         """Mirror the detection logic from session.py."""
-        return bool(overview) and any(
-            f"## {s}" in overview for s in WM_SEVEN_SECTIONS
-        )
+        return bool(overview) and any(f"## {s}" in overview for s in WM_SEVEN_SECTIONS)
 
     def test_valid_v2(self):
         wm = _make_wm(session_title="Test")
@@ -463,6 +474,7 @@ class TestIsWmV2Detection:
 # WM_PATH_LIKE_RE
 # =======================================================================
 
+
 class TestWmPathLikeRe:
     def test_python_file(self):
         assert Session._WM_PATH_LIKE_RE.search("src/main.py")
@@ -484,6 +496,7 @@ class TestWmPathLikeRe:
 # pending_tokens defensive clamp
 # =======================================================================
 
+
 class TestPendingTokensClamp:
     """Verify that pending_tokens is always clamped to >= 0."""
 
@@ -497,6 +510,7 @@ class TestPendingTokensClamp:
 
     def test_from_dict_clamps_negative_pending(self):
         from openviking.session.session import SessionMeta
+
         data = {"pending_tokens": -100, "keep_recent_count": -5}
         meta = SessionMeta.from_dict(data)
         assert meta.pending_tokens >= 0
@@ -506,6 +520,7 @@ class TestPendingTokensClamp:
 # =======================================================================
 # APPEND non-string items handling
 # =======================================================================
+
 
 class TestAppendNonStringItems:
     """APPEND items that are not strings should be dropped (not crash)."""
@@ -545,8 +560,8 @@ class TestAppendNonStringItems:
 # _merge_wm_sections edge cases
 # =======================================================================
 
-class TestMergeWmSectionsEdgeCases:
 
+class TestMergeWmSectionsEdgeCases:
     def test_missing_ops_default_to_keep(self):
         old_wm = _make_wm(
             session_title="Original Title",
@@ -593,9 +608,6 @@ class TestMergeWmSectionsEdgeCases:
 # _format_message_for_wm
 # -----------------------------------------------------------------------
 
-from openviking.message.message import Message
-from openviking.message.part import TextPart, ToolPart, ContextPart
-
 
 def _msg(role, parts):
     """Convenience builder for a Message with an auto-id."""
@@ -611,29 +623,42 @@ class TestFormatMessageForWm:
         assert result == "[user]: Hello world"
 
     def test_tool_part_included(self):
-        m = _msg("assistant", [
-            ToolPart(tool_name="search", tool_status="completed",
-                     tool_output="found 3 results"),
-        ])
+        m = _msg(
+            "assistant",
+            [
+                ToolPart(
+                    tool_name="search", tool_status="completed", tool_output="found 3 results"
+                ),
+            ],
+        )
         result = Session._format_message_for_wm(m)
         assert "[tool:search (completed)]" in result
         assert "found 3 results" in result
         assert result.startswith("[assistant]:")
 
     def test_context_part_included(self):
-        m = _msg("assistant", [
-            ContextPart(abstract="Summary of prior session"),
-        ])
+        m = _msg(
+            "assistant",
+            [
+                ContextPart(abstract="Summary of prior session"),
+            ],
+        )
         result = Session._format_message_for_wm(m)
         assert "[context] Summary of prior session" in result
 
     def test_mixed_parts(self):
-        m = _msg("assistant", [
-            TextPart(text="Let me check."),
-            ToolPart(tool_name="read_file", tool_status="completed",
-                     tool_output="/path/to/file content here"),
-            TextPart(text="Done reading."),
-        ])
+        m = _msg(
+            "assistant",
+            [
+                TextPart(text="Let me check."),
+                ToolPart(
+                    tool_name="read_file",
+                    tool_status="completed",
+                    tool_output="/path/to/file content here",
+                ),
+                TextPart(text="Done reading."),
+            ],
+        )
         result = Session._format_message_for_wm(m)
         lines = result.split("\n")
         assert lines[0] == "[assistant]: Let me check."
@@ -651,15 +676,21 @@ class TestFormatMessageForWm:
         assert "(no content)" in result
 
     def test_tool_with_empty_output(self):
-        m = _msg("assistant", [
-            ToolPart(tool_name="delete", tool_status="completed", tool_output=""),
-        ])
+        m = _msg(
+            "assistant",
+            [
+                ToolPart(tool_name="delete", tool_status="completed", tool_output=""),
+            ],
+        )
         result = Session._format_message_for_wm(m)
         assert "[tool:delete (completed)]" in result
 
     def test_tool_default_status(self):
-        m = _msg("assistant", [
-            ToolPart(tool_name="run", tool_output="ok"),
-        ])
+        m = _msg(
+            "assistant",
+            [
+                ToolPart(tool_name="run", tool_output="ok"),
+            ],
+        )
         result = Session._format_message_for_wm(m)
         assert "(pending)" in result

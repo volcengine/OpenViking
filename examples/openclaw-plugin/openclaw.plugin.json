@@ -12,7 +12,8 @@
   },
   "contracts": {
     "tools": [
-      "ov_import",
+      "add_resource",
+      "add_skill",
       "memory_search",
       "memory_recall",
       "memory_store",

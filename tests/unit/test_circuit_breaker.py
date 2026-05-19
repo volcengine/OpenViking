@@ -12,6 +12,12 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
+from openviking.utils.model_retry import (
+    ERROR_CLASS_PERMANENT,
+    ERROR_CLASS_QUOTA_EXCEEDED,
+    ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_UNKNOWN,
+)
 
 
 class TestClassifyApiError:
@@ -20,99 +26,99 @@ class TestClassifyApiError:
     def test_classify_403_as_permanent(self):
         """Test 403 Forbidden is classified as permanent."""
         error = Exception("403 Forbidden")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_401_as_permanent(self):
         """Test 401 Unauthorized is classified as permanent."""
         error = Exception("401 Unauthorized")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_forbidden_as_permanent(self):
         """Test 'Forbidden' string is classified as permanent."""
         error = Exception("Access Forbidden")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_unauthorized_as_permanent(self):
         """Test 'Unauthorized' string is classified as permanent."""
         error = Exception("Unauthorized access")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_account_overdue_as_permanent(self):
         """Test 'AccountOverdue' string is classified as permanent."""
         error = Exception("AccountOverdue error")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_429_as_transient(self):
         """Test 429 TooManyRequests is classified as transient."""
         error = Exception("429 TooManyRequests")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_500_as_transient(self):
         """Test 500 Internal Server Error is classified as transient."""
         error = Exception("500 Internal Server Error")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_502_as_transient(self):
         """Test 502 Bad Gateway is classified as transient."""
         error = Exception("502 Bad Gateway")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_503_as_transient(self):
         """Test 503 Service Unavailable is classified as transient."""
         error = Exception("503 Service Unavailable")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_504_as_transient(self):
         """Test 504 Gateway Timeout is classified as transient."""
         error = Exception("504 Gateway Timeout")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_rate_limit_as_transient(self):
         """Test 'RateLimit' string is classified as transient."""
         error = Exception("RateLimit exceeded")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_timeout_as_transient(self):
         """Test 'timeout' string is classified as transient."""
         error = Exception("Connection timeout")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_connection_error_as_transient(self):
         """Test 'ConnectionError' string is classified as transient."""
         error = Exception("ConnectionError: Connection refused")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_connection_refused_as_transient(self):
         """Test 'Connection refused' string is classified as transient."""
         error = Exception("Connection refused by server")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_connection_reset_as_transient(self):
         """Test 'Connection reset' string is classified as transient."""
         error = Exception("Connection reset by peer")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_classify_unknown_error(self):
         """Test unknown error type is classified as unknown."""
         error = Exception("Some random error")
-        assert classify_api_error(error) == "unknown"
+        assert classify_api_error(error) == ERROR_CLASS_UNKNOWN
 
     def test_classify_error_with_cause(self):
         """Test classification checks error cause."""
         error = Exception("Primary error")
         error.__cause__ = Exception("403 Forbidden")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
     def test_classify_error_with_transient_cause(self):
         """Test classification checks error cause for transient."""
         error = Exception("Primary error")
         error.__cause__ = Exception("429 Rate limit")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
     def test_permanent_takes_precedence_over_transient(self):
         """Test permanent error patterns are checked first."""
         error = Exception("403 Forbidden 429 timeout")
-        assert classify_api_error(error) == "permanent"
+        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
 
 class TestCircuitBreaker:
@@ -330,6 +336,24 @@ class TestCircuitBreakerEdgeCases:
         cb.record_failure(Exception("500 Error"))
         cb.record_failure(Exception("403 Forbidden"))  # Permanent error
         cb.record_failure(Exception("500 Error"))
+
+        with pytest.raises(CircuitBreakerOpen):
+            cb.check()
+
+    def test_quota_exceeded_trips_immediately(self):
+        """Test breaker trips immediately on quota_exceeded error."""
+        cb = CircuitBreaker(failure_threshold=10)
+
+        cb.record_failure(Exception("AccountQuotaExceeded"))
+
+        with pytest.raises(CircuitBreakerOpen):
+            cb.check()
+
+    def test_quota_exceeded_trips_even_with_high_threshold(self):
+        """Test quota_exceeded bypasses failure threshold."""
+        cb = CircuitBreaker(failure_threshold=100)
+
+        cb.record_failure(Exception("usage quota exceeded"))
 
         with pytest.raises(CircuitBreakerOpen):
             cb.check()

@@ -79,7 +79,9 @@ npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
 | `--workdir PATH`           | Target OpenClaw data directory                                     |
 | `--version VER`            | Set plugin version (e.g. `0.2.9` → plugin `v0.2.9`)                |
 | `--current-version`        | Print the currently installed plugin version                       |
-| `--plugin-version REF`     | Set plugin version only — supports tag, branch, or commit          |
+| `--plugin-version REF`     | Set plugin version — auto-detected: npm version (e.g. `2026.5.8`) or npm dist-tag (e.g. `dev`) resolves via npm; other refs (e.g. `v0.3.16`, `main`) resolve via the GitHub repo; default `npm latest` |
+| `--plugin-source=npm\|github` | Plugin download source (default `npm`)                            |
+| `--plugin-package=NAME`    | npm plugin package name (default `@openviking/openclaw-plugin`)    |
 | `--github-repo owner/repo` | Use a different GitHub repo for plugin files (default `volcengine/OpenViking`) |
 | `--update`                 | Upgrade only the plugin                                            |
 | `-y`                       | Non-interactive mode, use default values                           |
