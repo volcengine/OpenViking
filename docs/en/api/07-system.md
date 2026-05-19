@@ -22,11 +22,19 @@ Basic health check endpoint. No authentication required. Returns service version
 | profile | string | No | - | When set to `1`, `true`, `yes`, or `on`, enables request-scoped `cProfile` and appends a `profile` field to JSON responses |
 
 **`profile` behavior**:
-- `profile` only applies to the current request and is automatically disabled when the request completes.
-- The middleware only injects `profile` into JSON responses; plain text, file, and streaming responses are left unchanged.
-- The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers easier to read.
-- Paths are trimmed to the package/module root when possible, such as `openviking/server/...`, `starlette/...`, or `asyncio/...`, instead of leaking absolute filesystem paths.
-- Entries like `~:0(<method 'read' of 'builtins.RAGFSBindingClient' objects>)` represent builtin or native-extension calls that do not map to a normal `.py` source file. This is expected `cProfile/pstats` output.
+- `profile` is implemented at the HTTP middleware layer and works for any OpenViking endpoint that returns JSON, not just `/health`.
+- `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
+- The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
+- The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
+- Function locations are trimmed to the package/module root when possible, such as `openviking/server/...`, `starlette/...`, or `asyncio/...`, instead of leaking absolute filesystem paths. Entries like `~:0(...)` represent builtin or native-extension calls rather than normal `.py` source files.
+
+**`profile` column meanings**:
+- `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
+- `tottime`: Total time spent in the function body itself, excluding time in subcalls.
+- `percall` (first): `tottime / ncalls`, the average self time per call.
+- `cumtime`: Cumulative time including the current function and all of its subcalls.
+- `percall` (second): `cumtime / primitive calls`, the average cumulative time per primitive call.
+- `filename:lineno(function)`: Function location. Regular Python code shows the trimmed module path; entries like `~:0(...)` usually represent builtin or native-extension calls.
 
 #### 3. Usage Examples
 
