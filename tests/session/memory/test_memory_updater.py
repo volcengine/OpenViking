@@ -637,6 +637,68 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
+    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+        memory_type = "notes"
+        uri = "viking://user/test/memories/notes/demo.md"
+
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description="notes",
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            ],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+
+        store: dict[str, str] = {}
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        existing_content = MemoryFileUtils.write(MemoryFile(content="Original body"))
+        store[uri] = existing_content
+
+        trace_info = MagicMock()
+        patch_warning = MagicMock()
+        monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
+        monkeypatch.setattr("openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning)
+
+        op = ResolvedOperation(
+            old_memory_file_content=MemoryFile(
+                uri=uri,
+                content="Original body",
+            ),
+            memory_fields={
+                "content": StrPatch(blocks=[SearchReplaceBlock(search="missing", replace="new")]),
+            },
+            memory_type=memory_type,
+            uris=[uri],
+        )
+
+        await updater._apply_upsert(op, MagicMock())
+
+        parsed = parse_memory_file_with_fields(store[uri])
+        assert parsed["content"] == "Original body"
+        patch_warning.assert_not_called()
+        assert any(
+            "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
+            and f"uri={uri}" in call.args[0]
+            and "field=content" in call.args[0]
+            for call in trace_info.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_two_patches_same_uri_second_sees_first_patch(self):
         """Two patches to the same URI: second SEARCH/REPLACE must apply
         against the result of the first, not the original content."""

@@ -1186,7 +1186,6 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
-        logger.warning("Patch application failed, skipping update")
         raise PatchParseError(
             f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}"
         )

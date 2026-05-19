@@ -745,7 +745,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     break
         if errors:
-            tracer.error(f"SEARCH/REPLACE patch validation failed before apply: {errors}")
+            tracer.info(f"SEARCH/REPLACE patch validation failed before apply: {errors}")
         return errors
 
     def _build_patch_repair_instruction(self, patch_errors: List[Dict[str, Any]]) -> str:
