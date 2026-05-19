@@ -5,6 +5,7 @@
   "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
+  "autoStartServer": false,
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10

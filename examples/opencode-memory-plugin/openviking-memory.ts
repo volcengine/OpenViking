@@ -13,6 +13,7 @@
 
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
+import { spawn } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import { fileURLToPath } from "url"
@@ -281,6 +282,7 @@ interface OpenVikingConfig {
   user: string
   enabled: boolean
   timeoutMs: number
+  autoStartServer?: boolean
   autoCommit?: {
     enabled: boolean
     intervalMinutes: number
@@ -364,6 +366,7 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   user: "",
   enabled: true,
   timeoutMs: 30000,
+  autoStartServer: false,
   autoCommit: {
     enabled: true,
     intervalMinutes: 10
@@ -603,7 +606,7 @@ function unwrapResponse<T>(response: OpenVikingResponse<T>): T {
   return response.result as T
 }
 
-async function checkServiceHealth(config: OpenVikingConfig): Promise<boolean> {
+async function checkServiceHealth(config: OpenVikingConfig, logFailure = true): Promise<boolean> {
   try {
     const response = await fetch(`${config.endpoint}/health`, {
       method: "GET",
@@ -611,12 +614,128 @@ async function checkServiceHealth(config: OpenVikingConfig): Promise<boolean> {
     })
     return response.ok
   } catch (error: any) {
-    log("ERROR", "health", "OpenViking health check failed", {
-      endpoint: config.endpoint,
+    if (logFailure) {
+      log("ERROR", "health", "OpenViking health check failed", {
+        endpoint: config.endpoint,
+        error: error.message,
+      })
+    }
+    return false
+  }
+}
+
+const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
+const SERVER_STARTUP_TIMEOUT_MS = 30_000
+const SERVER_STARTUP_POLL_MS = 3_000
+
+function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint)
+    return LOCAL_ENDPOINT_HOSTS.has(url.hostname)
+  } catch (error: any) {
+    log("ERROR", "health", "Invalid OpenViking endpoint URL", {
+      endpoint,
       error: error.message,
     })
     return false
   }
+}
+
+function buildOpenVikingServerArgs(endpoint: string): string[] {
+  try {
+    const url = new URL(endpoint)
+    return url.port ? ["--port", url.port] : []
+  } catch {
+    return []
+  }
+}
+
+async function startOpenVikingServerProcess(endpoint: string): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    const settle = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      resolve(ok)
+    }
+
+    try {
+      const args = buildOpenVikingServerArgs(endpoint)
+      const child = spawn("openviking-server", args, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      })
+
+      child.once("spawn", () => {
+        child.unref()
+        log("INFO", "health", "Started local openviking-server process", {
+          pid: child.pid,
+          args,
+        })
+        settle(true)
+      })
+
+      child.once("error", (error) => {
+        log("ERROR", "health", "Failed to start local openviking-server process", {
+          error: error.message,
+        })
+        settle(false)
+      })
+    } catch (error: any) {
+      log("ERROR", "health", "Failed to start local openviking-server process", {
+        error: error.message,
+      })
+      settle(false)
+    }
+  })
+}
+
+async function waitForServiceHealth(config: OpenVikingConfig): Promise<boolean> {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < SERVER_STARTUP_TIMEOUT_MS) {
+    if (await checkServiceHealth(config, false)) {
+      return true
+    }
+    await new Promise((resolve) => setTimeout(resolve, SERVER_STARTUP_POLL_MS))
+  }
+
+  return false
+}
+
+async function checkOrStartLocalService(config: OpenVikingConfig): Promise<boolean> {
+  if (await checkServiceHealth(config)) {
+    return true
+  }
+
+  if (!config.autoStartServer) {
+    return false
+  }
+
+  if (!isLocalEndpoint(config.endpoint)) {
+    log("INFO", "health", "Skipping auto-start for non-local OpenViking endpoint", {
+      endpoint: config.endpoint,
+    })
+    return false
+  }
+
+  log("INFO", "health", "OpenViking is unavailable; attempting local auto-start", {
+    endpoint: config.endpoint,
+  })
+
+  if (!(await startOpenVikingServerProcess(config.endpoint))) {
+    return false
+  }
+
+  const healthy = await waitForServiceHealth(config)
+  if (!healthy) {
+    log("ERROR", "health", "Local openviking-server did not become healthy in time", {
+      endpoint: config.endpoint,
+      timeout_ms: SERVER_STARTUP_TIMEOUT_MS,
+    })
+  }
+  return healthy
 }
 
 // ============================================================================
@@ -1717,9 +1836,10 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
   // Load session map from disk
   await loadSessionMap()
 
-  const healthy = await checkServiceHealth(config)
-  log("INFO", "health", healthy ? "OpenViking health check passed" : "OpenViking health check failed", {
+  const healthy = await checkOrStartLocalService(config)
+  log("INFO", "health", healthy ? "OpenViking service is ready" : "OpenViking service is unavailable", {
     endpoint: config.endpoint,
+    auto_start_server: config.autoStartServer === true,
   })
 
   // Start auto-commit scheduler

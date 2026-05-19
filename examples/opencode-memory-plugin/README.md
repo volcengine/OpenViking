@@ -48,6 +48,12 @@ Start the server first if it is not already running:
 openviking-server --config ~/.openviking/ov.conf
 ```
 
+For local development, you can optionally set `"autoStartServer": true` in the
+plugin config. When enabled, the plugin only attempts to start
+`openviking-server` for local endpoints such as `http://localhost:1933` or
+`http://127.0.0.1:1933`; remote endpoints still require an externally managed
+server.
+
 ## Install Into OpenCode
 
 Recommended location from the OpenCode docs:
@@ -91,6 +97,7 @@ Example config:
   "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
+  "autoStartServer": false,
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10
@@ -99,6 +106,10 @@ Example config:
 ```
 
 `account` and `user` are sent as `X-OpenViking-Account` and `X-OpenViking-User` tenant headers on every plugin API request; leave them empty to omit the headers.
+
+`autoStartServer` is disabled by default to preserve explicit server lifecycle
+management. Set it to `true` only when you want this plugin to start a local
+OpenViking server automatically if the configured local endpoint is unavailable.
 
 The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take precedence over the config file.
 
