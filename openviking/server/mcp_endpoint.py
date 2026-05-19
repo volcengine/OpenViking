@@ -401,9 +401,18 @@ def _resolve_public_base_url() -> tuple[str, str]:
 
     url_info = _request_url_ctx.get()
     if url_info:
-        xfh = url_info.get("x_forwarded_host")
-        xfp = url_info.get("x_forwarded_proto")
-        host_hdr = url_info.get("host")
+        # X-Forwarded-Host / -Proto can be comma-separated lists when the request
+        # crosses multiple proxy hops. Take the first (left-most original-client)
+        # value, matching the normalization in openviking.server.oauth.router.
+        def _first(value: Optional[str]) -> Optional[str]:
+            if not value:
+                return None
+            head = value.split(",", 1)[0].strip()
+            return head or None
+
+        xfh = _first(url_info.get("x_forwarded_host"))
+        xfp = _first(url_info.get("x_forwarded_proto"))
+        host_hdr = _first(url_info.get("host"))
         if xfh:
             proto = xfp or "https"
             return f"{proto}://{xfh}", "forwarded"

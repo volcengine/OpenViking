@@ -103,7 +103,7 @@ claude mcp add --transport http openviking \
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时必填) |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |

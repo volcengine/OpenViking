@@ -111,7 +111,7 @@ Once connected, OpenViking exposes 9 tools:
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
-| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `to` (optional, target `viking://resources/...` URI; required when `watch_interval > 0`) |
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |

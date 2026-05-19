@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
-from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
@@ -140,16 +139,6 @@ async def temp_upload(
     return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
-_DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
-
-
-def _resolve_upload_max_bytes(request: Request) -> int:
-    config = getattr(request.app.state, "config", None)
-    if isinstance(config, ServerConfig):
-        return config.upload_signed_max_bytes
-    return _DEFAULT_UPLOAD_MAX_BYTES
-
-
 @router.post("/resources/temp_upload_signed")
 async def temp_upload_signed(
     request: Request,
@@ -165,17 +154,9 @@ async def temp_upload_signed(
     and returns it in the response body; the agent then calls ``add_resource`` with that id.
 
     Persistence flows through :class:`TempUploadStore`, so the same local/shared upload modes
-    used by the auth'd ``/temp_upload`` route apply here too.
+    and size limit (``temp_upload.shared_max_size_bytes``) as the auth'd ``/temp_upload`` route
+    apply here too.
     """
-    max_bytes = _resolve_upload_max_bytes(request)
-    content_length_hdr = request.headers.get("content-length")
-    if content_length_hdr is not None:
-        try:
-            if int(content_length_hdr) > max_bytes:
-                raise HTTPException(status_code=413, detail="upload exceeds max_bytes")
-        except ValueError:
-            pass
-
     try:
         account_id, user_id, agent_id = upload_token_store.consume(token)
     except UploadTokenError as exc:
@@ -194,7 +175,11 @@ async def temp_upload_signed(
     try:
         temp_file_id = await store.save_upload(file, upload_mode, ctx)
     except InvalidArgumentError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # save_upload raises InvalidArgumentError for both bad mode and oversize.
+        # Map oversize specifically to 413; the rest stay 400.
+        msg = str(exc)
+        status = 413 if "exceeds size limit" in msg else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
 
     return {"temp_file_id": temp_file_id}
 

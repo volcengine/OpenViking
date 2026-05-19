@@ -153,11 +153,13 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
-    # Public-facing base URL emitted in MCP-issued upload instructions. Resolution at use-site:
-    # OPENVIKING_PUBLIC_BASE_URL env var > this field > http://{host}:{port}.
+    # Public-facing base URL emitted in MCP-issued upload instructions. See
+    # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
+    # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header
+    # > listen-address fallback. Set this (or the env var) when the server runs
+    # behind a reverse proxy that does not forward X-Forwarded-* headers.
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
-    upload_signed_max_bytes: int = 100 * 1024 * 1024
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
 
     model_config = {"extra": "forbid"}

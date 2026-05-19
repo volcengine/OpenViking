@@ -77,8 +77,8 @@ async def test_signed_upload_unknown_token(client: httpx.AsyncClient, upload_tem
 async def test_signed_upload_oversize_rejected(
     client: httpx.AsyncClient, upload_temp_dir: Path, app
 ):
-    """Body-length cap on the signed endpoint should fire when content-length exceeds max."""
-    app.state.config.upload_signed_max_bytes = 16
+    """Size cap is enforced while streaming by TempUploadStore — same limit as /temp_upload."""
+    app.state.config.temp_upload.shared_max_size_bytes = 16
 
     token = _issue()
     big = b"x" * 64
