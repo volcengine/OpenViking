@@ -123,10 +123,10 @@ The `add_resource` tool accepts both **remote URLs** and **local file paths**, h
 
 - **Remote URL** (`http(s)://`, `git@`, `ssh://`, `git://`): single round-trip — the server fetches and ingests directly.
 - **Local file path**: the tool returns a **two-step upload instruction** (plain prose with `Step 1` / `Step 2` formatting). The agent must:
-  1. POST the file as `multipart/form-data` to the `temp_upload_signed` URL given in the response (URL embeds a one-shot token; 10-minute TTL by default).
-  2. After receiving 200, call `add_resource(temp_file_id="upload_xxx.ext")` again — the server ingests.
+  1. POST the file as `multipart/form-data` to the `temp_upload_signed` URL given in the response (URL embeds a one-shot token; 10-minute TTL by default). The server mints the `temp_file_id` at write time and returns it as JSON: `{"temp_file_id": "..."}`.
+  2. Read `temp_file_id` from that response, then call `add_resource(temp_file_id="<id from step 1>")` again — the server resolves the file via `TempUploadStore` and ingests.
 
-This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI.
+This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The signed endpoint shares the same persistence layer as the authenticated `temp_upload` route, so the `local` / `shared` upload modes (and multi-worker support via the `shared` mode) apply equally.
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 

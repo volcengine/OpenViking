@@ -115,10 +115,10 @@ claude mcp add --transport http openviking \
 
 - **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
 - **本地文件路径**:返回**两步上传指令**(纯文本,Step 1 / Step 2 排版),agent 需要:
-  1. 把文件以 `multipart/form-data` POST 到响应里给出的 `temp_upload_signed` URL(URL 内嵌一次性 token,默认 10 分钟过期)
-  2. 收到 200 后再次调用 `add_resource(temp_file_id="upload_xxx.ext")`,server 入库
+  1. 把文件以 `multipart/form-data` POST 到响应里给出的 `temp_upload_signed` URL(URL 内嵌一次性 token,默认 10 分钟过期)。Server 在写入时 mint `temp_file_id`,通过 JSON `{"temp_file_id": "..."}` 返回。
+  2. 从响应体读出 `temp_file_id`,再次调用 `add_resource(temp_file_id="<step 1 返回的 id>")`,server 通过 `TempUploadStore` 解析文件并入库。
 
-这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。
+这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。签名端点和认证版的 `temp_upload` 共享同一个持久化层(`TempUploadStore`),所以 `local` / `shared` 上传模式(以及 `shared` 模式带来的多 worker 支持)在两个端点上行为一致。
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 
