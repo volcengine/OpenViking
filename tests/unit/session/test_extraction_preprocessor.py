@@ -8,7 +8,8 @@ from openviking.session.extraction_preprocessor import (
     PreprocessorOptions,
     build_wm_compact_packet,
 )
-from openviking.session.session import WM_SEVEN_SECTIONS, Session
+from openviking.session.session import Session
+from openviking.session.wm_constants import WM_SEVEN_SECTIONS
 
 
 def _msg(idx: int, role: str, text: str) -> Message:
@@ -165,6 +166,26 @@ def test_compact_packet_respects_min_absolute_savings_threshold():
     assert packet.fallback_reason == "savings_too_small"
 
 
+def test_full_token_estimate_uses_cjk_aware_path():
+    line = "这是一个中文会话消息" * 40
+    messages = [
+        _msg(1, "user", line),
+        _msg(2, "assistant", line),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=1,
+            min_absolute_savings_tokens=0,
+        ),
+    )
+
+    naive = sum(int(getattr(m, "estimated_tokens", 0) or 0) for m in messages)
+    assert packet.token_estimates.full_messages_tokens_est > naive
+
+
 def test_metadata_headers_do_not_pollute_risk_flags_or_scoring():
     metadata = 'Sender (untrusted metadata): ```json {"status":"error","retry":true}```'
     messages = [
@@ -218,6 +239,31 @@ def test_selected_spans_strip_metadata_headers_from_llm_view():
 
     assert "Sender (untrusted metadata)" not in packet.selected_spans[0].text
     assert "好的，我来帮你写个函数。" in packet.selected_spans[0].text
+
+
+def test_latest_message_signal_uses_clean_text():
+    metadata = 'Sender (untrusted metadata): ```json {"status":"completed"}```'
+    messages = [
+        _msg(1, "assistant", f"{metadata}\n\n好的，我来帮你写个函数。"),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=1,
+            min_absolute_savings_tokens=0,
+        ),
+    )
+
+    latest_signals = [
+        signal
+        for signal in packet.section_signals["Current State"]
+        if signal.kind == "latest_message"
+    ]
+    assert latest_signals
+    assert "Sender (untrusted metadata)" not in latest_signals[0].text
+    assert "好的，我来帮你写个函数。" in latest_signals[0].text
 
 
 def test_rendered_packet_contains_all_sections_and_source_ids():
@@ -276,9 +322,16 @@ class _MemoryConfig:
     def __init__(self, enabled: bool, fallback_ratio: float = 10.0):
         self.wm_v2_preprocess_enabled = enabled
         self.wm_v2_preprocess_max_span_tokens = 1200
+        self.wm_v2_preprocess_min_span_tokens = 200
+        self.wm_v2_preprocess_max_span_chars = 1600
         self.wm_v2_preprocess_fallback_ratio = fallback_ratio
+        self.wm_v2_preprocess_expand_budget_on_risk = True
+        self.wm_v2_preprocess_max_facts_total = 24
         self.wm_v2_preprocess_min_full_tokens = 600
         self.wm_v2_preprocess_min_absolute_savings_tokens = 500
+        self.wm_v2_preprocess_mmr_similarity_threshold = 0.72
+        self.wm_v2_preprocess_max_tool_output_chars = 300
+        self.wm_v2_preprocess_max_tool_spans = 3
 
 
 class _Config:

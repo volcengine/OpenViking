@@ -59,6 +59,11 @@ def _estimate_embedding_input_tokens(text: str) -> int:
     return max(1, cjk_chars + math.ceil(other_chars / 4))
 
 
+def estimate_embedding_input_tokens(text: str) -> int:
+    """Public alias for the repository's CJK-aware token estimate."""
+    return _estimate_embedding_input_tokens(text)
+
+
 def _truncate_embedding_input(
     text: str,
     max_tokens: int,

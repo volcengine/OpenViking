@@ -16,17 +16,8 @@ from typing import Dict, List, Optional, Sequence, Set
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
-from openviking.utils.embedding_utils import _estimate_embedding_input_tokens
-
-WM_SEVEN_SECTIONS: List[str] = [
-    "Session Title",
-    "Current State",
-    "Task & Goals",
-    "Key Facts & Decisions",
-    "Files & Context",
-    "Errors & Corrections",
-    "Open Issues",
-]
+from openviking.session.wm_constants import WM_SEVEN_SECTIONS
+from openviking.utils.embedding_utils import estimate_embedding_input_tokens
 
 _SIGNAL_SECTIONS: List[str] = [
     "Current State",
@@ -184,7 +175,7 @@ def estimate_tokens(text: str) -> int:
 
     if not text:
         return 0
-    return _estimate_embedding_input_tokens(text)
+    return estimate_embedding_input_tokens(text)
 
 
 def _resolve_adaptive_options(
@@ -234,9 +225,7 @@ def build_wm_compact_packet(
     opts = options or PreprocessorOptions()
     normalized = [_normalize_message(m, idx, opts) for idx, m in enumerate(messages)]
     full_text = "\n".join(item["formatted"] for item in normalized)
-    full_tokens = sum(int(getattr(m, "estimated_tokens", 0) or 0) for m in messages)
-    if full_tokens <= 0:
-        full_tokens = estimate_tokens(full_text)
+    full_tokens = estimate_tokens(full_text)
 
     # Apply adaptive parameters based on session size
     opts = _resolve_adaptive_options(full_tokens, opts)
@@ -423,7 +412,7 @@ def _extract_section_signals(
             seen,
             SectionSignal(
                 section="Current State",
-                text=_compact_sentence(str(latest["text"])),
+                text=_compact_sentence(str(latest.get("clean_text") or latest["text"])),
                 source_id=str(latest["id"]),
                 source_index=int(latest["index"]),
                 kind="latest_message",

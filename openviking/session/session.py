@@ -17,6 +17,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session.wm_constants import WM_SEVEN_SECTIONS
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
@@ -26,6 +27,7 @@ from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.session.compressor import SessionCompressor
+    from openviking.session.extraction_preprocessor import PreprocessorOptions
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 
@@ -51,16 +53,6 @@ def _wm_debug(msg: str) -> None:
 # `update_working_memory` tool to get a per-section decision, then let
 # the server do section-level merge against the previous WM.
 # =====================================================================
-
-WM_SEVEN_SECTIONS: List[str] = [
-    "Session Title",
-    "Current State",
-    "Task & Goals",
-    "Key Facts & Decisions",
-    "Files & Context",
-    "Errors & Corrections",
-    "Open Issues",
-]
 
 _WM_SECTION_OP_SCHEMA: Dict[str, Any] = {
     "oneOf": [
@@ -1551,21 +1543,42 @@ class Session:
         return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
     @staticmethod
-    def _build_wm_preprocessor_options(memory_config: Any) -> Any:
+    def _build_wm_preprocessor_options(memory_config: Any) -> "PreprocessorOptions":
         from openviking.session.extraction_preprocessor import PreprocessorOptions
 
         return PreprocessorOptions(
             max_span_tokens=int(
                 getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)
             ),
+            min_span_tokens=int(
+                getattr(memory_config, "wm_v2_preprocess_min_span_tokens", 200)
+            ),
+            max_span_chars=int(
+                getattr(memory_config, "wm_v2_preprocess_max_span_chars", 1600)
+            ),
             fallback_if_compact_ratio_above=float(
                 getattr(memory_config, "wm_v2_preprocess_fallback_ratio", 0.9)
+            ),
+            expand_budget_on_risk=bool(
+                getattr(memory_config, "wm_v2_preprocess_expand_budget_on_risk", True)
+            ),
+            max_facts_total=int(
+                getattr(memory_config, "wm_v2_preprocess_max_facts_total", 24)
             ),
             min_full_tokens_for_compact=int(
                 getattr(memory_config, "wm_v2_preprocess_min_full_tokens", 600)
             ),
             min_absolute_savings_tokens=int(
                 getattr(memory_config, "wm_v2_preprocess_min_absolute_savings_tokens", 500)
+            ),
+            mmr_similarity_threshold=float(
+                getattr(memory_config, "wm_v2_preprocess_mmr_similarity_threshold", 0.72)
+            ),
+            max_tool_output_chars=int(
+                getattr(memory_config, "wm_v2_preprocess_max_tool_output_chars", 300)
+            ),
+            max_tool_spans=int(
+                getattr(memory_config, "wm_v2_preprocess_max_tool_spans", 3)
             ),
         )
 
@@ -1701,7 +1714,8 @@ class Session:
 
         formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
 
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
         if not (vlm and vlm.is_available()):
             turn_count = len([m for m in messages if m.role == "user"])
             return (
@@ -1729,7 +1743,6 @@ class Session:
                 f"{len(latest_archive_overview or '')}B)"
             )
             try:
-                config = get_openviking_config()
                 memory_config = getattr(config, "memory", None)
                 creation_messages, _packet = self._run_wm_preprocessor(
                     messages=messages,
@@ -1739,6 +1752,9 @@ class Session:
                     phase="creation",
                 )
 
+                # The WM creation/update prompts must tolerate two `messages`
+                # formats: the raw `_format_message_for_wm()` fallback shape
+                # and the compact packet shape emitted by the preprocessor.
                 prompt = render_prompt(
                     "compression.ov_wm_v2",
                     {
@@ -1759,7 +1775,6 @@ class Session:
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         _wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
         try:
-            config = get_openviking_config()
             memory_config = getattr(config, "memory", None)
             update_messages, _packet = self._run_wm_preprocessor(
                 messages=messages,
