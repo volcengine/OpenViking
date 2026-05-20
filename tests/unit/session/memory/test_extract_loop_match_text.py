@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile, WikiLink
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, WikiLink
 from openviking.session.memory.extract_loop import ExtractLoop
 
 
@@ -38,6 +38,58 @@ class TestResolveLinksLogging:
             "from_uri=viking://agent/agent_sample_0/memories/trajectories/a.md, to_uri=None, "
             "op_page_map_keys=[]"
         )
+
+
+class TestResolveLinksMultiUri:
+    def test_shared_page_id_fans_out_all_uri_combinations(self):
+        loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
+        loop._page_id_map = Mock()
+        loop._page_id_map._id_to_uri = {}
+        loop._page_id_map.resolve.return_value = None
+        loop._page_id_map.register_new_page_id = Mock()
+
+        raw_links = [WikiLink(f=100, t=101, match_text="trip")]
+        upsert_operations = [
+            ResolvedOperation(
+                memory_fields={},
+                memory_type="experiences",
+                uris=[
+                    "viking://user/a/memories/experiences/source.md",
+                    "viking://user/b/memories/experiences/source.md",
+                ],
+                page_id=100,
+            ),
+            ResolvedOperation(
+                memory_fields={},
+                memory_type="experiences",
+                uris=[
+                    "viking://user/a/memories/experiences/target.md",
+                    "viking://user/b/memories/experiences/target.md",
+                ],
+                page_id=101,
+            ),
+        ]
+
+        resolved = loop._resolve_links(raw_links, upsert_operations=upsert_operations)
+
+        assert {(link.from_uri, link.to_uri) for link in resolved} == {
+            (
+                "viking://user/a/memories/experiences/source.md",
+                "viking://user/a/memories/experiences/target.md",
+            ),
+            (
+                "viking://user/a/memories/experiences/source.md",
+                "viking://user/b/memories/experiences/target.md",
+            ),
+            (
+                "viking://user/b/memories/experiences/source.md",
+                "viking://user/a/memories/experiences/target.md",
+            ),
+            (
+                "viking://user/b/memories/experiences/source.md",
+                "viking://user/b/memories/experiences/target.md",
+            ),
+        }
 
 
 class TestPageIdInstruction:

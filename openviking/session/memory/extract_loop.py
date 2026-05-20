@@ -436,54 +436,81 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not raw_links:
             return []
 
-        # Build fallback map from upsert operations: page_id → first URI
         op_page_map = {}
         if upsert_operations:
             for op in upsert_operations:
-                if op.page_id is not None and op.uris:
-                    op_page_map[op.page_id] = op.uris[0]
+                if op.page_id is None or not op.uris:
+                    continue
+                op_page_map.setdefault(op.page_id, [])
+                for uri in op.uris:
+                    if uri not in op_page_map[op.page_id]:
+                        op_page_map[op.page_id].append(uri)
 
-        # No page_id context available — links cannot be resolved
         if not self._page_id_map._id_to_uri and not op_page_map:
             return []
 
         resolved_links = []
+        seen_links = set()
         now = datetime.now(timezone.utc).isoformat()
 
         for link in raw_links:
             if link.f is None or link.t is None:
                 tracer.info(f"Skipping link with null page_ids: f={link.f}, t={link.t}")
                 continue
+
+            from_uris = []
+            to_uris = []
+
             from_uri = self._page_id_map.resolve(link.f)
             to_uri = self._page_id_map.resolve(link.t)
+            if from_uri:
+                from_uris.append(from_uri)
+            if to_uri:
+                to_uris.append(to_uri)
 
-            # Fallback: resolve from upsert operations and register into page_id_map
-            if not from_uri and link.f in op_page_map:
-                from_uri = op_page_map[link.f]
-                self._page_id_map.register_new_page_id(from_uri, link.f)
-            if not to_uri and link.t in op_page_map:
-                to_uri = op_page_map[link.t]
-                self._page_id_map.register_new_page_id(to_uri, link.t)
+            for uri in op_page_map.get(link.f, []):
+                if uri not in from_uris:
+                    from_uris.append(uri)
+            for uri in op_page_map.get(link.t, []):
+                if uri not in to_uris:
+                    to_uris.append(uri)
 
-            if not from_uri or not to_uri:
-                tracer.info(f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
-                            f"from_uri={from_uri}, to_uri={to_uri}, "
-                            f"op_page_map_keys={list(op_page_map.keys())}")
+            if not from_uris or not to_uris:
+                tracer.info(
+                    f"Skipping link with unresolved page_ids: f={link.f}, t={link.t}, "
+                    f"from_uri={from_uris[0] if from_uris else None}, "
+                    f"to_uri={to_uris[0] if to_uris else None}, "
+                    f"op_page_map_keys={list(op_page_map.keys())}"
+                )
                 continue
 
-            if from_uri == to_uri:
-                continue
+            for from_uri in from_uris:
+                for to_uri in to_uris:
+                    if from_uri == to_uri:
+                        continue
 
-            stored_link = StoredLink(
-                from_uri=from_uri,
-                to_uri=to_uri,
-                link_type=link.link_type,
-                weight=link.weight,
-                match_text=link.match_text,
-                description=link.description,
-                created_at=now,
-            )
-            resolved_links.append(stored_link)
+                    link_key = (
+                        from_uri,
+                        to_uri,
+                        link.link_type,
+                        link.weight,
+                        link.match_text,
+                        link.description,
+                    )
+                    if link_key in seen_links:
+                        continue
+                    seen_links.add(link_key)
+
+                    stored_link = StoredLink(
+                        from_uri=from_uri,
+                        to_uri=to_uri,
+                        link_type=link.link_type,
+                        weight=link.weight,
+                        match_text=link.match_text,
+                        description=link.description,
+                        created_at=now,
+                    )
+                    resolved_links.append(stored_link)
 
         return resolved_links
 
