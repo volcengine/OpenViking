@@ -7,7 +7,6 @@ import tempfile
 import uuid
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -31,11 +30,16 @@ class TestLinkUnlink:
             f.write("# Link Target\n\nThis is a link target file.")
             temp_path = f.name
         try:
-            ov(["add-resource", temp_path, "--to", second_pack_uri, "--wait", "-o", "json"], timeout=120)
+            ov(
+                ["add-resource", temp_path, "--to", second_pack_uri, "--wait", "-o", "json"],
+                timeout=120,
+            )
         finally:
             os.unlink(temp_path)
 
-        link_r = ov(["link", test_pack_uri, second_pack_uri, "--reason", "CLI test link", "-o", "json"])
+        link_r = ov(
+            ["link", test_pack_uri, second_pack_uri, "--reason", "CLI test link", "-o", "json"]
+        )
         assert link_r["exit_code"] == 0, (
             f"ov link should exit 0, got {link_r['exit_code']}: {link_r['stderr'][:300]}"
         )

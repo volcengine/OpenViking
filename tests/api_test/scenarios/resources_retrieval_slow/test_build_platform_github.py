@@ -1,6 +1,6 @@
 import time
 
-from build_test_helpers import assert_resource_indexed, assert_root_uri_valid, assert_source_format
+from build_test_helpers import assert_resource_indexed, assert_root_uri_valid
 
 
 def _add_resource_with_retry(api_client, path, max_retries=3, delay=10):
@@ -11,7 +11,9 @@ def _add_resource_with_retry(api_client, path, max_retries=3, delay=10):
             return response
         last_response = response
         if response.status_code >= 500 and attempt < max_retries - 1:
-            print(f"  retry {attempt + 1}/{max_retries}: {path} got {response.status_code}, waiting {delay}s...")
+            print(
+                f"  retry {attempt + 1}/{max_retries}: {path} got {response.status_code}, waiting {delay}s..."
+            )
             time.sleep(delay)
             delay *= 2
     return last_response
