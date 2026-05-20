@@ -84,6 +84,20 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "it"
 
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("project document user data model profile", "en"),
+            ("Ce document décrit les préférences de l utilisateur et le projet à terminer.", "fr"),
+            ("Este documento describe las preferencias del usuario y el proyecto para completar.", "es"),
+            ("Dieses Dokument beschreibt die Präferenzen der Benutzer und das Projekt.", "de"),
+            ("Este documento descreve as preferências do usuário e o projeto para completar.", "pt"),
+        ],
+    )
+    def test_detect_latin_language_conservatively(self, text, expected):
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == expected
+
 
 class TestLanguageFlow:
     """语言检测 + 模板渲染流程测试。"""
@@ -394,6 +408,18 @@ class TestOutputLanguageOverride:
         with patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "ja"
+
+    def test_english_timezone_hint_used_when_locale_hint_absent(self):
+        config = self._make_config(override="")
+        with patch.dict(os.environ, {"TZ": "America/New_York"}, clear=True):
+            result = resolve_output_language("12345 ---", config=config)
+        assert result == "en"
+
+    def test_arabic_timezone_hint_used_when_locale_hint_absent(self):
+        config = self._make_config(override="")
+        with patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True):
+            result = resolve_output_language("12345 ---", config=config)
+        assert result == "ar"
 
     def test_content_language_wins_over_locale_hint(self):
         config = self._make_config(override="")

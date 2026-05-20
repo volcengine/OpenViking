@@ -47,46 +47,47 @@ _LATIN_ACCENT_BONUSES = {
     "de": r"[äöüß]",
     "pt": r"[áâãàçéêíóôõú]",
 }
+_LATIN_HINT_LANGUAGES = {"it", "fr", "es", "de", "pt"}
 
-_LOCALE_LANGUAGE_PREFIXES = {
-    "zh": "zh-CN",
-    "ja": "ja",
-    "ko": "ko",
-    "ru": "ru",
-    "ar": "ar",
-    "it": "it",
-    "fr": "fr",
-    "es": "es",
-    "de": "de",
-    "pt": "pt",
-    "en": "en",
+_LOCALE_LANGUAGE_PREFIXES = dict(
+    zh="zh-CN", ja="ja", ko="ko", ru="ru", ar="ar",
+    it="it", fr="fr", es="es", de="de", pt="pt", en="en",
+)
+
+# Use Timezone as a weak fallback signal.
+_TIMEZONE_LANGUAGE_GROUPS = {
+    "zh-CN": (
+        "asia/shanghai", "asia/chongqing", "asia/harbin", "asia/urumqi",
+        "asia/hong_kong", "asia/macau", "asia/taipei", "prc", "roc", "hongkong",
+    ),
+    "ja": ("asia/tokyo", "japan"),
+    "ko": ("asia/seoul", "rok"),
+    "ru": (
+        "europe/moscow", "europe/kaliningrad", "asia/yekaterinburg", "asia/vladivostok",
+    ),
+    "ar": (
+        "asia/riyadh", "asia/dubai", "asia/qatar", "asia/kuwait",
+        "asia/baghdad", "africa/cairo", "africa/algiers", "africa/tunis",
+    ),
+    "it": ("europe/rome",),
+    "fr": ("europe/paris",),
+    "es": ("europe/madrid",),
+    "de": ("europe/berlin",),
+    "pt": ("europe/lisbon", "america/sao_paulo"),
+    "en": (
+        "america/new_york", "america/chicago", "america/denver", "america/los_angeles",
+        "america/phoenix", "america/anchorage", "pacific/honolulu", "us/eastern",
+        "us/central", "us/mountain", "us/pacific", "europe/london", "europe/dublin",
+        "gb", "gb-eire", "america/toronto", "america/vancouver", "canada/eastern",
+        "canada/pacific", "australia/sydney", "australia/melbourne",
+        "australia/brisbane", "australia/perth", "pacific/auckland", "nz",
+    ),
 }
 
 _TIMEZONE_LANGUAGE_HINTS = {
-    "asia/shanghai": "zh-CN",
-    "asia/chongqing": "zh-CN",
-    "asia/harbin": "zh-CN",
-    "asia/urumqi": "zh-CN",
-    "asia/hong_kong": "zh-CN",
-    "asia/macau": "zh-CN",
-    "asia/taipei": "zh-CN",
-    "prc": "zh-CN",
-    "roc": "zh-CN",
-    "hongkong": "zh-CN",
-    "asia/tokyo": "ja",
-    "japan": "ja",
-    "asia/seoul": "ko",
-    "rok": "ko",
-    "europe/moscow": "ru",
-    "europe/kaliningrad": "ru",
-    "asia/yekaterinburg": "ru",
-    "asia/vladivostok": "ru",
-    "europe/rome": "it",
-    "europe/paris": "fr",
-    "europe/madrid": "es",
-    "europe/berlin": "de",
-    "europe/lisbon": "pt",
-    "america/sao_paulo": "pt",
+    timezone_name: language
+    for language, timezone_names in _TIMEZONE_LANGUAGE_GROUPS.items()
+    for timezone_name in timezone_names
 }
 
 
@@ -156,19 +157,26 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
     if len(words) < 3:
         return fallback_language
 
-    scores = {
+    stopword_scores = {
         lang: sum(1 for word in words if word in stopwords)
         for lang, stopwords in _LATIN_STOPWORDS.items()
     }
+    scores = dict(stopword_scores)
 
     lowered = text.lower()
+    accent_hits = {}
     for lang, pattern in _LATIN_ACCENT_BONUSES.items():
-        scores[lang] += len(re.findall(pattern, lowered))
+        accent_hits[lang] = len(re.findall(pattern, lowered))
+        scores[lang] += accent_hits[lang]
 
     language, score = max(scores.items(), key=lambda item: item[1])
     second_score = max((value for key, value in scores.items() if key != language), default=0)
-    if score >= 2 and score > second_score:
-        return language
+    if language == "en" and score >= 2 and score > second_score:
+        return "en"
+    if language in _LATIN_HINT_LANGUAGES and len(words) >= 6:
+        strong_hint = accent_hits.get(language, 0) > 0 or stopword_scores[language] >= 4
+        if strong_hint and score >= 3 and score >= scores.get("en", 0) + 2:
+            return language
     return fallback_language
 
 
