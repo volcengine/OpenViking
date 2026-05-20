@@ -40,6 +40,21 @@ export TAU2_REPO=/path/to/tau2-bench
 export TAU2_CLI=/path/to/tau2
 ```
 
+The default OpenViking TAU-2 memory evidence protocol is
+`fixed_first_user_full8`: retail + airline, 8 repeats, same seeds, confirmation
+aware user simulator, and fixed first user fixtures for both domains. Later user
+simulator turns remain live. Set the fixture paths before running the default
+configs:
+
+```bash
+export TAU2_RETAIL_FIXED_FIRST_USER_FILE=/path/to/retail/fixed_first_user_fixture.json
+export TAU2_AIRLINE_FIXED_FIRST_USER_FILE=/path/to/airline/fixed_first_user_fixture.json
+```
+
+`--strict-preflight` fails when `eval.require_fixed_first_user=true` and either
+fixture is missing. Use `config/official.yaml` for an explicit non-fixed,
+official-live-user control.
+
 For a local one-command setup, clone and install TAU-2 into ignored benchmark
 directories:
 

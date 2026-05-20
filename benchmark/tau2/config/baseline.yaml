@@ -24,12 +24,17 @@ paths:
   corpus_cache_dir: benchmark/tau2/result/memory_corpora
 
 eval:
+  # Default OpenViking TAU-2 memory evidence uses the fixed-first-user full8
+  # protocol: retail + airline, 8 repeats, same seeds, first user turn pinned by
+  # fixtures, later user simulator turns still live.
+  protocol: fixed_first_user_full8
+  require_fixed_first_user: true
   # The runner default is official if this field is omitted. The OpenViking
   # memory benchmark config opts into a confirmation-aware TAU-2 user simulator
   # prompt; run_eval.py applies that small prompt patch idempotently when needed.
   user_simulator_policy: confirmation_aware
-  # Optional fixed-first-user fixtures keep the first simulated user turn stable
-  # while leaving later turns live. Set these env vars to fixture JSON files.
+  # Fixed-first-user fixtures keep the first simulated user turn stable while
+  # leaving later turns live. Main PR-B evidence requires these env vars.
   fixed_first_user_fixtures:
     retail: ${TAU2_RETAIL_FIXED_FIRST_USER_FILE:-}
     airline: ${TAU2_AIRLINE_FIXED_FIRST_USER_FILE:-}

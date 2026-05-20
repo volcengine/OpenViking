@@ -15,7 +15,7 @@ strategies:
     label: PR-B new trajectory fixed-count first-user top4
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -32,7 +32,7 @@ strategies:
     label: PR-B new trajectory fixed-count prewrite top4
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -50,7 +50,7 @@ strategies:
     label: PR-B new trajectory fixed-count first-user + prewrite top4
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -69,7 +69,7 @@ strategies:
     label: PR-B new experience fixed-count first-user top2
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -86,7 +86,7 @@ strategies:
     label: PR-B new experience fixed-count prewrite top2
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -104,7 +104,7 @@ strategies:
     label: PR-B new experience fixed-count first-user + prewrite top2
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -123,7 +123,7 @@ strategies:
     label: PR-B new trajectory 4000-char prewrite
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
@@ -142,7 +142,7 @@ strategies:
     label: PR-B new experience 4000-char first-user + prewrite
     memory_backend: openviking
     train_required: true
-    corpus_id: memory_v2_operation_contract_v2_success_only
+    corpus_id: memory_v2_operation_family_v1_success_only
     train_memory_mode: experience_only
     train_transcript_format: role_tool_blocks
     train_include_system_prompt: true

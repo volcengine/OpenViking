@@ -38,7 +38,7 @@ fields:
       - Domain: <task domain or product area, e.g. customer support, commerce operations, software tooling>
       - Trigger: <the reusable user intent or task situation — one sentence>
       - Operation Intent:
-        - Action Boundary: <the smallest reusable operation boundary for this record, e.g. read/verify only, create, update, cancel/delete, replace/migrate, append/remove attribute, compensate/refund, handoff/escalate, final response only, or another concise generic pattern>
+        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, cancel_existing_object, replace_existing_object, attribute_append_remove, compensation_or_refund, read_then_transfer, final_response_only>
         - Primary object: <the object whose state or lifecycle this record is about>
         - Target object/lifecycle: <the intended final state, lifecycle transition, or handoff target>
       - Preconditions:
@@ -65,15 +65,15 @@ fields:
       Rules:
       - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
       - Extract one record per primary user intent, object, and lifecycle transition. Split separable intents, pivots, follow-ups, enabling writes, and final writes; omit low-value side work.
-      - Use Action Boundary to name the smallest operation boundary in plain language. Prefer generic object/lifecycle verbs; do not force a category when a domain needs a better concise label.
+      - Family must be exactly one listed enum value. Do not invent compound labels. Use read_then_transfer when the reusable path ends in handoff after verification.
       - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
-      - Stop each record at its action boundary: a read/verification, create, update, cancel/delete, replace/migration, append/remove, compensation/refund, handoff/escalation, or final response boundary.
+      - Stop each record at its family boundary: update_existing_object stops after update verification, cancel_existing_object after cancellation verification, create_new_object after creation verification, replace_existing_object after replacement verification, read_then_transfer after handoff verification.
       - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
       - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
       - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
       - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
       - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts, exact routes/locations, product names, and raw tool payloads. Keep tool names only when they are part of the reusable path.
-      - Use exactly the title, Domain line, and labels above in this exact order.
+      - Use exactly the title, Domain line, and 11 labels above in this exact order.
       - Trigger, Result, and Evidence are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch

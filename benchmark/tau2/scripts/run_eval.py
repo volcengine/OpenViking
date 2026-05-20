@@ -101,6 +101,10 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _require_fixed_first_user(config: dict[str, Any]) -> bool:
+    return _enabled(config.get("eval", {}).get("require_fixed_first_user"))
+
+
 def _retrieval_budget(config: dict[str, Any], strategy: dict[str, Any]) -> dict[str, int | None]:
     retrieval_top_k = _strategy_int(config, strategy, "retrieval_top_k", default=4)
     first_user_retrieval_top_k = _strategy_int(
@@ -504,6 +508,7 @@ def _build_plan(
         strategy_concurrency = config["benchmark"].get("cell_concurrency", 1)
     strategy_concurrency = max(1, int(strategy_concurrency or 1))
     policy_report = simulator_policy_report(config)
+    require_fixed_first_user = _require_fixed_first_user(config)
     strategies = config.get("strategies") or []
     if selected_strategy_ids:
         unknown = selected_strategy_ids - set(strategy_ids(config))
@@ -519,6 +524,18 @@ def _build_plan(
         if unknown_domains:
             raise ValueError(f"unknown domains: {sorted(unknown_domains)}")
         plan_domains = [domain for domain in plan_domains if domain in selected_domains]
+    if require_fixed_first_user:
+        missing_domains = [
+            domain for domain in plan_domains if _fixed_first_user_file(config, domain) is None
+        ]
+        if missing_domains:
+            protocol = config.get("eval", {}).get("protocol", "fixed_first_user_full8")
+            raise ValueError(
+                f"eval protocol {protocol!r} requires fixed-first-user fixtures for "
+                f"{missing_domains}; set TAU2_RETAIL_FIXED_FIRST_USER_FILE and "
+                "TAU2_AIRLINE_FIXED_FIRST_USER_FILE, or use a config that explicitly "
+                "sets eval.require_fixed_first_user=false"
+            )
     for domain in plan_domains:
         split_path = split_file(config, domain)
         for strategy in strategies:
@@ -609,6 +626,8 @@ def _build_plan(
         "strategy_ids": strategy_ids(config),
         "domains": plan_domains,
         "tau2": tau2_context(config),
+        "eval_protocol": config.get("eval", {}).get("protocol"),
+        "require_fixed_first_user": require_fixed_first_user,
         "simulator_policy": policy_report,
         "cell_count": len(cells),
         "executable_cell_count": executable_cell_count,
@@ -951,12 +970,27 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
             f"checkout with the prompt fix: {policy_report['prompt_files']}"
         )
     split_rows = []
+    fixture_rows = []
     for domain in domains(config):
         path = split_file(config, domain)
         exists = path.is_file()
         split_rows.append({"domain": domain, "path": str(path), "exists": exists})
         if strict and not exists:
             errors.append(f"missing split file for {domain}: {path}")
+        fixed_first_user_file = _fixed_first_user_file(config, domain)
+        fixture_exists = fixed_first_user_file.is_file() if fixed_first_user_file else False
+        fixture_rows.append(
+            {
+                "domain": domain,
+                "path": str(fixed_first_user_file) if fixed_first_user_file else None,
+                "exists": fixture_exists,
+            }
+        )
+        if strict and _require_fixed_first_user(config) and not fixture_exists:
+            errors.append(
+                "missing fixed-first-user fixture for "
+                f"{domain}: set TAU2_{domain.upper()}_FIXED_FIRST_USER_FILE"
+            )
 
     import_rows = []
     for module in ("openviking", "openviking_cli", "tau2"):
@@ -969,12 +1003,15 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "status": "failed" if errors else "ok",
         "strict": strict,
         "tau2": tau2_info,
+        "eval_protocol": config.get("eval", {}).get("protocol"),
+        "require_fixed_first_user": _require_fixed_first_user(config),
         "llm_env": llm_env,
         "simulator_policy": policy_report,
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,
         "split_files": split_rows,
+        "fixed_first_user_fixtures": fixture_rows,
         "errors": errors,
     }
     write_json(out / "preflight.json", report)

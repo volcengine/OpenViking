@@ -34,6 +34,7 @@ WRITE_TOOL_PREFIXES = (
 FIXED_FIRST_USER_NAME = "openviking_fixed_first_user_simulator"
 TRAIN_TRANSCRIPT_OPENVIKING_TEXT = "openviking_text"
 TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS = "role_tool_blocks"
+TRAIN_TRANSCRIPT_CUSTOM_LIKE = "custom_like"
 DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS = 5000
 
 
@@ -294,7 +295,7 @@ def _message_texts(
 ) -> list[tuple[str, str]]:
     if transcript_format == TRAIN_TRANSCRIPT_OPENVIKING_TEXT:
         return [_message_text_openviking_text(message)]
-    if transcript_format == TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS:
+    if transcript_format in {TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS, TRAIN_TRANSCRIPT_CUSTOM_LIKE}:
         return _message_texts_role_tool_blocks(
             message,
             tool_calls_by_id=tool_calls_by_id,
@@ -956,12 +957,17 @@ def main() -> int:
     parser.add_argument("--scope-prompt-file", type=Path)
     parser.add_argument(
         "--train-transcript-format",
-        choices=[TRAIN_TRANSCRIPT_OPENVIKING_TEXT, TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS],
+        choices=[
+            TRAIN_TRANSCRIPT_OPENVIKING_TEXT,
+            TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS,
+            TRAIN_TRANSCRIPT_CUSTOM_LIKE,
+        ],
         default=TRAIN_TRANSCRIPT_OPENVIKING_TEXT,
         help=(
             "How to replay TAU-2 train messages into OpenViking sessions. "
             "openviking_text preserves the compact adapter text format; role_tool_blocks "
-            "uses role-prefixed messages plus tool-call/tool-response blocks."
+            "uses role-prefixed messages plus tool-call/tool-response blocks. "
+            "custom_like is a compatibility alias for older cached PR-B corpora."
         ),
     )
     parser.add_argument(
