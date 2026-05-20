@@ -106,6 +106,24 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        self.base.patch(path, body, params).await
+    }
+
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        self.base.post_with_query(path, body, params).await
+    }
+
     // ============ File Helper Methods ============
 
     fn create_uploader(&self) -> FileUploader {
@@ -1058,6 +1076,66 @@ impl HttpClient {
         );
         let body = serde_json::json!({ "version": version });
         self.post(&path, &body).await
+    }
+
+    // ============ Watch Management (RFC #2104) ============
+
+    pub async fn list_watches(&self, active_only: bool) -> Result<serde_json::Value> {
+        let mut params = vec![];
+        if active_only {
+            params.push(("active_only".to_string(), "true".to_string()));
+        }
+        self.get("/api/v1/watches", &params).await
+    }
+
+    pub async fn get_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn get_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.get("/api/v1/watches", &params).await
+    }
+
+    pub async fn patch_watch_by_id(
+        &self,
+        task_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.patch(&path, body, &[]).await
+    }
+
+    pub async fn patch_watch_by_uri(
+        &self,
+        to_uri: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.patch("/api/v1/watches", body, &params).await
+    }
+
+    pub async fn delete_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn delete_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.delete("/api/v1/watches", &params).await
+    }
+
+    pub async fn trigger_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}/trigger", task_id);
+        let empty = serde_json::json!({});
+        self.post(&path, &empty).await
+    }
+
+    pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        let empty = serde_json::json!({});
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
     }
 }
 

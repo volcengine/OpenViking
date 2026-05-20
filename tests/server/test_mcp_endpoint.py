@@ -20,10 +20,12 @@ from openviking.server.mcp_endpoint import (
     _get_ctx,
     _mcp_ctx,
     add_resource,
+    cancel_watch,
     forget,
     glob,
     grep,
     health,
+    list_watches,
     read,
     remember,
     search,
@@ -310,17 +312,205 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_add_resource_rejects_local_path_with_cli_hint(service):
-    result = await add_resource(path="/tmp/definitely_does_not_exist_xyz.md")
-    assert "error" in result.lower()
-    assert "ov add-resource" in result
-    assert "ovcli.conf" in result
+async def test_add_resource_local_path_returns_upload_instruction(service):
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
+    assert "upload required" in result.lower()
+    assert "Step 1." in result
+    assert "Step 2." in result
+    assert "/api/v1/resources/temp_upload_signed" in result
+    assert "token=" in result
+    # The server now mints temp_file_id at upload time; the prose tells the agent
+    # to read it from the upload response.
+    assert "temp_file_id" in result
+    assert "<id from step 1>" in result
+    # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
+    # and the troubleshooting hint must appear.
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
 
 
-async def test_add_resource_rejects_bare_filename_with_cli_hint(service):
-    result = await add_resource(path="some_local_file.md")
+async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatch):
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://my-ov.example.com")
+    result = await add_resource(path="/tmp/x.pdf")
+    assert "https://my-ov.example.com/api/v1/resources/temp_upload_signed" in result
+    # Explicit source → no troubleshooting hint
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_uses_config_when_env_unset(service, monkeypatch):
+    from openviking.server.config import ServerConfig
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "openviking.server.dependencies._server_config",
+        ServerConfig(public_base_url="https://configured.example.com"),
+    )
+
+    result = await add_resource(path="/tmp/x.pdf")
+    assert "https://configured.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, monkeypatch):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+
+    token = _request_url_ctx.set(
+        {
+            "x_forwarded_proto": "https",
+            "x_forwarded_host": "ov.public.example.com",
+            "host": "internal:1933",
+        }
+    )
+    try:
+        result = await add_resource(path="/tmp/x.pdf")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    # Inferred → hint must appear
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_temp_file_id_lookalike_in_path_is_rejected(service):
+    result = await add_resource(path="upload_abc123.pdf")
+    assert "looks like a temp_file_id" in result.lower()
+    assert 'temp_file_id="upload_abc123.pdf"' in result
+
+
+async def test_add_resource_neither_path_nor_temp_file_id(service):
+    result = await add_resource()
     assert "error" in result.lower()
-    assert "ov add-resource" in result
+    assert "path" in result.lower() or "temp_file_id" in result.lower()
+
+
+async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured["enforce_public_remote_targets"] = kwargs.get("enforce_public_remote_targets")
+        return {"root_uri": "viking://resources/test_remote"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+    result = await add_resource(path="https://example.com/x.md")
+    assert "Resource added" in result
+    assert captured["path"] == "https://example.com/x.md"
+    assert captured["enforce_public_remote_targets"] is True
+
+
+async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
+    service, upload_temp_dir, monkeypatch
+):
+    """When temp_file_id is supplied, MCP resolves via TempUploadStore and ingests."""
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+
+    # Drop a file in the flat-local layout used by TempUploadStore._resolve_local.
+    tfid = "upload_abcdef123.md"
+    target = upload_temp_dir / tfid
+    target.write_text("hello mcp")
+
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
+        return {"root_uri": "viking://resources/from_tfid"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(temp_file_id=tfid)
+    assert "Resource added" in result
+    assert captured["path"] == str(target.resolve())
+    assert captured["allow_local_path_resolution"] is True
+    upload_token_store.clear()
+
+
+async def test_add_resource_watch_requires_to(service):
+    """watch_interval > 0 without `to` returns hint about deterministic URI."""
+    result = await add_resource(
+        path="https://example.com/foo",
+        watch_interval=1440,
+    )
+    assert "error" in result.lower()
+    assert "watch_interval > 0 requires `to`" in result
+
+
+async def test_add_resource_rejects_negative_watch_interval(service):
+    """watch_interval < 0 is rejected at the MCP boundary, even when `to` is given.
+
+    Without this guard, a negative value would bypass the `> 0 requires to`
+    check (passing the `> 0` comparison as false) and be forwarded into
+    the service layer with undefined semantics.
+    """
+    result = await add_resource(
+        path="https://example.com/foo",
+        watch_interval=-1,
+        to="viking://resources/test/neg",
+    )
+    assert "error" in result.lower()
+    assert "watch_interval must be >= 0" in result
+
+
+# ---------------------------------------------------------------------------
+# list_watches / cancel_watch tools
+# ---------------------------------------------------------------------------
+
+
+async def _seed_watch(service, to_uri="viking://resources/test/foo"):
+    wm = service.watch_scheduler.watch_manager
+    return await wm.create_task(
+        path="https://example.com/foo",
+        account_id=DEFAULT_CTX.account_id,
+        user_id=DEFAULT_CTX.user.user_id,
+        agent_id=DEFAULT_CTX.user.agent_id,
+        original_role="root",
+        to_uri=to_uri,
+        watch_interval=1440.0,
+    )
+
+
+async def test_list_watches_empty(service):
+    result = await list_watches()
+    assert "no watch" in result.lower()
+
+
+async def test_list_watches_with_seed(service):
+    task = await _seed_watch(service, to_uri="viking://resources/test/list")
+    result = await list_watches()
+    assert task.to_uri in result
+    assert "active" in result.lower()
+    assert "1440" in result
+
+
+async def test_cancel_watch_by_uri(service):
+    task = await _seed_watch(service, to_uri="viking://resources/test/cancel")
+    result = await cancel_watch(to_uri=task.to_uri)
+    assert "cancelled" in result.lower()
+    # Verify it's actually gone
+    follow_up = await list_watches()
+    assert task.to_uri not in follow_up
+
+
+async def test_cancel_watch_not_found(service):
+    result = await cancel_watch(to_uri="viking://resources/never/existed")
+    assert "no watch task found" in result.lower()
 
 
 # ---------------------------------------------------------------------------

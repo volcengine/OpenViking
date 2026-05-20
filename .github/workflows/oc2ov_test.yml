@@ -78,6 +78,11 @@ jobs:
           submodules: false
           fetch-depth: 100
 
+      - name: Install OpenClaw plugin dependencies
+        run: |
+          cd examples/openclaw-plugin
+          npm install --production 2>&1 || npm install 2>&1 || true
+
       - name: Upgrade OpenViking to latest main
         run: |
           echo "🔄 Upgrading OpenViking to latest main branch..."

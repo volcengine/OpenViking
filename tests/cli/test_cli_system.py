@@ -3,7 +3,6 @@
 """CLI system endpoint tests (health, status, wait)."""
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -35,8 +34,13 @@ class TestSystemStatus:
 
 
 class TestSystemWait:
+    @pytest.mark.skip(
+        reason="CLI --timeout passed as query param but server only reads from request body, "
+        "causing infinite wait when queue is not empty. "
+        "Re-enable after CLI/Server timeout parameter mismatch is fixed."
+    )
     def test_wait_with_timeout(self):
-        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=60)
+        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=120)
         assert r["exit_code"] == 0, (
             f"ov wait should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )

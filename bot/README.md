@@ -173,6 +173,8 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
   - If you don't use the locally started OpenViking Server, you can configure the url and the corresponding root user's API Key here
     - root_api_key: In a multi-tenant scenario, the API KEY must have root privileges; otherwise, the bot cannot automatically register multiple OpenViking users, which is used to implement memory isolation.
     - account_id: Defaults to default, which is the account ID of OpenViking. All users under an OpenViking account share resources.
+    - api_key_type: Optional `root` or `user`, default `root`. `root` keeps the original root-key fanout behavior; `user` switches the bot to the user-key flow for OpenViking client calls. See #1994 for the full client flow.
+    - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. Injection only fires when the OpenViking server has `memory.agent_memory_enabled` set; otherwise this list is harmless.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
 
 ```json

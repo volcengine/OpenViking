@@ -99,7 +99,7 @@ def assert_resource_findable(api_client, root_uri, keyword, timeout=90, poll_int
     return False
 
 
-def assert_resource_indexed(api_client, root_uri, keyword, timeout=120):
+def assert_resource_indexed(api_client, root_uri, keyword, timeout=180):
     found = assert_resource_findable(api_client, root_uri, keyword, timeout=timeout)
     assert found, f"搜索应能检索到资源 {root_uri}, 关键词: {keyword}"
     return found

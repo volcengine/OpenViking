@@ -30,7 +30,7 @@ openclaw --version
 ## Install via ClawHub (recommended)
 
 ```bash
-openclaw plugins install clawhub:@openclaw/openviking
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 Then run the interactive setup wizard:

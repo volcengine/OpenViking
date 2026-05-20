@@ -3,7 +3,6 @@
 """CLI observer endpoint tests (queue, models, system status)."""
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -16,7 +15,9 @@ class TestObserverQueue:
             f"ov observer queue should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None, f"observer queue should return JSON, got stdout: {r['stdout'][:200]}"
+        assert data is not None, (
+            f"observer queue should return JSON, got stdout: {r['stdout'][:200]}"
+        )
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
 
 
@@ -27,7 +28,9 @@ class TestObserverModels:
             f"ov observer models should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None, f"observer models should return JSON, got stdout: {r['stdout'][:200]}"
+        assert data is not None, (
+            f"observer models should return JSON, got stdout: {r['stdout'][:200]}"
+        )
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
 
 
@@ -38,5 +41,7 @@ class TestObserverSystem:
             f"ov observer system should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None, f"observer system should return JSON, got stdout: {r['stdout'][:200]}"
+        assert data is not None, (
+            f"observer system should return JSON, got stdout: {r['stdout'][:200]}"
+        )
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"

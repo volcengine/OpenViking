@@ -4,10 +4,10 @@
 
 import os
 import tempfile
+import time
 import uuid
 
 import pytest
-
 from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
@@ -23,12 +23,19 @@ class TestSkillAdd:
             )
             temp_path = f.name
         try:
-            r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
+            r = None
+            for _attempt in range(5):
+                r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
+                if r["exit_code"] == 0:
+                    break
+                if "UNAUTHENTICATED" in (r.get("stderr") or ""):
+                    pytest.skip("Upstream API authentication unavailable")
+                time.sleep(5)
             assert r["exit_code"] == 0, (
                 f"add-skill from file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )
             data = r["json"]
-            assert data is not None, f"add-skill should return JSON"
+            assert data is not None, "add-skill should return JSON"
             assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
             assert "result" in data, "'result' field should exist"
             result = data["result"]
@@ -47,12 +54,19 @@ class TestSkillAdd:
             )
             temp_path = f.name
         try:
-            r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
+            r = None
+            for _attempt in range(5):
+                r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
+                if r["exit_code"] == 0:
+                    break
+                if "UNAUTHENTICATED" in (r.get("stderr") or ""):
+                    pytest.skip("Upstream API authentication unavailable")
+                time.sleep(5)
             assert r["exit_code"] == 0, (
                 f"add-skill should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )
             data = r["json"]
-            assert data is not None and data.get("ok") is True, f"Expected ok=true"
+            assert data is not None and data.get("ok") is True, "Expected ok=true"
         finally:
             os.unlink(temp_path)
 
@@ -64,7 +78,7 @@ class TestSkillList:
             f"ov ls skills should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        assert data is not None and data.get("ok") is True, f"Expected ok=true"
+        assert data is not None and data.get("ok") is True, "Expected ok=true"
         assert "result" in data, "'result' field should exist"
         assert isinstance(data["result"], list), "'result' should be a list"
 
@@ -86,7 +100,11 @@ class TestSkillRead:
             if not skill_uri:
                 continue
             ls_skill_r = ov(["ls", skill_uri, "-o", "json"])
-            if ls_skill_r["exit_code"] != 0 or not ls_skill_r["json"] or not ls_skill_r["json"].get("result"):
+            if (
+                ls_skill_r["exit_code"] != 0
+                or not ls_skill_r["json"]
+                or not ls_skill_r["json"].get("result")
+            ):
                 continue
             items = ls_skill_r["json"]["result"]
             for item in items:

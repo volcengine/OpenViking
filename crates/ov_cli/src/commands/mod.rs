@@ -12,3 +12,4 @@ pub mod search;
 pub mod session;
 pub mod system;
 pub mod task;
+pub mod watch;

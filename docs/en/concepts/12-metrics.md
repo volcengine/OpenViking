@@ -316,10 +316,14 @@ openviking_feedback_thumbs_down_rate{valid="1"}
 openviking_feedback_one_turn_resolution_rate{valid="1"}
 ```
 
-- per-channel coverage comparison:
+- per-channel coverage and resolution comparison:
 
 ```promql
 openviking_feedback_channel_coverage{valid="1"}
+```
+
+```promql
+openviking_feedback_channel_one_turn_resolution_rate{valid="1"}
 ```
 
 - detect fallback snapshots:

@@ -365,7 +365,7 @@ class VikingClient:
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
-        """通过上下文消息，检索viking 的user memory（agent memory 已关闭自动检索）。"""
+        """通过上下文消息，检索viking 的user memory 和 agent memory。"""
         await self._load_namespace_policy()
 
         def _extract_memories(result: Any) -> list[Any]:
@@ -399,7 +399,15 @@ class VikingClient:
             )
             all_user_memories.extend(_extract_memories(user_memory))
 
-        return {"user_memory": all_user_memories, "agent_memory": []}
+        uri_agent_memory = self._agent_memory_target_uri(agent_user_id)
+        agent_memory_result = await self.client.find(
+            query=query,
+            target_uri=uri_agent_memory,
+            limit=limit,
+        )
+        all_agent_memories = _extract_memories(agent_memory_result)
+
+        return {"user_memory": all_user_memories, "agent_memory": all_agent_memories}
 
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 agent experience 记忆。"""

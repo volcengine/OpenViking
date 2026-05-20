@@ -4,7 +4,10 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+from openviking.models.vlm.backends.litellm_vlm import (
+    LiteLLMVLMProvider,
+    detect_provider_by_model,
+)
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
 
@@ -516,8 +519,118 @@ class TestVLMConfigExtraRequestBody:
         assert result["extra_request_body"] == {"think": False}
 
 
+class TestVLMConfigLiteLLMAuth:
+    """Test LiteLLM VLM config can rely on provider-native credentials."""
+
+    def test_litellm_config_allows_no_api_key(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="bedrock/us.amazon.nova-micro-v1:0",
+            provider="litellm",
+        )
+
+        result = config._build_vlm_config_dict()
+        assert config.is_available()
+        assert result["provider"] == "litellm"
+        assert "api_key" not in result
+
+    def test_litellm_forward_api_key_is_forwarded_from_provider_config(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="bedrock/us.amazon.nova-micro-v1:0",
+            provider="litellm",
+            providers={
+                "litellm": {
+                    "api_key": "bedrock-bearer-token",
+                    "forward_api_key": True,
+                }
+            },
+        )
+
+        result = config._build_vlm_config_dict()
+        assert result["api_key"] == "bedrock-bearer-token"
+        assert result["forward_api_key"] is True
+
+
 class TestLiteLLMVLMModelResolution:
     """Regression tests for LiteLLM model prefix resolution."""
+
+    def test_explicit_litellm_routes_are_authoritative(self):
+        models = [
+            "azure/gpt-4o",
+            "bedrock/qwen.qwen3-coder-30b-a3b-v1:0",
+            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            "sagemaker/anthropic.claude-endpoint",
+            "sagemaker_chat/qwen-endpoint",
+            "sagemaker_nova/nova-endpoint",
+            "vertex_ai/gemini-1.5-pro",
+        ]
+
+        for model in models:
+            vlm = LiteLLMVLMProvider(
+                {
+                    "model": model,
+                    "provider": "litellm",
+                    "api_key": "placeholder",
+                }
+            )
+
+            assert detect_provider_by_model(model) is None
+            assert vlm._detected_provider is None
+            assert vlm._resolve_model(model) == model
+
+    def test_native_auth_litellm_routes_skip_api_key_by_default(self):
+        models = [
+            "bedrock/us.amazon.nova-micro-v1:0",
+            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            "sagemaker/anthropic.claude-endpoint",
+            "sagemaker_chat/qwen-endpoint",
+            "sagemaker_nova/nova-endpoint",
+            "vertex_ai/gemini-1.5-pro",
+        ]
+
+        for model in models:
+            vlm = LiteLLMVLMProvider(
+                {
+                    "model": model,
+                    "provider": "litellm",
+                    "api_key": "placeholder",
+                }
+            )
+            kwargs = vlm._build_text_kwargs(prompt="hello")
+
+            assert kwargs["model"] == model
+            assert "api_key" not in kwargs
+
+    def test_azure_route_keeps_api_key(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "azure/gpt-4o",
+                "provider": "litellm",
+                "api_key": "azure-key",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["model"] == "azure/gpt-4o"
+        assert kwargs["api_key"] == "azure-key"
+
+    def test_forward_api_key_overrides_native_auth_default(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "bedrock/us.amazon.nova-micro-v1:0",
+                "provider": "litellm",
+                "api_key": "bedrock-bearer-token",
+                "forward_api_key": True,
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["api_key"] == "bedrock-bearer-token"
 
     def test_zhipu_zai_model_keeps_existing_zai_prefix(self):
         """Zhipu GLM models already using LiteLLM's zai/ prefix must not be double-prefixed."""

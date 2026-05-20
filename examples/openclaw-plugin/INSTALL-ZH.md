@@ -1,12 +1,12 @@
 # 为 OpenClaw 安装 OpenViking
 
-OpenViking 通过 `@openclaw/openviking` 插件为 OpenClaw 提供长期记忆、知识库检索、语义搜索和 RAG 上下文能力。
+OpenViking 通过 `@openviking/openclaw-plugin` 插件为 OpenClaw 提供长期记忆、知识库检索、语义搜索和 RAG 上下文能力。
 
 这份文档同时面向用户和自动化 agent：用户可以按步骤执行，agent 可以按命令和 JSON 结果判断下一步。
 
 ## 不要把插件和 Skill 装混
 
-`@openclaw/openviking` 是 OpenClaw 插件。
+`@openviking/openclaw-plugin` 是 OpenClaw 插件。
 
 不要用下面这个命令安装本插件：
 
@@ -19,7 +19,7 @@ clawhub install openviking
 安装插件应使用：
 
 ```bash
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 ```
 
 ## 前置要求
@@ -36,7 +36,7 @@ OpenClaw 插件包版本边界：
 - `2026.4.8` 是当前插件支持的最低 OpenClaw 版本。
 - `2026.5.3` 开始，OpenClaw 在安装包时会校验 TypeScript 插件入口是否有编译后的 JavaScript 产物。
 - `2026.5.4` 及之后，已安装/全局插件如果缺少编译后的 JavaScript，运行时不再回退加载 `.ts` 源码，插件可能被跳过。
-- 推荐的 `openclaw plugins install @openclaw/openviking` 会安装已经发布并包含 `dist/*.js` 的插件包，普通用户不需要本地编译。
+- 推荐的 `openclaw plugins install @openviking/openclaw-plugin` 会安装已经发布并包含 `dist/*.js` 的插件包，普通用户不需要本地编译。
 - `ov-install` 是备用/源码安装路径。当 ClawHub 或 OpenClaw 插件管理器路径不可用、被限流，或者明确需要测试源码 ref 时才使用。目标 OpenClaw `>= 2026.5.3` 时，它会在安装过程中编译插件。
 
 快速检查：
@@ -87,13 +87,13 @@ curl http://127.0.0.1:1933/health
 ### 1. 安装插件
 
 ```bash
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 ```
 
 如果你的 OpenClaw 环境需要显式 registry 前缀，使用：
 
 ```bash
-openclaw plugins install clawhub:@openclaw/openviking
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 ### 2. 配置插件
@@ -271,7 +271,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 
 ## 备用路径：ov-install
 
-`ov-install` 是备用路径，不是主安装方式。仅当 `openclaw plugins install @openclaw/openviking` 无法访问 ClawHub、被限流，或者你明确需要从 Git 分支/源码 ref 安装测试时使用。
+`ov-install` 是备用路径，不是主安装方式。仅当 `openclaw plugins install @openviking/openclaw-plugin` 无法访问 ClawHub、被限流，或者你明确需要从 Git 分支/源码 ref 安装测试时使用。
 
 先尝试 OpenClaw 插件管理器。如果该路径不可用，再执行：
 
@@ -292,7 +292,7 @@ ov-install
 | `--agent-prefix PREFIX` | Agent 路由前缀 |
 | `--update` | 更新 helper 管理的安装 |
 
-面向用户的安装，请先使用 `openclaw plugins install @openclaw/openviking`。只有作为备用路径时才选择 `ov-install`。
+面向用户的安装，请先使用 `openclaw plugins install @openviking/openclaw-plugin`。只有作为备用路径时才选择 `ov-install`。
 
 ## 从 ov-install 迁移到 openclaw plugin install
 
@@ -307,7 +307,7 @@ ov-install 的 context-engine 部署会将文件写入 `~/.openclaw/extensions/o
 rm -rf ~/.openclaw/extensions/openviking/
 
 # 通过 OpenClaw 插件管理器安装
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 
 # 重新配置（openclaw.json 中的已有配置会保留）
 openclaw openviking setup --reconfigure
@@ -330,7 +330,7 @@ openclaw config set plugins.slots.memory none
 rm -rf ~/.openclaw/extensions/memory-openviking/
 
 # 安装新插件
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
 openclaw openviking status --json
