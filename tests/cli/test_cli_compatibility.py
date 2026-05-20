@@ -8,8 +8,7 @@ import platform
 import subprocess
 
 import pytest
-
-from conftest import CLI_BIN, CLI_COMPATIBLE, CLI_CONFIG_PATH, _env, ov
+from conftest import CLI_BIN, CLI_CONFIG_PATH, _env, ov
 
 pytestmark = pytest.mark.cli_remote
 
@@ -53,7 +52,11 @@ class TestCLIVersion:
 class TestCLIGlibcCompat:
     def test_no_glibc_error(self):
         result = subprocess.run(
-            [CLI_BIN, "version"], capture_output=True, text=True, timeout=10, env=_env(),
+            [CLI_BIN, "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_env(),
         )
         assert "GLIBC" not in result.stderr, (
             f"CLI should not have GLIBC compatibility issues. stderr: {result.stderr[:300]}"
@@ -62,9 +65,7 @@ class TestCLIGlibcCompat:
 
 class TestCLIConfigCompat:
     def test_config_file_exists(self):
-        assert os.path.isfile(CLI_CONFIG_PATH), (
-            f"CLI config file should exist at {CLI_CONFIG_PATH}"
-        )
+        assert os.path.isfile(CLI_CONFIG_PATH), f"CLI config file should exist at {CLI_CONFIG_PATH}"
 
     def test_config_file_valid_json(self):
         with open(CLI_CONFIG_PATH, "r") as f:
@@ -88,9 +89,7 @@ class TestCLIServerConnectivity:
 
     def test_server_reachable(self):
         r = ov(["health", "-o", "json"])
-        assert r["exit_code"] != 3, (
-            "CLI exit code 3 means connection error - server is unreachable"
-        )
+        assert r["exit_code"] != 3, "CLI exit code 3 means connection error - server is unreachable"
 
 
 class TestCLIOutputFormats:
@@ -122,14 +121,8 @@ class TestCLIPlatformCompat:
     def test_platform_info(self):
         system = platform.system()
         machine = platform.machine()
-        assert system in ("Linux", "Darwin", "Windows"), (
-            f"Unsupported platform: {system}"
-        )
+        assert system in ("Linux", "Darwin", "Windows"), f"Unsupported platform: {system}"
         if system == "Linux":
-            assert machine in ("x86_64", "aarch64"), (
-                f"Unsupported Linux architecture: {machine}"
-            )
+            assert machine in ("x86_64", "aarch64"), f"Unsupported Linux architecture: {machine}"
         elif system == "Darwin":
-            assert machine in ("x86_64", "arm64"), (
-                f"Unsupported macOS architecture: {machine}"
-            )
+            assert machine in ("x86_64", "arm64"), f"Unsupported macOS architecture: {machine}"

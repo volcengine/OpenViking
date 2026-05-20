@@ -128,6 +128,7 @@ def _resolve_bin():
         if os.path.isfile(OPENVIKING_BIN):
             return OPENVIKING_BIN
     import sys as _sys
+
     bin_dir = os.path.dirname(_sys.executable)
     for name in ("openviking", "ov"):
         for d in [bin_dir, "/usr/local/bin", "/usr/bin", os.path.expanduser("~/.local/bin")]:
@@ -141,7 +142,9 @@ def _resolve_bin():
     try:
         result = subprocess.run(
             ["bash", "-lc", "command -v openviking || command -v ov"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         path = result.stdout.strip()
         if path and os.path.isfile(path):
@@ -189,7 +192,11 @@ def _check_cli_compatible():
         return False
     try:
         result = subprocess.run(
-            [CLI_BIN, "version"], capture_output=True, text=True, timeout=10, env=_env(),
+            [CLI_BIN, "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_env(),
         )
         if result.returncode != 0 and "GLIBC" in result.stderr:
             return False
@@ -209,7 +216,11 @@ def pytest_collection_modifyitems(config, items):
         else:
             try:
                 result = subprocess.run(
-                    [CLI_BIN, "version"], capture_output=True, text=True, timeout=10, env=_env(),
+                    [CLI_BIN, "version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    env=_env(),
                 )
                 if "GLIBC" in result.stderr:
                     reason = "openviking CLI binary is not compatible with this system (GLIBC version mismatch)"
@@ -262,7 +273,11 @@ def _inject_global_args(args):
 def ov(args, timeout=120):
     cmd = [CLI_BIN] + _inject_global_args(args)
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, env=_env(),
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_env(),
     )
     stdout = result.stdout.strip()
     data = _parse_cli_json(stdout)
@@ -275,7 +290,7 @@ def ov(args, timeout=120):
 
 
 def _wait_for_resource_ready(uri, retries=20, interval=10):
-    for attempt in range(retries):
+    for _attempt in range(retries):
         r = ov(["read", uri, "-o", "json"], timeout=30)
         if r["exit_code"] == 0 and len(r["stdout"]) > 0:
             return True
@@ -284,7 +299,7 @@ def _wait_for_resource_ready(uri, retries=20, interval=10):
 
 
 def _find_file_in_pack(pack_uri, retries=10, interval=5):
-    for attempt in range(retries):
+    for _attempt in range(retries):
         ls_r = ov(["ls", pack_uri, "-o", "json"])
         if ls_r["json"] and "result" in ls_r["json"]:
             items = ls_r["json"]["result"]
@@ -308,14 +323,14 @@ def ensure_resources_dir():
 def test_dir_uri(ensure_resources_dir):
     uri = f"viking://resources/cli_test_{uuid.uuid4().hex[:8]}"
     r = None
-    for attempt in range(5):
+    for _attempt in range(5):
         r = ov(["mkdir", uri, "-o", "json"], timeout=120)
         if r["exit_code"] == 0:
             break
         time.sleep(5)
     assert r["exit_code"] == 0, f"mkdir failed after retries: {r['stderr']}"
     yield uri
-    for attempt in range(10):
+    for _attempt in range(10):
         r = ov(["rm", uri, "-r", "-o", "json"], timeout=120)
         if r["exit_code"] == 0:
             break
@@ -330,11 +345,16 @@ def test_pack_uri(test_dir_uri):
     try:
         pack_uri = f"{test_dir_uri}/test_pack"
         r = None
-        for attempt in range(5):
-            r = ov(["add-resource", temp_path, "--to", pack_uri, "--wait", "-o", "json"], timeout=120)
+        for _attempt in range(10):
+            r = ov(
+                ["add-resource", temp_path, "--to", pack_uri, "--wait", "-o", "json"], timeout=120
+            )
             if r["exit_code"] == 0:
                 break
-            time.sleep(5)
+            if "CONFLICT" in (r.get("stderr") or "") or "busy" in (r.get("stderr") or "").lower():
+                time.sleep(10)
+            else:
+                time.sleep(5)
         assert r["exit_code"] == 0, f"add-resource failed after retries: {r['stderr']}"
     finally:
         os.unlink(temp_path)
@@ -358,7 +378,7 @@ def test_file_uri(test_pack_uri):
 @pytest.fixture(scope="session")
 def test_session_id():
     r = None
-    for attempt in range(5):
+    for _attempt in range(5):
         r = ov(["session", "new", "-o", "json"], timeout=120)
         if r["exit_code"] == 0:
             break

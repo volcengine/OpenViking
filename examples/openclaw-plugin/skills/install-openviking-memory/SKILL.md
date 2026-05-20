@@ -13,7 +13,7 @@ description: >
   The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values.
   This skill assumes the OpenViking server is already running. If the server is not ready, the skill
   tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.
-version: 2.0.0
+version: 2.0.1
 metadata:
   openclaw:
     requires:
@@ -231,7 +231,7 @@ Tell the user:
 Run:
 
 ```bash
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 ```
 
 Trigger fallback to Path B only if the output contains any of these strings:
@@ -245,7 +245,7 @@ Trigger fallback to Path B only if the output contains any of these strings:
 Before falling back, also try the explicit registry prefix once:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/openviking
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 If the install **succeeds**, jump to STEP 7.
@@ -256,8 +256,8 @@ If both attempts fail with one of the fallback-eligible errors above, go to Path
 
 Tell the user:
 
-> (CN) ClawHub 现在好像被限流、不可用，或者当前账号不能安装。我改用备用路径，直接从 GitHub 下载插件源码安装。
-> (EN) ClawHub looks rate-limited, unavailable, or blocked for this account. I'll use the backup path and install the plugin source directly from GitHub.
+> (CN) ClawHub 现在好像被限流、不可用，或者当前账号不能安装。我改用备用路径，通过 npm 下载并部署插件包。
+> (EN) ClawHub looks rate-limited, unavailable, or blocked for this account. I'll use the backup path and install the plugin package from npm.
 
 Run the installer with `npx` (no global install needed):
 
@@ -273,11 +273,11 @@ Build the flag list according to what the user gave you:
 - `--account-id` / `--user-id` only if the root-key path requires them.
 
 `ov-install` will, in one shot:
-1. Download plugin sources from `raw.githubusercontent.com` into the OpenClaw `extensions/` dir.
-2. Run `npm install --omit=dev` inside the staging dir.
+1. Download the `@openviking/openclaw-plugin` package from npm into a temporary staging dir.
+2. Copy the package into the OpenClaw `extensions/` dir and install plugin dependencies.
 3. Register the plugin in `openclaw.json` (via `openclaw plugins enable` or direct write).
-4. Run `openclaw openviking setup --json --base-url … [--api-key …] --force-slot` for the user.
-5. Fall back to direct config write if `setup --json` fails.
+4. Run `openclaw openviking setup --json --base-url … [--api-key …]` for the user.
+5. Return a non-zero exit if setup needs explicit `--allow-offline` or `--force-slot` consent.
 
 This means **STEP 7 is effectively done by `ov-install`**. After `ov-install` exits 0, jump straight to **STEP 9** (gateway restart) and **STEP 10** (verify).
 

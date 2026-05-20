@@ -30,7 +30,7 @@ openclaw --version
 ## 通过 ClawHub 安装（推荐）
 
 ```bash
-openclaw plugins install clawhub:@openclaw/openviking
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 随后运行交互式配置向导：

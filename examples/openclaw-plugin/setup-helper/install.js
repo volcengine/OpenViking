@@ -1164,7 +1164,8 @@ async function resolvePluginConfig() {
         const pkg = JSON.parse(pkgJson);
         const pkgName = pkg.name || "";
         resolvedPluginReleaseId = pkg.version || "";
-        if (pkgName && pkgName !== "@openclaw/openviking") {
+        const currentPackageNames = new Set(["@openviking/openclaw-plugin", "@openclaw/openviking"]);
+        if (pkgName && !currentPackageNames.has(pkgName)) {
           fallbackKey = "legacy";
           info(tr(`Detected legacy plugin by package name: ${pkgName}`, `通过 package.json 名称检测到旧版插件: ${pkgName}`));
         } else if (pkgName) {

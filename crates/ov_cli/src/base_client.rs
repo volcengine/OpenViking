@@ -405,6 +405,46 @@ impl BaseClient {
 
         self.handle_response(response).await
     }
+
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .http
+            .patch(&url)
+            .headers(self.build_headers())
+            .query(params)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .http
+            .post(&url)
+            .headers(self.build_headers())
+            .query(params)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
 }
 
 // ============ FileUploader ============

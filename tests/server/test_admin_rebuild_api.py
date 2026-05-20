@@ -21,6 +21,12 @@ ROOT_ACCOUNT_HEADERS = {
 }
 
 
+def _make_reindex_run(ctx, counters):
+    from openviking.service.reindex_executor import _ReindexRunContext
+
+    return _ReindexRunContext(ctx=ctx, counters=counters)
+
+
 async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):
     resp = await admin_client.post(
         "/api/v1/content/reindex",
@@ -167,7 +173,7 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
 
     seen = {"semantic": [], "vectors": []}
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic"].append((uri, context_type))
 
     async def fake_reindex_memory_vectors(self, *, uri, counters, ctx):
@@ -186,8 +192,7 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
     await service._reindex_memory(
         uri="viking://user/default/memories",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["semantic"] == [("viking://user/default/memories", "memory")]
@@ -291,10 +296,10 @@ async def test_reindex_user_namespace_semantic_and_vectors_promotes_memory_mode(
 
     seen = {"memory_modes": [], "semantic_calls": [], "resource_calls": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory_modes"].append((uri, mode))
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -321,8 +326,7 @@ async def test_reindex_user_namespace_semantic_and_vectors_promotes_memory_mode(
     await service._reindex_user_namespace(
         uri="viking://user/default",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory_modes"] == [("viking://user/default/memories", "semantic_and_vectors")]
@@ -354,10 +358,10 @@ async def test_reindex_user_namespace_semantic_and_vectors_does_not_reprocess_me
 
     seen = {"memory_modes": [], "semantic_calls": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory_modes"].append((uri, mode))
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -384,8 +388,7 @@ async def test_reindex_user_namespace_semantic_and_vectors_does_not_reprocess_me
     await service._reindex_user_namespace(
         uri="viking://user/default",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory_modes"] == [("viking://user/default/memories", "semantic_and_vectors")]
@@ -416,7 +419,7 @@ async def test_reindex_user_namespace_semantic_and_vectors_skips_uncovered_root_
 
     seen = {"semantic_calls": [], "resource_files": []}
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -442,8 +445,7 @@ async def test_reindex_user_namespace_semantic_and_vectors_skips_uncovered_root_
     await service._reindex_user_namespace(
         uri="viking://user/default",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["semantic_calls"] == [("viking://user/default/resources", "resource")]
@@ -476,13 +478,13 @@ async def test_reindex_agent_namespace_semantic_and_vectors_promotes_memory_and_
 
     seen = {"memory_modes": [], "skill_modes": [], "semantic_calls": [], "resource_calls": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory_modes"].append((uri, mode))
 
-    async def fake_reindex_skill(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_skill(self, *, uri, mode, run):
         seen["skill_modes"].append((uri, mode))
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -510,8 +512,7 @@ async def test_reindex_agent_namespace_semantic_and_vectors_promotes_memory_and_
     await service._reindex_agent_namespace(
         uri="viking://agent/default",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory_modes"] == [("viking://agent/default/memories", "semantic_and_vectors")]
@@ -545,13 +546,13 @@ async def test_reindex_agent_namespace_semantic_and_vectors_does_not_reprocess_m
 
     seen = {"memory_modes": [], "skill_modes": [], "semantic_calls": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory_modes"].append((uri, mode))
 
-    async def fake_reindex_skill(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_skill(self, *, uri, mode, run):
         seen["skill_modes"].append((uri, mode))
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -579,8 +580,7 @@ async def test_reindex_agent_namespace_semantic_and_vectors_does_not_reprocess_m
     await service._reindex_agent_namespace(
         uri="viking://agent/default",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory_modes"] == [("viking://agent/default/memories", "semantic_and_vectors")]
@@ -612,7 +612,7 @@ async def test_reindex_skill_namespace_reindexes_only_skill_roots(monkeypatch):
 
     seen = []
 
-    async def fake_reindex_skill(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_skill(self, *, uri, mode, run):
         seen.append((uri, mode))
 
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
@@ -628,8 +628,7 @@ async def test_reindex_skill_namespace_reindexes_only_skill_roots(monkeypatch):
     await service._reindex_skill_namespace(
         uri="viking://agent/default/skills",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen == [("viking://agent/default/skills/my_skill", "semantic_and_vectors")]
@@ -659,13 +658,13 @@ async def test_reindex_global_namespace_semantic_and_vectors_propagates_to_child
 
     seen = {"user_modes": [], "agent_modes": [], "semantic_calls": [], "resource_calls": []}
 
-    async def fake_reindex_user_namespace(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_user_namespace(self, *, uri, mode, run):
         seen["user_modes"].append((uri, mode))
 
-    async def fake_reindex_agent_namespace(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_agent_namespace(self, *, uri, mode, run):
         seen["agent_modes"].append((uri, mode))
 
-    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx, lock=None):
         seen["semantic_calls"].append((uri, context_type))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -693,8 +692,7 @@ async def test_reindex_global_namespace_semantic_and_vectors_propagates_to_child
     await service._reindex_global_namespace(
         uri="viking://",
         mode="semantic_and_vectors",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["user_modes"] == [("viking://user/default", "semantic_and_vectors")]
@@ -826,7 +824,7 @@ async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypat
     seen = {}
 
     class FakeSemanticProcessor:
-        async def on_dequeue(self, payload):
+        async def on_dequeue(self, payload, lock=None):
             seen["payload"] = payload
 
     monkeypatch.setattr(
@@ -1325,7 +1323,7 @@ async def test_reindex_user_namespace_partitions_memory_and_resource(monkeypatch
 
     seen = {"memory": [], "resource_dirs": [], "resource_files": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory"].append((uri, mode))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -1358,8 +1356,7 @@ async def test_reindex_user_namespace_partitions_memory_and_resource(monkeypatch
     await service._reindex_user_namespace(
         uri="viking://user/",
         mode="vectors_only",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory"] == [("viking://user/default/memories", "vectors_only")]
@@ -1399,10 +1396,10 @@ async def test_reindex_agent_namespace_partitions_memory_skill_and_resource(monk
 
     seen = {"memory": [], "skill": [], "resource_dirs": [], "resource_files": []}
 
-    async def fake_reindex_memory(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_memory(self, *, uri, mode, run):
         seen["memory"].append((uri, mode))
 
-    async def fake_reindex_skill(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_skill(self, *, uri, mode, run):
         seen["skill"].append((uri, mode))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -1436,8 +1433,7 @@ async def test_reindex_agent_namespace_partitions_memory_skill_and_resource(monk
     await service._reindex_agent_namespace(
         uri="viking://agent/",
         mode="vectors_only",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory"] == [("viking://agent/default/memories", "vectors_only")]
@@ -1482,10 +1478,10 @@ async def test_reindex_global_namespace_partitions_user_agent_and_resources(monk
 
     seen = {"user": [], "agent": [], "resource_dirs": [], "resource_files": []}
 
-    async def fake_reindex_user_namespace(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_user_namespace(self, *, uri, mode, run):
         seen["user"].append((uri, mode))
 
-    async def fake_reindex_agent_namespace(self, *, uri, mode, counters, ctx):
+    async def fake_reindex_agent_namespace(self, *, uri, mode, run):
         seen["agent"].append((uri, mode))
 
     async def fake_reindex_resource_vectors_from_entries(
@@ -1519,8 +1515,7 @@ async def test_reindex_global_namespace_partitions_user_agent_and_resources(monk
     await service._reindex_global_namespace(
         uri="viking://",
         mode="vectors_only",
-        counters=counters,
-        ctx=ctx,
+        run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["user"] == [("viking://user/default", "vectors_only")]

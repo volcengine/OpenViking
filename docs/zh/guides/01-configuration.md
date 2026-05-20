@@ -216,12 +216,13 @@ openviking-server doctor
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"`、`"dashscope"` 或 `"gemini"` |
+| `provider` | str | `"openai"`、`"azure"`、`"volcengine"`、`"vikingdb"`、`"jina"`、`"ollama"`、`"gemini"`、`"voyage"`、`"dashscope"`、`"minimax"`、`"cohere"`、`"litellm"` 或 `"local"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
 | `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
 | `batch_size` | int | 批量请求大小 |
+| `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
 
 `embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -258,13 +259,57 @@ openviking-server doctor
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
+- `azure`: Azure OpenAI Embedding API
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `ollama`: Ollama 本地 OpenAI 兼容 Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `cohere`: Cohere Embedding API
 - `gemini`: Google Gemini Embedding API（仅文本；需安装 `google-genai>=1.0.0`）
 - `dashscope`: DashScope（阿里通义）Embedding API
+- `litellm`: LiteLLM Embedding API
+- `local`: 本地 GGUF embedding 模型
+
+**OpenAI 兼容 provider 的 JSON float embedding 示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_key": "your-api-key",
+      "api_base": "https://your-openai-compatible-endpoint/v1",
+      "model": "text-embedding-3-large",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+`encoding_format` 是可选字段，只会传给 `provider: "openai"` 和 `provider: "azure"`。留空时使用 OpenAI Python SDK 默认行为；如果 OpenAI 兼容上游网关无法正确反序列化 base64 embedding payload，可设置为 `"float"`。
+
+**Azure OpenAI provider 的 JSON float embedding 示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "azure",
+      "api_key": "your-azure-api-key",
+      "api_base": "https://your-resource-name.openai.azure.com",
+      "api_version": "2025-01-01-preview",
+      "model": "your-embedding-deployment-name",
+      "dimension": 3072,
+      "encoding_format": "float"
+    }
+  }
+}
+```
+
+对于 Azure OpenAI，`model` 必须填写 Azure 中配置的 embedding deployment name。
 
 **minimax provider 配置示例:**
 
@@ -506,7 +551,8 @@ openviking-server doctor
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key |
+| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
@@ -540,8 +586,14 @@ openviking-server doctor
 - `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
 - `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
+- `litellm`：LiteLLM VLM API，支持 `bedrock/`、`sagemaker/`、`vertex_ai/`、`azure/` 等显式 LiteLLM 路由
 
 对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+
+对于 `litellm`，当底层路由使用环境变量或 provider 原生凭据时可以省略
+`api_key`，例如 Bedrock/SageMaker 的 AWS IAM/IRSA，或 Vertex AI 的
+ADC/service-account 凭据。Azure 路由仍会正常使用 `api_key`。如果明确要使用
+LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=true`。
 
 **自定义 HTTP Headers**
 
@@ -1263,7 +1315,8 @@ openviking add-resource ./docs --exclude "*.tmp"
       "api_key": "string",
       "model": "string",
       "dimension": 1024,
-      "input": "multimodal"
+      "input": "multimodal",
+      "encoding_format": "float|base64"
     }
   },
   "vlm": {

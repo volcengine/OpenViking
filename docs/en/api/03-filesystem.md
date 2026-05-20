@@ -21,6 +21,7 @@ Behavior notes:
 
 - Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
 
 ## API Reference
@@ -179,7 +180,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Existing file URI |
+| uri | str | Yes | - | File URI to write. For `mode="create"`, the file must not already exist |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace`, `append`, or `create` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |

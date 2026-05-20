@@ -274,14 +274,13 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
         changed_uri=file_uri,
         context_type="resource",
         ctx=ctx,
-        lifecycle_lock_handle_id="lock-1",
     )
 
     assert len(queue.messages) == 1
     assert queue.messages[0].coalesce_key == (
         "resource|default|default|default|viking://resources/demo"
     )
-    assert queue.messages[0].lifecycle_lock_handle_id == "lock-1"
+    assert queue.messages[0].lock_handoff is None
 
 
 @pytest.mark.asyncio

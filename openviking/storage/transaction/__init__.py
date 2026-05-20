@@ -8,6 +8,13 @@ Provides path-lock management and redo-log crash recovery.
 
 from openviking.storage.transaction.lock_context import LockContext
 from openviking.storage.transaction.lock_handle import LockHandle, LockOwner
+from openviking.storage.transaction.lock_lease import (
+    NO_LOCK,
+    BorrowedLockLease,
+    LockHandoffRef,
+    LockLease,
+    OwnedLockLease,
+)
 from openviking.storage.transaction.lock_manager import (
     LockManager,
     get_lock_manager,
@@ -19,10 +26,15 @@ from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
 
 __all__ = [
+    "BorrowedLockLease",
     "LockContext",
     "LockHandle",
+    "LockHandoffRef",
+    "LockLease",
     "LockManager",
     "LockOwner",
+    "NO_LOCK",
+    "OwnedLockLease",
     "PathLockEngine",
     "RedoLog",
     "get_lock_manager",

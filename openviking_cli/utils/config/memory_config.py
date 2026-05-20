@@ -75,6 +75,13 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    enable_vaka_template: bool = Field(
+        default=False,
+        description=(
+            "When enabled, use vaka-specific memory templates (entities, profile) "
+            "from the bundled vaka/ subdirectory to override default templates."
+        ),
+    )
     enable_role_id_memory_isolate: bool = Field(
         default=False,
         description=(

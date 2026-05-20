@@ -478,6 +478,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
+            if config.memory.enable_vaka_template:
+                vaka_dir = os.path.join(memory_templates_dir, "vaka")
+                if os.path.exists(vaka_dir):
+                    self._schema_directories.append(vaka_dir)
             if custom_dir:
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):

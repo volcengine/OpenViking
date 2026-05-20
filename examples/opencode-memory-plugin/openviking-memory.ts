@@ -705,6 +705,12 @@ function cleanupOrphanedMessageBuffers(now: number): void {
   }
 }
 
+function hasUnsavedSessionWork(mapping: SessionMapping): boolean {
+  return mapping.capturedMessages.size > 0 ||
+    mapping.pendingMessages.size > 0 ||
+    mapping.commitInFlight === true
+}
+
 function getAutoCommitIntervalMinutes(config: OpenVikingConfig): number {
   const configured = Number(config.autoCommit?.intervalMinutes ?? DEFAULT_CONFIG.autoCommit?.intervalMinutes ?? 10)
   if (!Number.isFinite(configured)) {
@@ -878,6 +884,11 @@ async function finalizeCommitSuccess(
   await flushPendingMessages(opencodeSessionId, mapping, config)
 
   if (mapping.pendingCleanup) {
+    if (hasUnsavedSessionWork(mapping)) {
+      debouncedSaveSessionMap()
+      return
+    }
+
     sessionMap.delete(opencodeSessionId)
     sessionMessageBuffer.delete(opencodeSessionId)
     await saveSessionMap()
@@ -1142,7 +1153,7 @@ async function pollCommitTaskOnce(
     clearCommitState(mapping)
     debouncedSaveSessionMap()
 
-    if (mapping.pendingCleanup) {
+    if (mapping.pendingCleanup && !hasUnsavedSessionWork(mapping)) {
       sessionMap.delete(opencodeSessionId)
       sessionMessageBuffer.delete(opencodeSessionId)
       await saveSessionMap()
@@ -1854,9 +1865,19 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             openviking_session: mapping.ovSessionId,
             session_info: safeStringify(event.properties?.info)
           })
+          // Assistant text parts can arrive before finish=stop records the role.
+          let inferredRole = false
+          for (const [messageId, content] of mapping.pendingMessages.entries()) {
+            if (!mapping.messageRoles.has(messageId) && content.trim()) {
+              mapping.messageRoles.set(messageId, "assistant")
+              inferredRole = true
+            }
+          }
+          if (inferredRole) debouncedSaveSessionMap()
+
           await flushPendingMessages(sessionId, mapping, config)
 
-          if (mapping.capturedMessages.size > 0 || mapping.commitInFlight) {
+          if (hasUnsavedSessionWork(mapping)) {
             mapping.pendingCleanup = true
             if (!mapping.commitInFlight) {
               await startBackgroundCommit(mapping, sessionId, config)

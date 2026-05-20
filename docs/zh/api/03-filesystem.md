@@ -21,6 +21,7 @@ Phase 1 有意把范围控制得比较小：
 
 - 通过 WebDAV 新建文件时，会对该文件路径触发 OpenViking 的语义生成。
 - 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
+- `PUT` 不会自动创建父目录。缺失的目录需要先用 `MKCOL` 创建。
 - 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
 
 ## API 参考
@@ -179,7 +180,7 @@ openviking read viking://resources/docs/api.md
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | 已存在文件的 URI |
+| uri | str | 是 | - | 要写入的文件 URI。`mode="create"` 时目标文件必须不存在 |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |

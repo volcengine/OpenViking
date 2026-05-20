@@ -300,7 +300,7 @@ helm install openviking ./examples/k8s-helm \
 | 端点 | 认证 | 用途 |
 |------|------|------|
 | `GET /health` | 否 | 存活探针 — 立即返回 `{"status": "ok"}` |
-| `GET /ready` | 否 | 就绪探针 — 检查 AGFS、VectorDB、APIKeyManager |
+| `GET /ready` | 否 | 就绪探针 — 检查 AGFS、VectorDB、APIKeyManager、Embedding、Ollama |
 
 ```bash
 # 存活探针
@@ -308,7 +308,7 @@ curl http://localhost:1933/health
 
 # 就绪探针
 curl http://localhost:1933/ready
-# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok"}}
+# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok", "embedding": "ok", "ollama": "ok"}}
 ```
 
 在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。

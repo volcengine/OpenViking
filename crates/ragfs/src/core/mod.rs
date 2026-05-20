@@ -22,4 +22,4 @@ pub use mountable::MountableFS;
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
 pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, StatsCollector};
 pub use stats_wrapper::StatsWrappedFS;
-pub use types::{ConfigParameter, ConfigValue, FileInfo, GrepResult, PluginConfig, WriteFlag};
+pub use types::{ConfigParameter, ConfigValue, FileInfo, GrepMatch, GrepResult, PluginConfig, WriteFlag};

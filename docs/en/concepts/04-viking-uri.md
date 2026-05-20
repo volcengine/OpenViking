@@ -323,7 +323,7 @@ Each directory may contain special files:
 
 ```python
 # Add resources only to resources scope
-await client.add_resource(url, target="viking://resources/project/")
+await client.add_resource(url, to="viking://resources/project/")
 
 # Skills go to agent scope
 await client.add_skill(skill)  # Automatically to viking://agent/skills/

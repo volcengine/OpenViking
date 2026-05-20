@@ -79,6 +79,9 @@ lru = "0.12"
 # Regular expressions for grep
 regex = "1.10"
 
+# Stream combinators for concurrent I/O
+futures = "0.3"
+
 # Grep acceleration (localfs fallback, rg-like behavior)
 ignore = "0.4.25"
 grep = "0.4.1"
