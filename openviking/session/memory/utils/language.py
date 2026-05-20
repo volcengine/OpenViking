@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 _SCRIPT_MIN_CHARS = 2
 _SCRIPT_MIN_RATIO = 0.10
-_JAPANESE_KANA_MIN_RATIO = 0.15
+_JAPANESE_KANA_MIN_CHARS = 3
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -199,12 +199,7 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     if signal_total == 0:
         return fallback
 
-    cjk_total = counts["zh-CN"] + counts["ja_kana"] + counts["ko"]
-    if (
-        counts["ja_kana"] >= _SCRIPT_MIN_CHARS
-        and cjk_total > 0
-        and counts["ja_kana"] / cjk_total >= _JAPANESE_KANA_MIN_RATIO
-    ):
+    if counts["ja_kana"] >= _JAPANESE_KANA_MIN_CHARS:
         return "ja"
 
     non_latin_candidates = {

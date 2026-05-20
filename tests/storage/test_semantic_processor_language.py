@@ -36,6 +36,16 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "ja"
 
+    def test_detect_language_kanji_heavy_japanese(self):
+        text = "明日は会議です"
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "ja"
+
+    def test_single_kana_does_not_override_chinese(self):
+        text = "这是中文の测试"
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "zh-CN"
+
     def test_detect_language_korean(self):
         text = "이것은 한국어 문서입니다"
         language = _detect_language_from_text(text, fallback_language="en")
