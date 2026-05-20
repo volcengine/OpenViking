@@ -384,17 +384,17 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --zouk-status-error: #b14b4b;
 }
 [data-theme="kami"] .b-lead { color: #5a554a; }
-[data-theme="kami"] .b-pre { background: #1a1a1a; color: #e8e4da; border-color: #1a1a1a; }
-[data-theme="kami"] .b-pre__bar { background: #111; color: #8c8578; border-color: #333; }
-[data-theme="kami"] .b-pre__file { color: #e8e4da; }
-[data-theme="kami"] .b-pre .tk-id { color: #e8e4da; }
-[data-theme="kami"] .b-pre .tk-cm { color: #666; }
-[data-theme="kami"] .b-pre .tk-st { color: #c9956b; }
-[data-theme="kami"] .b-pre .tk-kw { color: #7b9ec4; }
-[data-theme="kami"] .b-pre .tk-nu { color: #c9956b; }
-[data-theme="kami"] .b-pre .tk-pn { color: #666; }
-[data-theme="kami"] .b-pre .tk-op { color: #8c8578; }
-[data-theme="kami"] .b-pre .tk-ty { color: #7b9ec4; }
+[data-theme="kami"] .b-pre { background: #f0eee6; color: #1a1a1a; border-color: var(--th-line); }
+[data-theme="kami"] .b-pre__bar { background: #e6e3d9; color: #8c8578; border-color: var(--th-line); }
+[data-theme="kami"] .b-pre__file { color: #1a1a1a; }
+[data-theme="kami"] .b-pre .tk-id { color: #1a1a1a; }
+[data-theme="kami"] .b-pre .tk-cm { color: #8c8578; }
+[data-theme="kami"] .b-pre .tk-st { color: #8b4513; }
+[data-theme="kami"] .b-pre .tk-kw { color: #1B365D; }
+[data-theme="kami"] .b-pre .tk-nu { color: #8b4513; }
+[data-theme="kami"] .b-pre .tk-pn { color: #8c8578; }
+[data-theme="kami"] .b-pre .tk-op { color: #5a554a; }
+[data-theme="kami"] .b-pre .tk-ty { color: #1B365D; }
 
 /* ===========================================================
    WASHI — 和纸 (dark)

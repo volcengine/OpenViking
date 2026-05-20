@@ -563,7 +563,7 @@ node 4b_chat_daemon.js
         en: 'Every code snippet in this post is from a runnable demo. The full source is at ',
         zh: '本文所有代码片段都来自可运行的示例。完整源码在 ',
       })}
-        <A href="https://github.com/ZaynJarvis/claude-use">github.com/ZaynJarvis/claude-use</A>
+        <A href="https://github.com/ZaynJarvis/agent-runtime">github.com/ZaynJarvis/agent-runtime</A>
         {T({ en: ':', zh: '：' })}
       </P>
 
