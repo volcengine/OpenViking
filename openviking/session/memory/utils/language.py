@@ -18,6 +18,9 @@ logger = get_logger(__name__)
 _SCRIPT_MIN_CHARS = 2
 _SCRIPT_MIN_RATIO = 0.10
 _JAPANESE_KANA_MIN_CHARS = 3
+_STRONG_DOMINANT_MIN_CHARS = 20
+_STRONG_DOMINANT_RATIO = 0.95
+_PRIMARY_LANGUAGES = {"zh-CN", "en"}
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -52,6 +55,8 @@ _LATIN_HINT_LANGUAGES = {"it", "fr", "es", "de", "pt"}
 _LOCALE_LANGUAGE_PREFIXES = dict(
     zh="zh-CN", ja="ja", ko="ko", ru="ru", ar="ar",
     it="it", fr="fr", es="es", de="de", pt="pt", en="en",
+    chinese="zh-CN", japanese="ja", korean="ko", russian="ru", arabic="ar",
+    italian="it", french="fr", spanish="es", german="de", portuguese="pt", english="en",
 )
 
 # Use Timezone as a weak fallback signal.
@@ -59,15 +64,18 @@ _TIMEZONE_LANGUAGE_GROUPS = {
     "zh-CN": (
         "asia/shanghai", "asia/chongqing", "asia/harbin", "asia/urumqi",
         "asia/hong_kong", "asia/macau", "asia/taipei", "prc", "roc", "hongkong",
+        "china standard time", "taipei standard time",
     ),
-    "ja": ("asia/tokyo", "japan"),
-    "ko": ("asia/seoul", "rok"),
+    "ja": ("asia/tokyo", "japan", "tokyo standard time"),
+    "ko": ("asia/seoul", "rok", "korea standard time"),
     "ru": (
         "europe/moscow", "europe/kaliningrad", "asia/yekaterinburg", "asia/vladivostok",
+        "russian standard time",
     ),
     "ar": (
         "asia/riyadh", "asia/dubai", "asia/qatar", "asia/kuwait",
         "asia/baghdad", "africa/cairo", "africa/algiers", "africa/tunis",
+        "arab standard time", "arabian standard time", "egypt standard time",
     ),
     "it": ("europe/rome",),
     "fr": ("europe/paris",),
@@ -81,6 +89,7 @@ _TIMEZONE_LANGUAGE_GROUPS = {
         "gb", "gb-eire", "america/toronto", "america/vancouver", "canada/eastern",
         "canada/pacific", "australia/sydney", "australia/melbourne",
         "australia/brisbane", "australia/perth", "pacific/auckland", "nz",
+        "eastern standard time", "pacific standard time", "gmt standard time",
     ),
 }
 
@@ -95,6 +104,14 @@ def _passes_threshold(count: int, total: int) -> bool:
     return count >= _SCRIPT_MIN_CHARS and total > 0 and count / total >= _SCRIPT_MIN_RATIO
 
 
+def _language_allowed_by_fallback(language: str, fallback_language: str) -> bool:
+    return language in _PRIMARY_LANGUAGES or language == fallback_language
+
+
+def _is_strong_dominant(count: int, total: int) -> bool:
+    return count >= _STRONG_DOMINANT_MIN_CHARS and total > 0 and count / total >= _STRONG_DOMINANT_RATIO
+
+
 def _language_from_locale_value(value: str) -> str:
     if not value:
         return ""
@@ -102,7 +119,7 @@ def _language_from_locale_value(value: str) -> str:
     normalized = normalized.strip().lower().replace("-", "_")
     if not normalized or normalized in {"c", "posix"}:
         return ""
-    prefix = normalized.split("_", 1)[0]
+    prefix = normalized.split("_", 1)[0].split(" ", 1)[0]
     return _LOCALE_LANGUAGE_PREFIXES.get(prefix, "")
 
 
@@ -115,6 +132,23 @@ def _language_from_timezone_value(value: str) -> str:
     return _TIMEZONE_LANGUAGE_HINTS.get(normalized, "")
 
 
+def _language_from_local_timezone() -> str:
+    try:
+        path_parts = os.path.realpath("/etc/localtime").split(os.sep)
+        for marker in ("zoneinfo", "zoneinfo.default"):
+            if marker in path_parts:
+                timezone_name = "/".join(path_parts[path_parts.index(marker) + 1 :])
+                if language := _language_from_timezone_value(timezone_name):
+                    return language
+    except Exception:
+        pass
+
+    for timezone_name in time.tzname:
+        if language := _language_from_timezone_value(timezone_name or ""):
+            return language
+    return ""
+
+
 def _resolve_system_fallback_language(default_language: str = "en") -> str:
     """Resolve a weak fallback hint from system locale/timezone.
 
@@ -122,28 +156,34 @@ def _resolve_system_fallback_language(default_language: str = "en") -> str:
     Explicit content and output_language_override still take precedence.
     """
     default = (default_language or "en").strip() or "en"
+    english_locale_hint = ""
 
     for env_name in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
         language = _language_from_locale_value(os.environ.get(env_name, ""))
-        if language:
+        if language and language != "en":
             return language
+        if language == "en":
+            english_locale_hint = language
+
+    try:
+        language = _language_from_locale_value(locale.getlocale()[0] or "")
+        if language and language != "en":
+            return language
+        if language == "en":
+            english_locale_hint = language
+    except Exception:
+        pass
 
     language = _language_from_timezone_value(os.environ.get("TZ", ""))
     if language:
         return language
 
-    try:
-        language = _language_from_locale_value(locale.getlocale()[0] or "")
-        if language:
-            return language
-    except Exception:
-        pass
+    language = _language_from_local_timezone()
+    if language:
+        return language
 
-    for timezone_name in time.tzname:
-        language = _language_from_timezone_value(timezone_name or "")
-        if language:
-            return language
-
+    if english_locale_hint:
+        return english_locale_hint
     return default
 
 
@@ -151,11 +191,11 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
     """Best-effort detector for common Latin-script languages.
 
     This intentionally stays conservative: if the signal is weak or tied, it
-    falls back instead of guessing.
+    uses English instead of guessing a non-English Latin language.
     """
     words = re.findall(r"[a-z\u00c0-\u024f]+", text.lower())
     if len(words) < 3:
-        return fallback_language
+        return "en"
 
     stopword_scores = {
         lang: sum(1 for word in words if word in stopwords)
@@ -175,9 +215,15 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
         return "en"
     if language in _LATIN_HINT_LANGUAGES and len(words) >= 6:
         strong_hint = accent_hits.get(language, 0) > 0 or stopword_scores[language] >= 4
-        if strong_hint and score >= 3 and score >= scores.get("en", 0) + 2:
+        strong_latin = len(words) >= 20 and score >= 6 and score >= scores.get("en", 0) + 4
+        if (
+            strong_hint
+            and score >= 3
+            and score >= scores.get("en", 0) + 2
+            and (_language_allowed_by_fallback(language, fallback_language) or strong_latin)
+        ):
             return language
-    return fallback_language
+    return "en"
 
 
 def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
@@ -199,7 +245,15 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     if signal_total == 0:
         return fallback
 
-    if counts["ja_kana"] >= _JAPANESE_KANA_MIN_CHARS:
+    japanese_total = counts["zh-CN"] + counts["ja_kana"]
+    strong_japanese = (
+        counts["ja_kana"] >= _STRONG_DOMINANT_MIN_CHARS
+        and japanese_total / signal_total >= _STRONG_DOMINANT_RATIO
+        and counts["ja_kana"] / japanese_total >= 0.30
+    )
+    if counts["ja_kana"] >= _JAPANESE_KANA_MIN_CHARS and (
+        _language_allowed_by_fallback("ja", fallback) or strong_japanese
+    ):
         return "ja"
 
     non_latin_candidates = {
@@ -209,7 +263,10 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
         "ar": counts["ar"],
     }
     language, score = max(non_latin_candidates.items(), key=lambda item: item[1])
-    if _passes_threshold(score, signal_total):
+    if _passes_threshold(score, signal_total) and (
+        _language_allowed_by_fallback(language, fallback)
+        or _is_strong_dominant(score, signal_total)
+    ):
         return language
 
     if counts["latin"] > 0:

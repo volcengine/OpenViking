@@ -249,12 +249,18 @@ class MemoryExtractor:
                 logger.warning("No formatted messages, returning empty list")
                 return []
 
-            from openviking.session.memory.utils.language import resolve_with_override
+            from openviking.session.memory.utils.language import (
+                _resolve_system_fallback_language,
+                resolve_with_override,
+            )
 
             config = get_openviking_config()
             output_language = resolve_with_override(
                 config,
-                lambda: self._detect_output_language(messages, fallback_language="en"),
+                lambda: self._detect_output_language(
+                    messages,
+                    fallback_language=_resolve_system_fallback_language("en"),
+                ),
             )
             history_summary = str(context.get("summary") or "")
 
