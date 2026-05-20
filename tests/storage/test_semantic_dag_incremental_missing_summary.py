@@ -93,7 +93,7 @@ class _FakeProcessor:
         return overview, abstract
 
     async def _sync_topdown_recursive(
-        self, root_uri, target_uri, ctx=None, file_change_status=None, lifecycle_lock_handle_id=""
+        self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None
     ):
         self.sync_calls.append((root_uri, target_uri))
         root_uri = self._fs._norm(root_uri)

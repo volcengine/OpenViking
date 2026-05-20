@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.storage.transaction import LockHandoffRef
+
 
 def build_semantic_coalesce_key(
     *,
@@ -50,7 +52,7 @@ class SemanticMsg:
     skip_vectorization: bool = False
     telemetry_id: str = ""
     target_uri: str = ""
-    lifecycle_lock_handle_id: str = ""
+    lock_handoff: Optional[LockHandoffRef] = None
     is_code_repo: bool = False
     coalesce_key: str = ""
     coalesce_version: int = 0
@@ -70,7 +72,7 @@ class SemanticMsg:
         skip_vectorization: bool = False,
         telemetry_id: str = "",
         target_uri: str = "",
-        lifecycle_lock_handle_id: str = "",
+        lock_handoff: Optional[LockHandoffRef] = None,
         is_code_repo: bool = False,
         coalesce_key: str = "",
         coalesce_version: int = 0,
@@ -87,7 +89,7 @@ class SemanticMsg:
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
         self.target_uri = target_uri
-        self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
+        self.lock_handoff = lock_handoff
         self.is_code_repo = is_code_repo
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
@@ -129,7 +131,7 @@ class SemanticMsg:
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
-            lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
+            lock_handoff=LockHandoffRef.from_value(data.get("lock_handoff")),
             is_code_repo=data.get("is_code_repo", False),
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
