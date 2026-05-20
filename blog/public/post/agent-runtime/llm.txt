@@ -7,7 +7,7 @@ Author: zayn
 
 ## Summary
 
-This post explains how to turn a CLI agent such as Claude Code into a product-grade daemon. A CLI agent is normally designed for one human at one terminal. A product runtime needs agents that can receive messages while idle, participate in multi-agent workflows, use shared cloud resources, survive restarts, and resume sessions.
+This post explains how to turn a CLI agent such as Claude Code into a product-grade daemon. A CLI agent is normally designed for one human at one terminal. A product runtime needs agents that can receive messages, participate in multi-agent workflows, use shared cloud resources, keep conversation context, and map each new product event to the right local runtime process.
 
 The architecture is a split boundary:
 
@@ -22,6 +22,8 @@ The daemon does not need to understand product semantics. It manages process lif
 - Human page: https://blog.openviking.ai/post/agent-runtime/
 - Agent-readable page: https://blog.openviking.ai/post/agent-runtime/llm.txt
 - Runnable examples: https://github.com/ZaynJarvis/agent-runtime
+- Zouk delivery routing details: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md
+- Zouk idle delivery and wake policy: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy
 
 ## Step 1: Spawn And Talk To Claude
 
@@ -76,11 +78,18 @@ The daemon normalizes Claude events into the shared event shape, for example:
 { "type": "agent:event", "agent": "black", "kind": "tool_use", "payload": { "name": "place_stone", "input": { "x": 7, "y": 7 } } }
 ```
 
-## Step 4: Add Session Resurrection
+## Step 4: Deliver Messages To Agents
 
-In real products, agents are often idle. Keeping every CLI process alive 24/7 is wasteful. The daemon can kill idle processes and later resume them when a message arrives.
+A chat product needs a path from "new user message" to "the right agent process sees it." The server turns user messages into `agent:deliver` events. The daemon receives each delivery and decides how to hand it to the local process.
 
-The product sends messages to a daemon endpoint. If the agent process is not alive, the daemon restarts it with the saved session ID. From the agent's perspective, the conversation is continuous. From the daemon's perspective, it is a sequence of short-lived processes sharing one session.
+The demo uses four delivery paths:
+
+- busy process: inject the message into the active turn through stdin;
+- live idle process: wake the existing process through stdin;
+- cached idle process: start the runtime again and pass the saved session ID so context continues;
+- no available process/config: queue the message for later.
+
+Session resume is only one implementation detail in the cached-idle branch. The product-level concept is agent message delivery. Zouk's production docs split this into two layers: `agent-delivery-routing.md` decides which agents receive `agent:deliver`; `agent-lifecycle.md` decides how live-idle and cached-idle agents are woken.
 
 ## Runtime Drivers
 
@@ -124,6 +133,4 @@ Busy delivery modes:
 1. Own the process: spawn the CLI agent as a child process, talk JSON over stdin/stdout, and save session IDs.
 2. Split server and daemon: the server handles users, routing, and shared cloud resources; the daemon handles local processes.
 3. Normalize and inject tools: translate runtime events into a shared product event shape and inject MCP tools.
-4. Add session resurrection: kill idle processes and resume them on demand.
-
-The core rule: let the product own coordination, let the daemon own local execution, and let tools be the only way an agent changes shared state.
+4. Deliver agent messages: route each new message into the right running, idle, or restarted agent process.

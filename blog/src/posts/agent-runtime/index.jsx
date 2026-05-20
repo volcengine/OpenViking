@@ -5,6 +5,8 @@ import {
 } from '../../blog-components';
 
 const LLM_PATH = '/post/agent-runtime/llm.txt';
+const ZOUK_DELIVERY_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md';
+const ZOUK_LIFECYCLE_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy';
 
 const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
 
@@ -135,7 +137,7 @@ const proc2 = spawn("claude", [...baseArgs, "--resume", sessionId], {
   stdio: ["pipe", "pipe", "pipe"],
 });
 send(proc2, "What is my secret code?");
-// → "PINEAPPLE-42" — the process died and came back, but the session survived`}</Pre>
+// → "PINEAPPLE-42" — the old process exited, but the session continued`}</Pre>
 
       <Callout type="note">
         <P>{T({
@@ -375,52 +377,72 @@ node 3b_gomoku_daemon.js white`}</Pre>
 
       <Hr ornament />
 
-      <H2 id="step-4">{T({ en: 'Step 4: Session Resurrection (the Serverless Agent)', zh: '第四步：保存 session，按需唤醒 agent' })}</H2>
+      <H2 id="step-4">{T({ en: 'Step 4: Deliver Messages to Agents', zh: '第四步：把消息投递给 agent' })}</H2>
 
       <P>{T({
-        en: 'The gomoku demo keeps agents alive for the whole game. But in a real product, agents are mostly idle. You don\'t want a Claude process running 24/7 waiting for messages. The solution: kill the process when it\'s idle, resurrect it when a message arrives.',
-        zh: '五子棋示例在整局游戏中保持 agent 存活。但在真实产品中，agent 大部分时间都在空闲。你不想让一个 Claude 进程 7×24 小时运行只为等消息。解法：空闲时结束进程，有消息来时用保存的 session 重新接上。',
+        en: 'The gomoku demo is turn-based: the server asks an agent to move. A chat product is different. Users can send Alice a message at any time, so the platform needs a delivery path from "new chat message" to "the right agent process sees it".',
+        zh: '五子棋示例是回合制：服务器轮到谁，就让哪个 agent 下棋。聊天产品不一样，用户随时都可能给 Alice 发消息。所以平台要解决的是一条投递链路：新的聊天消息来了，怎样让对应的 agent 进程收到它。',
       })}</P>
 
       <P>{T({
-        en: 'This is the chat platform demo. An agent named Alice joins a team chat. She has tools to send messages, read history, and check for new messages — injected by the daemon at spawn time, calling back to the same platform that hosts her.',
-        zh: '这就是聊天平台示例。一个叫 Alice 的 agent 加入团队聊天。她有发消息、读历史、检查新消息的工具——由 daemon 在启动时注入，回调到托管她的同一个平台。',
+        en: 'This is the chat platform demo. An agent named Alice joins a team chat. The server turns user messages into agent:deliver events. The daemon receives those events and decides how to hand each message to the agent process.',
+        zh: '这就是聊天平台示例。一个叫 Alice 的 agent 加入团队聊天。server 把用户消息转成 agent:deliver 事件；daemon 收到事件后，根据 agent 进程当前状态决定怎么把消息交给它。',
       })}</P>
 
-      <H3>{T({ en: 'Three delivery modes', zh: '三种消息投递模式' })}</H3>
+      <P>{T({
+        en: 'The production Zouk design splits this into two layers: delivery routing decides which agents should receive an agent:deliver frame, and lifecycle/wake policy decides how to wake the selected agent process.',
+        zh: 'Zouk 的生产实现把这件事拆成两层：消息路由先决定哪些 agent 应该收到 agent:deliver；生命周期/唤醒策略再决定怎样唤醒被选中的 agent 进程。',
+      })} <A href={ZOUK_DELIVERY_DOC}>{T({ en: 'Delivery routing doc', zh: '消息路由文档' })}</A>{T({ en: ' and ', zh: ' 和 ' })}<A href={ZOUK_LIFECYCLE_DOC}>{T({ en: 'idle wake policy', zh: 'idle 唤醒策略' })}</A>{T({ en: ' have the full contract.', zh: ' 里有完整设计。' })}</P>
+
+      <H3>{T({ en: 'Message delivery paths', zh: '消息投递路径' })}</H3>
 
       <Pre lang="js" filename="4b_chat_daemon.js">{`function deliverMessage(agentId, message) {
-  // Mode 1: agent is running and busy → write to stdin
+  // 1. Process is busy: inject the message into the active turn
   if (proc && !isIdle) {
     writeUser(\`New message: \${formatMessage(message)}\`);
     return;
   }
 
-  // Mode 2: agent process exited → respawn with --resume
+  // 2. Process is alive but idle: wake it through stdin
+  if (proc && isIdle) {
+    isIdle = false;
+    writeUser(\`New message: \${formatMessage(message)}\`);
+    return;
+  }
+
+  // 3. Process has exited: start it again and resume context
   if (!proc && idleCache) {
+    const cachedConfig = idleCache.config;
+    const cachedSessionId = idleCache.sessionId;
+    idleCache = null;
     startAgent(agentId, {
       ...cachedConfig,
-      sessionId: idleCache.sessionId,  // ← resume the old conversation
+      sessionId: cachedSessionId,
     }, message);
     return;
   }
 
-  // Mode 3: no agent at all → queue for later
+  // 4. No process/config yet: queue for later
   inbox.push(message);
 }`}</Pre>
 
       <P>{T({
-        en: 'The key is what happens when the process exits cleanly:',
-        zh: '关键在于进程正常退出时发生了什么：',
+        en: 'Only the third path needs session resume. Resume is not the product feature; it is one implementation detail that lets the daemon stop idle CLI processes while still keeping the next message in the same conversation.',
+        zh: '只有第三条路径需要 resume session。Resume 不是产品功能本身，它只是一个实现细节：daemon 可以让空闲的 CLI 进程退出，等下一条消息来时再接回同一个对话上下文。',
+      })}</P>
+
+      <P>{T({
+        en: 'To make that third path work, the daemon caches the session ID when the process exits cleanly:',
+        zh: '为了让第三条路径可用，daemon 会在进程正常退出时保存 session ID：',
       })}</P>
 
       <Pre lang="js" filename="4b_chat_daemon.js">{`proc.on("exit", (code) => {
   proc = null;
 
   if (code === 0) {
-    // Clean exit → cache session for future --resume
+    // Clean exit → keep enough state to deliver the next message
     idleCache = { config: agentConfig, sessionId };
-    console.log(\`Cached session \${sessionId} — will --resume on next message\`);
+    console.log(\`Agent idle; cached session \${sessionId}\`);
 
     // If messages arrived while exiting, restart immediately
     if (inbox.length > 0) {
@@ -492,12 +514,12 @@ node 4a_chat_server.js
 node 4b_chat_daemon.js
 
 # Then type in the server terminal. The agent responds, goes idle,
-# and gets resurrected when you send another message.`}</Pre>
+# and receives the next message through the delivery path above.`}</Pre>
 
       <Callout type="note">
         <P>{T({
-          en: 'From Claude\'s perspective, the conversation is continuous. From the daemon\'s perspective, it\'s a sequence of short-lived processes sharing one session.',
-          zh: '从 Claude 的视角看，对话仍然连续；从 daemon 的视角看，只是多次启动进程，并让它们共享同一个 session。',
+          en: 'The user-facing promise is simple: send Alice another message and she can reply with context. Whether a CLI process stayed alive behind the scenes is an implementation detail.',
+          zh: '面向用户的承诺很简单：再给 Alice 发一条消息，她能带着上下文继续回复。背后有没有常驻的 CLI 进程，只是实现细节。',
         })}</P>
       </Callout>
 
@@ -509,12 +531,12 @@ node 4b_chat_daemon.js
         <Li><strong>{T({ en: 'Own the process', zh: '接管进程' })}</strong>{T({ en: ' — spawn Claude as a child, talk JSON over stdin/stdout. Save the session ID.', zh: '——以子进程方式启动 Claude，通过 stdin/stdout 传 JSON。保存 session ID。' })}</Li>
         <Li><strong>{T({ en: 'Split server and daemon', zh: '拆分 server 和 daemon' })}</strong>{T({ en: ' — server handles users and routing. Daemon handles the local process. WebSocket in between.', zh: '——server 处理用户和路由，daemon 处理本地进程，中间用 WebSocket 连接。' })}</Li>
         <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a shared product event shape. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成产品统一事件格式。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
-        <Li><strong>{T({ en: 'Add session resurrection', zh: '保存 session，按需唤醒' })}</strong>{T({ en: ' — kill idle processes, resume them on demand. The agent becomes serverless.', zh: '——空闲时结束进程，有新消息再用保存的 session 接上。Agent 不需要常驻。' })}</Li>
+        <Li><strong>{T({ en: 'Deliver agent messages', zh: '实现 agent 消息投递' })}</strong>{T({ en: ' — route each new message into the right running, idle, or restarted agent process.', zh: '——每条新消息都按进程状态投递给正确的 agent；只有重启进程时才用保存的 session 接回上下文。' })}</Li>
       </Ol>
 
       <P>{T({
         en: 'Once these pieces are in place, "multi-agent" stops being magic. It\'s a scheduler waking named processes that can work, use tools, and remember.',
-        zh: '这些部件就位后，"多 agent"就不再神秘。它只是一个调度器在唤醒具体的 agent 进程，比如 Claude Code 或 Codex；这些进程能工作、能用工具、也能记住。',
+        zh: '这些部件就位后，"多 agent"就不再神秘。它只是平台把消息投递给具体的 agent 进程，比如 Claude Code 或 Codex；这些进程能工作、能用工具、也能记住上下文。',
       })}</P>
 
       <Hr ornament />
@@ -604,7 +626,7 @@ node 4b_chat_daemon.js
         <Li><InlineCode>1a_ws_server.js</InlineCode> + <InlineCode>1b_ws_daemon.js</InlineCode>{T({ en: ' — WebSocket server/daemon split', zh: '——WebSocket server/daemon 拆分' })}</Li>
         <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — event-shape normalization (zouk protocol)', zh: '——事件格式归一化（zouk 协议）' })}</Li>
         <Li><InlineCode>3a</InlineCode>/<InlineCode>3b</InlineCode>/<InlineCode>3c</InlineCode>{T({ en: ' — two-agent gomoku game with MCP tools', zh: '——双 agent 五子棋对弈 + MCP 工具' })}</Li>
-        <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with session resurrection', zh: '——聊天平台 + 按需唤醒 agent' })}</Li>
+        <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with agent message delivery', zh: '——聊天平台 + agent 消息投递' })}</Li>
         <Li><InlineCode>test_resume.js</InlineCode>{T({ en: ' — session resume proof', zh: '——session 恢复验证' })}</Li>
       </Ul>
     </Article>
@@ -617,8 +639,8 @@ export default {
   meta: {
     title: { en: 'Building an Agent Daemon', zh: '构建 Agent Daemon' },
     description: {
-      en: 'Four runnable demos that turn a CLI agent into a managed daemon — from process spawning to multi-agent games to serverless session resurrection.',
-      zh: '四个可运行的示例，将 CLI agent 逐步变成托管 daemon——从进程管理到多 agent 对弈，再到保存 session、按需唤醒 agent。',
+      en: 'Four runnable demos that turn a CLI agent into a managed daemon — from process spawning to multi-agent games to agent message delivery.',
+      zh: '四个可运行的示例，将 CLI agent 逐步变成托管 daemon——从进程管理到多 agent 对弈，再到 agent 消息投递。',
     },
     cover: '/assets/covers/runtime.png',
     publishedAt: '2026-05-08',
