@@ -5,12 +5,12 @@ import os
 import re
 import shutil
 import subprocess
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 TAU2_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = TAU2_DIR.parents[1]
@@ -63,6 +63,7 @@ def normalize_litellm_env() -> dict[str, Any]:
 
 def render_env(value: Any) -> Any:
     if isinstance(value, str):
+
         def replace(match: re.Match[str]) -> str:
             name = match.group(1)
             default = match.group(2) or ""
@@ -79,11 +80,7 @@ def render_env(value: Any) -> Any:
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = deep_merge(merged[key], value)
         else:
             merged[key] = value
@@ -123,6 +120,66 @@ def write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def tau2_result_failures(data: dict[str, Any], *, expected_trials: int = 1) -> list[str]:
+    tasks = data.get("tasks") or []
+    simulations = data.get("simulations") or []
+    failures: list[str] = []
+    if tasks:
+        expected_task_ids = {
+            str(task.get("id", task.get("task_id"))) for task in tasks if isinstance(task, dict)
+        }
+        observed_task_ids = {str(sim.get("task_id")) for sim in simulations}
+        expected = len(tasks) * expected_trials
+        if len(simulations) != expected:
+            failures.append(f"expected {expected} simulations, found {len(simulations)}")
+        if observed_task_ids != expected_task_ids:
+            missing = sorted(expected_task_ids - observed_task_ids)
+            extra = sorted(observed_task_ids - expected_task_ids)
+            failures.append(
+                f"simulation task ids do not match tasks: missing={missing[:10]} extra={extra[:10]}"
+            )
+        expected_pairs = {
+            (task_id, trial) for task_id in expected_task_ids for trial in range(expected_trials)
+        }
+        observed_pairs = [
+            (str(sim.get("task_id")), int(sim.get("trial", 0))) for sim in simulations
+        ]
+        duplicate_pairs = sorted(
+            pair for pair, count in Counter(observed_pairs).items() if count != 1
+        )
+        missing_pairs = sorted(expected_pairs - set(observed_pairs))
+        if duplicate_pairs or missing_pairs:
+            failures.append(
+                "simulation task/trial coverage mismatch: "
+                f"missing={missing_pairs[:10]} duplicate={duplicate_pairs[:10]}"
+            )
+
+    for sim in simulations:
+        info = sim.get("info") or {}
+        termination_reason = str(sim.get("termination_reason") or "")
+        if info.get("failed_after_attempts") or "infrastructure_error" in termination_reason:
+            failures.append(
+                "task="
+                f"{sim.get('task_id')} trial={sim.get('trial', 0)} "
+                f"termination={termination_reason} error={info.get('error') or info.get('error_type')}"
+            )
+        elif not sim.get("messages"):
+            failures.append(
+                f"task={sim.get('task_id')} trial={sim.get('trial', 0)} has no messages"
+            )
+    return failures
+
+
+def assert_tau2_results_complete(
+    data: dict[str, Any], *, context: str, expected_trials: int = 1
+) -> None:
+    failures = tau2_result_failures(data, expected_trials=expected_trials)
+    if failures:
+        preview = "; ".join(failures[:5])
+        more = f"; ... {len(failures) - 5} more" if len(failures) > 5 else ""
+        raise RuntimeError(f"{context} produced invalid TAU-2 results: {preview}{more}")
 
 
 def strategy_ids(config: dict[str, Any]) -> list[str]:
@@ -219,9 +276,7 @@ def user_simulator_policy(config: dict[str, Any]) -> str:
     policy = config.get("eval", {}).get("user_simulator_policy", "official")
     policy = str(policy)
     if policy not in {"official", "confirmation_aware"}:
-        raise ValueError(
-            "eval.user_simulator_policy must be 'official' or 'confirmation_aware'"
-        )
+        raise ValueError("eval.user_simulator_policy must be 'official' or 'confirmation_aware'")
     return policy
 
 

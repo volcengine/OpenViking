@@ -1,6 +1,6 @@
 memory_type: trajectories
 description: |
-  A record of agent execution in one business domain within a conversation.
+  A compact, reusable view of how the agent handled one task in a conversation.
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
@@ -32,31 +32,41 @@ fields:
   - name: content
     type: string
     description: |
-      Execution trace in EXACTLY this format:
-      - Goal: <what the user wanted to achieve — one sentence>
-      - Trajectory:
-        1. <what the agent aimed to achieve>. 
-           Actions: <summarized interactions, tools used, and summarized responses>. 
-           Progress: <how this shifted the state>.
-        2. <...>. 
-           Actions: <...>. 
-           Progress: <...>.
-        3. <... continue sequentially to capture the entire execution>
-      - Result: <final outcome and any important side effects — one sentence>
-      - Fail reason: <If task succeeded, leave empty or write "None". If failed, provide a detailed analysis of why the failure occurred and suggest how the agent's approach could be improved.>
+      Procedure-like trajectory view in EXACTLY this format:
 
-      Rules for 'Trajectory' section:
-      - STANDALONE COMPLETENESS: The trajectory must be comprehensive enough that a reader can fully understand exactly how the agent performed the task, what attempts it made, and what tools it used, entirely without the raw logs.
-      - EXHAUSTIVE TRACKING: Record every logical interaction, tool use, and system response in chronological order as a numbered list.
-      - SUMMARIZE LONG TEXTS: Do NOT record exact tool responses, raw JSON payloads, or verbatim user/agent messages, especially when they are very long. You MUST use a concise, summarized version that captures the core meaning without losing any key information, constraints, or data points critical to the task.
-      - CAPTURE ALL MISTAKES: You MUST explicitly detail any errors, false attempts, wrong function calls, or agent misunderstandings. Do not gloss over failures, dead ends, or retry loops.
-      - INTENT & PROGRESS TRACKING: Every step must clearly state the current agent intention, summarize the 'Actions/Events' taken, and conclude with 'Progress' (evaluating what was achieved or blocked).
-      - TOOL TRACKING (under 'Actions'): 
-        * Format (Success): "Called <tool_name(s)> -> Response: <summarized output retaining key info>."
-        * Format (Error/Mistake): "Called <tool_name(s)> -> Error/Issue: <summarized error> | Context: <why it failed or why it was the wrong call>."
+      # <trajectory_name>
+      - Domain: <task domain or product area, e.g. airline, retail, software tooling>
+      - Trigger: <the reusable user intent or task situation — one sentence>
+      - Preconditions:
+        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
+        2. <...>
+      - Procedure:
+        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
+        2. <future-agent instruction for the next decision/action step>
+        3. <continue until the write/confirmation/final-response boundary is clear>
+      - Anti-patterns:
+        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
+      - Applicability Boundary:
+        - <when this memory applies>
+        - <when this memory should not be used>
+      - Result: <final outcome and important side effects — one sentence>
+      - Evidence: <brief generalized source note from this session, including success/failure/partial status>
+
+      Rules:
+      - Write for future agent execution, not for human audit. Prefer clear instructions over chronological narration.
+      - Preserve the successful or best-known path: critical reads, required policy checks, confirmation steps, write-tool ordering, and final user-facing completion.
+      - Keep negative lessons in Anti-patterns, not mixed into Procedure.
+      - Keep the memory grounded in this session, but abstract away user-specific names, raw IDs, exact payloads, and long tool responses.
+      - Do not include raw user/order/reservation/payment/card IDs, user names, email/phone/address values, exact dates, case-specific amounts, exact budgets, route pairs, airport pairs, passenger/bag counts, card suffixes, flight numbers, order numbers, or raw tool payloads. Replace them with semantic descriptions such as "a delivered order", "an ineligible basic-economy reservation", "the saved payment method", or "a policy-ineligible cancellation". Stable policy constants may be kept when they are needed for future execution.
+      - The Evidence line is not an exception: it may name the source status and lesson type, but must not carry case-specific values such as exact amounts, routes, dates, counts, product names, or customer-specific state.
+      - Bad Evidence: "a mechanical keyboard exceeded the $200 threshold". Good Evidence: "a product variant exceeded the user-specified threshold".
+      - Bad Evidence: "the ORD-to-LAX reservation on May 12 used card ending 1234". Good Evidence: "a matching reservation required the saved payment method and policy checks before the write action".
+      - Mention tool names when they are part of the reusable path, but summarize observations instead of copying raw JSON.
+      - If the session failed or was partial, still write the best reusable lesson: put the corrected approach in Procedure and the failure cause in Anti-patterns / Evidence.
+      - Avoid broad SOPs. The Trigger and Applicability Boundary should make this record narrower than a whole domain workflow.
 
       General Rules:
-      - Use exactly the 4 labels (Goal, Trajectory, Result, Fail reason) in this exact order.
-      - Goal and Result are ONE sentence each.
+      - Use exactly the title, Domain line, and 7 labels above in this exact order.
+      - Trigger, Result, and Evidence are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch

@@ -1,13 +1,16 @@
 # TAU-2 Benchmark
 
 This directory contains a small OpenViking-style entry point for TAU-2 memory
-evaluation. The first version is intentionally narrow:
+evaluation. The scope is intentionally narrow:
 
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
+- trajectory-view retrieval treatment for the refined trajectory prompt;
+- experimental category-aware pre-write rerank on top of trajectory-view
+  memory.
 
-Trajectory / procedure-view prompts, category rerank, and other harness-only
-diagnostics are intentionally left out of this first PR.
+The category-aware route is opt-in and experimental; it is meant for PR-C review
+and smoke/targeted probes before any productization decision.
 
 ## Layout
 
@@ -15,8 +18,11 @@ diagnostics are intentionally left out of this first PR.
 benchmark/tau2/
 ├── config/
 │   ├── baseline.yaml
+│   ├── category_rerank.yaml
+│   ├── no_memory.yaml
 │   ├── official.yaml
-│   └── prewrite.yaml
+│   ├── prewrite.yaml
+│   └── trajectory.yaml
 ├── scripts/
 │   ├── run_eval.py
 │   ├── setup_tau2_repo.sh
@@ -24,7 +30,9 @@ benchmark/tau2/
 └── run_full_eval.sh
 ```
 
-Generated artifacts are written to `benchmark/tau2/result/<run_id>/`.
+Generated eval artifacts are written to `benchmark/tau2/result/<run_id>/`.
+Memory corpus artifacts are cached outside the run id at
+`benchmark/tau2/result/memory_corpora/` by default.
 
 ## Quick Start
 
@@ -51,6 +59,10 @@ Plan the default benchmark without running TAU-2:
 python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baseline.yaml --plan-only
 ```
 
+Use `config/no_memory.yaml` for same-runner no-memory baselines; it executes
+through the Python wrapper so artifacts and result validation match the memory
+cells.
+
 Add `--preflight` or `--strict-preflight` when you want the runner to write a
 small environment/config check next to the run plan.
 
@@ -74,6 +86,30 @@ benchmark/tau2/run_full_eval.sh \
   --domain retail \
   --strategy-id memory_v2_prewrite \
   --num-tasks 1 \
+  --repeat-count 1
+```
+
+Plan a one-cell trajectory-view smoke:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/trajectory.yaml \
+  --domain retail \
+  --strategy-id memory_v2_trajectory_view \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
+  --repeat-count 1
+```
+
+Plan a one-cell trajectory category-rerank smoke:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/category_rerank.yaml \
+  --domain retail \
+  --strategy-id memory_v2_trajectory_category_prewrite \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
   --repeat-count 1
 ```
 
@@ -104,19 +140,74 @@ and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
 Start the OpenViking service before executing memory cells, and verify it with
 `ov status`. For evidence runs, use a clean OpenViking workspace/config and set
 `OPENVIKING_URL` explicitly so local custom memory templates do not pollute the
-Memory V2 baseline.
+Memory V2 baseline. For trajectory-view evidence, start the service from this
+branch and inspect generated trajectory files; changing `search_uri` alone does
+not prove the new trajectory prompt was used.
 
 ## Memory Adapter
 
-`memory_v2_experience_only` and `memory_v2_prewrite` cells run through a small
-TAU-2 agent adapter in this directory:
+Memory V2 cells run through a small TAU-2 agent adapter in this directory:
 
 - train by writing TAU-2 training conversations into OpenViking sessions;
-- evaluate by retrieving OpenViking experience memory at the first user turn;
+- evaluate by retrieving OpenViking memory at the first user turn;
 - for pre-write recall, retrieve again before write-like tool calls and
-  regenerate that step with the matched memories;
+  regenerate that step with the matched memories. The default benchmark
+  retrieves 6 pre-write candidates and injects 2, which keeps extra candidates
+  visible in traces without expanding the prompt budget;
+- optionally run an explicit scope-prompt treatment that keeps retrieved
+  memories advisory and asks the agent to preserve the current task scope before
+  write-like tool calls;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
+
+The existing `train_memory_mode: experience_only` value selects the Memory V2
+session-commit path. `search_memory_type` selects which generated memory bucket
+is retrieved during eval (`experiences` by default, `trajectories` for
+`config/trajectory.yaml`). The runner prepares each distinct
+`domain + corpus_id` once and reuses it across eval run ids when the cached
+`corpus_manifest.json` is present. Different corpora may be prepared in
+parallel with `benchmark.corpus_prepare_concurrency`; session commits inside one
+corpus remain serial to preserve OpenViking write semantics.
+
+Eval cells run in parallel with `benchmark.strategy_concurrency` by default and
+can be overridden with `--strategy-concurrency`. This only parallelizes read-only
+TAU-2 eval cells; corpus writes inside one corpus are still serialized by the
+prepare step.
+
+`config/category_rerank.yaml` keeps the PR-B trajectory memory route and enables
+an adapter-local category-rerank probe: pre-write recall, LLM-generated category
+annotation sidecars, and the same scope prompt shape used by the trajectory-view
+evidence runs. The category treatment retrieves 6 candidates, keeps positive
+category matches, injects at most 2 memories, skips injection when no positive
+category match exists, and applies the scope/applicability prompt at the system
+prompt injection point. Runtime category rerank is sidecar-only:
+the runner looks up query and memory annotations from configured
+`annotation_files`; if either side is missing, the cell fails instead of doing
+live query-to-category mapping. Retrieval traces include
+the query category, candidate memory categories, rerank reasons, selected rows,
+skipped rows, scope prompt metadata,
+and flat `*_category*_prompt` fields kept compatible with Harness diagnostics.
+Each run summary also includes `retrieval_trace_summary`, a compact rollup of
+decision nodes, category decisions, query/memory category sources, selected
+category coverage, positive query-to-memory category-match coverage,
+aggregate-vs-concrete memory candidate coverage, and write tool calls. Use it
+as the first check that a run is using this branch's self-generated category
+signal before opening the JSONL trace. Category runs whose runtime trace has
+only aggregate `.overview.md` / `.abstract.md` candidates, no applied
+category-rerank event, no query or memory category coverage, no positive
+query-to-memory category match, no actual memory injection, no injected
+concrete memory, no injected concrete positive category match, or no selected
+positive category match are marked `runtime_evidence.status=diagnostic`;
+`scoreboard.json` excludes those diagnostic cells from the main reward/DB
+aggregates while preserving their metrics, artifacts, and
+`diagnostic_reason_counts` for debugging. Corpus
+manifests also include
+`corpus_probe.aggregate_match_count` and `corpus_probe.concrete_match_count` so
+aggregate-only corpora can be spotted before reading the eval trace; category
+runs whose corpus probe is empty, or has matches but no concrete matches, are
+also marked diagnostic. The corpus probe uses the category `retrieve_limit`
+when category rerank is enabled, so the probe width matches the runtime
+pre-write search width.
 
 ## User Simulator Policy
 
@@ -130,6 +221,14 @@ TAU-2 checkout before planning or running. The patch appends only the behavioral
 confirmation boundary to the TAU-2 user simulator guidelines; metadata such as
 the upstream PR link is kept in run artifacts, not in the simulator prompt.
 Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297).
+
+Optional fixed-first-user fixtures keep the first simulated user turn stable
+while preserving live simulator behavior after that turn:
+
+```bash
+export TAU2_RETAIL_FIXED_FIRST_USER_FILE=/path/to/retail_fixture.json
+export TAU2_AIRLINE_FIXED_FIRST_USER_FILE=/path/to/airline_fixture.json
+```
 
 Use `config/official.yaml` with a clean TAU-2 checkout when you need an
 official-user-simulator parity run. If the checkout was already patched, the

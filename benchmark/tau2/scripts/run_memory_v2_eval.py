@@ -2,15 +2,26 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib
 import json
 import shutil
 import sys
 import time
+from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from tau2_common import normalize_litellm_env
+try:
+    from category_rerank import CategoryReranker
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .category_rerank import CategoryReranker
 
+try:
+    from tau2_common import assert_tau2_results_complete, normalize_litellm_env
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .tau2_common import assert_tau2_results_complete, normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,10 +40,19 @@ WRITE_TOOL_PREFIXES = (
     "grant_",
     "reboot_",
 )
+FIXED_FIRST_USER_NAME = "openviking_fixed_first_user_simulator"
 
 
 def _json(text: str) -> dict[str, Any]:
     return json.loads(text) if text else {}
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -46,6 +66,27 @@ def _add_tau2_to_path(tau2_repo: Path) -> None:
     sys.path.insert(0, str(src if src.is_dir() else tau2_repo))
 
 
+def _patch_tau2_auxiliary_llm_defaults(llm: str, llm_args: dict[str, Any]) -> None:
+    # TAU-2 exposes agent/user LLMs in TextRunConfig, but NL assertion scoring
+    # still reads module defaults. Keep the evaluator on the same configured
+    # model so benchmark runs do not fall back to inaccessible upstream defaults.
+    patches = {
+        "DEFAULT_LLM_NL_ASSERTIONS": llm,
+        "DEFAULT_LLM_NL_ASSERTIONS_ARGS": deepcopy(llm_args),
+        "DEFAULT_LLM_ENV_INTERFACE": llm,
+        "DEFAULT_LLM_ENV_INTERFACE_ARGS": deepcopy(llm_args),
+    }
+    for module_name in (
+        "tau2.config",
+        "tau2.evaluator.evaluator_nl_assertions",
+        "tau2.environment.utils.interface_agent",
+    ):
+        module = importlib.import_module(module_name)
+        for name, value in patches.items():
+            if hasattr(module, name):
+                setattr(module, name, deepcopy(value))
+
+
 def _save_to_arg(path: Path) -> str:
     # Some TAU-2 versions append ".json"; newer versions treat save_to as a
     # run directory and write results.json under it.
@@ -55,6 +96,70 @@ def _save_to_arg(path: Path) -> str:
 def _compat_results_path(path: Path) -> Path:
     run_dir = path.with_suffix("") if path.suffix == ".json" else path
     return run_dir / "results.json"
+
+
+def _resolve_repo_path(raw_path: Any, *, repo_root: Path) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return path
+
+
+def _domain_value(mapping: Any, domain: str) -> Any:
+    if isinstance(mapping, dict):
+        return mapping.get(domain) or mapping.get(str(domain).lower())
+    return None
+
+
+def _load_scope_prompt(
+    payload: dict[str, Any] | None,
+    *,
+    domain: str,
+    repo_root: Path,
+) -> tuple[str, dict[str, Any]]:
+    payload = payload if isinstance(payload, dict) else {}
+    enabled = _as_bool(payload.get("enabled"), default=False)
+    summary: dict[str, Any] = {
+        "enabled": enabled,
+        "domain": domain,
+        "injection_point": str(payload.get("injection_point") or "system_prompt"),
+        "loaded": False,
+        "loaded_files": [],
+        "text_chars": 0,
+    }
+    if not enabled:
+        summary["skipped_reason"] = "disabled"
+        return "", summary
+
+    text = str(_domain_value(payload.get("domain_texts"), domain) or "").strip()
+    raw_path = _domain_value(payload.get("domain_files"), domain)
+    if raw_path:
+        path = _resolve_repo_path(raw_path, repo_root=repo_root)
+        summary["loaded_files"] = [str(path)]
+        if not path.is_file():
+            raise FileNotFoundError(f"scope prompt file not found for {domain}: {path}")
+        text = path.read_text(encoding="utf-8").strip()
+
+    if not text:
+        summary["skipped_reason"] = "no_domain_scope_prompt"
+        return "", summary
+
+    summary["loaded"] = True
+    summary["text_chars"] = len(text)
+    return text, summary
+
+
+def _scope_prompt_text(prompt: str) -> str:
+    if not prompt.strip():
+        return ""
+    return (
+        "Use this OpenViking memory applicability guard together with retrieved "
+        "memories. Current tool observations and the current user request remain "
+        "authoritative.\n\n"
+        "<procedure_memory>\n"
+        f"{prompt.strip()}\n"
+        "</procedure_memory>"
+    )
 
 
 def _reward(sim: dict[str, Any]) -> float:
@@ -86,7 +191,302 @@ def _metrics(results_path: Path) -> dict[str, Any]:
     return {
         "simulation_count": len(sims),
         "avg_reward": sum(rewards) / len(rewards) if rewards else 0.0,
-        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known)) if db_known else None,
+        "db_match_rate": (sum(1 for value in db_known if value) / len(db_known))
+        if db_known
+        else None,
+    }
+
+
+def _is_aggregate_memory_uri(uri: Any) -> bool:
+    value = str(uri or "").split("#", 1)[0]
+    return value.endswith("/.overview.md") or value.endswith("/.abstract.md")
+
+
+def _trace_category_summary(trace_path: Path) -> dict[str, Any]:
+    counters: Counter[str] = Counter()
+    decision_nodes: Counter[str] = Counter()
+    category_decisions: Counter[str] = Counter()
+    query_sidecar_coverage: Counter[str] = Counter()
+    query_category_sources: Counter[str] = Counter()
+    memory_category_sources: Counter[str] = Counter()
+    selected_memory_category_sources: Counter[str] = Counter()
+    tool_calls: Counter[str] = Counter()
+    trace_rows = 0
+    category_event_count = 0
+
+    if not trace_path.is_file():
+        return {
+            "trace_present": False,
+            "trace_rows": 0,
+            "category_event_count": 0,
+        }
+
+    for line_number, line in enumerate(trace_path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        trace_rows += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            counters["json_decode_error_count"] += 1
+            counters[f"json_decode_error_line:{line_number}"] += 1
+            continue
+        if not isinstance(row, dict):
+            counters["non_object_row_count"] += 1
+            continue
+
+        decision_nodes[str(row.get("decision_node") or "unknown")] += 1
+        injected_count = int(row.get("injected_count") or 0)
+        if str(row.get("retrieval_action_taken") or "") == "retrieve_and_inject" and (
+            row.get("injected") or injected_count > 0
+        ):
+            counters["memory_injection_event_count"] += 1
+            counters["memory_injected_count"] += injected_count
+        for call in row.get("tool_calls") or []:
+            if isinstance(call, dict) and call.get("name"):
+                tool_calls[str(call["name"])] += 1
+
+        category = (
+            row.get("category_rerank") if isinstance(row.get("category_rerank"), dict) else {}
+        )
+        if category:
+            category_event_count += 1
+            if category.get("enabled"):
+                counters["category_enabled_event_count"] += 1
+            if category.get("applied"):
+                counters["category_applied_event_count"] += 1
+            if category.get("decision"):
+                category_decisions[str(category["decision"])] += 1
+            coverage = category.get("query_sidecar_coverage")
+            if coverage:
+                coverage_key = str(coverage)
+                query_sidecar_coverage[coverage_key] += 1
+                counters[f"query_sidecar_{coverage_key}_event_count"] += 1
+            query_category = (
+                category.get("query_category")
+                if isinstance(category.get("query_category"), dict)
+                else {}
+            )
+            if query_category.get("category_source"):
+                query_category_sources[str(query_category["category_source"])] += 1
+            if query_category.get("matched"):
+                counters["query_category_matched_event_count"] += 1
+
+        for match in row.get("matches") or []:
+            if not isinstance(match, dict):
+                continue
+            counters["raw_match_count"] += 1
+            selected = bool(match.get("selected_for_injection") or match.get("injected"))
+            injected = bool(match.get("injected"))
+            if selected:
+                counters["selected_match_count"] += 1
+            if injected:
+                counters["injected_match_count"] += 1
+            is_aggregate = _is_aggregate_memory_uri(match.get("uri"))
+            if is_aggregate:
+                counters["aggregate_memory_candidate_count"] += 1
+                if selected:
+                    counters["selected_aggregate_memory_count"] += 1
+            else:
+                counters["concrete_memory_candidate_count"] += 1
+                if selected:
+                    counters["selected_concrete_memory_count"] += 1
+                if injected:
+                    counters["injected_concrete_memory_count"] += 1
+            memory_source = match.get("memory_category_source_prompt")
+            positive_category_match = bool(
+                match.get("category1_match") or match.get("category2_match")
+            )
+            if memory_source:
+                counters["memory_category_present_count"] += 1
+                memory_category_sources[str(memory_source)] += 1
+                if selected:
+                    counters["selected_memory_category_present_count"] += 1
+                    selected_memory_category_sources[str(memory_source)] += 1
+                if positive_category_match:
+                    counters["memory_category_matched_count"] += 1
+                    if selected:
+                        counters["selected_memory_category_matched_count"] += 1
+            elif match.get("category_rerank_reasons") is not None:
+                counters["memory_category_missing_count"] += 1
+            if positive_category_match:
+                counters["positive_category_match_count"] += 1
+                if selected:
+                    counters["selected_positive_category_match_count"] += 1
+                if injected:
+                    counters["injected_positive_category_match_count"] += 1
+                    if not is_aggregate:
+                        counters["injected_concrete_positive_category_match_count"] += 1
+
+    raw_count = counters["raw_match_count"]
+    selected_count = counters["selected_match_count"]
+    injected_count = counters["injected_match_count"]
+    for key in [
+        "aggregate_memory_candidate_count",
+        "concrete_memory_candidate_count",
+        "memory_injection_event_count",
+        "memory_injected_count",
+        "injected_match_count",
+        "selected_aggregate_memory_count",
+        "selected_concrete_memory_count",
+        "injected_concrete_memory_count",
+        "memory_category_matched_count",
+        "selected_memory_category_matched_count",
+        "injected_positive_category_match_count",
+        "injected_concrete_positive_category_match_count",
+        "query_sidecar_covered_event_count",
+        "query_sidecar_partial_event_count",
+        "query_sidecar_missing_event_count",
+    ]:
+        counters[key] += 0
+    sidecar_non_missing_count = (
+        counters["query_sidecar_covered_event_count"]
+        + counters["query_sidecar_partial_event_count"]
+    )
+    return {
+        "trace_present": True,
+        "trace_rows": trace_rows,
+        "category_event_count": category_event_count,
+        "counts": dict(counters),
+        "decision_nodes": dict(decision_nodes),
+        "category_decisions": dict(category_decisions),
+        "query_sidecar_coverage": dict(query_sidecar_coverage),
+        "query_category_sources": dict(query_category_sources),
+        "memory_category_sources": dict(memory_category_sources),
+        "selected_memory_category_sources": dict(selected_memory_category_sources),
+        "tool_calls": dict(tool_calls),
+        "rates": {
+            "memory_category_candidate_coverage": (
+                counters["memory_category_present_count"] / raw_count if raw_count else None
+            ),
+            "selected_memory_category_coverage": (
+                counters["selected_memory_category_present_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "memory_category_match_coverage": (
+                counters["memory_category_matched_count"] / raw_count if raw_count else None
+            ),
+            "selected_memory_category_match_coverage": (
+                counters["selected_memory_category_matched_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "selected_positive_category_match_rate": (
+                counters["selected_positive_category_match_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "injected_positive_category_match_rate": (
+                counters["injected_positive_category_match_count"] / injected_count
+                if injected_count
+                else None
+            ),
+            "injected_concrete_positive_category_match_rate": (
+                counters["injected_concrete_positive_category_match_count"] / injected_count
+                if injected_count
+                else None
+            ),
+            "concrete_memory_candidate_rate": (
+                counters["concrete_memory_candidate_count"] / raw_count if raw_count else None
+            ),
+            "selected_concrete_memory_rate": (
+                counters["selected_concrete_memory_count"] / selected_count
+                if selected_count
+                else None
+            ),
+            "injected_concrete_memory_rate": (
+                counters["injected_concrete_memory_count"] / injected_count
+                if injected_count
+                else None
+            ),
+            "query_sidecar_non_missing_event_rate": (
+                sidecar_non_missing_count / category_event_count if category_event_count else None
+            ),
+            "query_sidecar_full_event_rate": (
+                counters["query_sidecar_covered_event_count"] / category_event_count
+                if category_event_count
+                else None
+            ),
+        },
+    }
+
+
+def _runtime_evidence_status(
+    *,
+    category_rerank: dict[str, Any],
+    retrieval_trace_summary: dict[str, Any],
+    corpus_probe: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    if category_rerank.get("enabled"):
+        corpus_probe = corpus_probe if isinstance(corpus_probe, dict) else {}
+        probe_match_count = int(corpus_probe.get("match_count") or 0)
+        probe_concrete_match_count = int(
+            corpus_probe.get("concrete_match_count")
+            or corpus_probe.get("read_non_empty_count")
+            or 0
+        )
+        probe_aggregate_match_count = int(corpus_probe.get("aggregate_match_count") or 0)
+        if not corpus_probe:
+            reasons.append("missing_corpus_probe")
+        if corpus_probe and probe_match_count <= 0:
+            reasons.append("empty_corpus_probe")
+        if probe_match_count > 0:
+            if probe_concrete_match_count <= 0:
+                reasons.append("no_concrete_corpus_probe_matches")
+            if probe_aggregate_match_count == probe_match_count:
+                reasons.append("aggregate_only_corpus_probe")
+
+        if not retrieval_trace_summary.get("trace_present"):
+            reasons.append("missing_retrieval_trace")
+        counts = (
+            retrieval_trace_summary.get("counts")
+            if isinstance(retrieval_trace_summary.get("counts"), dict)
+            else {}
+        )
+        rates = (
+            retrieval_trace_summary.get("rates")
+            if isinstance(retrieval_trace_summary.get("rates"), dict)
+            else {}
+        )
+        applied_count = int(counts.get("category_applied_event_count") or 0)
+        if retrieval_trace_summary.get("trace_present"):
+            if int(retrieval_trace_summary.get("category_event_count") or 0) <= 0:
+                reasons.append("no_category_rerank_events")
+            elif applied_count <= 0:
+                reasons.append("no_category_rerank_applied_events")
+        if applied_count > 0:
+            if int(counts.get("query_category_matched_event_count") or 0) <= 0:
+                reasons.append("no_query_category_coverage")
+            if float(rates.get("concrete_memory_candidate_rate") or 0.0) <= 0.0:
+                reasons.append("no_concrete_memory_candidates")
+            if int(counts.get("memory_category_present_count") or 0) <= 0:
+                reasons.append("no_memory_category_coverage")
+            if int(counts.get("memory_category_matched_count") or 0) <= 0:
+                reasons.append("no_matched_memory_categories")
+            if int(counts.get("memory_injection_event_count") or 0) <= 0:
+                reasons.append("no_memory_injection")
+            if (
+                int(counts.get("memory_injection_event_count") or 0) > 0
+                and float(rates.get("injected_concrete_memory_rate") or 0.0) <= 0.0
+            ):
+                reasons.append("no_injected_concrete_memory")
+            if (
+                int(counts.get("query_category_matched_event_count") or 0) > 0
+                and float(rates.get("selected_positive_category_match_rate") or 0.0) <= 0.0
+            ):
+                reasons.append("no_selected_positive_category_match")
+            if (
+                int(counts.get("query_category_matched_event_count") or 0) > 0
+                and int(counts.get("memory_injection_event_count") or 0) > 0
+                and int(counts.get("injected_concrete_positive_category_match_count") or 0) <= 0
+            ):
+                reasons.append("no_injected_concrete_positive_category_match")
+
+    return {
+        "status": "diagnostic" if reasons else "valid",
+        "reasons": reasons,
     }
 
 
@@ -118,12 +518,14 @@ def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
     recent_user = [
         str(getattr(message, "content", "") or "")
         for message in state_messages[-8:]
-        if str(getattr(message, "role", "")) == "user" and str(getattr(message, "content", "") or "").strip()
+        if str(getattr(message, "role", "")) == "user"
+        and str(getattr(message, "content", "") or "").strip()
     ]
     recent_observations = [
         str(getattr(message, "content", "") or "")[:600]
         for message in state_messages[-12:]
-        if str(getattr(message, "role", "")) == "tool" and str(getattr(message, "content", "") or "").strip()
+        if str(getattr(message, "role", "")) == "tool"
+        and str(getattr(message, "content", "") or "").strip()
     ]
     parts = [
         "Before executing write-like tool call(s): " + "; ".join(rendered),
@@ -151,6 +553,69 @@ def _message_text(message: dict[str, Any]) -> tuple[str, str]:
     return "assistant", str(message.get("content") or "")
 
 
+def _scenario_sha256(instructions: str) -> str:
+    return hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+
+
+def _load_fixed_first_user_fixture(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"fixed-first-user fixture not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mapping = data.get("by_scenario_sha256") if isinstance(data, dict) else None
+    if not isinstance(mapping, dict) or not mapping:
+        raise ValueError(f"fixed-first-user fixture has no by_scenario_sha256 map: {path}")
+    return {str(key): str(value) for key, value in mapping.items()}
+
+
+def _has_user_message(state: Any) -> bool:
+    for message in getattr(state, "messages", []) or []:
+        role = getattr(message, "role", None)
+        if str(getattr(role, "value", role)) == "user":
+            return True
+    return False
+
+
+def _append_incoming_user_context(message: Any, state: Any) -> None:
+    from tau2.data_model.message import AssistantMessage, MultiToolMessage, ToolMessage
+
+    if isinstance(message, MultiToolMessage):
+        state.messages.extend(message.tool_messages)
+    elif isinstance(message, ToolMessage):
+        state.messages.append(message)
+    elif isinstance(message, AssistantMessage) and (
+        message.has_content() or message.is_tool_call()
+    ):
+        state.messages.append(message)
+
+
+def _register_fixed_first_user(args: argparse.Namespace) -> str:
+    if not args.fixed_first_user_file:
+        return args.user
+    _add_tau2_to_path(args.tau2_repo)
+    mapping = _load_fixed_first_user_fixture(args.fixed_first_user_file)
+
+    from tau2.data_model.message import UserMessage
+    from tau2.registry import registry
+    from tau2.user.user_simulator import UserSimulator
+
+    class FixedFirstUserSimulator(UserSimulator):  # type: ignore[misc]
+        def _generate_next_message(self, message: Any, state: Any) -> UserMessage:  # type: ignore[override]
+            if not _has_user_message(state):
+                key = _scenario_sha256(str(self.instructions or ""))
+                fixed = mapping.get(key)
+                if fixed is None:
+                    raise RuntimeError(
+                        f"fixed-first-user fixture does not cover this TAU-2 scenario: sha256={key}"
+                    )
+                _append_incoming_user_context(message, state)
+                return UserMessage(role="user", content=fixed)
+            return super()._generate_next_message(message, state)
+
+    if FIXED_FIRST_USER_NAME not in registry.get_users():
+        registry.register_user(FixedFirstUserSimulator, FIXED_FIRST_USER_NAME)
+    return FIXED_FIRST_USER_NAME
+
+
 def _run_tau2(
     *,
     tau2_repo: Path,
@@ -171,6 +636,7 @@ def _run_tau2(
     save_to: Path,
 ):
     _add_tau2_to_path(tau2_repo)
+    _patch_tau2_auxiliary_llm_defaults(agent_llm, agent_llm_args)
     from tau2.data_model.simulation import RunConfig, TextRunConfig
     from tau2.run import run_domain
 
@@ -246,29 +712,49 @@ def _read_memory_text(client: Any, match: Any) -> tuple[str, str | None]:
 
 
 def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
+    probe_limit = args.retrieval_top_k
+    if hasattr(args, "category_reranker"):
+        probe_limit = args.category_reranker.search_limit(
+            probe_limit,
+            decision_node="before_write_tool_call",
+        )
     result = client.search(
         query=f"{args.domain} customer service order reservation booking cancellation exchange return update",
         target_uri=args.search_uri,
-        limit=args.retrieval_top_k,
+        limit=probe_limit,
     )
     memories = list(getattr(result, "memories", []) or [])
     reads = []
-    for match in memories[: args.retrieval_top_k]:
+    for match in memories[:probe_limit]:
         uri = getattr(match, "uri", "")
         text, read_error = _read_memory_text(client, match)
+        is_aggregate = _is_aggregate_memory_uri(uri)
         row = {
             "uri": uri,
             "score": getattr(match, "score", None),
             "text_chars": len(text),
             "non_empty": bool(str(text).strip()),
+            "is_aggregate_memory": is_aggregate,
+            "is_concrete_memory": not is_aggregate,
         }
         if read_error:
             row["read_error"] = read_error
         reads.append(row)
+    aggregate_match_count = sum(1 for row in reads if row["is_aggregate_memory"])
+    concrete_match_count = sum(1 for row in reads if row["is_concrete_memory"])
     return {
         "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
+        "probe_limit": probe_limit,
         "match_count": len(memories),
+        "aggregate_match_count": aggregate_match_count,
+        "concrete_match_count": concrete_match_count,
         "read_non_empty_count": sum(1 for row in reads if row["non_empty"]),
+        "aggregate_read_non_empty_count": sum(
+            1 for row in reads if row["is_aggregate_memory"] and row["non_empty"]
+        ),
+        "concrete_read_non_empty_count": sum(
+            1 for row in reads if row["is_concrete_memory"] and row["non_empty"]
+        ),
         "matches": reads,
     }
 
@@ -297,11 +783,14 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     )
 
     data = json.loads(train_results.read_text())
+    assert_tau2_results_complete(data, context=f"{args.domain} train")
     client = _client(args)
     committed = []
     try:
         for sim in data.get("simulations") or []:
-            session_id = f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+            session_id = (
+                f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+            )
             created = client.create_session(session_id=session_id)
             sid = created.get("session_id", session_id)
             for msg in sim.get("messages") or []:
@@ -363,20 +852,44 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
     class OpenVikingMemoryAgent(LLMAgent):
         def get_init_state(self, message_history=None):
             state = super().get_init_state(message_history)
+            scope_prompt = _scope_prompt_text(args.scope_prompt_text)
+            if scope_prompt:
+                state.system_messages.append(SystemMessage(role="system", content=scope_prompt))
+                self._trace(
+                    {
+                        "decision_node": "static_scope_prompt",
+                        "retrieval_action_taken": "scope_prompt_static_injection",
+                        "scope_prompt": args.scope_prompt_summary,
+                        "injected": True,
+                        "injected_count": 1,
+                    }
+                )
             if args.retrieval_mode in {"first_user", "first_user_prewrite"}:
                 state.system_messages.append(
                     SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
                 )
             return state
 
-        def _retrieve(self, query: str) -> tuple[str, list[dict[str, Any]]]:
+        def _retrieve(
+            self,
+            query: str,
+            *,
+            decision_node: str,
+            search_limit: int,
+            inject_limit: int,
+        ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
             client = _client(args)
             rows: list[dict[str, Any]] = []
             try:
-                result = client.search(query=query, target_uri=args.search_uri, limit=args.retrieval_top_k)
+                effective_search_limit = args.category_reranker.search_limit(
+                    search_limit,
+                    decision_node=decision_node,
+                )
+                result = client.search(
+                    query=query, target_uri=args.search_uri, limit=effective_search_limit
+                )
                 memories = list(getattr(result, "memories", []) or [])
-                blocks = []
-                for index, match in enumerate(memories[: args.retrieval_top_k], 1):
+                for _index, match in enumerate(memories[:effective_search_limit], 1):
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     row = {
@@ -384,13 +897,24 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                         "score": getattr(match, "score", None),
                         "level": getattr(match, "level", None),
                         "text_chars": len(text),
+                        "_text": text,
                     }
                     if read_error:
                         row["read_error"] = read_error
                     rows.append(row)
+                selected_rows, trace_rows, category_rerank = args.category_reranker.select(
+                    domain=args.domain,
+                    query=query,
+                    rows=rows,
+                    decision_node=decision_node,
+                    base_limit=inject_limit,
+                )
+                blocks = []
+                for index, row in enumerate(selected_rows, 1):
+                    text = str(row.get("_text") or "")
                     if text.strip():
-                        blocks.append(f"Memory {index} ({uri}):\n{text.strip()}")
-                return "\n\n".join(blocks), rows
+                        blocks.append(f"Memory {index} ({row.get('uri', '')}):\n{text.strip()}")
+                return "\n\n".join(blocks), trace_rows, category_rerank
             finally:
                 client.close()
 
@@ -400,11 +924,18 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
 
         @staticmethod
         def _trace_injection_fields(block: str, matches: list[dict[str, Any]]) -> dict[str, Any]:
-            injected_count = sum(1 for row in matches if int(row.get("text_chars") or 0) > 0)
+            injected_count = sum(
+                1
+                for row in matches
+                if row.get("injected")
+                or (row.get("selected_for_injection", True) and int(row.get("text_chars") or 0) > 0)
+            )
             return {
                 "injected": bool(block.strip()),
                 "injected_count": injected_count if block.strip() else 0,
-                "retrieval_action_taken": "retrieve_and_inject" if block.strip() else "retrieve_no_injection",
+                "retrieval_action_taken": "retrieve_and_inject"
+                if block.strip()
+                else "retrieve_no_injection",
             }
 
         def _generate(self, messages):
@@ -476,7 +1007,8 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 (
                     i
                     for i, item in enumerate(state.system_messages)
-                    if isinstance(item, SystemMessage) and item.content == "<openviking_memory_not_loaded/>"
+                    if isinstance(item, SystemMessage)
+                    and item.content == "<openviking_memory_not_loaded/>"
                 ),
                 None,
             )
@@ -484,11 +1016,16 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             role_value = getattr(role, "value", role)
             if marker_index is not None and str(role_value) == "user":
                 query = str(getattr(message, "content", "") or "")
-                block, matches = self._retrieve(query)
+                block, matches, category_rerank = self._retrieve(
+                    query,
+                    decision_node="first_user",
+                    search_limit=args.first_user_retrieval_top_k,
+                    inject_limit=args.first_user_inject_top_k,
+                )
                 prompt = (
                     "No OpenViking memory matched this user request."
                     if not block
-                    else "Use these OpenViking experience memories only when they match the current task:\n\n"
+                    else "Use these OpenViking memories only when they match the current task:\n\n"
                     + block
                 )
                 state.system_messages[marker_index] = SystemMessage(role="system", content=prompt)
@@ -496,8 +1033,11 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     {
                         "decision_node": "first_user",
                         "query": query,
+                        "search_limit": args.first_user_retrieval_top_k,
+                        "inject_limit": args.first_user_inject_top_k,
                         "match_count": len(matches),
                         "matches": matches,
+                        "category_rerank": category_rerank,
                         **self._trace_injection_fields(block, matches),
                     }
                 )
@@ -508,13 +1048,21 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                 write_calls = [call for call in tool_calls if _is_write_tool_call(call)]
                 if write_calls:
                     query = _tool_call_query(write_calls, state.messages)
-                    block, matches = self._retrieve(query)
+                    block, matches, category_rerank = self._retrieve(
+                        query,
+                        decision_node="before_write_tool_call",
+                        search_limit=args.prewrite_retrieval_top_k,
+                        inject_limit=args.prewrite_inject_top_k,
+                    )
                     self._trace(
                         {
                             "decision_node": "before_write_tool_call",
                             "query": query,
+                            "search_limit": args.prewrite_retrieval_top_k,
+                            "inject_limit": args.prewrite_inject_top_k,
                             "match_count": len(matches),
                             "matches": matches,
+                            "category_rerank": category_rerank,
                             **self._trace_injection_fields(block, matches),
                             "tool_calls": [
                                 {
@@ -528,8 +1076,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
                     if block:
                         prompt = (
                             "Before executing the pending write-like tool call, use these "
-                            "OpenViking experience memories only when they match the current task:\n\n"
-                            + block
+                            "OpenViking memories only when they match the current task:\n\n" + block
                         )
                         assistant_message = self._generate(
                             state.system_messages
@@ -540,6 +1087,7 @@ def _register_memory_agent(args: argparse.Namespace, trace_path: Path) -> None:
             return assistant_message, state
 
     if AGENT_NAME not in registry.get_agents():
+
         def create_openviking_memory_agent(tools, domain_policy, **kwargs):
             return OpenVikingMemoryAgent(
                 tools=tools,
@@ -577,36 +1125,152 @@ def main() -> int:
     parser.add_argument("--user-llm", required=True)
     parser.add_argument("--agent-llm-args", type=_json, default={})
     parser.add_argument("--user-llm-args", type=_json, default={})
-    parser.add_argument("--openviking-url", required=True)
-    parser.add_argument("--openviking-account", required=True)
-    parser.add_argument("--openviking-user", required=True)
-    parser.add_argument("--openviking-agent-id", required=True)
+    parser.add_argument("--openviking-url")
+    parser.add_argument("--openviking-account")
+    parser.add_argument("--openviking-user")
+    parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
-    parser.add_argument("--search-uri", required=True)
+    parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
+    parser.add_argument("--first-user-retrieval-top-k", type=int)
+    parser.add_argument("--first-user-inject-top-k", type=int)
+    parser.add_argument("--prewrite-retrieval-top-k", type=int)
+    parser.add_argument("--prewrite-inject-top-k", type=int)
+    parser.add_argument("--fixed-first-user-file", type=Path)
+    parser.add_argument("--scope-prompt-file", type=Path)
     parser.add_argument(
         "--retrieval-mode",
         choices=["first_user", "prewrite", "first_user_prewrite"],
         default="first_user",
     )
+    parser.add_argument("--category-rerank-config", type=_json, default={})
+    parser.add_argument("--scope-prompt-config", type=_json, default={})
     parser.add_argument("--force-train", action="store_true")
+    parser.add_argument("--prepare-corpus-only", action="store_true")
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Run the configured TAU-2 agent without OpenViking retrieval.",
+    )
     args = parser.parse_args()
     normalize_litellm_env()
+    if not args.no_memory:
+        missing = [
+            name
+            for name in (
+                "openviking_url",
+                "openviking_account",
+                "openviking_user",
+                "openviking_agent_id",
+                "search_uri",
+            )
+            if not getattr(args, name)
+        ]
+        if missing:
+            parser.error(
+                "OpenViking memory runs require: "
+                + ", ".join("--" + name.replace("_", "-") for name in missing)
+            )
+    args.category_reranker = CategoryReranker.from_payload(
+        args.category_rerank_config,
+        repo_root=REPO_ROOT,
+    )
 
-    args.tau2_repo = args.tau2_repo.resolve()
+    args.tau2_repo = args.tau2_repo.expanduser().resolve()
+    args.run_dir = args.run_dir.expanduser().resolve()
+    if args.corpus_dir:
+        args.corpus_dir = args.corpus_dir.expanduser().resolve()
     args.run_dir.mkdir(parents=True, exist_ok=True)
     corpus_dir = args.corpus_dir or args.run_dir
     corpus_dir.mkdir(parents=True, exist_ok=True)
+    args.first_user_retrieval_top_k = args.first_user_retrieval_top_k or args.retrieval_top_k
+    args.first_user_inject_top_k = args.first_user_inject_top_k or args.first_user_retrieval_top_k
+    args.prewrite_retrieval_top_k = args.prewrite_retrieval_top_k or args.retrieval_top_k
+    args.prewrite_inject_top_k = args.prewrite_inject_top_k or args.prewrite_retrieval_top_k
+    if args.fixed_first_user_file is not None:
+        args.fixed_first_user_file = args.fixed_first_user_file.expanduser().resolve()
+    if args.scope_prompt_file is not None:
+        args.scope_prompt_file = args.scope_prompt_file.expanduser().resolve()
+        if not args.scope_prompt_file.is_file():
+            parser.error(f"--scope-prompt-file does not exist: {args.scope_prompt_file}")
+        if isinstance(args.scope_prompt_config, dict) and args.scope_prompt_config.get("enabled"):
+            parser.error(
+                "--scope-prompt-file and enabled --scope-prompt-config are mutually exclusive"
+            )
+        args.scope_prompt_config = {
+            "enabled": True,
+            "domain_files": {args.domain: str(args.scope_prompt_file)},
+        }
+    args.scope_prompt_text, args.scope_prompt_summary = _load_scope_prompt(
+        args.scope_prompt_config,
+        domain=args.domain,
+        repo_root=REPO_ROOT,
+    )
     train_results = corpus_dir / "train_results.json"
     corpus_manifest = corpus_dir / "corpus_manifest.json"
     eval_results = args.run_dir / f"{args.run_label}.json"
     trace_path = args.run_dir / f"{args.run_label}.retrieval_trace.jsonl"
     summary_path = args.run_dir / f"{args.run_label}.summary.json"
 
+    if args.no_memory:
+        user_name = _register_fixed_first_user(args)
+        _run_tau2(
+            tau2_repo=args.tau2_repo,
+            domain=args.domain,
+            split=args.eval_split_name,
+            task_ids=args.task_ids,
+            num_tasks=args.num_tasks,
+            trials=1,
+            max_steps=args.max_steps,
+            max_concurrency=args.max_concurrency,
+            agent=args.base_agent,
+            user=user_name,
+            agent_llm=args.agent_llm,
+            user_llm=args.user_llm,
+            agent_llm_args=args.agent_llm_args,
+            user_llm_args=args.user_llm_args,
+            seed=args.seed,
+            save_to=eval_results,
+        )
+        assert_tau2_results_complete(
+            json.loads(eval_results.read_text()), context=f"{args.domain} eval"
+        )
+        summary = {
+            "run_label": args.run_label,
+            "domain": args.domain,
+            "strategy_id": args.strategy_id,
+            "seed": args.seed,
+            "fixed_first_user_file": str(args.fixed_first_user_file)
+            if args.fixed_first_user_file
+            else None,
+            "eval_results": str(eval_results),
+            "metrics": _metrics(eval_results),
+        }
+        _write_json(summary_path, summary)
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        return 0
+
     corpus = _train(args, train_results, corpus_manifest)
+    if args.prepare_corpus_only:
+        print(
+            json.dumps(
+                {
+                    "run_label": args.run_label,
+                    "domain": args.domain,
+                    "strategy_id": args.strategy_id,
+                    "prepare_corpus_only": True,
+                    "corpus": corpus,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+
     trace_path.touch()
     _register_memory_agent(args, trace_path)
+    user_name = _register_fixed_first_user(args)
     _run_tau2(
         tau2_repo=args.tau2_repo,
         domain=args.domain,
@@ -617,7 +1281,7 @@ def main() -> int:
         max_steps=args.max_steps,
         max_concurrency=args.max_concurrency,
         agent=AGENT_NAME,
-        user=args.user,
+        user=user_name,
         agent_llm=args.agent_llm,
         user_llm=args.user_llm,
         agent_llm_args=args.agent_llm_args,
@@ -625,15 +1289,38 @@ def main() -> int:
         seed=args.seed,
         save_to=eval_results,
     )
+    assert_tau2_results_complete(
+        json.loads(eval_results.read_text()), context=f"{args.domain} eval"
+    )
+    category_summary = args.category_reranker.summary()
+    trace_summary = _trace_category_summary(trace_path)
     summary = {
         "run_label": args.run_label,
         "domain": args.domain,
         "strategy_id": args.strategy_id,
         "retrieval_mode": args.retrieval_mode,
+        "retrieval": {
+            "first_user_retrieval_top_k": args.first_user_retrieval_top_k,
+            "first_user_inject_top_k": args.first_user_inject_top_k,
+            "prewrite_retrieval_top_k": args.prewrite_retrieval_top_k,
+            "prewrite_inject_top_k": args.prewrite_inject_top_k,
+        },
         "seed": args.seed,
+        "fixed_first_user_file": str(args.fixed_first_user_file)
+        if args.fixed_first_user_file
+        else None,
+        "scope_prompt_file": str(args.scope_prompt_file) if args.scope_prompt_file else None,
         "corpus": corpus,
+        "category_rerank": category_summary,
+        "scope_prompt": args.scope_prompt_summary,
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
+        "retrieval_trace_summary": trace_summary,
+        "runtime_evidence": _runtime_evidence_status(
+            category_rerank=category_summary,
+            retrieval_trace_summary=trace_summary,
+            corpus_probe=corpus.get("corpus_probe") if isinstance(corpus, dict) else None,
+        ),
         "metrics": _metrics(eval_results),
     }
     _write_json(summary_path, summary)
