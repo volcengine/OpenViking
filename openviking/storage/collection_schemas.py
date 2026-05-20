@@ -42,6 +42,14 @@ logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
 
+def _parse_version(v: str) -> tuple:
+    """Parse a semver-like string into a comparable tuple of ints."""
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
+
+
 @dataclass
 class RequestQueueStats:
     processed: int = 0
@@ -103,6 +111,7 @@ class CollectionSchemas:
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
                 {"FieldName": "owner_agent_id", "FieldType": "string"},
@@ -131,6 +140,9 @@ class CollectionSchemas:
             "Description": description or "Unified context collection",
             "Fields": fields,
             "ScalarIndex": scalar_index,
+            "FullText": [
+                {"Field": "content", "Analyzer": {"Tokenizer": "standard"}},
+            ],
         }
 
 
@@ -169,6 +181,7 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         "model": model,
         "dimension": dimension,
         "model_identity": model_identity,
+        "schema_version": "0.3.18",
     }
 
 
@@ -248,6 +261,24 @@ async def init_context_collection(storage) -> bool:
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
     )
+
+    # Schema compatibility check: warn if collection was created by older OV version
+    if existing_embedding_meta:
+        existing_schema_version = existing_embedding_meta.get("schema_version", "0.0.0")
+        if _parse_version(existing_schema_version) < _parse_version("0.3.18"):
+            fields = existing_meta.get("Fields", [])
+            has_content = any(f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields)
+            fulltext = existing_meta.get("FullText") or []
+            has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
+            if not (has_content and has_content_fulltext):
+                logger.warning(
+                    "Collection schema is outdated (created by OV %s, requires >= 0.3.18). "
+                    "Missing 'content' field or FullText config. "
+                    "grep engine=auto will fall back to fs. "
+                    "Recreate the collection to enable vikingdb-based grep.",
+                    existing_schema_version,
+                )
+
     if existing_embedding_meta == embedding_meta:
         return False
 

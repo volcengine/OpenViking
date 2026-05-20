@@ -176,7 +176,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
+async def test_init_context_collection_warns_on_mismatched_nonempty_collection(monkeypatch):
+    """When embedding metadata mismatches for a non-empty collection, the function
+    logs a warning and returns False (does not raise)."""
+
     class _FakeStorage:
         async def create_collection(self, name, schema):
             del name, schema
@@ -204,8 +207,8 @@ async def test_init_context_collection_rejects_mismatched_nonempty_collection(mo
         lambda: config,
     )
 
-    with pytest.raises(EmbeddingRebuildRequiredError, match="Rebuild is required"):
-        await init_context_collection(_FakeStorage())
+    result = await init_context_collection(_FakeStorage())
+    assert result is False
 
 
 def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):

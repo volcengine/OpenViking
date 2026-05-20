@@ -313,10 +313,16 @@ class SyncHTTPClient:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        engine: str = "auto",
+        switch_to_remote_threshold: int = 1000,
+        remote_return_limit: int = 100,
     ) -> Dict:
         """Content search with pattern."""
         return run_async(
-            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+            self._async_client.grep(
+                uri, pattern, case_insensitive, node_limit, exclude_uri,
+                engine, switch_to_remote_threshold, remote_return_limit,
+            )
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
