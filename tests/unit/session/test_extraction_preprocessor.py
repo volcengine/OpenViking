@@ -50,6 +50,21 @@ def test_extracts_section_signals_with_source_ids():
     assert all(signal.source_id for signal in packet.structured_facts)
 
 
+def test_extracts_preference_signals_case_insensitively():
+    messages = [
+        _msg(1, "user", "I Prefer dark mode and you MUST keep conservative defaults."),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(fallback_if_compact_ratio_above=10.0),
+    )
+
+    facts = packet.section_signals["Key Facts & Decisions"]
+    assert any(signal.kind == "preference" for signal in facts)
+    assert "explicit_preference" in packet.risk_flags
+
+
 def test_span_selection_deduplicates_repeated_messages_and_keeps_latest_user():
     repeated = "We should update the same implementation note and repeat details."
     messages = [
@@ -148,6 +163,25 @@ def test_compact_packet_respects_min_absolute_savings_threshold():
 
     assert packet.should_fallback
     assert packet.fallback_reason == "savings_too_small"
+
+
+def test_metadata_headers_do_not_pollute_risk_flags_or_scoring():
+    metadata = 'Sender (untrusted metadata): ```json {"status":"error","retry":true}```'
+    messages = [
+        _msg(1, "assistant", f"{metadata}\n\n好的，我来帮你写个函数。"),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=1,
+            min_absolute_savings_tokens=0,
+        ),
+    )
+
+    assert "error_or_fix" not in packet.risk_flags
+    assert "fallback_or_degradation" not in packet.risk_flags
 
 
 def test_rendered_packet_contains_all_sections_and_source_ids():

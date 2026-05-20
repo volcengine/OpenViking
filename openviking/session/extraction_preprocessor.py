@@ -49,7 +49,8 @@ _DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _PREFERENCE_RE = re.compile(
-    r"(?:prefer|preference|I like|I don't like|must|should|不要|别|偏好|喜欢|不喜欢|要求|必须)"
+    r"(?:prefer|preference|I like|I don't like|must|should|不要|别|偏好|喜欢|不喜欢|要求|必须)",
+    re.IGNORECASE,
 )
 _CORRECTION_RE = re.compile(
     r"(?:actually|correction|correct|wrong|not that|不是|不对|纠正|更正|错了|改为|应该是)",
@@ -86,6 +87,20 @@ _COMPONENT_RE = re.compile(
     r"auto.?recall|vikingbot|embedding|chunk|rag|vector)",
     re.IGNORECASE,
 )
+_SIGNAL_WEIGHTS = [
+    (_PATH_RE, 2.0),
+    (_URL_RE, 1.5),
+    (_CORRECTION_RE, 4.0),
+    (_ERROR_RE, 3.0),
+    (_OPEN_ISSUE_RE, 2.5),
+    (_PREFERENCE_RE, 2.0),
+    (_FALLBACK_RE, 3.0),
+    (_RECALL_RE, 2.0),
+    (_PLUGIN_RE, 2.0),
+    (_COMPONENT_RE, 2.0),
+    (_DATE_RE, 1.5),
+    (_GOAL_RE, 1.0),
+]
 
 
 @dataclass(frozen=True)
@@ -328,11 +343,13 @@ def _normalize_message(message: Message, index: int, options: Optional[Preproces
     text = "\n".join(parts) if parts else "(no content)"
     if len(text) > 4000:
         text = text[:4000].rstrip() + "\n...[truncated]"
+    clean_text = _strip_metadata(text)
     return {
         "id": message.id,
         "index": index,
         "role": message.role,
         "text": text,
+        "clean_text": clean_text,
         "formatted": f"[{message.role} #{index} id={message.id}]: {text}",
         "has_tool": has_tool,
         "failed_tool": failed_tool,
@@ -362,9 +379,9 @@ def _extract_section_signals(
         text = str(item["text"])
         source_id = str(item["id"])
         source_index = int(item["index"])
-        # Use stripped text for signal extraction to avoid false positives
-        # from metadata headers, but keep original for the signal text.
-        clean_text = _strip_metadata(text)
+        clean_text = str(item["clean_text"])
+        # Keep raw text for literal URL/path/function extraction, but use
+        # clean_text for semantic matching so injected metadata cannot skew scoring/risk.
         _add_regex_signals(signals, seen, "Files & Context", "url", _URL_RE, text, source_id, source_index)
         _add_regex_signals(signals, seen, "Files & Context", "path", _PATH_RE, text, source_id, source_index)
         _add_regex_signals(signals, seen, "Files & Context", "function", _FUNCTION_RE, text, source_id, source_index)
@@ -465,7 +482,6 @@ def _detect_risk_flags(
     normalized_messages: Sequence[Dict[str, object]],
     structured_facts: Sequence[SectionSignal],
 ) -> List[str]:
-    joined = "\n".join(str(item["text"]) for item in normalized_messages)
     flags: List[str] = []
     checks = [
         ("correction_or_negation", _CORRECTION_RE),
@@ -477,7 +493,7 @@ def _detect_risk_flags(
         ("memory_recall", _RECALL_RE),
     ]
     for name, pattern in checks:
-        if pattern.search(joined):
+        if any(pattern.search(str(item["clean_text"])) for item in normalized_messages):
             flags.append(name)
     if any(bool(item["failed_tool"]) for item in normalized_messages):
         flags.append("failed_tool")
@@ -543,7 +559,7 @@ def _latest_role_index(messages: Sequence[Dict[str, object]], role: str) -> int:
 
 
 def _score_message(item: Dict[str, object]) -> float:
-    text = str(item["text"])
+    text = str(item["clean_text"])
     score = 0.0
     if item["role"] == "user":
         score += 3.0
@@ -551,48 +567,20 @@ def _score_message(item: Dict[str, object]) -> float:
         score += 2.0
     if item["failed_tool"]:
         score += 5.0
-    for pattern, weight in [
-        (_PATH_RE, 2.0),
-        (_URL_RE, 1.5),
-        (_CORRECTION_RE, 4.0),
-        (_ERROR_RE, 3.0),
-        (_OPEN_ISSUE_RE, 2.5),
-        (_PREFERENCE_RE, 2.0),
-        (_FALLBACK_RE, 3.0),
-        (_RECALL_RE, 2.0),
-        (_PLUGIN_RE, 2.0),
-        (_COMPONENT_RE, 2.0),
-        (_DATE_RE, 1.5),
-        (_GOAL_RE, 1.0),
-    ]:
-        if pattern.search(text):
-            score += weight
-    return score
+    return score + _regex_signal_score(text)
 
 
 def _paragraph_score(paragraph: str) -> float:
     """Score a paragraph for information density using the same regex signals."""
-    score = 0.0
-    for pattern, weight in [
-        (_PATH_RE, 2.0),
-        (_URL_RE, 1.5),
-        (_CORRECTION_RE, 4.0),
-        (_ERROR_RE, 3.0),
-        (_OPEN_ISSUE_RE, 2.5),
-        (_PREFERENCE_RE, 2.0),
-        (_FALLBACK_RE, 3.0),
-        (_RECALL_RE, 2.0),
-        (_PLUGIN_RE, 2.0),
-        (_COMPONENT_RE, 2.0),
-        (_DATE_RE, 1.5),
-        (_GOAL_RE, 1.0),
-    ]:
-        if pattern.search(paragraph):
-            score += weight
+    score = _regex_signal_score(_strip_metadata(paragraph))
     # Bonus for code-like content (backticks, indented blocks)
     if re.search(r"```|`[^`]+`|^\s{2,}\S", paragraph, re.MULTILINE):
         score += 1.5
     return score
+
+
+def _regex_signal_score(text: str) -> float:
+    return sum(weight for pattern, weight in _SIGNAL_WEIGHTS if pattern.search(text))
 
 
 def _truncate_span(text: str, max_chars: int) -> str:
