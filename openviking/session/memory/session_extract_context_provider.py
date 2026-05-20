@@ -109,14 +109,17 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.message.part import TextPart
         from openviking.session.memory.utils import resolve_output_language
 
-        text_parts = []
+        user_text_parts = []
+        all_text_parts = []
         for message in self.messages or []:
             for part in getattr(message, "parts", []):
                 if isinstance(part, TextPart) and part.text:
-                    text_parts.append(part.text)
+                    all_text_parts.append(part.text)
+                    if getattr(message, "role", "") == "user":
+                        user_text_parts.append(part.text)
 
+        text_parts = user_text_parts or all_text_parts
         return resolve_output_language("\n".join(text_parts))
-
 
     def get_output_language(self) -> str:
         return self._output_language

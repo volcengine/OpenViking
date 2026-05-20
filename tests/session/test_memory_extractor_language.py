@@ -119,3 +119,14 @@ def test_detect_output_language_insufficient_cyrillic_fallback():
     messages = [_msg("user", "Hello \u0424 world")]
     language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
     assert language == "en"
+
+
+def test_detect_output_language_italian():
+    messages = [
+        _msg(
+            "user",
+            "Questo documento descrive le preferenze dell utente e il progetto da completare.",
+        )
+    ]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    assert language == "it"

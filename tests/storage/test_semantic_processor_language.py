@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -59,6 +60,29 @@ class TestLanguageDetection:
         text = "这是一个 mixed 文档"
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "zh-CN"
+
+    def test_detect_language_chinese_with_single_korean_char(self):
+        text = "这是中文需求，继续优化记忆。한"
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "zh-CN"
+
+    def test_detect_language_chinese_with_single_cyrillic_char(self):
+        text = "这是中文需求，继续优化记忆。Д"
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "zh-CN"
+
+    def test_detect_language_english_with_single_korean_char(self):
+        text = "Please optimize memory extraction 한"
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "en"
+
+    def test_detect_language_italian(self):
+        text = (
+            "Questo documento descrive le preferenze dell utente "
+            "e il progetto da completare."
+        )
+        language = _detect_language_from_text(text, fallback_language="en")
+        assert language == "it"
 
 
 class TestLanguageFlow:
@@ -359,6 +383,27 @@ class TestOutputLanguageOverride:
         result = resolve_output_language("これは日本語のテキストです", config=config)
         assert result == "ja"
 
+    def test_locale_hint_used_when_content_has_no_language_signal(self):
+        config = self._make_config(override="")
+        with patch.dict(os.environ, {"LC_ALL": "zh_CN.UTF-8"}, clear=True):
+            result = resolve_output_language("12345 ---", config=config)
+        assert result == "zh-CN"
+
+    def test_timezone_hint_used_when_locale_hint_absent(self):
+        config = self._make_config(override="")
+        with patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True):
+            result = resolve_output_language("12345 ---", config=config)
+        assert result == "ja"
+
+    def test_content_language_wins_over_locale_hint(self):
+        config = self._make_config(override="")
+        with patch.dict(os.environ, {"LC_ALL": "zh_CN.UTF-8"}, clear=True):
+            result = resolve_output_language(
+                "This is an English document for testing language detection",
+                config=config,
+            )
+        assert result == "en"
+
     def test_conversation_override_set_bypasses_detection(self):
         config = self._make_config(override="en")
         conversation = "[user]: これは日本語のメッセージです\n[assistant]: reply"
@@ -370,3 +415,9 @@ class TestOutputLanguageOverride:
         conversation = "[user]: これは日本語のメッセージです\n[assistant]: reply"
         result = resolve_output_language_from_conversation(conversation, config=config)
         assert result == "ja"
+
+    def test_indexed_conversation_detects_user_content(self):
+        config = self._make_config(override="")
+        conversation = "[0][user][alice]: 请使用中文\n[1][assistant][bot]: 한국어 응답"
+        result = resolve_output_language_from_conversation(conversation, config=config)
+        assert result == "zh-CN"
