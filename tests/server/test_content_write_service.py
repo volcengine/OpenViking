@@ -71,7 +71,7 @@ async def test_memory_replace_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -82,10 +82,10 @@ async def test_memory_replace_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Updated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Updated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -99,7 +99,7 @@ async def test_memory_append_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -110,10 +110,10 @@ async def test_memory_append_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Original preference\nUpdated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Original preference\nUpdated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,11 @@ class _FakeLockManager:
     def create_handle(self):
         return self.handle
 
-    async def acquire_subtree(self, handle, path):
+    async def acquire_tree(self, handle, path):
+        del handle, path
+        return True
+
+    async def acquire_exact_path(self, handle, path):
         del handle, path
         return True
 
@@ -229,8 +233,58 @@ class _FakeVikingFS:
         self.content.pop(uri, None)
 
 
+class _FakeSemanticQueue:
+    def __init__(self):
+        self.messages = []
+
+    async def enqueue(self, msg):
+        self.messages.append(msg)
+        return "queued-id"
+
+
+class _FakeQueueManager:
+    SEMANTIC = "semantic"
+
+    def __init__(self, queue):
+        self.queue = queue
+
+    def get_queue(self, name, allow_create=False):
+        del allow_create
+        assert name == self.SEMANTIC
+        return self.queue
+
+
 @pytest.mark.asyncio
-async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkeypatch):
+async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    queue = _FakeSemanticQueue()
+    coordinator = ContentWriteCoordinator(
+        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    )
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager",
+        lambda: _FakeQueueManager(queue),
+    )
+
+    await coordinator._enqueue_semantic_refresh(
+        root_uri=root_uri,
+        changed_uri=file_uri,
+        context_type="resource",
+        ctx=ctx,
+    )
+
+    assert len(queue.messages) == 1
+    assert queue.messages[0].coalesce_key == (
+        "resource|default|default|default|viking://resources/demo"
+    )
+    assert queue.messages[0].lock_handoff is None
+
+
+@pytest.mark.asyncio
+async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -262,7 +316,7 @@ async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkey
             wait=True,
         )
 
-    assert lock_manager.release_calls == []
+    assert lock_manager.release_calls == ["lock-1"]
     assert viking_fs.delete_temp_calls == []
     assert viking_fs.content[file_uri] == "updated"
 
@@ -303,7 +357,7 @@ async def test_resource_write_updates_target_and_queues_refresh_before_return(mo
     assert captured_enqueue["changed_uri"] == file_uri
     assert captured_enqueue["change_type"] == "modified"
     assert viking_fs.delete_temp_calls == []
-    assert lock_manager.release_calls == []
+    assert lock_manager.release_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio
@@ -372,7 +426,7 @@ async def test_resource_write_rolls_back_create_when_enqueue_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypatch):
+async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatch):
     file_uri = "viking://user/default/memories/preferences/theme.md"
     root_uri = "viking://user/default/memories/preferences"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -414,7 +468,7 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
             wait=True,
         )
 
-    assert lock_manager.release_calls == []
+    assert lock_manager.release_calls == ["lock-1"]
 
 
 # Create-mode test helpers
@@ -508,6 +562,62 @@ async def test_create_mode_new_file_success(monkeypatch):
 
     assert result["mode"] == "create"
     assert write_calls == [(file_uri, "new content")]
+
+
+@pytest.mark.asyncio
+async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
+    input_uri = "viking://user/memories/new_file.md"
+    canonical_uri = "viking://user/default/memories/new_file.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=canonical_uri,
+        root_uri=root_uri,
+        file_exists=False,
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+
+    write_calls = []
+    vectorize_calls = []
+    refresh_calls = []
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del mode, ctx
+        write_calls.append((uri, content))
+        return content
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del ctx
+        vectorize_calls.append((uri, context_type))
+        return None
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        refresh_calls.append(kwargs)
+        return None
+
+    async def _fake_wait_for_queues(*, timeout):
+        del timeout
+        return None
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+
+    result = await coordinator.write(
+        uri=input_uri, content="new content", mode="create", ctx=ctx, wait=True
+    )
+
+    assert result["uri"] == canonical_uri
+    assert result["root_uri"] == root_uri
+    assert result["context_type"] == "memory"
+    assert write_calls == [(canonical_uri, "new content")]
+    assert vectorize_calls == [(canonical_uri, "memory")]
+    assert refresh_calls[0]["root_uri"] == root_uri
+    assert refresh_calls[0]["modified_uri"] == canonical_uri
 
 
 @pytest.mark.asyncio

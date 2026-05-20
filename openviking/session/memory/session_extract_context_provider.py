@@ -10,9 +10,13 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
-from openviking.server.identity import RequestContext
+from openviking.core.namespace import to_agent_space, to_user_space
+from openviking.message.part import ToolPart
+from openviking.prompts.manager import PromptManager
+from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.dataclass import MemoryFileContent
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     resolve_memory_templates_dir,
@@ -21,7 +25,9 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -31,21 +37,47 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
+_PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
+_PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
+_PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
+
 
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
-    def __init__(self, messages: Any, latest_archive_overview: str = ""):
+    def __init__(
+        self,
+        messages: Any,
+        latest_archive_overview: str = "",
+        isolation_handler: MemoryIsolationHandler = None,
+        ctx: RequestContext = None,
+        viking_fs: VikingFS = None,
+        transaction_handle=None,
+    ):
         self.messages = messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
         self._registry = None  # 延迟加载
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
-
+        self._isolation_handler = isolation_handler
+        self._read_file_contents: Dict[str, MemoryFileContent] = {}
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
+        self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
+        self._ctx = ctx
+        self._viking_fs = viking_fs
+        self._transaction_handle = transaction_handle
+
+    @property
+    def read_file_contents(self) -> Dict[str, MemoryFileContent]:
+        return self._read_file_contents
+
+    def set_transaction_handle(self, handle):
+        """Set transaction handle after lock is acquired."""
+        self._transaction_handle = handle
 
     def get_extract_context(self) -> "ExtractContext":
         """获取或创建 ExtractContext 实例（缓存）"""
@@ -57,10 +89,16 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.session.memory.utils import resolve_output_language_from_conversation
+        from openviking.message.part import TextPart
+        from openviking.session.memory.utils import resolve_output_language
 
-        conversation = self._assemble_conversation(self.messages)
-        return resolve_output_language_from_conversation(conversation)
+        text_parts = []
+        for message in self.messages or []:
+            for part in getattr(message, "parts", []):
+                if isinstance(part, TextPart) and part.text:
+                    text_parts.append(part.text)
+
+        return resolve_output_language("\n".join(text_parts))
 
     def instruction(self) -> str:
         output_language = self._output_language
@@ -85,21 +123,6 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 """
 
         return goal
-
-        """
-    ## Edit Overview Files
-    After writing new memories, you MUST also update the corresponding .overview.md file.
-    - Provide memory_type to identify which directory's overview to update
-
-    ## Overview Format
-    Two options:
-    1. **PREFERRED: Direct string** - Just provide the complete new overview content:
-       {{"memory_type": "events", "overview": "# Events Overview\n- [event1](event1.md) - Description"}}
-    2. **SEARCH/REPLACE** - Only use if you must modify a small portion:
-       {{"memory_type": "events", "overview": {{"blocks": [{{"search": "exact line to change", "replace": "new line"}}]}}}}
-
-    See GenericOverviewEdit in the JSON Schema below.
-        """
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
@@ -151,63 +174,139 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             Formatted conversation string
         """
         from openviking.message import Message
-        from openviking.message.part import ToolPart
 
         conversation_sections: List[str] = []
 
         def format_message_with_parts(msg: Message) -> str:
-            """Format message with text and tool parts."""
+            """Format message with text parts and ToolCall details."""
             parts = getattr(msg, "parts", [])
-            has_tool_parts = any(isinstance(p, ToolPart) for p in parts)
-
-            if not has_tool_parts:
-                return msg.content
-
-            tool_lines = []
-            text_lines = []
+            formatted_parts: List[str] = []
             for part in parts:
                 if hasattr(part, "text") and part.text:
-                    text_lines.append(part.text)
+                    formatted_parts.append(part.text)
                 elif isinstance(part, ToolPart):
                     tool_info = {
                         "type": "tool_call",
                         "tool_name": part.tool_name,
                         "tool_input": part.tool_input,
+                        "tool_output": part.tool_output[:500] if part.tool_output else "",
                         "tool_status": part.tool_status,
+                        "duration_ms": part.duration_ms,
                     }
                     if part.skill_uri:
                         tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    tool_lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+                    formatted_parts.append(
+                        f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}"
+                    )
+            return "\n".join(formatted_parts) if formatted_parts else msg.content
 
-            all_lines = tool_lines + text_lines
-            return "\n".join(all_lines) if all_lines else msg.content
+        def format_message_header(msg: Message, idx: int) -> str:
+            """Format message header with role and role_id."""
+            role_id_display = msg.role_id if msg.role_id else msg.role
+            return f"[{idx}][{msg.role}][{role_id_display}]: {format_message_with_parts(msg)}"
 
         conversation_sections.append(
-            "\n".join(
-                [
-                    f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}"
-                    for idx, msg in enumerate(messages)
-                ]
-            )
+            "\n".join([format_message_header(msg, idx) for idx, msg in enumerate(messages)])
         )
 
         return "\n\n".join(section for section in conversation_sections if section)
 
-    async def prefetch(
-        self,
-        ctx: RequestContext,
-        viking_fs: VikingFS,
-        transaction_handle,
-        vlm,
-    ) -> List[Dict]:
+    def _truncate_prefetch_query_text(self, text: Any, max_chars: int) -> str:
+        normalized = " ".join(str(text or "").split())
+        if len(normalized) <= max_chars:
+            return normalized
+        return normalized[: max_chars - 3].rstrip() + "..."
+
+    def _format_tool_part_for_search(self, part: ToolPart) -> str:
+        fields = []
+        if part.tool_name:
+            fields.append(f"tool_name={part.tool_name}")
+        if part.skill_uri:
+            skill_name = part.skill_uri.rstrip("/").split("/")[-1]
+            fields.append(f"skill_name={skill_name}")
+        if part.tool_status:
+            fields.append(f"status={part.tool_status}")
+        if part.tool_input:
+            fields.append(
+                "input="
+                + self._truncate_prefetch_query_text(
+                    json.dumps(part.tool_input, ensure_ascii=False),
+                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
+                )
+            )
+        if part.tool_output and part.tool_status == "error":
+            fields.append(
+                "error="
+                + self._truncate_prefetch_query_text(
+                    part.tool_output,
+                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
+                )
+            )
+        return "ToolCall: " + "; ".join(fields)
+
+    def _build_prefetch_search_query(self) -> str:
+        """Build a compact semantic query from raw conversation messages.
+
+        The LLM already receives the full conversation via pre_fetch_messages.
+        Search only needs topical recall signals, so use the raw message content
+        instead of the prompt-wrapped conversation.
+        """
+        if not isinstance(self.messages, list):
+            return ""
+
+        primary_sections: List[str] = []
+        supporting_sections: List[str] = []
+
+        for msg in self.messages:
+            role = getattr(msg, "role", "")
+            role_id = getattr(msg, "role_id", "") or role
+            parts = getattr(msg, "parts", [])
+
+            text_parts: List[str] = []
+            tool_parts: List[str] = []
+
+            for part in parts:
+                if hasattr(part, "text") and part.text:
+                    limit = (
+                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
+                        if role == "user"
+                        else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
+                    )
+                    text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
+                elif isinstance(part, ToolPart):
+                    tool_part = self._format_tool_part_for_search(part)
+                    if tool_part != "ToolCall: ":
+                        tool_parts.append(tool_part)
+
+            if text_parts:
+                section = f"{role_id}: " + "\n".join(text_parts)
+                if role == "user":
+                    primary_sections.append(section)
+                else:
+                    supporting_sections.append(section)
+
+            if tool_parts:
+                supporting_sections.append(f"{role_id}: " + "\n".join(tool_parts))
+
+        query = "\n\n".join(primary_sections + supporting_sections)
+        if not query.strip():
+            query = self._assemble_conversation(self.messages)
+
+        return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
+
+    def create_tool_context(self, default_search_uris=[]):
+        tool_ctx = ToolContext(
+            viking_fs=self._viking_fs,
+            request_ctx=self._ctx,
+            transaction_handle=self._transaction_handle,
+            default_search_uris=default_search_uris,
+            read_file_contents=self._read_file_contents,
+        )
+        return tool_ctx
+
+    async def prefetch(self) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
-
-        Args:
-            ctx: RequestContext
-            viking_fs: VikingFS
-            transaction_handle: 事务句柄
-            vlm: VLM 实例
 
         Returns:
             预取的消息列表，第一个元素是 Conversation History user message，后续是 tool call messages
@@ -222,51 +321,44 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载
-        schemas = self._get_registry().list_all(include_disabled=False)
-
-        from openviking.server.identity import ToolContext
+        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
+        schemas = [
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
         read_files = set()  # files to read directly (for single-file schemas)
-        overview_files = set()  # .overview.md files to read
+
+        rolescope: RoleScope = self._isolation_handler.get_read_scope()
+        policy = self._ctx.namespace_policy
 
         for schema in schemas:
             if not schema.directory:
                 continue
 
-            # Replace variables in directory path with actual user/agent space
-            user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
-            agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
-            import jinja2
-
-            env = jinja2.Environment(autoescape=False)
-            template = env.from_string(schema.directory)
-            dir_path = template.render(user_space=user_space, agent_space=agent_space)
-
-            # Always add .overview.md to read list
-            overview_files.add(f"{dir_path}/.overview.md")
-
             # 根据 operation_mode 决定是否需要 ls 和读取其他文件
             if schema.operation_mode == "add_only":
-                # 只新增，不需要查看之前的记忆列表，只需要读取 .overview.md
                 continue
 
-            # Check if filename_template has variables (contains {{ xxx }})
-            has_variables = False
-            if schema.filename_template:
-                has_variables = (
-                    "{{" in schema.filename_template and "}}" in schema.filename_template
-                )
-
-            if has_variables or not schema.filename_template:
-                # Multi-file schema or no filename template: ls the directory
-                ls_dirs.add(dir_path)
+            schema_dirs = set()
+            for user_id in rolescope.user_ids:
+                for agent_id in rolescope.agent_ids:
+                    user_space = to_user_space(policy, user_id, agent_id)
+                    agent_space = to_agent_space(policy, user_id, agent_id)
+                    dir_path = render_template(
+                        schema.directory, {"user_space": user_space, "agent_space": agent_space}
+                    )
+                    schema_dirs.add(dir_path)
+            if schema.filename_has_variables():
+                for dir_path in schema_dirs:
+                    ls_dirs.add(dir_path)
             else:
-                # Single-file schema: directly read the specific file
-                file_uri = f"{dir_path}/{schema.filename_template}"
-                read_files.add(file_uri)
+                for dir_path in schema_dirs:
+                    file_uri = f"{dir_path}/{schema.filename_template}"
+                    read_files.add(file_uri)
 
         call_id_seq = 0
         # Step 2: Execute search for each ls directory (instead of ls)
@@ -275,71 +367,49 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx
-        tool_ctx = ToolContext(
-            request_ctx=ctx, transaction_handle=transaction_handle, default_search_uris=[]
-        )
 
-        # for overview_uri in overview_files:
-        #     try:
-        #         result_str = await read_tool.execute(viking_fs, tool_ctx, uri=overview_uri)
-        #         add_tool_call_pair_to_messages(
-        #             messages=pre_fetch_messages,
-        #             call_id=call_id_seq,
-        #             tool_name="read",
-        #             params={"uri": overview_uri},
-        #             result=result_str,
-        #         )
-        #         call_id_seq += 1
-        #     except Exception as e:
-        #         logger.warning(f"Failed to read .overview.md: {e}")
-
-        # 在每个之前 ls 的目录内执行 search（替换原来的 ls 操作）
+        # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
-        if search_tool and viking_fs and ls_dirs:
-            for dir_uri in ls_dirs:
-                # 创建只在该目录搜索的 tool_ctx
-                tool_ctx_dir = ToolContext(
-                    request_ctx=ctx,
-                    transaction_handle=transaction_handle,
-                    default_search_uris=[dir_uri],
-                )
-                try:
-                    search_result = await search_tool.execute(
-                        viking_fs=viking_fs,
-                        ctx=tool_ctx_dir,
-                        query="[Keywords]",
-                    )
-                    # 处理搜索结果
-                    if isinstance(search_result, list):
-                        result_value = [m.get("uri", "") for m in search_result]
-                        if self._eager_prefetch:
-                            files_to_read_from_search.extend(result_value)
-                    elif isinstance(search_result, dict):
-                        if "error" in search_result:
-                            result_value = f"Error: {search_result.get('error')}"
-                        else:
-                            uris = [m.get("uri", "") for m in search_result.get("memories", [])]
-                            result_value = uris
-                            if self._eager_prefetch:
-                                files_to_read_from_search.extend(uris)
-                    else:
-                        result_value = []
 
-                    add_tool_call_pair_to_messages(
-                        messages=pre_fetch_messages,
-                        call_id=call_id_seq,
-                        tool_name="search",
-                        params={"query": "[Keywords]", "search_uri": dir_uri},
-                        result=result_value,
-                    )
-                    call_id_seq += 1
-                except Exception as e:
-                    logger.warning(f"Failed to search in {dir_uri}: {e}")
+        # 批量 search：所有目录一次搜索
+        if ls_dirs:
+            try:
+                # 将所有目录作为 target_uri 传入（支持 List[str]）
+                dir_list = list(ls_dirs)
+                search_query = self._build_prefetch_search_query()
+                if not search_query:
+                    search_query = "conversation"
+                search_result = await search_tool.execute(
+                    viking_fs=self._viking_fs,
+                    ctx=self.create_tool_context(dir_list),
+                    query=search_query,
+                )
+                # 处理搜索结果
+                if isinstance(search_result, list):
+                    result_value = [m.get("uri", "") for m in search_result]
+                    if self._eager_prefetch:
+                        files_to_read_from_search.extend(result_value)
+                elif isinstance(search_result, dict):
+                    if "error" in search_result:
+                        result_value = f"Error: {search_result.get('error')}"
+                else:
+                    result_value = []
+
+                add_tool_call_pair_to_messages(
+                    messages=pre_fetch_messages,
+                    call_id=call_id_seq,
+                    tool_name="search",
+                    params={"query": "[Keywords]", "search_uri": dir_list},
+                    result=result_value,
+                )
+                call_id_seq += 1
+            except Exception as e:
+                logger.warning(f"Failed to search in {ls_dirs}: {e}")
 
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
             try:
-                result_str = await read_tool.execute(viking_fs, tool_ctx, uri=file_uri)
+                result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
@@ -347,17 +417,20 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     params={"uri": file_uri},
                     result=result_str,
                 )
+                # read_file_contents
                 call_id_seq += 1
             except Exception as e:
                 logger.warning(f"Failed to read {file_uri}: {e}")
 
-        # eager_prefetch 模式：读取所有搜索到的文件内容
-        if self._eager_prefetch and read_tool and viking_fs:
-            for file_uri in files_to_read_from_search:
+        # eager_prefetch 模式：读取搜索结果 top-N
+        if self._eager_prefetch and read_tool:
+            # 只读取 top-N 个文件
+            topn_files = files_to_read_from_search[: self._prefetch_search_topn]
+            for file_uri in topn_files:
                 if not file_uri:
                     continue
                 try:
-                    result_str = await read_tool.execute(viking_fs, tool_ctx, uri=file_uri)
+                    result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
@@ -371,6 +444,18 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return pre_fetch_messages
 
+    @tracer("execute_tool", ignore_result=False)
+    async def execute_tool(
+        self,
+        tool_call,
+    ) -> Any:
+        tool = get_tool(tool_call.name)
+        if not tool:
+            return {"error": f"Unknown tool: {tool_call.name}"}
+        tracer.info(f"tool_call.arguments={tool_call.arguments}")
+        result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        return result
+
     def get_tools(self) -> List[str]:
         """获取可用的工具列表"""
         if self._eager_prefetch:
@@ -380,19 +465,33 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
-        return self._get_registry().list_all(include_disabled=False)
+        return [
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""
         if self._schema_directories is None:
-            memory_templates_dir = str(resolve_memory_templates_dir())
+            memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
+            if config.memory.enable_vaka_template:
+                vaka_dir = os.path.join(memory_templates_dir, "vaka")
+                if os.path.exists(vaka_dir):
+                    self._schema_directories.append(vaka_dir)
             if custom_dir:
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):
                     self._schema_directories.append(custom_dir_expanded)
+            else:
+                memory_templates_dir = str(resolve_memory_templates_dir())
+                if memory_templates_dir != str(
+                    PromptManager._get_bundled_templates_dir() / "memory"
+                ) and os.path.exists(memory_templates_dir):
+                    self._schema_directories.append(memory_templates_dir)
         return self._schema_directories
 
     def _get_registry(self) -> MemoryTypeRegistry:

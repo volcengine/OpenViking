@@ -20,19 +20,23 @@ import argparse
 import csv
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from urllib.parse import urlparse
 
 import requests
 
 # Configuration constants
 DEFAULT_BASE_URL = "http://127.0.0.1:18789"
 DEFAULT_AGENT_ID = "locomo-eval"
-DEFAULT_INGEST_RECORD_PATH = ".ingest_record.json"
+DEFAULT_INGEST_RECORD_PATH = ".ingest_record.csv"
 
 # CSV write lock for thread safety
 csv_lock = Lock()
@@ -170,7 +174,7 @@ def build_session_messages(
         dt_key = f"{sk}_date_time"
         date_time = conv.get(dt_key, "")
 
-        parts = [f"[group chat conversation: {date_time}]"]
+        parts = [f"Remember to your memory, [group chat conversation: {date_time}]"]
         for msg in conv[sk]:
             parts.append(format_locomo_message(msg))
         if tail:
@@ -248,28 +252,39 @@ def get_sample_question_time(sample: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def load_ingest_record(record_path: str = DEFAULT_INGEST_RECORD_PATH) -> dict:
-    """Load existing ingest record file, return empty dict if not exists."""
+def load_ingest_record(record_path: str = DEFAULT_INGEST_RECORD_PATH) -> set[tuple[str, str, str, str]]:
+    """Load existing ingest record CSV, return empty set if not exists."""
+    records = set()
     try:
-        with open(record_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(record_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                records.add(
+                    (
+                        row["agent_id"],
+                        row["user_key"],
+                        row["sample_id"],
+                        row["session_key"],
+                    )
+                )
     except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError as e:
-        print(f"Warning: Error parsing ingest record: {e}, starting fresh", file=sys.stderr)
-        return {}
+        return set()
+    except (csv.Error, KeyError) as e:
+        print(f"Warning: Error parsing ingest record CSV: {e}, starting fresh", file=sys.stderr)
+        return set()
     except IOError as e:
-        print(f"Warning: Error reading ingest record: {e}, starting fresh", file=sys.stderr)
-        return {}
+        print(f"Warning: Error reading ingest record CSV: {e}, starting fresh", file=sys.stderr)
+        return set()
+    return records
 
 
-def save_ingest_record(record: dict, record_path: str = DEFAULT_INGEST_RECORD_PATH) -> None:
-    """Save ingest record to file."""
+def clear_ingest_record(record_path: str = DEFAULT_INGEST_RECORD_PATH) -> None:
+    """Clear ingest record CSV file."""
     try:
-        with open(record_path, "w", encoding="utf-8") as f:
-            json.dump(record, f, indent=2, ensure_ascii=False)
+        if os.path.exists(record_path):
+            os.remove(record_path)
     except IOError as e:
-        print(f"Warning: Error saving ingest record: {e}", file=sys.stderr)
+        print(f"Warning: Error clearing ingest record CSV: {e}", file=sys.stderr)
 
 
 def is_already_ingested(
@@ -277,11 +292,10 @@ def is_already_ingested(
     user_key: str,
     sample_id: str | int,
     session_key: str,
-    record: dict,
+    record: set[tuple[str, str, str, str]],
 ) -> bool:
     """Check if a specific session has already been successfully ingested."""
-    key = f"{agent_id}:{user_key}:{sample_id}:{session_key}"
-    return key in record and record[key].get("success", False)
+    return (agent_id, user_key, str(sample_id), session_key) in record
 
 
 def mark_ingested(
@@ -289,16 +303,50 @@ def mark_ingested(
     user_key: str,
     sample_id: str | int,
     session_key: str,
-    record: dict,
+    record_path: str = DEFAULT_INGEST_RECORD_PATH,
     meta: dict | None = None,
 ) -> None:
-    """Mark a session as successfully ingested."""
-    key = f"{agent_id}:{user_key}:{sample_id}:{session_key}"
-    record[key] = {
-        "success": True,
-        "timestamp": int(time.time()),
-        "meta": meta or {},
-    }
+    """Append a successfully ingested session to the CSV record."""
+    fieldnames = [
+        "agent_id",
+        "user_key",
+        "sample_id",
+        "session_key",
+        "timestamp",
+        "date_time",
+        "mode",
+        "input_tokens",
+        "output_tokens",
+        "cacheRead",
+        "cacheWrite",
+        "total_tokens",
+    ]
+    meta = meta or {}
+    usage = meta.get("usage", {})
+    file_exists = os.path.exists(record_path)
+    try:
+        with open(record_path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(
+                {
+                    "agent_id": agent_id,
+                    "user_key": user_key,
+                    "sample_id": str(sample_id),
+                    "session_key": session_key,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "date_time": meta.get("date_time", ""),
+                    "mode": meta.get("mode", ""),
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "cacheRead": usage.get("cacheRead", 0),
+                    "cacheWrite": usage.get("cacheWrite", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                }
+            )
+    except (csv.Error, IOError) as e:
+        print(f"Warning: Error saving ingest record CSV: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +587,163 @@ def send_message(
     return extract_response_text(body), usage
 
 
+def resolve_gateway_ws_url(base_url: str) -> str:
+    """Convert HTTP gateway base URL to WS gateway endpoint URL."""
+    parsed = urlparse(base_url)
+    scheme = parsed.scheme.lower()
+
+    if scheme in ("ws", "wss"):
+        ws_scheme = scheme
+    elif scheme == "http":
+        ws_scheme = "ws"
+    elif scheme == "https":
+        ws_scheme = "wss"
+    else:
+        raise RuntimeError(f"Unsupported gateway base URL scheme: {parsed.scheme}")
+
+    path = parsed.path or ""
+    if not path or path == "/":
+        ws_path = "/ws"
+    elif path.endswith("/ws"):
+        ws_path = path
+    else:
+        ws_path = f"{path.rstrip('/')}/ws"
+
+    return f"{ws_scheme}://{parsed.netloc}{ws_path}"
+
+
+def build_openresponses_main_session_key(agent_id: str, user: str) -> str:
+    """Build the main session key used by /v1/responses when user is provided."""
+    normalized_agent = (agent_id or DEFAULT_AGENT_ID).strip().lower()
+    normalized_user = (user or "").strip().lower()
+    return f"agent:{normalized_agent}:openresponses-user:{normalized_user}"
+
+
+def parse_json_from_cli_output(stdout: str) -> dict:
+    """Parse JSON payload from mixed CLI output (logs + JSON)."""
+    text = (stdout or "").strip()
+    if not text:
+        raise RuntimeError("Empty output from openclaw gateway call")
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    last_obj: dict | None = None
+
+    for idx, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            parsed, consumed = decoder.raw_decode(text[idx:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+
+        tail = text[idx + consumed :].strip()
+        if not tail:
+            return parsed
+
+        last_obj = parsed
+
+    if last_obj is not None:
+        return last_obj
+
+    raise RuntimeError(f"Failed to parse JSON from gateway call output: {text[:500]}")
+
+
+def gateway_call(
+    base_url: str,
+    token: str,
+    method: str,
+    params: dict,
+    timeout_ms: int = 30_000,
+) -> dict:
+    """Call gateway RPC through `openclaw gateway call` CLI."""
+    ws_url = resolve_gateway_ws_url(base_url)
+    cmd = [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--url",
+        ws_url,
+        "--token",
+        token,
+        "--timeout",
+        str(timeout_ms),
+        "--params",
+        json.dumps(params, ensure_ascii=False),
+    ]
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(60, int(timeout_ms / 1000) + 30),
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "`openclaw` CLI not found in PATH; cannot call gateway chat.send"
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"gateway call timeout for method {method}: {e}") from e
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        raise RuntimeError(
+            f"gateway call failed for {method} (exit {completed.returncode}): {stderr or stdout or 'unknown error'}"
+        )
+
+    return parse_json_from_cli_output(completed.stdout)
+
+
+def compact_via_chat_send(
+    base_url: str,
+    token: str,
+    agent_id: str,
+    user: str,
+    wait_timeout_ms: int = 120_000,
+) -> tuple[dict, dict]:
+    """Trigger semantic compaction through gateway chat.send('/compact')."""
+    session_key = build_openresponses_main_session_key(agent_id, user)
+    chat_send_params = {
+        "sessionKey": session_key,
+        "message": "/compact",
+        "idempotencyKey": str(uuid.uuid4()),
+    }
+
+    ack = gateway_call(
+        base_url=base_url,
+        token=token,
+        method="chat.send",
+        params=chat_send_params,
+        timeout_ms=60_000,
+    )
+    run_id = str(ack.get("runId", "")).strip()
+    if not run_id:
+        raise RuntimeError(f"chat.send ack missing runId: {ack}")
+
+    wait = gateway_call(
+        base_url=base_url,
+        token=token,
+        method="agent.wait",
+        params={"runId": run_id, "timeoutMs": wait_timeout_ms},
+        timeout_ms=wait_timeout_ms + 60_000,
+    )
+
+    return ack, wait
+
+
 # ---------------------------------------------------------------------------
 # Ingest: load conversations into openclaw
 # ---------------------------------------------------------------------------
@@ -551,8 +756,8 @@ def run_ingest(
 
     # Handle ingest record operations
     if args.clear_ingest_record:
-        ingest_record = {}
-        save_ingest_record(ingest_record)
+        clear_ingest_record()
+        ingest_record = set()
         print("[INFO] All existing ingest records cleared", file=sys.stderr)
     else:
         ingest_record = load_ingest_record()
@@ -561,6 +766,9 @@ def run_ingest(
         samples = load_locomo_data(args.input, args.sample)
         results = []
         skipped_count = 0
+        if shutil.which("openclaw") is None:
+            print("[ERROR] openclaw CLI not found in PATH", file=sys.stderr)
+            sys.exit(1)
 
         for item in samples:
             sample_id = item["sample_id"]
@@ -596,7 +804,20 @@ def run_ingest(
                     reply, usage = send_message(
                         args.base_url, args.token, user_key, msg, args.agent_id
                     )
+
                     print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
+                    compact_ack, compact_wait = compact_via_chat_send(
+                        args.base_url,
+                        args.token,
+                        args.agent_id,
+                        user_key,
+                    )
+                    compact_status = compact_wait.get("status", "unknown")
+                    compact_run_id = compact_ack.get("runId", "")
+                    print(
+                        f"    -> compact(chat.send): runId={compact_run_id} status={compact_status}",
+                        file=sys.stderr,
+                    )
                     results.append(
                         {
                             "sample_id": sample_id,
@@ -612,8 +833,10 @@ def run_ingest(
                         user_key,
                         sample_id,
                         meta["session_key"],
-                        ingest_record,
-                        {"mode": "openclaw", "date_time": meta["date_time"], "usage": usage},
+                        meta={"mode": "openclaw", "date_time": meta["date_time"], "usage": usage},
+                    )
+                    ingest_record.add(
+                        (args.agent_id, user_key, str(sample_id), meta["session_key"])
                     )
                 except Exception as e:
                     print(f"    -> [ERROR] {e}", file=sys.stderr)
@@ -647,8 +870,6 @@ def run_ingest(
             except IOError as e:
                 print(f"Warning: Error writing output files: {e}", file=sys.stderr)
 
-        # Save ingest record
-        save_ingest_record(ingest_record)
         total_processed = len(results) + skipped_count
         print("\n=== Ingest summary ===", file=sys.stderr)
         print(f"Total sessions: {total_processed}", file=sys.stderr)

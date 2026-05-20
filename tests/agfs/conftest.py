@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+
 @pytest.fixture(scope="session")
 def agfs_test_root():
     """Root directory for AGFS tests."""

@@ -4,7 +4,10 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+from openviking.models.vlm.backends.litellm_vlm import (
+    LiteLLMVLMProvider,
+    detect_provider_by_model,
+)
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
 
@@ -200,6 +203,82 @@ class TestVLMExtraHeaders:
         assert "extra_body" not in call_kwargs
 
 
+class TestOpenAIVLMClientRetries:
+    """Test OpenAI SDK retries are disabled in favor of OpenViking retries."""
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_openai_sync_client_disables_sdk_retries(self, mock_openai_class):
+        mock_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_client()
+
+        call_kwargs = mock_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncOpenAI")
+    def test_openai_async_client_disables_sdk_retries(self, mock_async_openai_class):
+        mock_async_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_async_client()
+
+        call_kwargs = mock_async_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
+    def test_azure_sync_client_disables_sdk_retries(self, mock_azure_openai_class):
+        mock_azure_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-01-01-preview",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_client()
+
+        call_kwargs = mock_azure_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncAzureOpenAI")
+    def test_azure_async_client_disables_sdk_retries(self, mock_async_azure_openai_class):
+        mock_async_azure_openai_class.return_value = MagicMock()
+
+        vlm = OpenAIVLM(
+            {
+                "provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-01-01-preview",
+                "max_retries": 5,
+            }
+        )
+
+        _ = vlm.get_async_client()
+
+        call_kwargs = mock_async_azure_openai_class.call_args.kwargs
+        assert call_kwargs["max_retries"] == 0
+
+
 class TestVLMBaseExtraHeaders:
     """Test VLMBase extracts extra_headers from config."""
 
@@ -252,6 +331,83 @@ class TestVLMBaseExtraHeaders:
         )
 
         assert vlm.extra_headers is None
+
+
+class TestVLMExtraRequestBody:
+    """Test provider-specific VLM request body passthrough."""
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_openai_text_completion_passes_extra_request_body(self, mock_openai_class):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "model": "gpt-4o-mini",
+                "extra_request_body": {"think": False, "keep_alive": "5m"},
+            }
+        )
+
+        vlm.get_completion("hello")
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["extra_body"] == {"think": False, "keep_alive": "5m"}
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_dashscope_thinking_merges_with_extra_request_body(self, mock_openai_class):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen3.5-plus",
+                "extra_request_body": {"seed": 7},
+            }
+        )
+
+        vlm.get_completion("hello", thinking=True)
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["extra_body"] == {"seed": 7, "enable_thinking": True}
+
+    def test_litellm_build_kwargs_passes_extra_request_body(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "ollama/llama3",
+                "provider": "litellm",
+                "api_base": "http://127.0.0.1:11434",
+                "extra_request_body": {"think": False},
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["extra_body"] == {"think": False}
+
+    def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "qwen-plus",
+                "provider": "litellm",
+                "extra_request_body": {"seed": 7},
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello", thinking=False)
+
+        assert kwargs["extra_body"] == {"seed": 7, "enable_thinking": False}
 
 
 class TestVLMConfigExtraHeaders:
@@ -324,8 +480,157 @@ class TestVLMConfigExtraHeaders:
         }
 
 
+class TestVLMConfigExtraRequestBody:
+    """Test VLMConfig passes extra_request_body to VLM instance config."""
+
+    def test_vlm_config_accepts_extra_request_body_in_providers(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="llama3",
+            provider="litellm",
+            providers={
+                "litellm": {
+                    "api_key": "sk-test",
+                    "api_base": "http://127.0.0.1:11434",
+                    "extra_request_body": {"think": False},
+                }
+            },
+        )
+
+        result = config._build_vlm_config_dict()
+        assert result["extra_request_body"] == {"think": False}
+
+    def test_vlm_config_accepts_flat_extra_request_body(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="llama3",
+            provider="litellm",
+            api_key="sk-test",
+            api_base="http://127.0.0.1:11434",
+            extra_request_body={"think": False},
+        )
+
+        config._migrate_legacy_config()
+        assert config.providers["litellm"]["extra_request_body"] == {"think": False}
+
+        result = config._build_vlm_config_dict()
+        assert result["extra_request_body"] == {"think": False}
+
+
+class TestVLMConfigLiteLLMAuth:
+    """Test LiteLLM VLM config can rely on provider-native credentials."""
+
+    def test_litellm_config_allows_no_api_key(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="bedrock/us.amazon.nova-micro-v1:0",
+            provider="litellm",
+        )
+
+        result = config._build_vlm_config_dict()
+        assert config.is_available()
+        assert result["provider"] == "litellm"
+        assert "api_key" not in result
+
+    def test_litellm_forward_api_key_is_forwarded_from_provider_config(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="bedrock/us.amazon.nova-micro-v1:0",
+            provider="litellm",
+            providers={
+                "litellm": {
+                    "api_key": "bedrock-bearer-token",
+                    "forward_api_key": True,
+                }
+            },
+        )
+
+        result = config._build_vlm_config_dict()
+        assert result["api_key"] == "bedrock-bearer-token"
+        assert result["forward_api_key"] is True
+
+
 class TestLiteLLMVLMModelResolution:
     """Regression tests for LiteLLM model prefix resolution."""
+
+    def test_explicit_litellm_routes_are_authoritative(self):
+        models = [
+            "azure/gpt-4o",
+            "bedrock/qwen.qwen3-coder-30b-a3b-v1:0",
+            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            "sagemaker/anthropic.claude-endpoint",
+            "sagemaker_chat/qwen-endpoint",
+            "sagemaker_nova/nova-endpoint",
+            "vertex_ai/gemini-1.5-pro",
+        ]
+
+        for model in models:
+            vlm = LiteLLMVLMProvider(
+                {
+                    "model": model,
+                    "provider": "litellm",
+                    "api_key": "placeholder",
+                }
+            )
+
+            assert detect_provider_by_model(model) is None
+            assert vlm._detected_provider is None
+            assert vlm._resolve_model(model) == model
+
+    def test_native_auth_litellm_routes_skip_api_key_by_default(self):
+        models = [
+            "bedrock/us.amazon.nova-micro-v1:0",
+            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            "sagemaker/anthropic.claude-endpoint",
+            "sagemaker_chat/qwen-endpoint",
+            "sagemaker_nova/nova-endpoint",
+            "vertex_ai/gemini-1.5-pro",
+        ]
+
+        for model in models:
+            vlm = LiteLLMVLMProvider(
+                {
+                    "model": model,
+                    "provider": "litellm",
+                    "api_key": "placeholder",
+                }
+            )
+            kwargs = vlm._build_text_kwargs(prompt="hello")
+
+            assert kwargs["model"] == model
+            assert "api_key" not in kwargs
+
+    def test_azure_route_keeps_api_key(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "azure/gpt-4o",
+                "provider": "litellm",
+                "api_key": "azure-key",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["model"] == "azure/gpt-4o"
+        assert kwargs["api_key"] == "azure-key"
+
+    def test_forward_api_key_overrides_native_auth_default(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "bedrock/us.amazon.nova-micro-v1:0",
+                "provider": "litellm",
+                "api_key": "bedrock-bearer-token",
+                "forward_api_key": True,
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        assert kwargs["api_key"] == "bedrock-bearer-token"
 
     def test_zhipu_zai_model_keeps_existing_zai_prefix(self):
         """Zhipu GLM models already using LiteLLM's zai/ prefix must not be double-prefixed."""

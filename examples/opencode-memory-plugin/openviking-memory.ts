@@ -705,6 +705,12 @@ function cleanupOrphanedMessageBuffers(now: number): void {
   }
 }
 
+function hasUnsavedSessionWork(mapping: SessionMapping): boolean {
+  return mapping.capturedMessages.size > 0 ||
+    mapping.pendingMessages.size > 0 ||
+    mapping.commitInFlight === true
+}
+
 function getAutoCommitIntervalMinutes(config: OpenVikingConfig): number {
   const configured = Number(config.autoCommit?.intervalMinutes ?? DEFAULT_CONFIG.autoCommit?.intervalMinutes ?? 10)
   if (!Number.isFinite(configured)) {
@@ -878,6 +884,11 @@ async function finalizeCommitSuccess(
   await flushPendingMessages(opencodeSessionId, mapping, config)
 
   if (mapping.pendingCleanup) {
+    if (hasUnsavedSessionWork(mapping)) {
+      debouncedSaveSessionMap()
+      return
+    }
+
     sessionMap.delete(opencodeSessionId)
     sessionMessageBuffer.delete(opencodeSessionId)
     await saveSessionMap()
@@ -1142,7 +1153,7 @@ async function pollCommitTaskOnce(
     clearCommitState(mapping)
     debouncedSaveSessionMap()
 
-    if (mapping.pendingCleanup) {
+    if (mapping.pendingCleanup && !hasUnsavedSessionWork(mapping)) {
       sessionMap.delete(opencodeSessionId)
       sessionMessageBuffer.delete(opencodeSessionId)
       await saveSessionMap()
@@ -1429,18 +1440,6 @@ interface RecallSearchItem {
   overview?: string
 }
 
-/** Minimal message part type for hook injection. */
-interface RecallMessagePart {
-  type: "text" | "tool" | "reasoning"
-  text?: string
-}
-
-/** Minimal message shape for chat.messages.transform hook. */
-interface RecallWithParts {
-  info: { role: string }
-  parts: RecallMessagePart[]
-}
-
 const AUTO_RECALL_TIMEOUT_MS = 5_000
 
 // ─── Scoring helpers ───
@@ -1623,25 +1622,18 @@ function formatMemoryBlock(
 
 // ─── Hook helpers ───
 
-/** Extract text from the last user message. Returns null if empty or already injected. */
-function extractLatestUserText(messages: RecallWithParts[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg.info.role !== "user") continue
-    const parts = msg.parts ?? []
-    const texts: string[] = []
-    for (const part of parts) {
-      if (part.type === "text" && typeof part.text === "string") {
-        texts.push(part.text)
-      }
+/** Extract text from message parts. Returns null if empty or already injected. */
+function extractMessageText(parts: { type: string; text?: string }[]): string | null {
+  const texts: string[] = []
+  for (const part of parts) {
+    if (part.type === "text" && typeof part.text === "string") {
+      texts.push(part.text)
     }
-    const joined = texts.join(" ").trim()
-    if (!joined) continue
-    // Idempotency: skip if already contains injection marker
-    if (joined.includes("<relevant-memories>")) return null
-    return joined
   }
-  return null
+  const joined = texts.join(" ").trim()
+  if (!joined) return null
+  if (joined.includes("<relevant-memories>")) return null
+  return joined
 }
 
 /** Perform search against OpenViking with a timeout guard. Returns empty on any failure. */
@@ -1663,17 +1655,47 @@ async function performRecallSearch(config: OpenVikingConfig, query: string): Pro
   }
 }
 
-/** Append injection text to the last text part of a message. */
-function appendToLastTextPart(message: RecallWithParts, injection: string): boolean {
-  const parts = message.parts ?? []
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i]
-    if (part.type === "text" && typeof part.text === "string") {
-      part.text = `${part.text}\n\n${injection}`
-      return true
-    }
-  }
-  return false
+/** Run auto recall using chat.message hook — injects persistent synthetic part. */
+async function runAutoRecall(
+  input: { sessionID: string; messageID: string; parts: { type: string; text?: string }[] },
+  output: { parts: any[] },
+): Promise<void> {
+  const query = extractMessageText(input.parts ?? [])
+  if (!query) return
+
+  const rawResults = await performRecallSearch(config, query)
+  if (rawResults.length === 0) return
+
+  const ranked = pickMemoriesForInjection(
+    rawResults,
+    config.autoRecall.limit ?? 6,
+    query,
+    config.autoRecall.scoreThreshold ?? 0.15,
+  )
+  if (ranked.length === 0) return
+
+  const processed = postProcessMemories(
+    ranked,
+    config.autoRecall.maxContentChars ?? 500,
+    config.autoRecall.preferAbstract ?? true,
+  )
+
+  const block = formatMemoryBlock(
+    processed,
+    config.autoRecall.maxContentChars ?? 500,
+    config.autoRecall.tokenBudget ?? 2000,
+  )
+  if (!block) return
+
+  output.parts.unshift({
+    id: `prt-ov-recall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "text",
+    text: block,
+    synthetic: true,
+    sessionID: input.sessionID,
+    messageID: input.messageID,
+  })
+  log("INFO", "recall", `Injected ${processed.length} memories`)
 }
 
 // ============================================================================
@@ -1843,9 +1865,19 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             openviking_session: mapping.ovSessionId,
             session_info: safeStringify(event.properties?.info)
           })
+          // Assistant text parts can arrive before finish=stop records the role.
+          let inferredRole = false
+          for (const [messageId, content] of mapping.pendingMessages.entries()) {
+            if (!mapping.messageRoles.has(messageId) && content.trim()) {
+              mapping.messageRoles.set(messageId, "assistant")
+              inferredRole = true
+            }
+          }
+          if (inferredRole) debouncedSaveSessionMap()
+
           await flushPendingMessages(sessionId, mapping, config)
 
-          if (mapping.capturedMessages.size > 0 || mapping.commitInFlight) {
+          if (hasUnsavedSessionWork(mapping)) {
             mapping.pendingCleanup = true
             if (!mapping.commitInFlight) {
               await startBackgroundCommit(mapping, sessionId, config)
@@ -2304,51 +2336,12 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
       ),
     },
 
-    "experimental.chat.messages.transform": async (_input: {}, output: { messages: RecallWithParts[] }) => {
+    "chat.message": async (input, output) => {
       try {
-        // 1. Check if autoRecall is enabled
         if (!config.autoRecall?.enabled) return
-
-        // 2. Extract latest user text
-        const query = extractLatestUserText(output.messages)
-        if (!query) return
-
-        // 3. Search OpenViking
-        const rawResults = await performRecallSearch(config, query)
-        if (rawResults.length === 0) return
-
-        // 4. Rank + dedup + filter
-        const ranked = pickMemoriesForInjection(
-          rawResults,
-          config.autoRecall.limit ?? 6,
-          query,
-          config.autoRecall.scoreThreshold ?? 0.15,
-        )
-        if (ranked.length === 0) return
-
-        // 5. Post-process (truncate content, prefer abstract)
-        const processed = postProcessMemories(
-          ranked,
-          config.autoRecall.maxContentChars ?? 500,
-          config.autoRecall.preferAbstract ?? true,
-        )
-
-        // 6. Format injection block
-        const block = formatMemoryBlock(
-          processed,
-          config.autoRecall.maxContentChars ?? 500,
-          config.autoRecall.tokenBudget ?? 2000,
-        )
-        if (!block) return
-
-        // 7. Find last user message and append
-        const lastUser = [...output.messages].reverse().find((m) => m.info.role === "user")
-        if (lastUser) {
-          appendToLastTextPart(lastUser, block)
-          log("info", "recall", `Injected ${processed.length} memories`)
-        }
+        await runAutoRecall(input, output)
       } catch (error: any) {
-        log("warn", "recall", "Auto recall failed, skipping silently", {
+        log("WARN", "recall", "Auto recall failed, skipping silently", {
           error: error?.message ?? String(error),
         })
       }

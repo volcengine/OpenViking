@@ -21,8 +21,17 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
 
+    backup: Optional["VLMConfig"] = Field(
+        default=None, description="Backup VLM configuration for failover"
+    )
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
+    forward_api_key: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether to pass api_key through to LiteLLM. None uses provider-aware defaults."
+        ),
+    )
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
@@ -66,6 +75,14 @@ class VLMConfig(BaseModel):
 
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
+    )
+
+    extra_request_body: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields passed to OpenAI-compatible VLM completion requests. "
+            "Useful for provider-specific options such as Ollama's {'think': false}."
+        ),
     )
 
     stream: bool = Field(
@@ -121,21 +138,48 @@ class VLMConfig(BaseModel):
                     raise ValueError(
                         "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
                     )
-            elif not self._get_effective_api_key():
+            elif provider_name != "litellm" and not self._get_effective_api_key():
                 raise ValueError("VLM configuration requires 'api_key' to be set")
+        return self
+
+    @model_validator(mode="after")
+    def validate_no_recursive_backup(self):
+        """Prevent recursive backup configurations"""
+        if self.backup is not None:
+            if self.backup.backup is not None:
+                raise ValueError(
+                    "Backup VLM configuration cannot have its own backup (recursive backups are not allowed)"
+                )
         return self
 
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
-        if self.api_key and self.provider:
+        if self.provider and (
+            self.api_key
+            or self.api_base
+            or self.extra_headers
+            or self.extra_request_body
+            or self.stream
+            or self.forward_api_key is not None
+        ):
             if self.provider not in self.providers:
                 self.providers[self.provider] = {}
-            if "api_key" not in self.providers[self.provider]:
+            if self.api_key and "api_key" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_key"] = self.api_key
+            if (
+                self.forward_api_key is not None
+                and "forward_api_key" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["forward_api_key"] = self.forward_api_key
             if self.api_base and "api_base" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_base"] = self.api_base
             if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
                 self.providers[self.provider]["extra_headers"] = self.extra_headers
+            if (
+                self.extra_request_body
+                and "extra_request_body" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
 
@@ -160,16 +204,22 @@ class VLMConfig(BaseModel):
         config = dict(self.providers.get(provider_name) or {})
         if self.api_key and "api_key" not in config:
             config["api_key"] = self.api_key
+        if self.forward_api_key is not None and "forward_api_key" not in config:
+            config["forward_api_key"] = self.forward_api_key
         if self.api_base and "api_base" not in config:
             config["api_base"] = self.api_base
         if self.extra_headers and "extra_headers" not in config:
             config["extra_headers"] = self.extra_headers
+        if self.extra_request_body and "extra_request_body" not in config:
+            config["extra_request_body"] = self.extra_request_body
         if self.stream and "stream" not in config:
             config["stream"] = self.stream
         return config
 
     def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
         if config.get("api_key"):
+            return True
+        if provider_name == "litellm":
             return True
         if provider_name == "openai-codex":
             has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
@@ -222,9 +272,17 @@ class VLMConfig(BaseModel):
         """Get VLM instance."""
         if self._vlm_instance is None:
             config_dict = self._build_vlm_config_dict()
-            from openviking.models.vlm import VLMFactory
+            from openviking.models.vlm import FailoverVLM, VLMFactory
 
-            self._vlm_instance = VLMFactory.create(config_dict)
+            primary = VLMFactory.create(config_dict)
+
+            # If backup is configured, wrap with FailoverVLM
+            if self.backup is not None and self.backup._has_any_config():
+                backup_config_dict = self.backup._build_vlm_config_dict()
+                backup = VLMFactory.create(backup_config_dict)
+                self._vlm_instance = FailoverVLM(primary, backup)
+            else:
+                self._vlm_instance = primary
         return self._vlm_instance
 
     def _build_vlm_config_dict(self) -> Dict[str, Any]:
@@ -251,10 +309,14 @@ class VLMConfig(BaseModel):
         if config:
             if config.get("api_key"):
                 result["api_key"] = config.get("api_key")
+            if config.get("forward_api_key") is not None:
+                result["forward_api_key"] = config.get("forward_api_key")
             if config.get("api_base"):
                 result["api_base"] = config.get("api_base")
             if config.get("extra_headers"):
                 result["extra_headers"] = config.get("extra_headers")
+            if config.get("extra_request_body"):
+                result["extra_request_body"] = config.get("extra_request_body")
 
         return result
 
@@ -296,6 +358,8 @@ class VLMConfig(BaseModel):
             has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
             return bool(self._get_effective_api_key() or has_codex_auth_available())
+        if self._resolve_provider_name() == "litellm":
+            return bool(self.model)
         return self._get_effective_api_key() is not None
 
     def get_vision_completion(
@@ -331,3 +395,7 @@ class VLMConfig(BaseModel):
             tools=tools,
             messages=messages,
         )
+
+
+# Resolve forward reference for backup field
+VLMConfig.model_rebuild()

@@ -20,7 +20,9 @@ class TestGetOverview:
             print("=" * 80)
             print(json.dumps(data, indent=2, ensure_ascii=False))
             print("=" * 80 + "\n")
-            pytest.skip("Overview file not found on this server. This may be due to AGFS service not being available or no .overview.md file exists.")
+            pytest.skip(
+                "Overview file not found on this server. This may be due to AGFS service not being available or no .overview.md file exists."
+            )
 
         if response.status_code >= 500:
             data = response.json() if response.text else {}
@@ -29,10 +31,14 @@ class TestGetOverview:
             print("=" * 80)
             print(json.dumps(data, indent=2, ensure_ascii=False))
             print("=" * 80 + "\n")
-            pytest.skip(f"Server error on this environment: {data.get('error', 'Unknown error')}. This may be due to AGFS service not being available.")
+            pytest.skip(
+                f"Server error on this environment: {data.get('error', 'Unknown error')}. This may be due to AGFS service not being available."
+            )
 
         if response.status_code != 200:
-            pytest.skip(f"Unexpected status code {response.status_code}. This may be due to environment configuration.")
+            pytest.skip(
+                f"Unexpected status code {response.status_code}. This may be due to environment configuration."
+            )
 
         data = response.json()
         print("\n" + "=" * 80)

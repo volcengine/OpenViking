@@ -63,6 +63,8 @@ Operation telemetry is currently available on these endpoints:
 - `POST /api/v1/resources/temp_upload`
 - `POST /api/v1/resources`
 - `POST /api/v1/skills`
+- `POST /api/v1/sessions`
+- `POST /api/v1/sessions/{session_id}/messages`
 - `POST /api/v1/sessions/{session_id}/commit`
 
 ### Python SDK
@@ -73,6 +75,8 @@ The same telemetry model is available from the Python clients for:
 - `add_skill(...)`
 - `find(...)`
 - `search(...)`
+- `create_session(...)`
+- `add_message(...)`
 - `commit_session(...)`
 - `Session.commit(...)`
 
@@ -116,6 +120,7 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 ```
 
 This endpoint currently accepts the boolean form only.
+`upload_mode` is also a form field for this endpoint; it defaults to `local` and should only be set to `shared` when you explicitly need distributed shared temporary uploads. Python HTTP client / CLI users can alternatively drive the same behavior with `ovcli.conf` -> `upload.mode = "shared"`.
 
 ## Common summary groups
 

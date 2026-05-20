@@ -428,11 +428,11 @@ datasets/{dataset_name}/viking_store_index_dir
 
 ```json
 {
-  "_global_index": 2,
-  "question": "When did Caroline go to the LGBTQ support group?",
-  "gold_answers": ["7 May 2023"],
+  "_global_index": 18,
+  "question": "When did Melanie sign up for a pottery class?",
+  "gold_answers": ["2 July 2023"],
   "llm": {
-    "final_answer": "7 May 2023 (the day before the chat at 1:56 pm on 8 May, 2023)"
+    "final_answer": "2 July 2023 (mentioned in the conversation on 3 July 2023)"
   },
   "metrics": {
     "Recall": 1.0,
@@ -441,7 +441,7 @@ datasets/{dataset_name}/viking_store_index_dir
   },
   "llm_evaluation": {
     "prompt_used": "Locomo_0or4",
-    "reasoning": "The generated answer explicitly includes the exact date 7 May 2023 that matches the gold answer...",
+    "reasoning": "The generated answer explicitly includes the exact date 2 July 2023 that matches the gold answer...",
     "normalized_score": 4
   }
 }

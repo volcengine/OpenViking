@@ -78,9 +78,13 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
             app.load_content_for_selected().await;
         }
         KeyCode::Char('.') => {
-            let client = app.client.clone();
-            app.tree.toggle_expand(&client).await;
-            app.load_content_for_selected().await;
+            // First try to load pending image if any
+            if !app.load_pending_image().await {
+                // No pending image, toggle directory expand
+                let client = app.client.clone();
+                app.tree.toggle_expand(&client).await;
+                app.load_content_for_selected().await;
+            }
         }
         KeyCode::Char('d') => {
             // Delete currently selected URI

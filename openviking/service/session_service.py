@@ -252,7 +252,8 @@ class SessionService:
         """Query background commit task status by task_id for the calling owner."""
         task = get_task_tracker().get(
             task_id,
-            owner_account_id=ctx.account_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
 
@@ -270,12 +271,15 @@ class SessionService:
             raise NotInitializedError("SessionCompressor")
 
         session = await self.get(session_id, ctx)
+        session_uri = canonical_session_uri(session_id)
+        archive_uri = f"{session_uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
             user=ctx.user,
             session_id=session_id,
             ctx=ctx,
+            archive_uri=archive_uri,
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories

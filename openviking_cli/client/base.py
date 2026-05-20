@@ -63,6 +63,16 @@ class BaseClient(ABC):
         """Wait for all processing to complete."""
         ...
 
+    @abstractmethod
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        ...
+
     # ============= File System =============
 
     @abstractmethod
@@ -213,12 +223,15 @@ class BaseClient(ABC):
     # ============= Sessions =============
 
     @abstractmethod
-    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(
+        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            telemetry: Whether to attach operation telemetry data to the result.
         """
         ...
 
@@ -265,6 +278,7 @@ class BaseClient(ABC):
         parts: list[dict] | None = None,
         created_at: str | None = None,
         role_id: str | None = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -275,6 +289,7 @@ class BaseClient(ABC):
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
             role_id: Optional explicit actor identity. Omit to let the server derive it.
+            telemetry: Whether to attach operation telemetry data to the result.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -283,18 +298,42 @@ class BaseClient(ABC):
     # ============= Pack =============
 
     @abstractmethod
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(self, uri: str, to: str, include_vectors: bool = False) -> str:
         """Export as .ovpack file."""
         ...
 
     @abstractmethod
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
+        """Back up public scopes as a restore-only .ovpack file."""
+        ...
+
+    @abstractmethod
     async def import_ovpack(
-        self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        parent: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         ...
 
+    @abstractmethod
+    async def restore_ovpack(
+        self,
+        file_path: str,
+        on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
+    ) -> str:
+        """Restore backup .ovpack file."""
+        ...
+
     # ============= Debug =============
+
+    @abstractmethod
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        ...
 
     @abstractmethod
     async def health(self) -> bool:

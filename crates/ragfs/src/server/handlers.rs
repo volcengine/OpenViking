@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::{FileSystem, MountableFS, PluginConfig, WriteFlag};
+use crate::core::{FileSystem, FilesystemStats, GrepResult, MountableFS, PluginConfig, WriteFlag};
 
 /// Shared application state
 #[derive(Clone)]
@@ -71,6 +71,33 @@ pub struct FileQuery {
 pub struct DirQuery {
     /// Directory path
     pub path: String,
+    /// Optional permission mode (octal string, e.g. "755")
+    pub mode: Option<String>,
+}
+
+/// Query parameters for statistics operations
+#[derive(Debug, Deserialize)]
+pub struct StatsQuery {
+    /// Mount path (optional, if not provided returns all stats)
+    pub path: Option<String>,
+}
+
+/// Statistics response for a single mount
+#[derive(Debug, Serialize)]
+pub struct MountStats {
+    /// Mount path
+    pub path: String,
+    /// Plugin name
+    pub plugin: String,
+    /// Filesystem statistics
+    pub stats: FilesystemStats,
+}
+
+/// Statistics response for all mounts
+#[derive(Debug, Serialize)]
+pub struct AllStatsResponse {
+    /// Statistics for all mounts
+    pub mounts: Vec<MountStats>,
 }
 
 /// Request body for mount operation
@@ -90,6 +117,33 @@ pub struct MountRequest {
 pub struct UnmountRequest {
     /// Mount path to unmount
     pub path: String,
+}
+
+/// Request body for grep operation
+#[derive(Debug, Deserialize)]
+pub struct GrepRequest {
+    /// File or directory path to search
+    pub path: String,
+    /// Regular expression pattern
+    pub pattern: String,
+    /// Whether to search recursively
+    #[serde(default)]
+    pub recursive: bool,
+    /// Whether to perform case-insensitive matching
+    #[serde(default)]
+    pub case_insensitive: bool,
+    /// Whether to stream results (currently unsupported by ragfs server)
+    #[serde(default)]
+    pub stream: bool,
+    /// Maximum number of matches to return
+    #[serde(default)]
+    pub node_limit: Option<usize>,
+    /// Optional path prefix to exclude from search
+    #[serde(default)]
+    pub exclude_path: Option<String>,
+    /// Optional maximum depth relative to query root
+    #[serde(default)]
+    pub level_limit: Option<usize>,
 }
 
 /// Health check response
@@ -115,10 +169,7 @@ pub struct MountInfo {
 // ============================================================================
 
 /// GET /api/v1/files - Read file
-pub async fn read_file(
-    State(state): State<AppState>,
-    Query(query): Query<FileQuery>,
-) -> Response {
+pub async fn read_file(State(state): State<AppState>, Query(query): Query<FileQuery>) -> Response {
     match state.fs.read(&query.path, query.offset, query.size).await {
         Ok(data) => (StatusCode::OK, data).into_response(),
         Err(e) => (
@@ -198,10 +249,7 @@ pub async fn delete_file(
 }
 
 /// GET /api/v1/stat - Get file metadata
-pub async fn stat_file(
-    State(state): State<AppState>,
-    Query(query): Query<FileQuery>,
-) -> Response {
+pub async fn stat_file(State(state): State<AppState>, Query(query): Query<FileQuery>) -> Response {
     match state.fs.stat(&query.path).await {
         Ok(info) => (StatusCode::OK, Json(ApiResponse::success(info))).into_response(),
         Err(e) => (
@@ -239,6 +287,28 @@ pub async fn create_directory(
     match state.fs.mkdir(&query.path, 0o755).await {
         Ok(_) => (
             StatusCode::CREATED,
+            Json(ApiResponse::success(serde_json::json!({
+                "path": query.path
+            }))),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/v1/directories/ensure-parent - Ensure parent directories exist
+pub async fn ensure_parent_dirs(
+    State(state): State<AppState>,
+    Query(query): Query<DirQuery>,
+) -> Response {
+    let mode = query.mode.and_then(|m| u32::from_str_radix(&m, 8).ok()).unwrap_or(0o755);
+    match state.fs.ensure_parent_dirs(&query.path, mode).await {
+        Ok(_) => (
+            StatusCode::OK,
             Json(ApiResponse::success(serde_json::json!({
                 "path": query.path
             }))),
@@ -348,6 +418,40 @@ pub async fn unmount_filesystem(
 // Health Check Handler
 // ============================================================================
 
+/// POST /api/v1/grep - Search file content
+pub async fn grep_content(State(state): State<AppState>, Json(req): Json<GrepRequest>) -> Response {
+    if req.stream {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(ApiResponse::<()>::error(
+                "streaming grep is not supported by the ragfs HTTP server",
+            )),
+        )
+            .into_response();
+    }
+
+    match state
+        .fs
+        .grep(
+            &req.path,
+            &req.pattern,
+            req.recursive,
+            req.case_insensitive,
+            req.node_limit,
+            req.exclude_path.as_deref(),
+            req.level_limit,
+        )
+        .await
+    {
+        Ok(result) => (StatusCode::OK, Json(ApiResponse::success(result))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<GrepResult>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/v1/health - Health check
 pub async fn health_check() -> Response {
     let response = HealthResponse {
@@ -356,4 +460,104 @@ pub async fn health_check() -> Response {
     };
 
     (StatusCode::OK, Json(ApiResponse::success(response))).into_response()
+}
+
+// ============================================================================
+// Statistics Handlers
+// ============================================================================
+
+/// GET /api/v1/stats - Get filesystem statistics
+pub async fn get_stats(State(state): State<AppState>, Query(query): Query<StatsQuery>) -> Response {
+    if let Some(path) = query.path {
+        // Get stats for a specific mount
+        match state.fs.get_mount_stats(&path).await {
+            Ok(stats) => {
+                let mounts = state.fs.list_mounts().await;
+                let plugin_name = mounts
+                    .into_iter()
+                    .find(|(p, _)| p == &path)
+                    .map(|(_, plugin)| plugin)
+                    .unwrap_or_default();
+
+                let mount_stats = MountStats {
+                    path,
+                    plugin: plugin_name,
+                    stats,
+                };
+
+                (StatusCode::OK, Json(ApiResponse::success(mount_stats))).into_response()
+            }
+            Err(e) => (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::<()>::error(e.to_string())),
+            )
+                .into_response(),
+        }
+    } else {
+        // Get stats for all mounts
+        let all_stats = state.fs.get_all_stats().await;
+        let mounts: Vec<MountStats> = all_stats
+            .into_iter()
+            .map(|(path, (plugin, stats))| MountStats { path, plugin, stats })
+            .collect();
+
+        let response = AllStatsResponse { mounts };
+        (StatusCode::OK, Json(ApiResponse::success(response))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::State;
+    use std::collections::HashMap;
+
+    use crate::plugins::LocalFSPlugin;
+
+    #[tokio::test]
+    async fn test_grep_content_forwards_exclude_path_and_level_limit() {
+        let fs = Arc::new(MountableFS::new());
+        fs.register_plugin(LocalFSPlugin::new()).await;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("excluded")).unwrap();
+        std::fs::create_dir_all(temp.path().join("ok")).unwrap();
+        std::fs::write(temp.path().join("excluded/x.txt"), "hit\n").unwrap();
+        std::fs::write(temp.path().join("ok/y.txt"), "hit\n").unwrap();
+
+        fs.mount(PluginConfig {
+            name: "localfs".to_string(),
+            mount_path: "/local".to_string(),
+            params: HashMap::from([(
+                "local_dir".to_string(),
+                crate::core::ConfigValue::String(temp.path().to_string_lossy().to_string()),
+            )]),
+        })
+        .await
+        .unwrap();
+
+        let response = grep_content(
+            State(AppState { fs: fs.clone() }),
+            Json(GrepRequest {
+                path: "/local".to_string(),
+                pattern: "hit".to_string(),
+                recursive: true,
+                case_insensitive: false,
+                stream: false,
+                node_limit: Some(1),
+                exclude_path: Some("/local/excluded".to_string()),
+                level_limit: Some(5),
+            }),
+        )
+        .await;
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["data"]["count"], 1);
+        assert_eq!(parsed["data"]["matches"][0]["file"], "ok/y.txt");
+    }
 }

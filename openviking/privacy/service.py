@@ -5,8 +5,6 @@
 import json
 from typing import Any, Optional
 
-from openviking_cli.exceptions import NotFoundError
-
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.helpers import (
     canonicalize_values,
@@ -21,6 +19,7 @@ from openviking.privacy.models import UserPrivacyConfigMeta, UserPrivacyConfigVe
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
+from openviking_cli.exceptions import NotFoundError
 
 
 class UserPrivacyConfigService:
@@ -48,7 +47,9 @@ class UserPrivacyConfigService:
     async def _ensure_root(self, ctx: RequestContext, category: str, target_key: str) -> None:
         root_uri = self.get_config_root(ctx, category, target_key)
         await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
-        await self._viking_fs.mkdir(history_dir_uri(self._user_space(ctx), category, target_key), exist_ok=True, ctx=ctx)
+        await self._viking_fs.mkdir(
+            history_dir_uri(self._user_space(ctx), category, target_key), exist_ok=True, ctx=ctx
+        )
 
     async def get_meta(
         self, ctx: RequestContext, category: str, target_key: str

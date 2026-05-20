@@ -7,10 +7,12 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
@@ -41,6 +43,14 @@ class ContentWriteCoordinator:
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
 
+    @staticmethod
+    def _memory_content_parts(raw: str) -> tuple[str, Dict[str, Any]]:
+        try:
+            parsed = deserialize_full(raw)
+        except Exception:
+            return raw, {}
+        return parsed.plain_content, parsed.memory_fields or {}
+
     async def write(
         self,
         *,
@@ -51,7 +61,10 @@ class ContentWriteCoordinator:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        normalized_uri = VikingURI.normalize(uri)
+        try:
+            normalized_uri = canonicalize_uri(uri, ctx)
+        except NamespaceShapeError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
 
@@ -68,7 +81,7 @@ class ContentWriteCoordinator:
         if stat.get("isDir"):
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
 
-        context_type = self._context_type_for_uri(normalized_uri)
+        context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -166,15 +179,16 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
         previous_content: Optional[str] = None
         content_written = False
-        lock_transferred = False
+        semantic_enqueued = False
+        lock_released = False
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
@@ -187,10 +201,11 @@ class ContentWriteCoordinator:
                 changed_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
                 change_type="added" if mode == "create" else "modified",
             )
-            lock_transferred = True
+            semantic_enqueued = True
+            await lock_manager.release(handle)
+            lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -206,7 +221,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
             )
         except Exception:
-            if not lock_transferred and content_written:
+            if not semantic_enqueued and content_written:
                 await self._rollback_direct_write(
                     uri=uri,
                     previous_content=previous_content,
@@ -214,7 +229,7 @@ class ContentWriteCoordinator:
                     ctx=ctx,
                     lock_handle=handle,
                 )
-            if not lock_transferred:
+            if not lock_released:
                 await lock_manager.release(handle)
             raise
         finally:
@@ -300,7 +315,7 @@ class ContentWriteCoordinator:
         if not stat.get("not_found"):
             raise AlreadyExistsError(uri, "file")
 
-        context_type = self._context_type_for_uri(uri)
+        context_type = context_type_for_uri(uri)
         root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -339,9 +354,9 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and self._context_type_for_uri(uri) == "memory":
+        if mode == "replace" and context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            _, metadata = deserialize_full(existing_raw)
+            _, metadata = self._memory_content_parts(existing_raw)
             if metadata:
                 metadata_with_content = metadata.copy()
                 metadata_with_content["content"] = content
@@ -351,7 +366,7 @@ class ContentWriteCoordinator:
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing_content, metadata = deserialize_full(existing_raw)
+            existing_content, metadata = self._memory_content_parts(existing_raw)
             updated_content = existing_content + content
             if metadata:
                 metadata_with_content = metadata.copy()
@@ -370,7 +385,6 @@ class ContentWriteCoordinator:
         changed_uri: str,
         context_type: str,
         ctx: RequestContext,
-        lifecycle_lock_handle_id: str,
         change_type: str = "modified",
         target_uri: str = "",
     ) -> None:
@@ -387,12 +401,27 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
-            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+            coalesce_key=(
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    agent_id=ctx.user.agent_id,
+                )
+                if context_type in {"resource", "skill"}
+                else ""
+            ),
             changes={change_type: [changed_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _enqueue_memory_refresh(
         self,
@@ -400,7 +429,6 @@ class ContentWriteCoordinator:
         root_uri: str,
         modified_uri: str,
         ctx: RequestContext,
-        lifecycle_lock_handle_id: str,
     ) -> None:
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -414,12 +442,23 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
-            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+            coalesce_key=build_semantic_coalesce_key(
+                context_type="memory",
+                uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                agent_id=ctx.user.agent_id,
+            ),
             changes={"modified": [modified_uri]},
         )
-        await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as e:
+            if msg.telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+            raise
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
@@ -503,13 +542,13 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
-        lock_transferred = False
+        released = False
         try:
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
@@ -519,9 +558,9 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 modified_uri=uri,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
             )
-            lock_transferred = True
+            await lock_manager.release(handle)
+            released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -537,7 +576,7 @@ class ContentWriteCoordinator:
                 queue_status=queue_status,
             )
         except Exception:
-            if not lock_transferred:
+            if not released:
                 await lock_manager.release(handle)
             raise
         finally:
@@ -573,8 +612,12 @@ class ContentWriteCoordinator:
                 )
             root_uri = VikingURI.build(*parts[: memories_idx + 2])
         elif parts[0] == "agent":
-            if len(parts) >= 3 and parts[1] == "skills":
-                root_uri = VikingURI.build(*parts[:3])
+            try:
+                skills_idx = parts.index("skills")
+            except ValueError:
+                skills_idx = -1
+            if skills_idx >= 0 and len(parts) > skills_idx + 1:
+                root_uri = VikingURI.build(*parts[: skills_idx + 2])
             else:
                 try:
                     memories_idx = parts.index("memories")
@@ -595,10 +638,3 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")
             root_uri = parent.uri
         return root_uri
-
-    def _context_type_for_uri(self, uri: str) -> str:
-        if "/memories/" in uri:
-            return "memory"
-        if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
-            return "skill"
-        return "resource"

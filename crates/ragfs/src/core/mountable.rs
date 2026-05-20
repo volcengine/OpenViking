@@ -13,7 +13,9 @@ use tokio::sync::RwLock;
 use super::errors::{Error, Result};
 use super::filesystem::FileSystem;
 use super::plugin::ServicePlugin;
-use super::types::{FileInfo, PluginConfig, WriteFlag};
+use super::stats::{FilesystemStats, StatsCollector};
+use super::stats_wrapper::StatsWrappedFS;
+use super::types::{FileInfo, GrepResult, PluginConfig, WriteFlag};
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -21,8 +23,11 @@ struct MountInfo {
     /// The mount path (e.g., "/memfs")
     path: String,
 
-    /// The filesystem instance
+    /// The filesystem instance (wrapped with statistics)
     fs: Arc<dyn FileSystem>,
+
+    /// The statistics collector for this mount
+    stats: Arc<StatsCollector>,
 
     /// The plugin that created this filesystem
     plugin_name: String,
@@ -97,10 +102,15 @@ impl MountableFS {
         // Initialize filesystem
         let fs = plugin.initialize(config.clone()).await?;
 
+        // Wrap with statistics
+        let wrapped_fs = StatsWrappedFS::new(fs);
+        let stats_collector = wrapped_fs.stats_collector();
+
         // Add to mounts
         let mount_info = MountInfo {
             path: normalized_path.clone(),
-            fs: Arc::from(fs),
+            fs: Arc::from(Box::new(wrapped_fs) as Box<dyn FileSystem>),
+            stats: stats_collector,
             plugin_name: config.name.clone(),
         };
 
@@ -138,6 +148,40 @@ impl MountableFS {
             .iter()
             .map(|(path, info)| (path.clone(), info.plugin_name.clone()))
             .collect()
+    }
+
+    /// Get statistics for a specific mount point
+    ///
+    /// # Arguments
+    /// * `path` - The mount path
+    ///
+    /// # Returns
+    /// The filesystem statistics for the mount
+    pub async fn get_mount_stats(&self, path: &str) -> Result<FilesystemStats> {
+        let normalized_path = normalize_path(path);
+        let mounts = self.mounts.read().await;
+
+        let mount_info = mounts
+            .get(&normalized_path)
+            .ok_or_else(|| Error::MountPointNotFound(normalized_path.clone()))?;
+
+        Ok(mount_info.stats.snapshot().await)
+    }
+
+    /// Get aggregated statistics for all mount points
+    ///
+    /// # Returns
+    /// A map of mount path to filesystem statistics
+    pub async fn get_all_stats(&self) -> HashMap<String, (String, FilesystemStats)> {
+        let mounts = self.mounts.read().await;
+        let mut result = HashMap::new();
+
+        for (path, info) in mounts.iter() {
+            let stats = info.stats.snapshot().await;
+            result.insert(path.clone(), (info.plugin_name.clone(), stats));
+        }
+
+        result
     }
 
     /// Find the mount point for a given path
@@ -279,6 +323,56 @@ impl FileSystem for MountableFS {
         let (mount_info, rel_path) = self.find_mount(path).await?;
         mount_info.fs.truncate(&rel_path, size).await
     }
+
+    async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+        mount_info.fs.ensure_parent_dirs(&rel_path, mode).await
+    }
+
+    async fn grep(
+        &self,
+        path: &str,
+        pattern: &str,
+        recursive: bool,
+        case_insensitive: bool,
+        node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
+    ) -> Result<GrepResult> {
+        // Route grep to the mounted plugin so plugin-specific fast paths (e.g. localfs + rg)
+        // can take effect. If a plugin doesn't override grep, it will fall back to the trait
+        // default implementation on that plugin instance (still correct, just slower).
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+
+        // Exclude path only applies when it resolves to the same mount point; otherwise it
+        // should not affect searching under `path`.
+        let exclude_rel: Option<String> = match exclude_path {
+            None => None,
+            Some(excl_abs) => match self.find_mount(excl_abs).await {
+                Ok((exclude_mount, excl_rel)) => {
+                    if exclude_mount.path == mount_info.path {
+                        Some(excl_rel)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            },
+        };
+
+        mount_info
+            .fs
+            .grep(
+                &rel_path,
+                pattern,
+                recursive,
+                case_insensitive,
+                node_limit,
+                exclude_rel.as_deref(),
+                level_limit,
+            )
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -321,7 +415,13 @@ mod tests {
             Ok(self.name.as_bytes().to_vec())
         }
 
-        async fn write(&self, _path: &str, data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
+        async fn write(
+            &self,
+            _path: &str,
+            data: &[u8],
+            _offset: u64,
+            _flags: WriteFlag,
+        ) -> Result<u64> {
             Ok(data.len() as u64)
         }
 
@@ -339,6 +439,22 @@ mod tests {
 
         async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
             Ok(())
+        }
+
+        async fn grep(
+            &self,
+            path: &str,
+            pattern: &str,
+            _recursive: bool,
+            _case_insensitive: bool,
+            _node_limit: Option<usize>,
+            _exclude_path: Option<&str>,
+            _level_limit: Option<usize>,
+        ) -> Result<GrepResult> {
+            let mut out = GrepResult::new();
+            // Encode the received rel_path into the match so the test can assert routing worked.
+            out.add_match(path.to_string(), 1, pattern.to_string());
+            Ok(out)
         }
     }
 
@@ -471,7 +587,10 @@ mod tests {
         assert_eq!(data, b"mock");
 
         // Test write operation
-        let written = mfs.write("/mock/test.txt", b"hello", 0, WriteFlag::Create).await.unwrap();
+        let written = mfs
+            .write("/mock/test.txt", b"hello", 0, WriteFlag::Create)
+            .await
+            .unwrap();
         assert_eq!(written, 5);
 
         // Test stat operation
@@ -578,7 +697,8 @@ mod tests {
 
         // Register multiple plugins
         for i in 0..5 {
-            mfs.register_plugin(MockPlugin::new(&format!("mock{}", i))).await;
+            mfs.register_plugin(MockPlugin::new(&format!("mock{}", i)))
+                .await;
         }
 
         // Spawn concurrent mount operations
@@ -610,9 +730,8 @@ mod tests {
         let mut handles = vec![];
         for i in 0..5 {
             let mfs_clone = Arc::clone(&mfs);
-            let handle = task::spawn(async move {
-                mfs_clone.unmount(&format!("/mock{}", i)).await
-            });
+            let handle =
+                task::spawn(async move { mfs_clone.unmount(&format!("/mock{}", i)).await });
             handles.push(handle);
         }
 
@@ -625,5 +744,29 @@ mod tests {
         // Verify all unmounted
         let mounts = mfs.list_mounts().await;
         assert!(mounts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_grep_routes_to_plugin() {
+        let mfs = MountableFS::new();
+        mfs.register_plugin(MockPlugin::new("mock")).await;
+
+        let config = PluginConfig {
+            name: "mock".to_string(),
+            mount_path: "/mock".to_string(),
+            params: HashMap::new(),
+        };
+        mfs.mount(config).await.unwrap();
+
+        let result = mfs
+            .grep("/mock/a.txt", "foo", false, false, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].file, "/a.txt");
+        assert_eq!(result.matches[0].line, 1);
+        assert_eq!(result.matches[0].content, "foo");
     }
 }

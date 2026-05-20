@@ -323,14 +323,14 @@ async def test_task_endpoints_are_user_scoped():
     alice_task = tracker.create(
         "session_commit",
         resource_id="alice-session",
-        owner_account_id=account_id,
-        owner_user_id="alice",
+        account_id=account_id,
+        user_id="alice",
     )
     bob_task = tracker.create(
         "session_commit",
         resource_id="bob-session",
-        owner_account_id=account_id,
-        owner_user_id="bob",
+        account_id=account_id,
+        user_id="bob",
     )
 
     alice_app = _build_task_http_test_app(
@@ -562,6 +562,31 @@ async def test_root_tenant_scoped_requests_allow_explicit_identity():
     assert ctx.role == Role.ROOT
     assert ctx.user.account_id == "acme"
     assert ctx.user.user_id == "alice"
+
+
+async def test_root_reindex_requests_require_explicit_account():
+    """ROOT reindex must select an account because indexes are account-scoped."""
+    request = _make_request("/api/v1/content/reindex", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Account"):
+        await get_request_context(request, identity)
+
+
+async def test_root_reindex_requests_allow_account_without_user():
+    """ROOT reindex is account-scoped and does not require a user header."""
+    request = _make_request(
+        "/api/v1/content/reindex",
+        headers={"X-OpenViking-Account": "acme"},
+        auth_enabled=True,
+    )
+    identity = ResolvedIdentity(role=Role.ROOT, account_id="acme", user_id="default")
+
+    ctx = await get_request_context(request, identity)
+
+    assert ctx.role == Role.ROOT
+    assert ctx.user.account_id == "acme"
+    assert ctx.user.user_id == "default"
 
 
 async def test_root_monitoring_requests_allow_implicit_default_identity():

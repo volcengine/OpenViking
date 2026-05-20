@@ -600,7 +600,7 @@ fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
 struct ColumnInfo {
     max_width: usize,    // Max width for alignment (capped at 120)
     is_numeric: bool,    // True if all values in column are numeric
-    is_uri_column: bool, // True if column name is "uri"
+    is_unbounded_column: bool, // True if column should respect server-side length
 }
 
 fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Option<String> {
@@ -668,7 +668,7 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
     let mut column_info: Vec<ColumnInfo> = Vec::new();
 
     for key in &keys {
-        let is_uri_column = key == "uri";
+        let is_unbounded_column = key == "uri" || key == "abstract";
         let mut is_numeric = true;
         let mut max_width = key.width(); // Start with header width
 
@@ -691,7 +691,7 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
         column_info.push(ColumnInfo {
             max_width,
             is_numeric,
-            is_uri_column,
+            is_unbounded_column,
         });
     }
 
@@ -718,7 +718,7 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
                     let value = obj.get(k).map(|v| format_value(v)).unwrap_or_default();
 
                     let (content, skip_padding) =
-                        truncate_string(&value, info.is_uri_column, info.max_width);
+                        truncate_string(&value, info.is_unbounded_column, info.max_width);
 
                     if skip_padding {
                         // Long URI, output as-is without padding
@@ -771,11 +771,12 @@ fn is_numeric_value(v: &serde_json::Value) -> bool {
     }
 }
 
-fn truncate_string(s: &str, is_uri: bool, max_width: usize) -> (String, bool) {
+fn truncate_string(s: &str, is_unbounded: bool, max_width: usize) -> (String, bool) {
     let display_width = s.width();
 
-    // URI columns: never truncate
-    if is_uri {
+    // URI/abstract columns: never truncate. For long values, skip padding so
+    // the server-side limit (such as --abs-limit) remains authoritative.
+    if is_unbounded {
         if display_width > max_width {
             return (s.to_string(), true); // true = skip padding
         } else {
@@ -836,5 +837,13 @@ mod tests {
     fn test_empty_object() {
         let obj = json!({});
         print_table(obj, true);
+    }
+
+    #[test]
+    fn test_abstract_column_is_not_truncated_by_cli_renderer() {
+        let long_abstract = "a".repeat(MAX_COL_WIDTH + 50);
+        let (rendered, skip_padding) = truncate_string(&long_abstract, true, 10);
+        assert_eq!(rendered, long_abstract);
+        assert!(skip_padding);
     }
 }

@@ -174,7 +174,8 @@ int BitmapGroupBase::count_field_enums(
 int BitmapGroupBase::count_field_enums(
     std::map<std::string, uint32_t>& enum_count,
     std::map<std::string, const BitmapPtr>& first_enum_bitmaps) {
-  // Combine second field with first field distribution to get joint key distribution
+  // Combine second field with first field distribution to get joint key
+  // distribution
   for (auto& pkv : first_enum_bitmaps) {
     BitmapPtr valid_bitmap = pkv.second;
     if (valid_bitmap) {

@@ -31,10 +31,6 @@ class ExtractContextProvider(ABC):
     @abstractmethod
     async def prefetch(
         self,
-        ctx: RequestContext,
-        viking_fs: VikingFS,
-        transaction_handle,
-        vlm,
     ) -> List[Dict]:
         """
         执行 prefetch

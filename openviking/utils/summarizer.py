@@ -7,8 +7,9 @@ Handles summarization and key information extraction.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
-from openviking.core.directories import get_context_type_for_uri
+from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -35,7 +36,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lifecycle_lock_handle_id: str = "",
+        lock: LockLease = NO_LOCK,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -59,6 +60,7 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
+        lock_handoff = lock.to_handoff()
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -77,10 +79,10 @@ class Summarizer:
 
         for uri, temp_uri in zip(resource_uris, temp_uris, strict=True):
             # Determine context_type based on URI
-            context_type = get_context_type_for_uri(uri)
+            context_type = context_type_for_uri(uri)
 
             enqueue_units: List[Tuple[str, str]] = []
-            if is_resources_root(uri) and uri != temp_uri:
+            if is_resources_root(uri) and uri != temp_uri and lock_handoff is None:
                 children = await list_top_children(temp_uri)
                 if not children:
                     return {
@@ -104,12 +106,28 @@ class Summarizer:
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
                     target_uri=target_uri if target_uri != source_uri else None,
-                    lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+                    lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
                 )
-                await semantic_queue.enqueue(msg)
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+                try:
+                    enqueue_id = await semantic_queue.enqueue(msg)
+                except Exception as e:
+                    if msg.telemetry_id:
+                        get_request_wait_tracker().mark_semantic_failed(
+                            msg.telemetry_id, msg.id, str(e)
+                        )
+                    raise
+                if enqueue_id == "deduplicated":
+                    if msg.telemetry_id:
+                        get_request_wait_tracker().mark_semantic_done(
+                            msg.telemetry_id,
+                            msg.id,
+                            processed_delta=0,
+                        )
+                    logger.info("Semantic generation already queued for: %s", target_uri)
+                    continue
                 enqueued_count += 1
                 logger.info(
                     f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"

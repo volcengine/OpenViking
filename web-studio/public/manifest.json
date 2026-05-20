@@ -1,0 +1,16 @@
+{
+  "short_name": "OpenViking",
+  "name": "OpenViking Studio",
+  "icons": [
+    {
+      "src": "openviking-icon.png",
+      "type": "image/png",
+      "sizes": "1280x1280",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff"
+}

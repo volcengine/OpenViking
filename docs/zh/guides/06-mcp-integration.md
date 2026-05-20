@@ -18,7 +18,7 @@ MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口
 |------|----------|
 | **Claude Code** | `type: http` 接入 |
 | **ChatGPT & Codex** | 标准 MCP 配置 |
-| **Claude.ai / Claude Desktop** | 通过 MCP-Key2OAuth 代理接入 |
+| **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
 | **Manus** | 标准 MCP 配置 |
 | **Trae** | 标准 MCP 配置 |
 
@@ -78,36 +78,24 @@ claude mcp add --transport http openviking \
 
 加 `--scope user` 可将配置设为全局（所有项目共享）。
 
-### Claude.ai / Claude Desktop（OAuth 代理鉴权）
+### Claude.ai / Claude Desktop / ChatGPT / Cursor（OAuth）
 
-Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 2.1 鉴权，无法直接传入 API Key。
+这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 console 驱动的 OTP 授权页），不再需要外部代理。
 
-#### 官方 OAuth 支持（规划中）
+**详见 [OAuth 2.1 接入指南](11-oauth.md)**：
 
-我们正在考虑在 `openviking-server` 中内置 OAuth 2.1 授权端点，初步方案包括：
+- 端到端流程（device-flow 风格：authorize 页显示 6 字符码，用户在 console 确认）
+- HTTP（本地）与 HTTPS（生产）两阶段部署，包含 Caddy / nginx 反代模板和 docker-compose 示例
+- Claude.ai / Claude Desktop / Cursor / ChatGPT 接入步骤
+- `OPENVIKING_PUBLIC_BASE_URL` 与 `oauth` 配置项
+- Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 
-- **OTP 授权**：通过 CLI (`ov otp`) 或 REST API 获取一次性口令，在 OAuth 授权页面输入完成认证，无需外部依赖
-- **Console 快捷授权**：利用 Web Console (8020) 同源 session 实现一键授权
-- **第三方登录**：可选的 GitHub / Google 等 IdP 委托登录
-
-上述方案尚在设计评审阶段，实现时间待定。
-
-#### 当前可用方案：MCP-Key2OAuth（社区项目）
-
-在官方 OAuth 实现就绪之前，可以借助社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) 将 API Key 认证代理为 OAuth 流程：
-
-1. 参照项目 README 自行部署代理服务（Cloudflare Workers）
-2. 填入你的 OpenViking MCP 服务器 URL（如 `https://your-server.com/mcp`）
-3. 生成代理后的新 URL
-4. 在 Claude.ai / Claude Desktop 中填入生成的新 URL，连接时会跳转至代理站进行鉴权
-5. 授权完成后即可正常使用
-
-> ⚠️ **免责声明：** MCP-Key2OAuth 为社区维护的第三方项目，OpenViking 团队不对其安全性、可用性或数据处理方式做任何保证。使用前请自行评估风险。如有顾虑，建议等待官方 OAuth 实现或自行搭建代理。
+> 社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理仍可作为第三方备选方案，但现在更推荐原生流程：无需额外部署单元，也不会引入第三方对 API Key 的信任面。
 
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 9 个工具：
+连接后，OpenViking MCP 端点暴露 11 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
@@ -115,11 +103,52 @@ Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 2.
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `add_resource` | 添加本地文件或 URL 作为资源 | `path`, `description`(可选) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时必填) |
+| `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
+| `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
-| `forget` | 删除任意 `viking://` URI（先用 `search` 查找） | `uri` |
+| `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+
+> **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
+
+### 添加本地文件资源(渐进式上传)
+
+`add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
+
+- **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
+- **本地文件路径**:返回**两步上传指令**(纯文本,Step 1 / Step 2 排版),agent 需要:
+  1. 把文件以 `multipart/form-data` POST 到响应里给出的 `temp_upload_signed` URL(URL 内嵌一次性 token,默认 10 分钟过期)。Server 在写入时 mint `temp_file_id`,通过 JSON `{"temp_file_id": "..."}` 返回。
+  2. 从响应体读出 `temp_file_id`,再次调用 `add_resource(temp_file_id="<step 1 返回的 id>")`,server 通过 `TempUploadStore` 解析文件并入库。
+
+这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。签名端点和认证版的 `temp_upload` 共享同一个持久化层(`TempUploadStore`),所以 `local` / `shared` 上传模式(以及 `shared` 模式带来的多 worker 支持)在两个端点上行为一致。
+
+#### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
+
+工具响应里给出的上传 URL,server 端按以下顺序解析:
+
+1. 环境变量 `OPENVIKING_PUBLIC_BASE_URL`
+2. `ov.conf` 中的 `server.public_base_url`
+3. 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto`(由反代链转发)
+4. 请求头 `Host`(直连场景)
+5. 监听地址兜底 `http://{host}:{port}`
+
+只要 server 部署在反向代理(nginx / cloud LB / k8s ingress)后,**强烈建议显式配置 `OPENVIKING_PUBLIC_BASE_URL`**。后两层是兜底推断,在以下情况会失败:
+
+- 反代/MCP proxy 不转发 `X-Forwarded-*` 头
+- server 监听 `0.0.0.0`(fallback URL 含 `0.0.0.0`,agent 无法连接)
+- 多层代理存在 host 重写
+
+未配置该变量且 fallback 推断生效时,工具响应末尾会自动附带提示,告知用户在 server 端设置该环境变量。Docker Compose 部署示例:
+
+```yaml
+services:
+  openviking:
+    image: ghcr.io/volcengine/openviking:latest
+    environment:
+      OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
+```
 
 ## 故障排除
 

@@ -6,13 +6,14 @@ Registry for Data Accessors.
 Manages DataAccessor registration and provides automatic source routing.
 """
 
-import logging
 from pathlib import Path
 from typing import List, Optional, Union
 
+from openviking_cli.utils import get_logger
+
 from .base import DataAccessor, LocalResource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AccessorRegistry:

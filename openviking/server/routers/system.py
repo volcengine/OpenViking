@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -18,6 +20,19 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+async def _embedding_probe(embedder) -> str:
+    """Quick embedding probe: embed a single token and check for errors."""
+    from openviking.models.embedder.base import embed_compat
+
+    try:
+        await embed_compat(embedder, "ok", is_query=True)
+        return "ok"
+    except Exception as e:
+        provider = getattr(embedder, "provider", "unknown")
+        model = getattr(embedder, "model_name", "unknown")
+        return f"error: provider={provider} model={model}: {e}"
 
 
 @router.get("/health", tags=["system"])
@@ -72,6 +87,21 @@ async def readiness_check(request: Request):
     Returns 200 when all subsystems are operational, 503 otherwise.
     No authentication required (designed for K8s probes).
     """
+    # If service is still initializing, return 503 immediately
+    try:
+        service = get_service()
+        if not service._initialized:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "reason": "initializing"},
+            )
+    except RuntimeError:
+        # get_service() raises RuntimeError when service not yet set
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "initializing"},
+        )
+
     checks = {}
 
     # 1. AGFS: try to list root
@@ -104,7 +134,25 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["api_key_manager"] = f"error: {e}"
 
-    # 4. Ollama: connectivity check if configured
+    # 4. Embedding: quick probe to verify the provider is reachable
+    try:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        embedder = ov_config.embedding.get_embedder()
+        if embedder is not None:
+            probe_result = await asyncio.wait_for(
+                _embedding_probe(embedder), timeout=10.0
+            )
+            checks["embedding"] = probe_result
+        else:
+            checks["embedding"] = "not_configured"
+    except asyncio.TimeoutError:
+        checks["embedding"] = "error: probe timed out (provider unreachable)"
+    except Exception as e:
+        checks["embedding"] = f"error: {e}"
+
+    # 5. Ollama: connectivity check if configured
     try:
         from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
         from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
@@ -155,6 +203,12 @@ class WaitRequest(BaseModel):
     timeout: Optional[float] = None
 
 
+class ConsistencyRequest(BaseModel):
+    """Request model for filesystem/vector-index consistency checks."""
+
+    uri: str
+
+
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest,
@@ -163,4 +217,19 @@ async def wait_processed(
     """Wait for all processing to complete."""
     service = get_service()
     result = await service.resources.wait_processed(timeout=request.timeout)
+    return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/consistency", tags=["system"])
+async def check_consistency(
+    request: ConsistencyRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Check filesystem/vector-index consistency for a URI subtree."""
+    service = get_service()
+    uri = validate_viking_uri(request.uri)
+    result = await service.check_consistency(
+        uri=uri,
+        ctx=ctx,
+    )
     return Response(status="ok", result=result)

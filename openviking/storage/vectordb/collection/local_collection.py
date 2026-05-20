@@ -41,6 +41,7 @@ from openviking.storage.vectordb.utils.constants import (
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
+from openviking.storage.vectordb.utils.json_safety import safe_json_dumps
 from openviking.storage.vectordb.utils.path_safety import (
     resolve_storage_path,
     safe_join,
@@ -568,7 +569,7 @@ class LocalCollection(ICollection):
                     if sparse_dict and isinstance(sparse_dict, dict):
                         cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
                         cands_list[i].sparse_values = list(sparse_dict.values())
-            cands_list[i].fields = json.dumps(data)
+            cands_list[i].fields = safe_json_dumps(data, ensure_ascii=False)
             cands_list[i].expire_ns_ts = time.time_ns() + ttl * 1000000000 if ttl > 0 else 0
 
         if not self.store_mgr:
@@ -946,6 +947,15 @@ class PersistCollection(LocalCollection):
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
     def _recover(self):
+        index_count = 0
+        for f in os.listdir(self.index_dir):
+            try:
+                if safe_join(self.index_dir, f).is_dir():
+                    index_count += 1
+            except ValueError:
+                pass
+        if index_count > 0:
+            logger.info("Recovering %d index(es) from %s", index_count, self.index_dir)
         for folder in os.listdir(self.index_dir):
             try:
                 index_dir = safe_join(self.index_dir, folder)
@@ -983,24 +993,102 @@ class PersistCollection(LocalCollection):
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             delta_list = self.store_mgr.get_delta_data_after_ts(newest_version)
+            logger.info(
+                "Index '%s': replaying %d delta records to recover from last persistent snapshot",
+                index_name,
+                len(delta_list),
+            )
             upsert_list: List[DeltaRecord] = []
             delete_list: List[DeltaRecord] = []
+            _processed = 0
+            _last_log = 0.0
             for data in delta_list:
                 if data.type == OpType.PUT.value:
                     if delete_list:
-                        index.delete_data(delete_list)
+                        _processed += self._replay_recovery_records(
+                            index_name=index_name,
+                            index=index,
+                            records=delete_list,
+                            operation="delete",
+                        )
                         delete_list = []
                     upsert_list.append(data)
                 elif data.type == OpType.DEL.value:
                     if upsert_list:
-                        index.upsert_data(upsert_list)
+                        _processed += self._replay_recovery_records(
+                            index_name=index_name,
+                            index=index,
+                            records=upsert_list,
+                            operation="upsert",
+                        )
                         upsert_list = []
                     delete_list.append(data)
+                now = time.time()
+                if now - _last_log >= 5.0 and _processed > 0:
+                    logger.info(
+                        "Delta replay progress: %d/%d records for index '%s'",
+                        _processed,
+                        len(delta_list),
+                        index_name,
+                    )
+                    _last_log = now
             if upsert_list:
-                index.upsert_data(upsert_list)
+                _processed += self._replay_recovery_records(
+                    index_name=index_name,
+                    index=index,
+                    records=upsert_list,
+                    operation="upsert",
+                )
             if delete_list:
-                index.delete_data(delete_list)
+                _processed += self._replay_recovery_records(
+                    index_name=index_name,
+                    index=index,
+                    records=delete_list,
+                    operation="delete",
+                )
+            logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             self.indexes.set(index_name, index)
+
+    def _replay_recovery_records(
+        self,
+        *,
+        index_name: str,
+        index: PersistentIndex,
+        records: List[DeltaRecord],
+        operation: str,
+    ) -> int:
+        if not records:
+            return 0
+
+        replay = index.upsert_data if operation == "upsert" else index.delete_data
+        try:
+            replay(records)
+            return len(records)
+        except Exception as exc:
+            logger.warning(
+                "Index '%s': failed to replay %d %s delta records as a batch: %s; "
+                "retrying individually",
+                index_name,
+                len(records),
+                operation,
+                exc,
+            )
+
+        processed = 0
+        for record in records:
+            try:
+                replay([record])
+                processed += 1
+            except Exception as exc:
+                logger.warning(
+                    "Index '%s': skipping corrupt %s delta record label=%s type=%s: %s",
+                    index_name,
+                    operation,
+                    getattr(record, "label", None),
+                    getattr(record, "type", None),
+                    exc,
+                )
+        return processed
 
     def _persist_all_indexes(self):
         """Persist all indexes.

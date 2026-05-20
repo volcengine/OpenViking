@@ -23,6 +23,7 @@ from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
+from .oauth_config import OAuthConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
@@ -42,6 +43,11 @@ from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
+
+
+def _get_config_warning_logger():
+    """Use stdlib logging during config bootstrap to avoid early logger side effects."""
+    return logging.getLogger(__name__)
 
 
 class OpenVikingConfig(BaseModel):
@@ -150,7 +156,7 @@ class OpenVikingConfig(BaseModel):
     @model_validator(mode="after")
     def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
         if self.language_fallback and self.language_fallback != "en":
-            logging.getLogger(__name__).warning(
+            _get_config_warning_logger().warning(
                 "Config field 'language_fallback=%s' is deprecated and has no effect; "
                 "remove it, or set 'output_language_override' to pin an explicit language.",
                 self.language_fallback,
@@ -168,6 +174,11 @@ class OpenVikingConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
+
+    oauth: OAuthConfig = Field(
+        default_factory=OAuthConfig,
+        description="OAuth 2.1 (MCP) configuration",
+    )
 
     telemetry: "TelemetryConfig" = Field(
         default_factory=TelemetryConfig, description="Telemetry configuration"
@@ -247,7 +258,7 @@ class OpenVikingConfig(BaseModel):
                     isinstance(memory_config_data, dict)
                     and "agent_scope_mode" in memory_config_data
                 ):
-                    logging.getLogger(__name__).warning(
+                    _get_config_warning_logger().warning(
                         "memory.agent_scope_mode is deprecated and ignored. "
                         "User/agent namespace behavior is now controlled by per-account "
                         "namespace policy."
@@ -338,6 +349,9 @@ class OpenVikingConfigSingleton:
                             )
                     finally:
                         cls._initializing = False
+                    from openviking_cli.utils.logger import reconfigure_logging
+
+                    reconfigure_logging()
         return cls._instance
 
     @classmethod
@@ -372,6 +386,9 @@ class OpenVikingConfigSingleton:
                         )
             finally:
                 cls._initializing = False
+        from openviking_cli.utils.logger import reconfigure_logging
+
+        reconfigure_logging()
         return cls._instance
 
     @classmethod
@@ -382,7 +399,7 @@ class OpenVikingConfigSingleton:
             if not config_path.exists():
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 raw = f.read()
 
             # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).

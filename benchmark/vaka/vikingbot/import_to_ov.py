@@ -23,11 +23,9 @@ from vaka_utils import (
     select_cases,
 )
 
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
-DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
-DEFAULT_ERROR_LOG = str(DEFAULT_RESULT_DIR / "import_errors.log")
-DEFAULT_RECORD_PATH = str(DEFAULT_RESULT_DIR / ".ingest_record.json")
 DEFAULT_USER_ID = "default"
 DEFAULT_AGENT_ID = "default"
 
@@ -185,7 +183,7 @@ def is_already_ingested(
     account: str | None,
     user_id: str | None,
     agent_id: str | None,
-    global_session_id: int,
+    global_session_id: int | str,
     record: dict[str, Any],
     success_keys: set[str],
 ) -> bool:
@@ -202,7 +200,7 @@ def mark_ingested(
     account: str | None,
     user_id: str | None,
     agent_id: str | None,
-    global_session_id: int,
+    global_session_id: int | str,
     record: dict[str, Any],
     meta: dict[str, Any],
 ) -> None:
@@ -227,8 +225,8 @@ def _parse_token_usage(commit_result: dict[str, Any]) -> dict[str, int]:
             return {
                 "embedding": embed_total,
                 "vlm": llm_total,
-                "llm_input": llm.get("input", 0),
-                "llm_output": llm.get("output", 0),
+                "llm_input": llm.get("prompt_tokens", llm.get("input", 0)),
+                "llm_output": llm.get("completion_tokens", llm.get("output", 0)),
                 "total": token_usage.get("total", {}).get("total_tokens", embed_total + llm_total),
             }
 
@@ -243,23 +241,69 @@ def _parse_token_usage(commit_result: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _parse_tool_parts(row: dict[str, Any]) -> list[dict[str, Any]]:
+    tools_raw = row.get("tools") or ""
+    if isinstance(tools_raw, str):
+        tools_raw = tools_raw.strip()
+        if not tools_raw:
+            return []
+        try:
+            tools = json.loads(tools_raw)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(tools_raw, list):
+        tools = tools_raw
+    else:
+        return []
+    parts: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "tool":
+            continue
+        part: dict[str, Any] = {
+            "type": "tool",
+            "tool_id": tool.get("tool_id", ""),
+            "tool_name": tool.get("tool_name", ""),
+            "tool_uri": tool.get("tool_uri", ""),
+            "skill_uri": tool.get("skill_uri", ""),
+            "tool_input": tool.get("tool_input"),
+            "tool_output": str(tool.get("tool_output", "")) if tool.get("tool_output") is not None else "",
+            "tool_status": tool.get("tool_status", "completed"),
+        }
+        if tool.get("duration_ms") is not None:
+            part["duration_ms"] = tool["duration_ms"]
+        parts.append(part)
+    return parts
+
+
 def build_session_messages(
     rows: list[dict[str, Any]],
     *,
     answer_column: str,
     keep_references: bool,
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
     for row in rows:
+        created_at = (row.get("created_at") or "").strip() or None
         query = (row.get("query") or "").strip()
         if query:
-            messages.append({"role": "user", "text": query})
+            msg: dict[str, Any] = {"role": "user", "text": query}
+            if created_at:
+                msg["created_at"] = created_at
+            messages.append(msg)
 
         response = choose_response(row, answer_column)
         if not keep_references:
             response = choose_response_without_refs(row, response)
-        if response:
-            messages.append({"role": "assistant", "text": response})
+        tool_parts = _parse_tool_parts(row)
+        if response or tool_parts:
+            parts: list[dict[str, Any]] = []
+            if response:
+                parts.append({"type": "text", "text": response})
+            parts.extend(tool_parts)
+            msg = {"role": "assistant", "parts": parts}
+            if created_at:
+                msg["created_at"] = created_at
+            messages.append(msg)
     return messages
 
 
@@ -306,8 +350,41 @@ def build_case_sessions(
     return sessions
 
 
+def build_merged_case_session(
+    case: dict[str, Any],
+    *,
+    memory_sessions: set[int],
+    answer_column: str,
+    keep_references: bool,
+) -> dict[str, Any] | None:
+    filtered_rows = [
+        row for row in case["rows"] if row["_global_session_id"] in memory_sessions
+    ]
+    if not filtered_rows:
+        return None
+    filtered_rows = sorted(filtered_rows, key=lambda r: r["_row_index"])
+    messages = build_session_messages(
+        filtered_rows, answer_column=answer_column, keep_references=keep_references
+    )
+    if not messages:
+        return None
+    used_doc_values = {row.get("used_doc") or row.get("doc_base") or "" for row in filtered_rows}
+    used_docs = sorted(doc for doc in used_doc_values if doc)
+    return {
+        "messages": messages,
+        "meta": {
+            "case_id": case["case_id"],
+            "case_session_range": case["session_range"],
+            "global_session_id": case["session_range"],
+            "local_session_id": "all",
+            "row_count": len(filtered_rows),
+            "used_docs": used_docs,
+        },
+    }
+
+
 async def viking_ingest(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     openviking_url: str,
     account: str | None,
@@ -330,10 +407,22 @@ async def viking_ingest(
         create_res = await client.create_session()
         session_id = create_res["session_id"]
         for msg in messages:
+            if "parts" in msg:
+                parts = msg["parts"]
+            else:
+                parts = [{"type": "text", "text": msg["text"]}]
+            role_id = msg.get("role_id")
+            if not role_id:
+                if msg["role"] == "user":
+                    role_id = user_id
+                elif msg["role"] == "assistant":
+                    role_id = agent_id
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
-                parts=[{"type": "text", "text": msg["text"]}],
+                parts=parts,
+                created_at=msg.get("created_at"),
+                role_id=role_id,
             )
 
         result = await client.commit_session(session_id, telemetry=True)
@@ -457,12 +546,21 @@ async def run_import(args: argparse.Namespace) -> None:
             f"\n=== {case['case_id']} (global sessions {case['session_range']}) ===",
             file=sys.stderr,
         )
-        sessions = build_case_sessions(
-            case,
-            memory_sessions=memory_sessions,
-            answer_column=args.answer_column,
-            keep_references=args.keep_references,
-        )
+        if args.ingest_mode == "case":
+            merged = build_merged_case_session(
+                case,
+                memory_sessions=memory_sessions,
+                answer_column=args.answer_column,
+                keep_references=args.keep_references,
+            )
+            sessions = [merged] if merged is not None else []
+        else:
+            sessions = build_case_sessions(
+                case,
+                memory_sessions=memory_sessions,
+                answer_column=args.answer_column,
+                keep_references=args.keep_references,
+            )
         print(f"    {len(sessions)} memory session(s) to import", file=sys.stderr)
         print(
             f"    target user={_identity_part(user_id)} agent={_identity_part(agent_id)}",
@@ -554,6 +652,16 @@ def main() -> None:
         help="Keep Vaka <reference> tags in imported assistant answers",
     )
     parser.add_argument(
+        "--ingest-mode",
+        choices=["session", "case"],
+        default="session",
+        help=(
+            "Granularity for memory ingestion. "
+            "'session' (default): one OpenViking session per global_session_id. "
+            "'case': all filtered sessions within a case merged into a single OpenViking session."
+        ),
+    )
+    parser.add_argument(
         "--openviking-url",
         default="http://localhost:1933",
         help="OpenViking service URL, default: http://localhost:1933",
@@ -574,19 +682,25 @@ def main() -> None:
         help=f"OpenViking agent_id for all imported Vaka memory, default: {DEFAULT_AGENT_ID}",
     )
     parser.add_argument(
+        "--output",
+        default=None,
+        help="Output directory for result files (success CSV, error log, ingest record). "
+        "Overrides DEFAULT_RESULT_DIR. Individual --success-csv/--error-log/--record-path still take precedence if specified.",
+    )
+    parser.add_argument(
         "--success-csv",
-        default=DEFAULT_SUCCESS_CSV,
-        help=f"Path to success CSV, default: {DEFAULT_SUCCESS_CSV}",
+        default=None,
+        help="Path to success CSV, default: <output>/import_success.csv",
     )
     parser.add_argument(
         "--error-log",
-        default=DEFAULT_ERROR_LOG,
-        help=f"Path to error log, default: {DEFAULT_ERROR_LOG}",
+        default=None,
+        help="Path to error log, default: <output>/import_errors.log",
     )
     parser.add_argument(
         "--record-path",
-        default=DEFAULT_RECORD_PATH,
-        help=f"Path to ingest record JSON, default: {DEFAULT_RECORD_PATH}",
+        default=None,
+        help="Path to ingest record JSON, default: <output>/.ingest_record.json",
     )
     parser.add_argument(
         "--force-ingest",
@@ -604,6 +718,15 @@ def main() -> None:
         help="Do not set OpenViking user_id or agent_id on the client",
     )
     args = parser.parse_args()
+
+    # Resolve output directory: --output overrides DEFAULT_RESULT_DIR
+    result_dir = Path(args.output) if args.output else DEFAULT_RESULT_DIR
+    if args.success_csv is None:
+        args.success_csv = str(result_dir / "import_success.csv")
+    if args.error_log is None:
+        args.error_log = str(result_dir / "import_errors.log")
+    if args.record_path is None:
+        args.record_path = str(result_dir / ".ingest_record.json")
 
     if args.case_size <= 0:
         raise ValueError("--case-size must be positive")

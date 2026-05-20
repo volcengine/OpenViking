@@ -16,7 +16,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -57,6 +57,26 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
     """ADMIN can only operate on their own account."""
     if ctx.role == Role.ADMIN and ctx.account_id != account_id:
         raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
+
+
+def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
+    """Validate which roles may be minted through register_user.
+
+    register_user is the user-creation path, not the privileged role-escalation path.
+    - ROOT may create USER or ADMIN accounts here.
+    - ADMIN may create USER or ADMIN accounts in their own account.
+    - ROOT role assignment must go through the dedicated ROOT-only set_role endpoint.
+    """
+    try:
+        resolved_role = Role(role)
+    except ValueError as exc:
+        raise InvalidArgumentError(f"Unsupported role for register_user: {role}") from exc
+
+    if resolved_role == Role.ROOT:
+        raise PermissionDeniedError(
+            "register_user cannot mint ROOT users; use the ROOT-only set_role endpoint instead."
+        )
+    return resolved_role
 
 
 # ---- Account endpoints ----
@@ -167,8 +187,9 @@ async def register_user(
 ):
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
+    resolved_role = _validate_register_user_role(ctx, body.role)
     manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, body.role)
+    user_key = await manager.register_user(account_id, body.user_id, resolved_role.value)
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id, "default"),

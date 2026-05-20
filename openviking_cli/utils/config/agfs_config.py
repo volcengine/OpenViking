@@ -99,6 +99,52 @@ class S3Config(BaseModel):
         return self
 
 
+class QueueFSConfig(BaseModel):
+    """Configuration for QueueFS backend."""
+
+    mode: str = Field(
+        default="shared",
+        description="QueueFS namespace mode: 'shared' | 'worker'",
+    )
+
+    backend: str = Field(
+        default="sqlite",
+        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3'",
+    )
+
+    db_path: Optional[str] = Field(
+        default=None,
+        description="SQLite database path for QueueFS when backend is 'sqlite' or 'sqlite3'.",
+    )
+
+    recover_stale_sec: int = Field(
+        default=0,
+        description="Recover processing messages older than this many seconds on startup (0 = recover all).",
+    )
+
+    busy_timeout_ms: int = Field(
+        default=5000,
+        description="SQLite busy timeout for QueueFS in milliseconds.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        valid_modes = {"shared", "worker"}
+        if self.mode not in valid_modes:
+            raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
+
+        valid_backends = {"memory", "sqlite", "sqlite3"}
+        if self.backend not in valid_backends:
+            raise ValueError("queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3'")
+        if self.recover_stale_sec < 0:
+            raise ValueError("queuefs recover_stale_sec must be >= 0")
+        if self.busy_timeout_ms < 0:
+            raise ValueError("queuefs busy_timeout_ms must be >= 0")
+        return self
+
+
 class AGFSConfig(BaseModel):
     """Configuration for RAGFS (Rust-based AGFS)."""
 
@@ -148,6 +194,11 @@ class AGFSConfig(BaseModel):
         description="Override path of the queuefs sqlite database file. "
         "Defaults to '{storage.workspace}/_system/queue/queue.db' when not set. "
         "Useful when the workspace volume does not support sqlite (e.g. some network filesystems).",
+    )
+
+    queuefs: QueueFSConfig = Field(
+        default_factory=QueueFSConfig,
+        description="QueueFS configuration.",
     )
 
     retry_times: Any = Field(
@@ -206,5 +257,18 @@ class AGFSConfig(BaseModel):
         elif self.backend == "s3":
             # Validate S3 configuration
             self.s3.validate_config()
+
+        if self.queue_db_path is not None and self.queuefs.db_path is None:
+            logger.warning(
+                "AGFSConfig: 'storage.agfs.queue_db_path' is deprecated; "
+                "prefer 'storage.agfs.queuefs.db_path'."
+            )
+
+        if self.queuefs.backend == "memory":
+            if self.queuefs.db_path is not None or self.queue_db_path is not None:
+                logger.warning(
+                    "AGFSConfig: QueueFS backend is 'memory'; "
+                    "db_path/queue_db_path will be ignored."
+                )
 
         return self

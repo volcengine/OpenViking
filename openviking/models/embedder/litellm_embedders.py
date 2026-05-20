@@ -6,7 +6,6 @@ Uses litellm to provide a unified embedding interface across many providers
 (OpenRouter, Ollama, vLLM, and any OpenAI-compatible endpoint).
 """
 
-import logging
 import os
 from typing import Any, Dict, List, Optional
 
@@ -14,8 +13,9 @@ import litellm
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LiteLLMDenseEmbedder(DenseEmbedderBase):

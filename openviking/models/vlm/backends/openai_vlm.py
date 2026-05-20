@@ -4,13 +4,13 @@
 
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
 
 try:
     import openai
@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _DASHSCOPE_HOSTS = {
@@ -66,6 +66,8 @@ def _build_openai_client_kwargs(
     else:
         kwargs = {"api_key": api_key, "base_url": api_base}
     kwargs["timeout"] = timeout
+    # OpenViking owns provider retry/backoff via retry_sync/retry_async.
+    kwargs["max_retries"] = 0
     if extra_headers:
         kwargs["default_headers"] = extra_headers
     return kwargs
@@ -139,8 +141,11 @@ class OpenAIVLM(VLMBase):
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
+        extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
-            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
+            extra_body["enable_thinking"] = bool(thinking)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
     def _update_token_usage_from_response(
         self,
@@ -197,75 +202,6 @@ class OpenAIVLM(VLMBase):
             )
         return message.content or ""
 
-    def _extract_from_chunk(self, chunk):
-        """Extract content and usage from a single chunk.
-
-        Returns:
-            tuple: (content, prompt_tokens, completion_tokens)
-        """
-        content = None
-        prompt_tokens = 0
-        completion_tokens = 0
-
-        if chunk.choices and chunk.choices[0].delta:
-            content = getattr(chunk.choices[0].delta, "content", None)
-
-        if hasattr(chunk, "usage") and chunk.usage:
-            prompt_tokens = chunk.usage.prompt_tokens or 0
-            completion_tokens = chunk.usage.completion_tokens or 0
-
-        return content, prompt_tokens, completion_tokens
-
-    def _process_streaming_response(self, response):
-        """Process streaming response and extract content and token usage."""
-        content_parts = []
-        prompt_tokens = 0
-        completion_tokens = 0
-
-        for chunk in response:
-            content, pt, ct = self._extract_from_chunk(chunk)
-            if content:
-                content_parts.append(content)
-            if pt > 0:
-                prompt_tokens = pt
-            if ct > 0:
-                completion_tokens = ct
-
-        if prompt_tokens > 0 or completion_tokens > 0:
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
-
-        return "".join(content_parts)
-
-    async def _process_streaming_response_async(self, response):
-        """Process async streaming response and extract content and token usage."""
-        content_parts = []
-        prompt_tokens = 0
-        completion_tokens = 0
-
-        async for chunk in response:
-            content, pt, ct = self._extract_from_chunk(chunk)
-            if content:
-                content_parts.append(content)
-            if pt > 0:
-                prompt_tokens = pt
-            if ct > 0:
-                completion_tokens = ct
-
-        if prompt_tokens > 0 or completion_tokens > 0:
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
-
-        return "".join(content_parts)
-
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -280,15 +216,14 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        if self.max_tokens is not None:
-            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -318,34 +253,27 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
-            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        if self.max_tokens is not None:
-            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
-        if self.stream:
-            content = self._process_streaming_response(response)
-        else:
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            content = self._extract_content_from_response(response)
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
-        if self.stream:
-            content = await self._process_streaming_response_async(response)
-        else:
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            content = self._extract_content_from_response(response)
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     def get_completion(
@@ -465,11 +393,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -493,11 +422,12 @@ class OpenAIVLM(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, tool_choice, messages, thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

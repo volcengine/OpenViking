@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -77,6 +77,7 @@ class MetricsConfig(BaseModel):
     """Metrics subsystem configuration."""
 
     enabled: bool = False
+    bot_data_path: Optional[str] = None
     account_dimension: MetricsAccountDimensionConfig = Field(
         default_factory=MetricsAccountDimensionConfig
     )
@@ -85,12 +86,57 @@ class MetricsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class UsageAuditConfig(BaseModel):
+    """Product usage and audit projection configuration."""
+
+    enabled: bool = True
+    backend: Literal["sqlite"] = "sqlite"
+    sqlite_path: Optional[str] = None
+    queue_size: int = Field(10_000, gt=0)
+    batch_size: int = Field(500, gt=0)
+    flush_interval_seconds: float = Field(1.0, gt=0)
+    shutdown_flush_timeout_seconds: float = Field(3.0, gt=0)
+    usage_retention_days: int = Field(14, ge=0)
+    audit_retention_days: int = Field(7, ge=0)
+    audit_retention_per_account: int = Field(1000, ge=0)
+    timezone: str = "local"
+    inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
+class TraceDumpBodyConfig(BaseModel):
+    """HTTP body dump configuration.
+
+    Attaches request/response bodies as attributes on the active trace span so
+    they can be inspected in trace UIs. Off by default — bodies may contain
+    secrets and high-cardinality content.
+    """
+
+    enabled: bool = False
+    max_bytes: int = 4096
+
+    model_config = {"extra": "forbid"}
+
+
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    usage_audit: UsageAuditConfig = Field(default_factory=UsageAuditConfig)
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+    dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
+
+    model_config = {"extra": "forbid"}
+
+
+class TempUploadConfig(BaseModel):
+    """Temporary upload configuration."""
+
+    default_mode: str = "local"
+    shared_max_size_bytes: int = 512 * 1024 * 1024
+    shared_prefix: str = "viking://upload"
 
     model_config = {"extra": "forbid"}
 
@@ -107,6 +153,14 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    # Public-facing base URL emitted in MCP-issued upload instructions. See
+    # ``openviking.server.mcp_endpoint._resolve_public_base_url`` for the full
+    # resolution chain: env var > this field > X-Forwarded-Host/Proto > Host header
+    # > listen-address fallback. Set this (or the env var) when the server runs
+    # behind a reverse proxy that does not forward X-Forwarded-* headers.
+    public_base_url: Optional[str] = None
+    upload_signed_ttl_seconds: int = 600
+    temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
 
     model_config = {"extra": "forbid"}
 

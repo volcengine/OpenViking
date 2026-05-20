@@ -35,16 +35,15 @@ def format_iso8601(dt: datetime) -> str:
 
 def format_simplified(dt: datetime, now: datetime) -> str:
     """
-    Format datetime object to simplified format: yyyy-MM-dd (if not in a day) or HH:mm:ss (if in a day).
-
-    This format is more readable for humans and is used in VikingDB.
+    Format datetime in UTC: HH:MM:SS if same UTC date as *now*, else YYYY-MM-DD.
     """
-    dt = dt.replace(tzinfo=None)
-    # if in a day
-    if (now - dt).days < 1:
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc)
+    if dt.date() == now.date():
         return dt.strftime("%H:%M:%S")
-    else:
-        return dt.strftime("%Y-%m-%d")
+    return dt.strftime("%Y-%m-%d")
 
 
 def get_current_timestamp() -> str:
