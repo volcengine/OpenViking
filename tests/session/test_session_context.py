@@ -69,6 +69,7 @@ def _write_test_config(tmp_path):
                         "dimension": 1024,
                     }
                 },
+                "memory": {"extraction_enabled": False},
                 "encryption": {"enabled": False},
             }
         ),
@@ -110,6 +111,14 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
             return task.to_dict()
         await asyncio.sleep(0.1)
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
+
+
+def _patch_summary_sequence(monkeypatch, summaries: list[str]) -> None:
+    async def fake_generate(_self, _messages, latest_archive_overview=""):
+        del _self, _messages, latest_archive_overview
+        return summaries.pop(0)
+
+    monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
 
 
 class TestGetContextForSearch:
@@ -264,7 +273,7 @@ class TestGetContextForSearch:
         assert len(context["current_messages"]) == 1
 
     async def test_get_context_tracks_multiple_rapid_commits_by_done_boundary(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch
     ):
         """Context should only advance latest overview when the earlier archive is .done."""
         session = client.session(session_id="archive_context_done_boundary_test")
@@ -272,17 +281,17 @@ class TestGetContextForSearch:
         second_gate = asyncio.Event()
         second_started = asyncio.Event()
 
-        async def gated_extract(messages, **kwargs):
-            del kwargs
+        async def gated_summary(_self, messages, latest_archive_overview=""):
+            del _self, latest_archive_overview
             contents = " ".join(m.content for m in messages)
             if "First round" in contents:
                 await first_gate.wait()
-                return []
+                return "# Session Summary\n\nfirst archive"
             second_started.set()
             await second_gate.wait()
-            return []
+            return "# Session Summary\n\nsecond archive"
 
-        session._session_compressor.extract_long_term_memories = gated_extract
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", gated_summary)
 
         session.add_message("user", [TextPart("First round user")])
         session.add_message("assistant", [TextPart("First round assistant")])
@@ -340,11 +349,7 @@ class TestGetSessionContext:
             "# Session Summary\n\n" + ("B" * 20),
         ]
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return summaries.pop(0)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, summaries)
 
         session.add_message("user", [TextPart("first turn")])
         session.add_message("assistant", [TextPart("first reply")])
@@ -391,10 +396,10 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
-    async def test_get_session_context_reads_latest_overview_and_all_archive_abstracts(
+    async def test_get_session_context_reads_latest_overview_without_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
-        """Overview is only read for the latest archive; abstracts are returned for all archives."""
+        """Overview is only read for the latest archive; archive abstracts stay API-empty."""
         session = client.session(session_id="assemble_lazy_read_test")
         summaries = [
             "# Summary\n\n" + ("A" * 80),
@@ -402,11 +407,7 @@ class TestGetSessionContext:
             "# Summary\n\n" + ("C" * 80),
         ]
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return summaries.pop(0)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, summaries)
 
         for word in ("first", "second", "third"):
             session.add_message("user", [TextPart(f"{word} turn")])
@@ -438,13 +439,9 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_003", "abstract": "# Summary"},
-            {"archive_id": "archive_002", "abstract": "# Summary"},
-            {"archive_id": "archive_001", "abstract": "# Summary"},
-        ]
-        assert context["stats"]["includedArchives"] == 3
-        assert context["stats"]["droppedArchives"] == 0
+        assert context["pre_archive_abstracts"] == []
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 3
 
         overview_reads = [u for u in read_uris if u.endswith(".overview.md")]
         abstract_reads = [u for u in read_uris if u.endswith(".abstract.md")]
@@ -458,7 +455,7 @@ class TestGetSessionContext:
             "Oldest archive overview should not be read"
         )
 
-    async def test_get_session_context_drops_oldest_pre_archive_abstracts_first(
+    async def test_get_session_context_drops_archive_abstracts_from_api_response(
         self, client: AsyncOpenViking, monkeypatch
     ):
         session = client.session(session_id="assemble_trim_oldest_abstracts_test")
@@ -468,11 +465,7 @@ class TestGetSessionContext:
             "# Summary\n\n" + ("C" * 80),
         ]
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return summaries.pop(0)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, summaries)
 
         for word in ("first", "second", "third"):
             session.add_message("user", [TextPart(f"{word} turn")])
@@ -492,13 +485,11 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_003", "abstract": "# Summary"}
-        ]
-        assert context["estimatedTokens"] == token_budget
+        assert context["pre_archive_abstracts"] == []
+        assert context["estimatedTokens"] == active_tokens + _estimate_tokens(newest_summary)
         assert context["stats"]["totalArchives"] == 3
-        assert context["stats"]["includedArchives"] == 1
-        assert context["stats"]["droppedArchives"] == 2
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 3
 
     async def test_get_session_context_falls_back_to_older_completed_archive(
         self, client: AsyncOpenViking, monkeypatch
@@ -509,11 +500,7 @@ class TestGetSessionContext:
             "# Session Summary\n\narchive two",
         ]
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return summaries.pop(0)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, summaries)
 
         session.add_message("user", [TextPart("turn one")])
         result = await session.commit_async()
@@ -536,12 +523,10 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=128_000)
 
         assert context["latest_archive_overview"] == "# Session Summary\n\narchive one"
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_001", "abstract": "# Session Summary"}
-        ]
+        assert context["pre_archive_abstracts"] == []
         assert context["stats"]["totalArchives"] == 2
-        assert context["stats"]["includedArchives"] == 1
-        assert context["stats"]["droppedArchives"] == 0
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 1
         assert context["stats"]["failedArchives"] == 1
 
     async def test_get_session_context_budget_trim_drops_latest_archive_abstract(
@@ -549,11 +534,7 @@ class TestGetSessionContext:
     ):
         session = client.session(session_id="assemble_trim_id_test")
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return "# Session Summary\n\n" + ("Z" * 80)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, ["# Session Summary\n\n" + ("Z" * 80)])
 
         session.add_message("user", [TextPart("turn one")])
         result = await session.commit_async()
@@ -579,11 +560,7 @@ class TestGetSessionArchive:
             "# Session Summary\n\narchive two",
         ]
 
-        async def fake_generate(_messages, latest_archive_overview=""):
-            del latest_archive_overview
-            return summaries.pop(0)
-
-        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+        _patch_summary_sequence(monkeypatch, summaries)
 
         session.add_message("user", [TextPart("turn one")])
         session.add_message("assistant", [TextPart("reply one")])

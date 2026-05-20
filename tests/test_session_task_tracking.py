@@ -64,7 +64,8 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
         started: asyncio.Event to set when background task starts (for "gated")
     """
 
-    async def mock_commit(_sid, _ctx):
+    async def mock_commit(_sid, _ctx, keep_recent_count=0):
+        del keep_recent_count
         tracker = get_task_tracker()
         task = tracker.create(
             "session_commit",
@@ -210,15 +211,24 @@ async def test_task_lifecycle_failure(api_client):
     assert "LLM provider timeout" in result["error"]
 
 
-async def test_task_failed_when_memory_extraction_raises(api_client):
-    """Extractor failures should propagate to task error instead of silent completed+0."""
+async def test_task_completes_when_memory_extraction_raises(api_client, monkeypatch):
+    """Memory extraction is best-effort after archive finalization completes."""
+    from openviking.session.session import Session
+
     client, service = api_client
     session_id = await _new_session_with_message(client)
 
-    async def failing_extract(_context, _user, _session_id):
+    async def fake_summary(_self, _messages, latest_archive_overview=""):
+        del _self
+        del latest_archive_overview
+        return "# Session Summary\n\narchive finalized"
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
         raise RuntimeError("memory_extraction_failed: synthetic extractor error")
 
-    service.sessions._session_compressor.extractor.extract = failing_extract
+    monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_summary)
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = resp.json()["result"]["task_id"]
@@ -233,8 +243,8 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
             break
 
     assert result is not None
-    assert result["status"] == "failed"
-    assert "memory_extraction_failed" in result["error"]
+    assert result["status"] == "completed"
+    assert result["result"]["archive_uri"]
 
 
 # ── Duplicate commit acceptance ──
