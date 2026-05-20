@@ -4,6 +4,42 @@ import {
   Ol, Li, Ul, A, InlineCode, Tag, Table,
 } from '../../blog-components';
 
+const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
+
+const STREAM_JSON_OUTPUT = `{"type":"system","subtype":"init","session_id":"sess_demo_01","model":"claude-sonnet","tools":[]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I am ready to help."}]}}
+{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"sess_demo_01"}`;
+
+function StreamJsonDemo({ T }) {
+  return (
+    <details className="runtime-io-demo">
+      <summary>
+        <span className="runtime-io-demo__title">{T({
+          en: 'Expandable example: stdin JSON and stdout stream',
+          zh: '可展开演示：stdin 输入 JSON 与 stdout 输出流',
+        })}</span>
+        <span className="runtime-io-demo__hint">{T({ en: 'folded by default', zh: '默认折叠' })}</span>
+      </summary>
+      <div className="runtime-io-demo__body">
+        <P className="runtime-io-demo__intro">{T({
+          en: 'Write one NDJSON line to stdin. Claude then emits multiple JSON events on stdout; this sample is trimmed, so real events may include more fields.',
+          zh: '向 stdin 写入一行 NDJSON。Claude 会在 stdout 连续输出多条 JSON 事件；这里是精简示例，真实事件可能带更多字段。',
+        })}</P>
+        <div className="runtime-io-demo__grid">
+          <section className="runtime-io-demo__panel runtime-io-demo__panel--input">
+            <div className="runtime-io-demo__label">{T({ en: 'stdin input', zh: 'stdin 输入' })}</div>
+            <pre className="runtime-io-demo__code"><code>{STREAM_JSON_INPUT}</code></pre>
+          </section>
+          <section className="runtime-io-demo__panel runtime-io-demo__panel--output">
+            <div className="runtime-io-demo__label">{T({ en: 'stdout output stream', zh: 'stdout 输出流' })}</div>
+            <pre className="runtime-io-demo__code"><code>{STREAM_JSON_OUTPUT}</code></pre>
+          </section>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 const AgentRuntime = ({ t }) => {
   const T = t;
 
@@ -22,6 +58,8 @@ const AgentRuntime = ({ t }) => {
       })}</P>
 
       <Pre lang="bash" filename="terminal">{`claude --output-format stream-json --input-format stream-json --model sonnet`}</Pre>
+
+      <StreamJsonDemo T={T} />
 
       <P>{T({
         en: 'In Node.js, you spawn this as a child process and talk to it over stdin/stdout using NDJSON (newline-delimited JSON):',
