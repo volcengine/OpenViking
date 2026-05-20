@@ -1,9 +1,9 @@
-# OV Dream Install
+# OV Lite Install
 
-Use this install prompt to ask a cloud OpenClaw agent to install or update the `ov_dream` skill.
+Use this install prompt to ask a cloud OpenClaw agent to install or update OV Lite through the `ov_dream` skill.
 
 ```text
-Please install or update the ov_dream skill for the current cloud OpenClaw environment, and configure it to sync memories through OpenViking serverless. Do not install the OpenViking contextEngine plugin and do not consume a plugin slot.
+Please install or update OV Lite for the current cloud OpenClaw environment through the ov_dream skill, and configure it to sync memories through OpenViking serverless. Do not install the OpenViking contextEngine plugin and do not consume a plugin slot.
 
 Important: this skill is not in the OpenViking main branch yet. Use the upstream pull request source:
 
@@ -83,7 +83,7 @@ Notes:
 - Do not consume a plugin slot.
 - Do not download from main.
 - Do not print the API key in logs or replies.
-- ov_dream only reads chat sessions from ~/.openclaw/agents/main/sessions/sessions.json and no longer falls back to scanning latest jsonl files.
-- ov_dream filters non-chat sessions containing :cron:, :heartbeat:, :subagent:, :acp:, or :hook:.
-- ov_dream reuses the OpenClaw session_id when writing to OpenViking serverless and no longer creates a separate serverless session id.
+- OV Lite only reads chat sessions from ~/.openclaw/agents/main/sessions/sessions.json and no longer falls back to scanning latest jsonl files.
+- OV Lite filters non-chat sessions containing :cron:, :heartbeat:, :subagent:, :acp:, or :hook:.
+- OV Lite reuses the OpenClaw session_id when writing to OpenViking serverless and no longer creates a separate serverless session id.
 ```
