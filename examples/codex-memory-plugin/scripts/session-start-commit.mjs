@@ -31,6 +31,7 @@
  */
 
 import { loadConfig } from "./config.mjs";
+import { countExtracted, waitForCommitTask } from "./commit-task.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { clearState, listStates } from "./session-state.mjs";
 
@@ -105,16 +106,19 @@ async function commitAndClear(state, reason) {
       });
       return { committed: false, ovSessionId: null };
     }
+    const outcome = await waitForCommitTask(commit, fetchJSON, cfg, log);
     log("commit", {
       reason,
       codexSessionId: state.codexSessionId,
       ovSessionId,
-      archived: commit.archived ?? false,
+      archived: outcome.final?.archived ?? commit.archived ?? false,
       taskId: commit.task_id,
       status: commit.status,
+      taskStatus: outcome.status,
+      memoriesExtracted: outcome.final?.memories_extracted ?? null,
     });
     await clearState(state.codexSessionId);
-    return { committed: true, ovSessionId };
+    return { committed: true, ovSessionId, extracted: countExtracted(outcome.final) };
   }
   // No OV session attached — nothing to commit on the server, but the local
   // state file is still stale and should be removed.
@@ -123,10 +127,15 @@ async function commitAndClear(state, reason) {
   return { committed: true, ovSessionId: null };
 }
 
-function describeCommittedSessions(ovSessionIds) {
-  if (ovSessionIds.length === 1) return `OpenViking session ${ovSessionIds[0]} is committed`;
-  if (ovSessionIds.length > 1) {
-    return `OpenViking sessions ${ovSessionIds.join(", ")} are committed`;
+function describeCommittedSessions(results) {
+  const committed = results.filter((r) => r.ovSessionId);
+  const totalExtracted = committed.reduce((sum, r) => sum + (r.extracted || 0), 0);
+  const suffix = totalExtracted === 1 ? "memory item" : "memory item(s)";
+  if (committed.length === 1) {
+    return `OpenViking session ${committed[0].ovSessionId} is committed; ${totalExtracted} ${suffix} extracted`;
+  }
+  if (committed.length > 1) {
+    return `OpenViking sessions ${committed.map((r) => r.ovSessionId).join(", ")} are committed; ${totalExtracted} ${suffix} extracted`;
   }
   return "OpenViking session state is cleared";
 }
@@ -178,7 +187,7 @@ async function main() {
   );
 
   let heuristicCommitted = 0;
-  const heuristicSessionIds = [];
+  const heuristicResults = [];
   const skippedSessionIds = new Set();
 
   if (recentlyActive.length === 0) {
@@ -194,7 +203,7 @@ async function main() {
     const r = await commitAndClear(target, "heuristic_1_active");
     if (r.committed) {
       heuristicCommitted += 1;
-      if (r.ovSessionId) heuristicSessionIds.push(r.ovSessionId);
+      if (r.ovSessionId) heuristicResults.push(r);
     }
   } else {
     log("heuristic", {
@@ -213,7 +222,7 @@ async function main() {
   // -------------------------------------------------------------------------
   const postHeuristic = await listStates();
   let idleCommitted = 0;
-  const idleSessionIds = [];
+  const idleResults = [];
 
   for (const s of postHeuristic) {
     if (!s?.codexSessionId) continue;
@@ -227,12 +236,13 @@ async function main() {
     const r = await commitAndClear(s, "idle_ttl");
     if (r.committed) {
       idleCommitted += 1;
-      if (r.ovSessionId) idleSessionIds.push(r.ovSessionId);
+      if (r.ovSessionId) idleResults.push(r);
     }
   }
 
   const totalCommitted = heuristicCommitted + idleCommitted;
-  const ovSessionIds = [...heuristicSessionIds, ...idleSessionIds];
+  const committedResults = [...heuristicResults, ...idleResults];
+  const ovSessionIds = committedResults.map((r) => r.ovSessionId);
 
   log("done", {
     source,
@@ -244,7 +254,7 @@ async function main() {
   });
 
   if (totalCommitted > 0) {
-    noop(describeCommittedSessions(ovSessionIds));
+    noop(describeCommittedSessions(committedResults));
   } else {
     noop();
   }

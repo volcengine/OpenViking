@@ -21,7 +21,9 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { sanitizeCapturedText } from "./captured-text.mjs";
 import { loadConfig } from "./config.mjs";
+import { describeCommitOutcome, waitForCommitTask } from "./commit-task.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
@@ -106,7 +108,7 @@ function extractTurns(entries) {
 
     if (role !== "user" && role !== "assistant") continue;
     if (role === "assistant" && !cfg.captureAssistantTurns) continue;
-    const trimmed = text.trim();
+    const trimmed = sanitizeCapturedText(text);
     if (!trimmed) continue;
 
     const capped = trimmed.length > cfg.captureMaxLength
@@ -237,11 +239,15 @@ async function main() {
     return;
   }
 
+  const outcome = await waitForCommitTask(commit, fetchJSON, cfg, log);
+
   log("commit", {
     ovSessionId,
-    archived: commit.archived ?? false,
+    archived: outcome.final?.archived ?? commit.archived ?? false,
     taskId: commit.task_id,
     status: commit.status,
+    taskStatus: outcome.status,
+    memoriesExtracted: outcome.final?.memories_extracted ?? null,
   });
 
   // Reset OV session for the post-compact half. Keep capturedTurnCount so
@@ -249,7 +255,7 @@ async function main() {
   state.ovSessionId = null;
   await saveState(state);
 
-  noop(`OpenViking session ${ovSessionId} is committed`);
+  noop(describeCommitOutcome(ovSessionId, outcome, "pre-compact commit:"));
 }
 
 function hasCaptureKeyword(turns) {
