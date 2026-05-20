@@ -19,6 +19,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -32,7 +33,6 @@ from openviking.session.memory.utils import (
     pretty_print_messages,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
-from openviking.session.memory.utils.uri import supplement_operation_uris
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
@@ -303,8 +303,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
-        # Resolve links after the loop completes — uris are filled by memory_updater,
-        # but we need them now to build page_id → URI mapping for link resolution.
+        # Resolve links after the loop completes using the URIs already bound in resolve_operations().
         await self.finalize_operations(final_operations, raw_links)
 
         return final_operations, tools_used
@@ -315,11 +314,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
         delete_file_contents: List[MemoryFile] = []
         errors: List[str] = []
 
-        # 获取 registry
-        registry = self.context_provider._get_registry()
         role_scope = self._isolation_handler.get_read_scope()
+        page_id_map = getattr(self._extract_context, "page_id_map", None)
 
-        # 遍历每个 memory_type 字段
         for schema in self.context_provider.get_memory_schemas(self.ctx):
             memory_type = schema.memory_type
             value = getattr(operations, memory_type, None)
@@ -329,18 +326,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
             items = value if isinstance(value, list) else [value]
 
             for item in items:
-                # 转换为 dict
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
-                # 填充 user_id 和 agent_id
                 self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
 
-                # Extract page_id before it's excluded from memory_fields
                 page_id = item_dict.pop("page_id", None)
-
-                # 构建 ResolvedOperation
-                # 注意：此时 uris 为空，稍后由 supplement_operation_uris 填充
-
                 resolved_op = ResolvedOperation(
                     old_memory_file_content=None,
                     memory_fields=item_dict,
@@ -348,34 +338,50 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     uris=[],
                     page_id=page_id,
                 )
+
+                if page_id is not None and page_id_map is not None:
+                    resolved_uri = page_id_map.resolve(page_id)
+                    if resolved_uri:
+                        resolved_op.uris = [resolved_uri]
+                        old_content = self.context_provider.read_file_contents.get(resolved_uri)
+                        if old_content is not None:
+                            resolved_op.old_memory_file_content = old_content
+                            immutable_fields = {
+                                field.name for field in schema.fields if field.merge_op != MergeOp.PATCH
+                            }
+                            for field_name in immutable_fields:
+                                if field_name in old_content.extra_fields:
+                                    resolved_op.memory_fields[field_name] = old_content.extra_fields[field_name]
+                    else:
+                        resolved_op.uris = self._isolation_handler.calculate_memory_uris(
+                            memory_type_schema=schema,
+                            operation=resolved_op,
+                            extract_context=self._extract_context,
+                        )
+                else:
+                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
+                        memory_type_schema=schema,
+                        operation=resolved_op,
+                        extract_context=self._extract_context,
+                    )
+
                 upsert_operations.append(resolved_op)
 
-        # 处理 delete_uris - 转换为 delete_file_contents
         delete_uris_raw = getattr(operations, "delete_uris", []) or []
         for uri_str in delete_uris_raw:
             uri_str = uri_str.strip()
             if not uri_str:
                 continue
-            # 尝试从已读取的文件内容中获取
             old_content = self.context_provider.read_file_contents.get(uri_str)
             if old_content:
                 delete_file_contents.append(old_content)
 
-        # 构建 ResolvedOperations
         raw_links = getattr(operations, "links", None) or []
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
             errors=errors,
         )
-
-        if self._isolation_handler:
-            supplement_operation_uris(
-                operations=resolved,
-                registry=registry,
-                extract_context=self._extract_context,
-                isolation_handler=self._isolation_handler,
-            )
 
         for op in upsert_operations:
             for uri in op.uris:
@@ -398,17 +404,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         upsert_operations = operations.upsert_operations
 
-        # Fill uris before registering page_ids — resolve_operations leaves uris empty,
-        # supplement_operation_uris is normally called later in memory_updater,
-        # but we need uris now to build the page_id → URI mapping.
-        registry = self.context_provider._get_registry()
-        supplement_operation_uris(
-            operations,
-            registry,
-            extract_context=self._extract_context,
-            isolation_handler=self._isolation_handler,
-        )
-
+        # URIs are already bound in resolve_operations() before any refetch rounds.
+        # finalize_operations only consumes them to register new page_ids and resolve links.
         page_id_map = self._extract_context.page_id_map
 
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id

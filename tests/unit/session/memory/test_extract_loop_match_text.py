@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, WikiLink
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema, ResolvedOperation, WikiLink
+from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.extract_loop import ExtractLoop
 
@@ -15,7 +16,62 @@ class AttrDict(dict):
     __getattr__ = dict.get
 
 
-class TestResolveLinksLogging:
+
+
+class TestResolveOperations:
+    @pytest.mark.asyncio
+    async def test_existing_page_id_keeps_existing_uri_and_identity_fields(self):
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            ],
+        )
+        existing_uri = "viking://user/alice/memories/entities/Melanie.md"
+        old_file = MemoryFile(
+            uri=existing_uri,
+            content="old content",
+            memory_type="entities",
+            extra_fields={"name": "Melanie"},
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {existing_uri: old_file}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri)
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                entities=[{"name": "WrongName", "content": "new content", "page_id": 7}],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.uris == [existing_uri]
+        assert operation.old_memory_file_content is old_file
+        assert operation.memory_fields["name"] == "Melanie"
+        assert operation.memory_fields["content"] == "new content"
+        isolation_handler.calculate_memory_uris.assert_not_called()
+
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
         loop._extract_context = Mock()
@@ -115,6 +171,9 @@ class TestPageIdInstruction:
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://user/alice/memories/experiences/chat.md"
+        ]
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),
@@ -148,7 +207,6 @@ class TestPageIdInstruction:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch("openviking.session.memory.extract_loop.supplement_operation_uris"),
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
@@ -184,6 +242,9 @@ class TestPageIdInstruction:
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://user/alice/memories/experiences/chat.md"
+        ]
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),
@@ -218,7 +279,6 @@ class TestPageIdInstruction:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch("openviking.session.memory.extract_loop.supplement_operation_uris"),
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=True))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
@@ -240,12 +300,13 @@ class TestFinalOperationsHydration:
         old_file = MemoryFile(uri="viking://user/Caroline/memories/experiences/chat.md", content="old")
 
         context_provider = Mock()
-        schema = SimpleNamespace(memory_type="experiences")
+        schema = SimpleNamespace(memory_type="experiences", fields=[])
         context_provider.get_memory_schemas.return_value = [schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
         extract_context = Mock()
         extract_context.page_id_map = PageIdMap()
+        extract_context.page_id_map.get_page_id(old_file.uri)
         context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {old_file.uri: old_file}
@@ -282,18 +343,10 @@ class TestFinalOperationsHydration:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch(
-                "openviking.session.memory.extract_loop.supplement_operation_uris"
-            ) as mock_supplement_operation_uris,
             patch("openviking.session.memory.extract_loop.tracer.info") as mock_tracer_info,
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
-
-            def hydrate_existing_uri(operations, registry, extract_context, isolation_handler):
-                operations.upsert_operations[0].uris = [old_file.uri]
-
-            mock_supplement_operation_uris.side_effect = hydrate_existing_uri
 
             final_operations, _ = await loop.run()
 
