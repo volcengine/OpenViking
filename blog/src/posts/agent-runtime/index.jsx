@@ -4,6 +4,8 @@ import {
   Ol, Li, Ul, A, InlineCode, Tag, Table,
 } from '../../blog-components';
 
+const LLM_PATH = '/post/agent-runtime/llm.txt';
+
 const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
 
 const STREAM_JSON_OUTPUT = `{"type":"system","subtype":"init","session_id":"sess_demo_01","model":"claude-sonnet","tools":[]}
@@ -216,8 +218,8 @@ node 1a_ws_server.js
 node 1b_ws_daemon.js`}</Pre>
 
       <P>{T({
-        en: 'The server knows nothing about Claude. It sends text, receives events. The daemon knows nothing about the product. It owns the process and translates. This boundary is the entire architecture.',
-        zh: 'Server 对 Claude 一无所知——它发送文本，接收事件。Daemon 对产品一无所知——它管理进程并做翻译。这个边界就是整个架构。',
+        en: 'The server knows nothing about Claude. It sends product messages over WebSocket and receives runtime events back. The daemon does not need product semantics; it accepts WS messages, hands them to the matching agent process, and returns the output stream. This boundary is the entire architecture.',
+        zh: 'Server 对 Claude 一无所知——它通过 WebSocket 发送产品侧消息，接收运行时事件。Daemon 不需要理解产品语义；它只接收 WS 发来的消息/事件，交给对应 agent 进程处理，再把输出流回传。这个边界就是整个架构。',
       })}</P>
 
       <Hr ornament />
@@ -633,6 +635,7 @@ export default {
     category: { en: 'Engineering', zh: '工程' },
     tags: ['agent', 'daemon', 'mcp', 'claude-code'],
     languages: ['en', 'zh'],
+    llmPath: LLM_PATH,
     authors: [{ name: 'zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
   },
 };

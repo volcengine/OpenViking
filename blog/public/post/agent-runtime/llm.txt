@@ -1,0 +1,129 @@
+# Building an Agent Daemon
+
+Source title: Building an Agent Daemon
+Published: 2026-05-08
+Updated: 2026-05-20
+Author: zayn
+
+## Summary
+
+This post explains how to turn a CLI agent such as Claude Code into a product-grade daemon. A CLI agent is normally designed for one human at one terminal. A product runtime needs agents that can receive messages while idle, participate in multi-agent workflows, use shared cloud resources, survive restarts, and resume sessions.
+
+The architecture is a split boundary:
+
+- A cloud server owns users, permissions, message routing, coordination, and shared resources.
+- A local daemon owns the agent process, local files, shell access, tools, and runtime protocol translation.
+- The two sides communicate over WebSocket. The server sends product messages or events. The daemon accepts those WS messages, hands them to the matching local agent process, and returns the output stream.
+
+The daemon does not need to understand product semantics. It manages process lifecycle and runtime I/O.
+
+## Public Resources
+
+- Human page: https://blog.openviking.ai/post/agent-runtime/
+- Agent-readable page: https://blog.openviking.ai/post/agent-runtime/llm.txt
+- Runnable examples: https://github.com/ZaynJarvis/agent-runtime
+
+## Step 1: Spawn And Talk To Claude
+
+Claude Code supports programmatic JSON-over-stdio mode:
+
+```bash
+claude --output-format stream-json --input-format stream-json --model sonnet
+```
+
+Input is newline-delimited JSON sent to stdin. A minimal user message looks like:
+
+```json
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}
+```
+
+Output is a stream of newline-delimited JSON events on stdout. A representative shortened stream:
+
+```json
+{"type":"system","subtype":"init","session_id":"sess_demo_01","model":"claude-sonnet","tools":[]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I am ready to help."}]}}
+{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"sess_demo_01"}
+```
+
+Three event types matter for the first demo:
+
+- `system.init` gives the session ID.
+- `assistant` carries text blocks and tool calls.
+- `result` signals that the turn is complete.
+
+When a process exits, save the session ID. A later process can resume the conversation with `--resume <session_id>`.
+
+## Step 2: Split Into Server And Daemon
+
+The server side is product-facing. It manages users, channels, permissions, cloud resources, and routing. It does not need to know Claude's stdin/stdout protocol.
+
+The daemon side is local-runtime-facing. It starts the CLI agent, keeps track of the child process, receives WebSocket messages from the server, forwards them to the corresponding agent process, parses runtime output, and sends events back to the server.
+
+This boundary avoids putting local execution directly into the web app while still letting the agent use shared cloud resources.
+
+## Step 3: Add Multi-Agent And MCP Tools
+
+Raw Claude `stream-json` events are runtime-specific. A multi-agent product needs a generic envelope so the product does not care whether a worker is Claude, Codex, Cursor, or another runtime.
+
+Agents also need tools. The daemon can inject MCP tools at spawn time by writing a runtime config that points at a local MCP server. The post demonstrates two Claude agents playing Gomoku through MCP tools:
+
+- `view_board()` reads the current board from a game server.
+- `place_stone(x, y)` sends a move to the game server.
+
+The daemon normalizes Claude events into an envelope such as:
+
+```json
+{ "type": "agent:event", "agent": "black", "kind": "tool_use", "payload": { "name": "place_stone", "input": { "x": 7, "y": 7 } } }
+```
+
+## Step 4: Add Session Resurrection
+
+In real products, agents are often idle. Keeping every CLI process alive 24/7 is wasteful. The daemon can kill idle processes and later resume them when a message arrives.
+
+The product sends messages to a daemon endpoint. If the agent process is not alive, the daemon restarts it with the saved session ID. From the agent's perspective, the conversation is continuous. From the daemon's perspective, it is a sequence of short-lived processes sharing one session.
+
+## Runtime Drivers
+
+The daemon architecture is runtime-agnostic. A runtime driver knows how to:
+
+- spawn a specific CLI;
+- parse the runtime's event stream;
+- encode stdin messages;
+- build system prompts and config;
+- decide how busy agents receive new messages.
+
+Example interface:
+
+```ts
+interface Driver {
+  id: string;
+  spawn(ctx: SpawnContext): { process: ChildProcess };
+  parseLine(line: string): ParsedEvent[];
+  encodeStdinMessage(text: string, sessionId: string | null): string | null;
+  buildSystemPrompt(config: AgentConfig, agentId: string): string;
+  busyDeliveryMode: "notification" | "direct" | "none";
+}
+```
+
+Runtime protocol families:
+
+| Protocol | Runtimes | Behavior |
+| --- | --- | --- |
+| `stream-json` | Claude, Cursor | NDJSON over stdio. Events include `system.init`, `assistant`, and `result`. |
+| ACP / JSON-RPC | Codex, Hermes, OpenCode, Coco | JSON-RPC 2.0 over stdio. Methods include `session/new`, `session/prompt`, and `session/update`. |
+| Custom JSON events | Copilot, Gemini | Runtime-specific event streams, often one-shot per turn. |
+
+Busy delivery modes:
+
+- `direct`: pipe the message into the active turn through stdin.
+- `notification`: store the message and expose it through a tool such as `check_messages`.
+- `none`: queue the message until the current turn ends, then restart with the queued message.
+
+## Build Order
+
+1. Own the process: spawn the CLI agent as a child process, talk JSON over stdin/stdout, and save session IDs.
+2. Split server and daemon: the server handles users, routing, and shared cloud resources; the daemon handles local processes.
+3. Normalize and inject tools: translate runtime events into a product envelope and inject MCP tools.
+4. Add session resurrection: kill idle processes and resume them on demand.
+
+The core rule: let the product own coordination, let the daemon own local execution, and let tools be the only way an agent changes shared state.
