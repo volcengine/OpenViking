@@ -202,7 +202,11 @@ def _tool_result_call_id(message: dict[str, Any]) -> str:
 
 
 def _compact_train_tool_output(content: Any, *, max_chars: int) -> str:
-    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, sort_keys=True)
+    text = (
+        content
+        if isinstance(content, str)
+        else json.dumps(content, ensure_ascii=False, sort_keys=True)
+    )
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + f"... <truncated {len(text) - max_chars} chars>"

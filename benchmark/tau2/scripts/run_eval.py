@@ -369,9 +369,7 @@ def _tau2_command(
             str(seed),
         ]
         if budget["memory_inject_max_chars"] is not None:
-            command.extend(
-                ["--memory-inject-max-chars", str(budget["memory_inject_max_chars"])]
-            )
+            command.extend(["--memory-inject-max-chars", str(budget["memory_inject_max_chars"])])
         if budget["first_user_memory_inject_max_chars"] is not None:
             command.extend(
                 [
