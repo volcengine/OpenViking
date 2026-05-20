@@ -375,11 +375,11 @@ node 3b_gomoku_daemon.js white`}</Pre>
 
       <Hr ornament />
 
-      <H2 id="step-4">{T({ en: 'Step 4: Session Resurrection (the Serverless Agent)', zh: '第四步：Session 复活（无服务器 Agent）' })}</H2>
+      <H2 id="step-4">{T({ en: 'Step 4: Session Resurrection (the Serverless Agent)', zh: '第四步：保存 session，按需唤醒 agent' })}</H2>
 
       <P>{T({
         en: 'The gomoku demo keeps agents alive for the whole game. But in a real product, agents are mostly idle. You don\'t want a Claude process running 24/7 waiting for messages. The solution: kill the process when it\'s idle, resurrect it when a message arrives.',
-        zh: '五子棋示例在整局游戏中保持 agent 存活。但在真实产品中，agent 大部分时间都在空闲。你不想让一个 Claude 进程 7×24 小时运行只为等消息。解法：空闲时杀掉进程，有消息来时复活它。',
+        zh: '五子棋示例在整局游戏中保持 agent 存活。但在真实产品中，agent 大部分时间都在空闲。你不想让一个 Claude 进程 7×24 小时运行只为等消息。解法：空闲时结束进程，有消息来时用保存的 session 重新接上。',
       })}</P>
 
       <P>{T({
@@ -431,11 +431,11 @@ node 3b_gomoku_daemon.js white`}</Pre>
   }
 });`}</Pre>
 
-      <H3>{T({ en: 'The recursive tool pattern', zh: '递归工具模式' })}</H3>
+      <H3>{T({ en: 'The recursive tool pattern', zh: '工具调用平台 API' })}</H3>
 
       <P>{T({
         en: 'The chat bridge MCP server is the most interesting part. Unlike the gomoku tools (which interact with an external game), these tools call back to the platform that spawned the agent:',
-        zh: '聊天桥接 MCP 服务器是最有趣的部分。不同于五子棋工具（与外部游戏交互），这些工具回调到了启动 agent 的同一个平台：',
+        zh: '聊天桥接 MCP 服务器是最有趣的部分。不同于五子棋工具（与外部游戏交互），这里的工具会调用托管 agent 的同一个平台：agent 调用 send_message/read_history，实际执行的是平台 API。',
       })}</P>
 
       <Pre lang="js" filename="4c_chat_bridge_mcp.js">{`// The platform spawns the agent.
@@ -496,8 +496,8 @@ node 4b_chat_daemon.js
 
       <Callout type="note">
         <P>{T({
-          en: 'The agent never knows it died. From Claude\'s perspective, the conversation is continuous. From the daemon\'s perspective, it\'s a sequence of short-lived processes sharing one session.',
-          zh: 'Agent 从不知道自己死过。从 Claude 的视角看，对话是连续的。从 daemon 的视角看，这是一系列短命进程共享一个 session。',
+          en: 'From Claude\'s perspective, the conversation is continuous. From the daemon\'s perspective, it\'s a sequence of short-lived processes sharing one session.',
+          zh: '从 Claude 的视角看，对话仍然连续；从 daemon 的视角看，只是多次启动进程，并让它们共享同一个 session。',
         })}</P>
       </Callout>
 
@@ -509,12 +509,12 @@ node 4b_chat_daemon.js
         <Li><strong>{T({ en: 'Own the process', zh: '接管进程' })}</strong>{T({ en: ' — spawn Claude as a child, talk JSON over stdin/stdout. Save the session ID.', zh: '——以子进程方式启动 Claude，通过 stdin/stdout 传 JSON。保存 session ID。' })}</Li>
         <Li><strong>{T({ en: 'Split server and daemon', zh: '拆分 server 和 daemon' })}</strong>{T({ en: ' — server handles users and routing. Daemon handles the local process. WebSocket in between.', zh: '——server 处理用户和路由，daemon 处理本地进程，中间用 WebSocket 连接。' })}</Li>
         <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a shared product event shape. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成产品统一事件格式。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
-        <Li><strong>{T({ en: 'Add session resurrection', zh: '添加 session 复活' })}</strong>{T({ en: ' — kill idle processes, resume them on demand. The agent becomes serverless.', zh: '——杀掉空闲进程，按需恢复。Agent 变成无服务器的。' })}</Li>
+        <Li><strong>{T({ en: 'Add session resurrection', zh: '保存 session，按需唤醒' })}</strong>{T({ en: ' — kill idle processes, resume them on demand. The agent becomes serverless.', zh: '——空闲时结束进程，有新消息再用保存的 session 接上。Agent 不需要常驻。' })}</Li>
       </Ol>
 
       <P>{T({
         en: 'Once these pieces are in place, "multi-agent" stops being magic. It\'s a scheduler waking named processes that can work, use tools, and remember.',
-        zh: '这些部件就位后，"多 agent"就不再神秘。它只是一个调度器在唤醒具名进程——这些进程能工作、能用工具、也能记住。',
+        zh: '这些部件就位后，"多 agent"就不再神秘。它只是一个调度器在唤醒具体的 agent 进程，比如 Claude Code 或 Codex；这些进程能工作、能用工具、也能记住。',
       })}</P>
 
       <Quote cite={T({ en: 'One rule', zh: '一条规则' })}>
@@ -611,7 +611,7 @@ node 4b_chat_daemon.js
         <Li><InlineCode>1a_ws_server.js</InlineCode> + <InlineCode>1b_ws_daemon.js</InlineCode>{T({ en: ' — WebSocket server/daemon split', zh: '——WebSocket server/daemon 拆分' })}</Li>
         <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — event-shape normalization (zouk protocol)', zh: '——事件格式归一化（zouk 协议）' })}</Li>
         <Li><InlineCode>3a</InlineCode>/<InlineCode>3b</InlineCode>/<InlineCode>3c</InlineCode>{T({ en: ' — two-agent gomoku game with MCP tools', zh: '——双 agent 五子棋对弈 + MCP 工具' })}</Li>
-        <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with session resurrection', zh: '——聊天平台 + session 复活' })}</Li>
+        <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with session resurrection', zh: '——聊天平台 + 按需唤醒 agent' })}</Li>
         <Li><InlineCode>test_resume.js</InlineCode>{T({ en: ' — session resume proof', zh: '——session 恢复验证' })}</Li>
       </Ul>
     </Article>
@@ -625,7 +625,7 @@ export default {
     title: { en: 'Building an Agent Daemon', zh: '构建 Agent Daemon' },
     description: {
       en: 'Four runnable demos that turn a CLI agent into a managed daemon — from process spawning to multi-agent games to serverless session resurrection.',
-      zh: '四个可运行的示例，将 CLI agent 逐步变成托管 daemon——从进程管理到多 agent 对弈再到无服务器 session 复活。',
+      zh: '四个可运行的示例，将 CLI agent 逐步变成托管 daemon——从进程管理到多 agent 对弈，再到保存 session、按需唤醒 agent。',
     },
     cover: '/assets/covers/runtime.png',
     publishedAt: '2026-05-08',
