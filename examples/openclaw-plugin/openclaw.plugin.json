@@ -19,7 +19,10 @@
       "memory_store",
       "memory_forget",
       "ov_archive_search",
-      "ov_archive_expand"
+      "ov_archive_expand",
+      "openviking_tool_result_read",
+      "openviking_tool_result_search",
+      "openviking_tool_result_list"
     ]
   },
   "commandAliases": [

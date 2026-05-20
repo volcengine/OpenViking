@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeUserTextForCapture,
   getCaptureDecision,
+  extractNewTurnMessages,
   extractNewTurnTexts,
   extractLatestUserText,
   pickRecentUniqueTexts,
@@ -218,6 +219,87 @@ describe("extractNewTurnTexts", () => {
     const { texts } = extractNewTurnTexts(messages, 0);
     expect(texts).toHaveLength(1);
     expect(texts[0]).toContain("[bash result]: exit code 0");
+  });
+});
+
+describe("extractNewTurnMessages", () => {
+  it("keeps assistant toolCall messages that have no text block", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "Need to inspect the file first." },
+          { type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } },
+        ],
+      },
+    ];
+
+    const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
+
+    expect(newCount).toBe(1);
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: read_file]" }],
+      },
+    ]);
+  });
+
+  it("keeps assistant toolUse messages that have no text block", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "Search first." },
+          { type: "toolUse", id: "call_2", name: "grep", input: { pattern: "TODO" } },
+        ],
+      },
+    ];
+
+    const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
+
+    expect(newCount).toBe(1);
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: grep]" }],
+      },
+    ]);
+  });
+
+  it("keeps multiple textless assistant tool calls in one placeholder", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_1", toolName: "read_file" },
+          { type: "tool_use", id: "call_2", name: "grep" },
+        ],
+      },
+    ];
+
+    const { messages: extracted } = extractNewTurnMessages(messages, 0);
+
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: read_file, grep]" }],
+      },
+    ]);
+  });
+
+  it("does not create a placeholder for textless assistant messages without tool calls", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "thinking", text: "Internal reasoning only." }],
+      },
+    ];
+
+    const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
+
+    expect(newCount).toBe(1);
+    expect(extracted).toEqual([]);
   });
 });
 
