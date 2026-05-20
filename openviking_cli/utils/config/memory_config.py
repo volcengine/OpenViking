@@ -119,6 +119,14 @@ class MemoryConfig(BaseModel):
             "below this threshold. Set to 0 to force compact even for short sessions."
         ),
     )
+    wm_v2_preprocess_min_absolute_savings_tokens: int = Field(
+        default=500,
+        ge=0,
+        description=(
+            "Fallback to full messages when compact preprocessing saves fewer than "
+            "this many estimated tokens, even if the ratio threshold passes."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

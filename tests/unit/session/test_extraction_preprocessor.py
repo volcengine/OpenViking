@@ -129,6 +129,27 @@ def test_compact_packet_falls_back_when_not_smaller_enough():
     assert "compact_not_smaller_enough" in (packet.fallback_reason or "")
 
 
+def test_compact_packet_respects_min_absolute_savings_threshold():
+    long_line = "token work " * 80
+    messages = [
+        _msg(1, "user", long_line),
+        _msg(2, "assistant", long_line),
+        _msg(3, "user", long_line),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=100,
+            min_absolute_savings_tokens=5_000,
+        ),
+    )
+
+    assert packet.should_fallback
+    assert packet.fallback_reason == "savings_too_small"
+
+
 def test_rendered_packet_contains_all_sections_and_source_ids():
     messages = [
         _msg(1, "user", "目标：减少 token。文件 openviking/session/session.py。"),
@@ -186,6 +207,8 @@ class _MemoryConfig:
         self.wm_v2_preprocess_enabled = enabled
         self.wm_v2_preprocess_max_span_tokens = 1200
         self.wm_v2_preprocess_fallback_ratio = fallback_ratio
+        self.wm_v2_preprocess_min_full_tokens = 600
+        self.wm_v2_preprocess_min_absolute_savings_tokens = 500
 
 
 class _Config:
@@ -224,7 +247,8 @@ async def test_wm_update_wiring_uses_compact_messages_when_enabled(monkeypatch):
     await session._generate_archive_summary_async(messages, latest_archive_overview=_prior_wm())
 
     assert captured["template_id"] == "compression.ov_wm_v2_update"
-    assert captured["messages"].startswith("# Compact Working Memory Update Packet")
+    assert captured["messages"].startswith("# Compact")
+    assert "## Evidence" in captured["messages"]
 
 
 async def test_wm_update_wiring_uses_full_messages_when_disabled(monkeypatch):
@@ -252,3 +276,48 @@ async def test_wm_update_wiring_uses_full_messages_when_disabled(monkeypatch):
 
     assert captured["template_id"] == "compression.ov_wm_v2_update"
     assert captured["messages"] == "[user]: short"
+
+
+class _FakeTelemetry:
+    def __init__(self):
+        self.values = {}
+
+    def set(self, key, value):
+        self.values[key] = value
+
+
+async def test_wm_creation_wiring_emits_preprocessor_telemetry(monkeypatch):
+    import openviking.prompts
+    import openviking.session.session as session_module
+
+    captured = {}
+    telemetry = _FakeTelemetry()
+
+    def fake_render_prompt(template_id, variables):
+        captured["template_id"] = template_id
+        captured["messages"] = variables["messages"]
+        return "rendered prompt"
+
+    monkeypatch.setattr(openviking.prompts, "render_prompt", fake_render_prompt)
+    monkeypatch.setattr(
+        session_module,
+        "get_openviking_config",
+        lambda: _Config(_MemoryConfig(enabled=True, fallback_ratio=10.0)),
+    )
+    monkeypatch.setattr(session_module, "get_current_telemetry", lambda: telemetry)
+
+    session = object.__new__(Session)
+    long_chatter = " ".join(f"routine implementation detail {idx}" for idx in range(240))
+    messages = [
+        _msg(1, "assistant", long_chatter),
+        _msg(2, "assistant", long_chatter),
+        _msg(3, "user", "目标：减少 token。文件 openviking/session/session.py。"),
+        _msg(4, "assistant", "当前状态：已经完成基线确认，下一步接入 creation path。"),
+    ]
+
+    await session._generate_archive_summary_async(messages, latest_archive_overview="")
+
+    assert captured["template_id"] == "compression.ov_wm_v2"
+    assert telemetry.values["wm.preprocess.phase"] == "creation"
+    assert telemetry.values["wm.preprocess.enabled"] is True
+    assert "wm.preprocess.full_messages_tokens_est" in telemetry.values

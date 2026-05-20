@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Sequence, Set
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.utils.embedding_utils import _estimate_embedding_input_tokens
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -147,11 +148,11 @@ class CompactPacket:
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate tokens using the repository's existing ceil(len / 4) heuristic."""
+    """Estimate tokens using the repository's CJK-aware embedding heuristic."""
 
     if not text:
         return 0
-    return -(-len(text) // 4)
+    return _estimate_embedding_input_tokens(text)
 
 
 def _resolve_adaptive_options(
@@ -181,6 +182,7 @@ def _resolve_adaptive_options(
         expand_budget_on_risk=opts.expand_budget_on_risk,
         max_facts_total=adaptive_facts,
         min_full_tokens_for_compact=opts.min_full_tokens_for_compact,
+        min_absolute_savings_tokens=opts.min_absolute_savings_tokens,
         max_tool_output_chars=opts.max_tool_output_chars,
     )
 
@@ -257,10 +259,8 @@ def build_wm_compact_packet(
         fallback_reason = "compact_not_smaller_enough"
     elif (full_tokens - compact_tokens) < opts.min_absolute_savings_tokens:
         fallback_reason = "savings_too_small"
-    elif "failed_tool" in risk_flags and not any(
-        span.source_index == item["index"] and item["has_tool"]
-        for item in normalized
-        for span in selected_spans
+    elif "failed_tool" in risk_flags and not _has_selected_tool_span(
+        normalized, selected_spans
     ):
         fallback_reason = "failed_tool_not_selected"
 
@@ -675,6 +675,17 @@ def _jaccard(left: Set[str], right: Set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
+def _has_selected_tool_span(
+    normalized_messages: Sequence[Dict[str, object]],
+    selected_spans: Sequence[SelectedSpan],
+) -> bool:
+    selected_indices = {span.source_index for span in selected_spans}
+    return any(
+        bool(item["has_tool"]) and int(item["index"]) in selected_indices
+        for item in normalized_messages
+    )
+
+
 def _render_wm_update_view(
     *,
     latest_overview: str,
@@ -697,73 +708,123 @@ def _render_wm_update_view(
     if total_tokens <= 0:
         total_tokens = int(session_meta.get("full_messages_tokens_est", 0) or 0)
 
-    tier = 1 if total_tokens < 2000 else 2 if total_tokens < 8000 else 3
+    render_mode = (
+        "minimal" if total_tokens < 2000 else "balanced" if total_tokens < 8000 else "full"
+    )
 
-    # ---- Tier 1: ultra-compact (< 2,000 tokens) ----
-    if tier == 1:
-        lines: List[str] = ["# WM-Compact"]
-        msg_count = session_meta.get("message_count", "?")
-        archive = session_meta.get("archive_uri", "")
-        if archive:
-            lines.append(f"  session={msg_count}msgs archive={archive}")
-        else:
-            lines.append(f"  {msg_count} messages")
+    if render_mode == "minimal":
+        return _render_wm_update_view_minimal(
+            latest_overview=latest_overview,
+            session_meta=session_meta,
+            structured_facts=structured_facts,
+            selected_spans=selected_spans,
+            risk_flags=risk_flags,
+        )
 
-        overview = latest_overview.strip()
-        if overview and overview != "(none)":
-            lines.append(f"  memory: {overview}")
+    if render_mode == "balanced":
+        return _render_wm_update_view_balanced(
+            latest_overview=latest_overview,
+            session_meta=session_meta,
+            structured_facts=structured_facts,
+            selected_spans=selected_spans,
+            risk_flags=risk_flags,
+        )
 
-        if risk_flags:
-            lines.append(f"  risk: {', '.join(risk_flags)}")
+    return _render_wm_update_view_full(
+        latest_overview=latest_overview,
+        session_meta=session_meta,
+        section_signals=section_signals,
+        structured_facts=structured_facts,
+        selected_spans=selected_spans,
+        risk_flags=risk_flags,
+        expanded_budget=expanded_budget,
+    )
 
-        # Inline structured facts (terse format)
-        if structured_facts:
-            fact_texts = []
-            for f in structured_facts:
-                fact_texts.append(f"[{f.kind}] {f.text}")
-            lines.append(f"  facts: {'; '.join(fact_texts)}")
 
-        # Evidence spans without per-span headers
-        if selected_spans:
-            lines.append("---")
-            for span in selected_spans:
-                lines.append(span.text)
-                lines.append("")
+def _render_wm_update_view_minimal(
+    *,
+    latest_overview: str,
+    session_meta: Dict[str, object],
+    structured_facts: Sequence[SectionSignal],
+    selected_spans: Sequence[SelectedSpan],
+    risk_flags: Sequence[str],
+) -> str:
+    lines: List[str] = ["# WM-Compact"]
+    msg_count = session_meta.get("message_count", "?")
+    archive = session_meta.get("archive_uri", "")
+    if archive:
+        lines.append(f"  session={msg_count}msgs archive={archive}")
+    else:
+        lines.append(f"  {msg_count} messages")
 
-        return "\n".join(lines).rstrip() + "\n"
+    overview = latest_overview.strip()
+    if overview and overview != "(none)":
+        lines.append(f"  memory: {overview}")
 
-    # ---- Tier 2: moderate (2,000 – 8,000 tokens) ----
-    if tier == 2:
-        lines = [
-            "# Compact WM Update",
-            "",
-            f"  {session_meta.get('message_count', '?')} messages, archive: {session_meta.get('archive_uri', 'none')}",
-            "",
-            "## Memory",
-        ]
-        overview = latest_overview.strip()
-        lines.append(overview if overview else "(none)")
+    if risk_flags:
+        lines.append(f"  risk: {', '.join(risk_flags)}")
 
-        if risk_flags:
-            lines.extend(["", "## Risk"])
-            for flag in risk_flags:
-                lines.append(f"- {flag}")
+    if structured_facts:
+        fact_texts = [f"[{fact.kind}] {fact.text}" for fact in structured_facts]
+        lines.append(f"  facts: {'; '.join(fact_texts)}")
 
-        if structured_facts:
-            lines.extend(["", "## Facts"])
-            for fact in structured_facts:
-                lines.append(f"- [{fact.kind}] {fact.text}")
+    if selected_spans:
+        lines.append("---")
+        for span in selected_spans:
+            lines.append(span.text)
+            lines.append("")
 
-        if selected_spans:
-            lines.extend(["", "## Evidence"])
-            for span in selected_spans:
-                lines.append(f"### [{span.role}] (score={span.score:.2f})")
-                lines.append(span.text)
-                lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
-        return "\n".join(lines).rstrip() + "\n"
 
-    # ---- Tier 3: full format (> 8,000 tokens) ----
+def _render_wm_update_view_balanced(
+    *,
+    latest_overview: str,
+    session_meta: Dict[str, object],
+    structured_facts: Sequence[SectionSignal],
+    selected_spans: Sequence[SelectedSpan],
+    risk_flags: Sequence[str],
+) -> str:
+    lines = [
+        "# Compact WM Update",
+        "",
+        f"  {session_meta.get('message_count', '?')} messages, archive: {session_meta.get('archive_uri', 'none')}",
+        "",
+        "## Memory",
+    ]
+    overview = latest_overview.strip()
+    lines.append(overview if overview else "(none)")
+
+    if risk_flags:
+        lines.extend(["", "## Risk"])
+        for flag in risk_flags:
+            lines.append(f"- {flag}")
+
+    if structured_facts:
+        lines.extend(["", "## Facts"])
+        for fact in structured_facts:
+            lines.append(f"- [{fact.kind}] {fact.text}")
+
+    if selected_spans:
+        lines.extend(["", "## Evidence"])
+        for span in selected_spans:
+            lines.append(f"### [{span.role}] (score={span.score:.2f})")
+            lines.append(span.text)
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_wm_update_view_full(
+    *,
+    latest_overview: str,
+    session_meta: Dict[str, object],
+    section_signals: Dict[str, List[SectionSignal]],
+    structured_facts: Sequence[SectionSignal],
+    selected_spans: Sequence[SelectedSpan],
+    risk_flags: Sequence[str],
+    expanded_budget: bool,
+) -> str:
     lines = [
         "# Compact Working Memory Update Packet",
         "",
