@@ -171,8 +171,8 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
   visible in traces without expanding the prompt budget;
 - optionally run an explicit scope-prompt treatment that keeps retrieved
   memories advisory and asks the agent to preserve the current task scope before
-  write-like tool calls. Configs may provide either `scope_prompt_files` or a
-  `scope_prompt.domain_files` mapping;
+  write-like tool calls. Configs provide per-domain files through
+  `scope_prompt_files`;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
 
