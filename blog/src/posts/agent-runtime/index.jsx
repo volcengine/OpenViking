@@ -148,8 +148,8 @@ send(proc2, "What is my secret code?");
       <H2 id="step-2">{T({ en: 'Step 2: Split Into Server and Daemon', zh: '第二步：拆分成 Server 和 Daemon' })}</H2>
 
       <P>{T({
-        en: 'A product needs network access. An agent needs local file access. Mixing the two is how you end up with browser tabs owning local shells. The fix: split into two processes connected by WebSocket.',
-        zh: '产品需要网络访问，agent 需要本地文件访问。把两者混在一起，就会变成浏览器标签页拥有本地 shell。解法：拆成两个进程，用 WebSocket 连接。',
+        en: 'The product owns users, permissions, message routing, and shared cloud resources. The agent needs local files, shell access, and tools. To let the agent use those cloud resources without putting local execution inside the web app, split the system: a cloud server coordinates, and a local daemon owns the agent process over WebSocket.',
+        zh: '云上产品负责用户、权限、消息路由和共享资源；本地 agent 需要访问文件、shell 和工具。要让 agent 使用这些云上资源，又不把本地执行能力塞进网页里，就把系统拆成两端：云上 server 负责协调，本地 daemon 负责启动 agent，并通过 WebSocket 收发任务和事件。',
       })}</P>
 
       <Pre lang="js" filename="1a_ws_server.js">{`// NO-AGENT SIDE — accepts a WebSocket connection from the daemon,
