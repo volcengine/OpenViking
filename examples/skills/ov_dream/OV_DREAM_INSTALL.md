@@ -1,6 +1,6 @@
-# OpenClaw ov_dream Install Prompt
+# OV Dream Install
 
-Use this prompt when asking a cloud OpenClaw agent to install or update the `ov_dream` skill.
+Use this install prompt to ask a cloud OpenClaw agent to install or update the `ov_dream` skill.
 
 ```text
 Please install or update the ov_dream skill for the current cloud OpenClaw environment, and configure it to sync memories through OpenViking serverless. Do not install the OpenViking contextEngine plugin and do not consume a plugin slot.
