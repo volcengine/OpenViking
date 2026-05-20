@@ -6,7 +6,7 @@ import math
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -111,6 +111,9 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = None
     level_limit: int = 5
+    engine: Literal["auto", "fs"] = "auto"
+    switch_to_remote_threshold: int = Field(default=1000, ge=0, description="L2 record count threshold to switch to vikingdb; 0 means always use vikingdb")
+    remote_return_limit: int = Field(default=100, ge=1, le=100000, description="Maximum files recalled by vikingdb bm25")
 
 
 class GlobRequest(BaseModel):
@@ -228,6 +231,9 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
+            engine=request.engine,
+            switch_to_remote_threshold=request.switch_to_remote_threshold,
+            remote_return_limit=request.remote_return_limit,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")

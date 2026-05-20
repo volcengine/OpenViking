@@ -458,6 +458,42 @@ class _SingleAccountBackend:
         logger.info("Optimization requested")
         return True
 
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            if self._bound_account_id:
+                account_filter = Eq("account_id", self._bound_account_id)
+                if filter:
+                    if isinstance(filter, dict):
+                        filter = RawDSL(filter)
+                    filter = And([account_filter, filter])
+                else:
+                    filter = account_filter
+
+            return await asyncio.to_thread(
+                self._adapter.search_by_keywords,
+                keywords=keywords,
+                query=query,
+                limit=limit,
+                offset=offset,
+                filter=filter,
+                output_fields=output_fields,
+                mode=mode,
+                fields=fields,
+            )
+        except Exception as e:
+            logger.error("Error searching by keywords: %s", e)
+            return []
+
     async def close(self) -> None:
         try:
             self._adapter.close()
@@ -511,6 +547,7 @@ class VikingVectorIndexBackend:
         init_cpp_logging()
 
         self._config = config
+        self._backend_type = config.backend  # expose for engine resolution
         self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
         self.sparse_weight = config.sparse_weight
@@ -596,8 +633,16 @@ class VikingVectorIndexBackend:
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._get_default_backend().get_collection_info()
 
-    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
-        return await self._get_default_backend().get_collection_meta()
+    async def get_collection_meta(
+        self,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.get_collection_meta()
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
@@ -733,6 +778,34 @@ class VikingVectorIndexBackend:
         else:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
+
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.search_by_keywords(
+            keywords=keywords,
+            query=query,
+            limit=limit,
+            offset=offset,
+            filter=filter,
+            output_fields=output_fields,
+            mode=mode,
+            fields=fields,
+        )
 
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:
         if ctx:

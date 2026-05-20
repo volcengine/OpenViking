@@ -523,6 +523,41 @@ class CollectionAdapter(ABC):
 
         return 0
 
+    def search_by_keywords(
+        self,
+        keywords: Optional[list[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[list[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
+    ) -> list[Dict[str, Any]]:
+        coll = self.get_collection()
+        result = coll.search_by_keywords(
+            index_name=self._index_name,
+            keywords=keywords,
+            query=query,
+            limit=limit,
+            offset=offset,
+            filters=self._compile_filter(filter),
+            output_fields=output_fields,
+            mode=mode,
+            fields=fields,
+        )
+        records: list[Dict[str, Any]] = []
+        for item in result.data:
+            record = dict(item.fields) if item.fields else {}
+            record["id"] = item.id
+            raw_score = item.score if item.score is not None else 0.0
+            if not math.isfinite(raw_score):
+                raw_score = 0.0
+            record["_score"] = raw_score
+            record = self._normalize_record_for_read(record)
+            records.append(record)
+        return records
+
     def clear(self) -> bool:
         self.get_collection().delete_all_data()
         return True

@@ -69,6 +69,9 @@ pub async fn grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    engine: Option<String>,
+    switch_to_remote_threshold: Option<i32>,
+    remote_return_limit: Option<i32>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -80,6 +83,9 @@ pub async fn grep(
             ignore_case,
             node_limit,
             level_limit,
+            engine,
+            switch_to_remote_threshold,
+            remote_return_limit,
         )
         .await?;
     output_success(&result, output_format, compact);
