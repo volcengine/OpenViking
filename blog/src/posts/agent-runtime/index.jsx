@@ -517,13 +517,6 @@ node 4b_chat_daemon.js
         zh: '这些部件就位后，"多 agent"就不再神秘。它只是一个调度器在唤醒具体的 agent 进程，比如 Claude Code 或 Codex；这些进程能工作、能用工具、也能记住。',
       })}</P>
 
-      <Quote cite={T({ en: 'One rule', zh: '一条规则' })}>
-        {T({
-          en: 'Let the product own coordination. Let the daemon own the local process. Let tools be the only way the agent changes shared state.',
-          zh: '让产品负责协调，让 daemon 负责本地进程，让工具成为 agent 改变共享状态的唯一方式。',
-        })}
-      </Quote>
-
       <Hr ornament />
 
       <H2 id="drivers">{T({ en: 'Beyond Claude: Runtime Drivers', zh: '不止 Claude：运行时驱动' })}</H2>
