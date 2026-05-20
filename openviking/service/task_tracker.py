@@ -209,6 +209,10 @@ class TaskTracker:
         return True
 
     @staticmethod
+    async def _call_sync(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    @staticmethod
     def _validate_owner(account_id: str, user_id: str) -> None:
         """Reject ownerless task creation for user-originated background work."""
         if not account_id or not user_id:
@@ -243,6 +247,22 @@ class TaskTracker:
             resource_id,
         )
         return self._copy(task)
+
+    async def create_async(
+        self,
+        task_type: str,
+        resource_id: Optional[str] = None,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> TaskRecord:
+        return await self._call_sync(
+            self.create,
+            task_type,
+            resource_id,
+            account_id=account_id,
+            user_id=user_id,
+        )
 
     def create_if_no_running(
         self,
@@ -287,6 +307,22 @@ class TaskTracker:
         )
         return self._copy(task)
 
+    async def create_if_no_running_async(
+        self,
+        task_type: str,
+        resource_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        return await self._call_sync(
+            self.create_if_no_running,
+            task_type,
+            resource_id,
+            account_id=account_id,
+            user_id=user_id,
+        )
+
     def start(
         self,
         task_id: str,
@@ -301,6 +337,14 @@ class TaskTracker:
                 task.updated_at = time.time()
                 self._tasks[task.task_id] = task
                 self._store.update(task)
+
+    async def start_async(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        await self._call_sync(self.start, task_id, account_id=account_id, user_id=user_id)
 
     def complete(
         self,
@@ -320,6 +364,21 @@ class TaskTracker:
                 self._store.update(task)
         logger.info("[TaskTracker] Task %s completed", task_id)
 
+    async def complete_async(
+        self,
+        task_id: str,
+        result: Optional[Dict[str, Any]] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        await self._call_sync(
+            self.complete,
+            task_id,
+            result,
+            account_id=account_id,
+            user_id=user_id,
+        )
+
     def fail(
         self,
         task_id: str,
@@ -338,6 +397,21 @@ class TaskTracker:
                 self._store.update(task)
         logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
+    async def fail_async(
+        self,
+        task_id: str,
+        error: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        await self._call_sync(
+            self.fail,
+            task_id,
+            error,
+            account_id=account_id,
+            user_id=user_id,
+        )
+
     def get(
         self,
         task_id: str,
@@ -354,6 +428,19 @@ class TaskTracker:
             if task is None or not self._matches_owner(task, account_id, user_id):
                 return None
             return self._copy(task)
+
+    async def get_async(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        return await self._call_sync(
+            self.get,
+            task_id,
+            account_id=account_id,
+            user_id=user_id,
+        )
 
     def list_tasks(
         self,
@@ -383,6 +470,25 @@ class TaskTracker:
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks[:limit]
 
+    async def list_tasks_async(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[TaskRecord]:
+        return await self._call_sync(
+            self.list_tasks,
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=account_id,
+            user_id=user_id,
+        )
+
     def has_running(
         self,
         task_type: str,
@@ -402,6 +508,21 @@ class TaskTracker:
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in self._tasks.values()
             )
+
+    async def has_running_async(
+        self,
+        task_type: str,
+        resource_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        return await self._call_sync(
+            self.has_running,
+            task_type,
+            resource_id,
+            account_id=account_id,
+            user_id=user_id,
+        )
 
     def _load_for_update(
         self,

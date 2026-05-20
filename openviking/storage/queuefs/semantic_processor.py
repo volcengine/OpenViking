@@ -29,9 +29,9 @@ from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
-from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
@@ -461,10 +461,17 @@ class SemanticProcessor(DequeueHandlerBase):
             return None
         return self._dag_executor.get_stats()
 
-    async def _process_memory_directory(
-        self, msg: SemanticMsg, lock: LockLease = NO_LOCK
-    ) -> None:
-        """Process a memory directory with special handling."""
+    async def _process_memory_directory(self, msg: SemanticMsg, lock: LockLease = NO_LOCK) -> None:
+        """Process a memory directory with special handling.
+
+        For memory directories:
+        - Memory files are already vectorized via embedding queue
+        - Only generate abstract.md and overview.md
+        - Vectorize the generated abstract.md and overview.md
+
+        Args:
+            msg: The semantic message containing directory info and changes
+        """
         viking_fs = get_viking_fs()
         dir_uri = msg.uri
         ctx = self._current_ctx
@@ -595,9 +602,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     lock=lock,
                 )
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to write abstract/overview for {dir_uri}: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
             if not wrote_semantics:
                 _mark_done()
                 return

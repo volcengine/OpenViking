@@ -122,6 +122,44 @@ def test_start_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.RUNNING
 
 
+@pytest.mark.asyncio
+async def test_async_task_tracker_api_runs_sync_store_off_loop(monkeypatch):
+    calls = []
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("openviking.service.task_tracker.asyncio.to_thread", fake_to_thread)
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+
+    task = await tracker.create_async("session_commit", resource_id="sess-123", **_owner_kwargs())
+    await tracker.start_async(task.task_id, **_owner_kwargs())
+
+    assert await tracker.has_running_async("session_commit", "sess-123", **_owner_kwargs()) is True
+    assert (
+        await tracker.create_if_no_running_async("session_commit", "sess-123", **_owner_kwargs())
+        is None
+    )
+
+    loaded = await tracker.get_async(task.task_id, **_owner_kwargs())
+    listed = await tracker.list_tasks_async(account_id="acme", user_id="alice")
+    await tracker.complete_async(task.task_id, {"ok": True}, **_owner_kwargs())
+
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+    assert [item.task_id for item in listed] == [task.task_id]
+    assert calls == [
+        "create",
+        "start",
+        "has_running",
+        "create_if_no_running",
+        "get",
+        "list_tasks",
+        "complete",
+    ]
+
+
 def test_complete_task(tracker: TaskTracker):
     task = tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     tracker.start(task.task_id)

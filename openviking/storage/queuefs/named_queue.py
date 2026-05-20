@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
+from openviking.pyagfs import AsyncAGFSClient
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -114,6 +115,7 @@ class NamedQueue:
         self.name = name
         self.path = f"{mount_point}/{name}"
         self._agfs = agfs
+        self._async_agfs = AsyncAGFSClient(agfs)
         self._enqueue_hook = enqueue_hook
         self._dequeue_handler = dequeue_handler
         self._initialized = False
@@ -195,7 +197,7 @@ class NamedQueue:
         """Ensure queue directory is created in AGFS."""
         if not self._initialized:
             try:
-                self._agfs.mkdir(self.path)
+                await self._async_agfs.mkdir(self.path)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     logger.warning(f"[NamedQueue] Failed to ensure queue {self.name}: {e}")
@@ -213,7 +215,7 @@ class NamedQueue:
         if isinstance(data, dict):
             data = json.dumps(data)
 
-        msg_id = self._agfs.write(enqueue_file, data.encode("utf-8"))
+        msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str) -> None:
@@ -227,16 +229,16 @@ class NamedQueue:
             return
         ack_file = f"{self.path}/ack"
         try:
-            self._agfs.write(ack_file, msg_id.encode("utf-8"))
+            await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
         except Exception as e:
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
 
-    def _read_queue_message(self) -> Optional[Dict[str, Any]]:
+    async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
 
         Normalises the various return types AGFSClient.read() may produce.
         """
-        content = self._agfs.read(f"{self.path}/dequeue")
+        content = await self._async_agfs.read(f"{self.path}/dequeue")
         if not content or content == b"{}":
             return None
         if isinstance(content, bytes):
@@ -262,7 +264,7 @@ class NamedQueue:
         """
         await self._ensure_initialized()
         try:
-            data = self._read_queue_message()
+            data = await self._read_queue_message()
             if data is None:
                 return None
             # Capture message ID before passing data to handler (handler may modify it)
@@ -283,7 +285,7 @@ class NamedQueue:
         """Get and remove message from queue without invoking the handler."""
         await self._ensure_initialized()
         try:
-            return self._read_queue_message()
+            return await self._read_queue_message()
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
@@ -304,7 +306,7 @@ class NamedQueue:
         peek_file = f"{self.path}/peek"
 
         try:
-            content = self._agfs.read(peek_file)
+            content = await self._async_agfs.read(peek_file)
             if not content or content == b"{}":
                 return None
             if isinstance(content, bytes):
@@ -323,7 +325,7 @@ class NamedQueue:
         size_file = f"{self.path}/size"
 
         try:
-            content = self._agfs.read(size_file)
+            content = await self._async_agfs.read(size_file)
             if not content:
                 return 0
             if isinstance(content, bytes):
@@ -342,7 +344,7 @@ class NamedQueue:
         clear_file = f"{self.path}/clear"
 
         try:
-            self._agfs.write(clear_file, b"")
+            await self._async_agfs.write(clear_file, b"")
             return True
         except Exception as e:
             logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")

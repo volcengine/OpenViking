@@ -137,6 +137,13 @@ class TestPathLockIsLocked:
         lock = PathLockEngine(agfs, lock_expire=300.0)
         assert lock.is_locked("/local/u/foo", ignore_stale=False) is True
 
+    async def test_is_locked_async_uses_async_agfs_path(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
+        agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
+        lock = PathLockEngine(agfs)
+
+        assert await lock.is_locked_async("/local/u/foo/bar") is True
+
 
 class TestPathLockOwnership:
     async def test_refresh_reports_refreshed_lost_and_failed_paths(self):

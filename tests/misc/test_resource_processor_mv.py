@@ -117,6 +117,9 @@ class _FakeVikingFS:
     async def delete_temp(self, temp_dir_path, ctx=None):
         return None
 
+    async def persist_temp_tree(self, temp_uri, target_uri, ctx=None):
+        self.agfs.write(self._uri_to_path(target_uri, ctx=ctx), b"content")
+
     def _uri_to_path(self, uri, ctx=None):
         return f"/mock/{uri.replace('viking://', '')}"
 
