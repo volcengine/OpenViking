@@ -1,0 +1,59 @@
+memory_type: entities
+description: |
+  Wikipedia article - manages page using Zettelkasten method.
+  Each page represents an article with relative path links to events.
+  Entity should be rich and distributed - avoid putting all info in one entity.
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ category }}/{{ name }}.md"
+enabled: true
+
+overview_template: |-
+  # Entities Overview
+  {% if items %}**Category:** {{ items[0].file_content.category }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.name }}](./{{ item.file_name }})
+  {% endfor %}
+
+fields:
+  - name: category
+    type: string
+    description: |
+      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
+  - name: name
+    type: string
+    description: |
+      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      - Detailed Zettelkasten card content in markdown format.
+      - Keep the card self-contained, factual, neutral, and useful after retrieval.
+      - For people or evaluative content, do not output only an "Issue" field. Pair any evaluation, risk, weakness, or recommendation with "Evidence".
+      - Prefer objective facts, metrics, dates, user-provided context, or quoted requirements over labels.
+      - If evidence is missing or weak, omit the judgment or write "Insufficient information, needs verification"; do not overgeneralize.
+      - Avoid hostile or blaming wording such as "dragging down", "very poor", "not good", or "incapable"; prefer neutral wording such as "output below target/peer level" or "needs further observation".
+
+      Preferred shape for evaluative person entities:
+      # <Entity Name>
+      - Evaluation conclusion: <neutral conclusion, if supported by evidence>
+      - Evidence:
+        - <objective fact, metric, date/context, or quoted requirement>
+      - Concerns/Risks: <neutral risk statement, optional; include only if supported>
+
+      Bad example:
+      # Kevin D. Wallace
+      - Evaluation level: Needs improvement
+      - Issue: Since Q4, work efficiency has declined noticeably; other colleagues in the same group have stable output, while his state has fluctuated significantly, dragging the team down.
+
+      Good example:
+      # Kevin D. Wallace
+      - Evaluation conclusion: Current performance needs further attention
+      - Evidence:
+        - User mentioned that his work efficiency has declined noticeably since Q4
+        - User mentioned that other colleagues in the same group have stable output, while his state has fluctuated significantly
+      - Concerns/Risks: Team output pace may be affected; needs to be reviewed with the latest performance data
+    merge_op: patch

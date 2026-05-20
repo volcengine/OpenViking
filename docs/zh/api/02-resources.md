@@ -107,7 +107,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 1. API 实现介绍
 
-此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。
+此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
 
 **处理流程**：
 1. 识别资源来源（URL 或上传的临时文件）
@@ -131,8 +131,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 |------|------|------|--------|------|
 | path | string | 否 | - | 远程资源 URL（HTTP/HTTPS/Git）。与 `temp_file_id` 二选一 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID。与 `path` 二选一 |
-| to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 和 `parent_auto_create` 互斥 |
-| parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 和 `parent_auto_create` 互斥 |
+| to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
+| parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
 | reason | string | 否 | "" | 添加资源的原因（用于文档化和相关性提升，实验特性） |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
@@ -148,10 +148,11 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
-- `to`、`parent` 和 `parent_auto_create` 都可用于指定目标路径，但不能同时使用；指定 `to` 且目标已存在时，触发增量更新。
+- `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `watch_interval` 仅在指定 `to` 时生效
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
 

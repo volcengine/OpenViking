@@ -57,6 +57,13 @@ class MemoryTypeRegistry:
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
+        # Load vaka templates if enabled (overrides default for matching memory_types)
+        if config.memory.enable_vaka_template:
+            vaka_dir = str(Path(memory_templates_dir) / "vaka")
+            if os.path.exists(vaka_dir):
+                vaka_loaded = self.load_from_directory(vaka_dir, replace=True)
+                logger.info(f"Loaded {vaka_loaded} vaka memory schemas from: {vaka_dir}")
+
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
             if os.path.exists(custom_dir_expanded):

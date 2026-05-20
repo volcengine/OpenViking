@@ -103,11 +103,48 @@ claude mcp add --transport http openviking \
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `add_resource` | 添加本地文件或 URL 作为资源 | `path`, `description`(可选) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时必填) |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+
+### 添加本地文件资源(渐进式上传)
+
+`add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
+
+- **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
+- **本地文件路径**:返回**两步上传指令**(纯文本,Step 1 / Step 2 排版),agent 需要:
+  1. 把文件以 `multipart/form-data` POST 到响应里给出的 `temp_upload_signed` URL(URL 内嵌一次性 token,默认 10 分钟过期)。Server 在写入时 mint `temp_file_id`,通过 JSON `{"temp_file_id": "..."}` 返回。
+  2. 从响应体读出 `temp_file_id`,再次调用 `add_resource(temp_file_id="<step 1 返回的 id>")`,server 通过 `TempUploadStore` 解析文件并入库。
+
+这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。签名端点和认证版的 `temp_upload` 共享同一个持久化层(`TempUploadStore`),所以 `local` / `shared` 上传模式(以及 `shared` 模式带来的多 worker 支持)在两个端点上行为一致。
+
+#### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
+
+工具响应里给出的上传 URL,server 端按以下顺序解析:
+
+1. 环境变量 `OPENVIKING_PUBLIC_BASE_URL`
+2. `ov.conf` 中的 `server.public_base_url`
+3. 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto`(由反代链转发)
+4. 请求头 `Host`(直连场景)
+5. 监听地址兜底 `http://{host}:{port}`
+
+只要 server 部署在反向代理(nginx / cloud LB / k8s ingress)后,**强烈建议显式配置 `OPENVIKING_PUBLIC_BASE_URL`**。后两层是兜底推断,在以下情况会失败:
+
+- 反代/MCP proxy 不转发 `X-Forwarded-*` 头
+- server 监听 `0.0.0.0`(fallback URL 含 `0.0.0.0`,agent 无法连接)
+- 多层代理存在 host 重写
+
+未配置该变量且 fallback 推断生效时,工具响应末尾会自动附带提示,告知用户在 server 端设置该环境变量。Docker Compose 部署示例:
+
+```yaml
+services:
+  openviking:
+    image: ghcr.io/volcengine/openviking:latest
+    environment:
+      OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
+```
 
 ## 故障排除
 
