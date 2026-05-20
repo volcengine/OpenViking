@@ -105,6 +105,15 @@
         "provider": "volcengine",
         "thinking": false,
     },
+    "query_planner_example": {
+        "_comment": "Optional lightweight model for retrieval intent analysis and query planning. If omitted or empty, OpenViking falls back to the vlm config.",
+        "provider": "litellm",
+        "model": "ollama/qwen3.5:4b",
+        "api_base": "http://127.0.0.1:11434",
+        "temperature": 0.0,
+        "timeout": 60.0,
+        "extra_request_body": {"think": false},
+    },
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",

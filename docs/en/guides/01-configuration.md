@@ -686,6 +686,27 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### query_planner
+
+Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/qwen3.5:4b",
+    "api_base": "http://127.0.0.1:11434",
+    "temperature": 0.0,
+    "timeout": 60,
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
+
+Use `query_planner` when you want a smaller or cheaper model to handle retrieval planning while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
+
 ### feishu
 
 Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-resources.md) for supported URL patterns.
