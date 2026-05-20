@@ -71,7 +71,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
         self._link_enabled = config.memory.link_enabled if config.memory else False
-        self._page_id_map = None  # Set by ExtractLoop before prefetch
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -88,10 +87,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
                     text_parts.append(part.text)
         return "\n".join(text_parts)
 
-    def set_page_id_map(self, page_id_map):
-        """Set PageIdMap for annotating read results with page_ids."""
-        self._page_id_map = page_id_map
-
     def set_transaction_handle(self, handle):
         """Set transaction handle after lock is acquired."""
         self._transaction_handle = handle
@@ -100,8 +95,8 @@ class SessionExtractContextProvider(ExtractContextProvider):
         """获取或创建 ExtractContext 实例（缓存）"""
         from openviking.session.memory.memory_updater import ExtractContext
 
-        if self._extract_context is None and self.messages:
-            self._extract_context = ExtractContext(self.messages)
+        if self._extract_context is None:
+            self._extract_context = ExtractContext(self.messages or [])
         return self._extract_context
 
     def _detect_language(self) -> str:
@@ -315,13 +310,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
     def create_tool_context(self, default_search_uris=[]):
+        extract_context = self.get_extract_context()
         tool_ctx = ToolContext(
             viking_fs=self._viking_fs,
             request_ctx=self._ctx,
             transaction_handle=self._transaction_handle,
             default_search_uris=default_search_uris,
             read_file_contents=self._read_file_contents,
-            page_id_map=self._page_id_map,
+            page_id_map=extract_context.page_id_map,
         )
         return tool_ctx
 

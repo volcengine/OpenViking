@@ -19,7 +19,6 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -205,15 +204,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         await self._mark_cache_breakpoint(messages)
 
-        self._page_id_map = PageIdMap()
-        self.context_provider.set_page_id_map(self._page_id_map)
-
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
 
         for uri in self.context_provider.read_file_contents:
-            self._page_id_map.get_page_id(uri)
+            self._extract_context.page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
             iteration += 1
@@ -413,11 +409,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
             isolation_handler=self._isolation_handler,
         )
 
+        page_id_map = self._extract_context.page_id_map
+
         # Register new page_ids (100+) after URI resolution, using LLM-declared page_id
         for op in upsert_operations:
             if op.page_id is not None and op.page_id >= 100:
                 for uri in op.uris:
-                    self._page_id_map.register_new_page_id(uri, op.page_id)
+                    page_id_map.register_new_page_id(uri, op.page_id)
 
         # Resolve links from WikiLink (page_ids) to StoredLink (URIs)
         resolved_links = self._resolve_links(raw_links, upsert_operations)
@@ -446,7 +444,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     if uri not in op_page_map[op.page_id]:
                         op_page_map[op.page_id].append(uri)
 
-        if not self._page_id_map._id_to_uri and not op_page_map:
+        page_id_map = self._extract_context.page_id_map
+
+        if not page_id_map._id_to_uri and not op_page_map:
             return []
 
         resolved_links = []
@@ -461,8 +461,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             from_uris = []
             to_uris = []
 
-            from_uri = self._page_id_map.resolve(link.f)
-            to_uri = self._page_id_map.resolve(link.t)
+            from_uri = page_id_map.resolve(link.f)
+            to_uri = page_id_map.resolve(link.t)
             if from_uri:
                 from_uris.append(from_uri)
             if to_uri:

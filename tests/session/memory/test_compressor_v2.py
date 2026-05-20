@@ -18,7 +18,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v2 import SessionCompressorV2
 from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.memory_isolation_handler import RoleScope
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -717,9 +717,6 @@ class TestExtractLoopPatchRepair:
                 assert memory_type == "profile"
                 return schema
 
-        class DummyExtractContext:
-            page_id_map = None
-
         class DummyProvider:
             read_file_contents = {
                 target_uri: target_file,
@@ -727,7 +724,7 @@ class TestExtractLoopPatchRepair:
             }
 
             def __init__(self):
-                self.extract_context = DummyExtractContext()
+                self.extract_context = ExtractContext([])
 
             def get_memory_schemas(self, _ctx):
                 return [schema]
@@ -746,9 +743,6 @@ class TestExtractLoopPatchRepair:
 
             def get_extract_context(self):
                 return self.extract_context
-
-            def set_page_id_map(self, page_id_map):
-                self.extract_context.page_id_map = page_id_map
 
             def _get_registry(self):
                 return DummyRegistry()
@@ -821,14 +815,11 @@ class TestExtractLoopPatchRepair:
                 assert memory_type == "profile"
                 return schema
 
-        class DummyExtractContext:
-            page_id_map = None
-
         class DummyProvider:
             read_file_contents = {target_uri: target_file}
 
             def __init__(self):
-                self.extract_context = DummyExtractContext()
+                self.extract_context = ExtractContext([])
 
             def get_memory_schemas(self, _ctx):
                 return [schema]
@@ -847,9 +838,6 @@ class TestExtractLoopPatchRepair:
 
             def get_extract_context(self):
                 return self.extract_context
-
-            def set_page_id_map(self, page_id_map):
-                self.extract_context.page_id_map = page_id_map
 
             def _get_registry(self):
                 return DummyRegistry()
@@ -921,14 +909,11 @@ class TestExtractLoopPatchRepair:
                 assert memory_type == "profile"
                 return schema
 
-        class DummyExtractContext:
-            page_id_map = None
-
         class DummyProvider:
             read_file_contents = {target_uri: target_file}
 
             def __init__(self):
-                self.extract_context = DummyExtractContext()
+                self.extract_context = ExtractContext([])
 
             def get_memory_schemas(self, _ctx):
                 return [schema]
@@ -947,9 +932,6 @@ class TestExtractLoopPatchRepair:
 
             def get_extract_context(self):
                 return self.extract_context
-
-            def set_page_id_map(self, page_id_map):
-                self.extract_context.page_id_map = page_id_map
 
             def _get_registry(self):
                 return DummyRegistry()

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, WikiLink
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.extract_loop import ExtractLoop
 
 
@@ -17,12 +18,15 @@ class AttrDict(dict):
 class TestResolveLinksLogging:
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
-        loop._page_id_map = Mock()
-        loop._page_id_map._id_to_uri = {100: "viking://agent/agent_sample_0/memories/trajectories/a.md"}
-        loop._page_id_map.resolve.side_effect = lambda page_id: {
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {
+            100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
+        }
+        loop._extract_context.page_id_map.resolve.side_effect = lambda page_id: {
             100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
         }.get(page_id)
-        loop._page_id_map.register_new_page_id = Mock()
+        loop._extract_context.page_id_map.register_new_page_id = Mock()
 
         raw_links = [WikiLink(f=100, t=102, match_text="trip")]
 
@@ -43,10 +47,11 @@ class TestResolveLinksLogging:
 class TestResolveLinksMultiUri:
     def test_shared_page_id_fans_out_all_uri_combinations(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
-        loop._page_id_map = Mock()
-        loop._page_id_map._id_to_uri = {}
-        loop._page_id_map.resolve.return_value = None
-        loop._page_id_map.register_new_page_id = Mock()
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {}
+        loop._extract_context.page_id_map.resolve.return_value = None
+        loop._extract_context.page_id_map.register_new_page_id = Mock()
 
         raw_links = [WikiLink(f=100, t=101, match_text="trip")]
         upsert_operations = [
@@ -99,11 +104,12 @@ class TestPageIdInstruction:
         context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
@@ -167,11 +173,12 @@ class TestPageIdInstruction:
         context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
@@ -237,11 +244,12 @@ class TestFinalOperationsHydration:
         context_provider.get_memory_schemas.return_value = [schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {old_file.uri: old_file}
         context_provider.instruction.return_value = "test instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
@@ -289,9 +297,7 @@ class TestFinalOperationsHydration:
 
             final_operations, _ = await loop.run()
 
-        context_provider.set_page_id_map.assert_called_once()
-        assert loop._page_id_map is not None
-        assert loop._page_id_map.resolve(1) == old_file.uri
+        assert extract_context.page_id_map.resolve(1) == old_file.uri
 
         op = final_operations.upsert_operations[0]
         assert op.page_id == 1

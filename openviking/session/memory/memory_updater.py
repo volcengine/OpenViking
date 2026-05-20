@@ -25,6 +25,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils import flat_model_to_dict
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template, supplement_operation_uris
@@ -43,6 +44,7 @@ class ExtractContext:
 
     def __init__(self, messages: List[Message]):
         self.messages = messages
+        self.page_id_map = PageIdMap()
 
     def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
         """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""

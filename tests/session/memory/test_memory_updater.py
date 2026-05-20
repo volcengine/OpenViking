@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -20,6 +22,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -89,6 +92,15 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    def test_extract_context_initializes_page_id_map(self):
+        extract_context = ExtractContext(
+            messages=[Message(id="1", role="user", parts=[TextPart(text="hi")])]
+        )
+
+        assert extract_context.page_id_map is not None
+        page_id = extract_context.page_id_map.get_page_id("viking://user/a/memories/profile.md")
+        assert page_id == 1
 
     def test_create(self):
         """Test creating a MemoryUpdater."""
