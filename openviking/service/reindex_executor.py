@@ -25,12 +25,19 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
-from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.transaction import LockContext, get_lock_manager
+from openviking.storage.transaction import (
+    NO_LOCK,
+    BorrowedLockLease,
+    LockContext,
+    LockLease,
+    get_lock_manager,
+)
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_utils import get_resource_content_type
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError, OpenVikingError
@@ -58,6 +65,13 @@ class _ReindexCounters:
     unsupported_records: int = 0
     failed_records: int = 0
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _ReindexRunContext:
+    ctx: RequestContext
+    counters: _ReindexCounters
+    lock: LockLease = NO_LOCK
 
 
 class ReindexExecutor:
@@ -196,9 +210,10 @@ class ReindexExecutor:
         target_root: str,
         directories: list[str],
         files: list[str],
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> tuple[list[str], list[str]]:
+        counters = run.counters
+        ctx = run.ctx
         prefix = self._child_prefix(target_root)
         semantic_roots = sorted(
             {
@@ -235,6 +250,7 @@ class ReindexExecutor:
                 uri=semantic_root,
                 context_type="resource",
                 ctx=ctx,
+                lock=run.lock,
             )
         return filtered_directories, filtered_files
 
@@ -243,6 +259,22 @@ class ReindexExecutor:
         if root.rstrip("/") == "viking:":
             return "viking://"
         return root.rstrip("/") + "/"
+
+    @staticmethod
+    def _apply_embedding_wait_status(
+        counters: _ReindexCounters,
+        queue_status: dict[str, Any],
+    ) -> None:
+        embedding_status = queue_status.get("Embedding") or {}
+        error_count = int(embedding_status.get("error_count", 0) or 0)
+        if error_count <= 0:
+            return
+        counters.failed_records += error_count
+        counters.rebuilt_records = max(0, counters.rebuilt_records - error_count)
+        for error in embedding_status.get("errors", []) or []:
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            if message:
+                counters.warnings.append(f"Embedding queue failed during reindex: {message}")
 
     def _is_resource_entry_for_namespace(self, uri: str, target_root: str) -> bool:
         if not uri.startswith(self._child_prefix(target_root)):
@@ -260,9 +292,10 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         viking_fs = get_viking_fs()
         try:
             entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
@@ -276,7 +309,11 @@ class ReindexExecutor:
                 skill_roots.append(entry_uri)
 
         for skill_root in sorted(set(skill_roots)):
-            await self._reindex_skill(uri=skill_root, mode=mode, counters=counters, ctx=ctx)
+            await self._reindex_skill(
+                uri=skill_root,
+                mode=mode,
+                run=run,
+            )
 
         if not skill_roots:
             counters.unsupported_records += 1
@@ -306,52 +343,86 @@ class ReindexExecutor:
         service = get_service()
         if service.viking_fs is None or service.vikingdb_manager is None:
             raise RuntimeError("OpenVikingService not initialized")
+        if not service.vikingdb_manager.has_queue_manager:
+            raise OpenVikingError(
+                "Reindex requires embedding queue",
+                code="FAILED_PRECONDITION",
+                details={"uri": uri},
+            )
 
         path = service.viking_fs._uri_to_path(uri, ctx=ctx)
         started_at = time.perf_counter()
         counters = _ReindexCounters()
+        telemetry_id = get_current_telemetry().telemetry_id
+        wait_tracker = get_request_wait_tracker()
+        if telemetry_id:
+            wait_tracker.register_request(telemetry_id)
 
-        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
-            if object_type == "global_namespace":
-                await self._reindex_global_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
+        try:
+            async with LockContext(get_lock_manager(), [path], lock_mode="tree") as lock_handle:
+                run = _ReindexRunContext(
                     ctx=ctx,
-                )
-            elif object_type == "agent_namespace":
-                await self._reindex_agent_namespace(
-                    uri=uri,
-                    mode=mode,
                     counters=counters,
-                    ctx=ctx,
+                    lock=BorrowedLockLease.from_handle(get_lock_manager(), lock_handle),
                 )
-            elif object_type == "user_namespace":
-                await self._reindex_user_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "skill_namespace":
-                await self._reindex_skill_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "resource":
-                await self._reindex_resource(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            elif object_type == "skill":
-                await self._reindex_skill(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            elif object_type == "memory":
-                await self._reindex_memory(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            else:
-                raise OpenVikingError(
-                    f"Unsupported reindex type: {object_type}",
-                    code="UNSUPPORTED_URI",
-                    details={"uri": uri},
-                )
+                if object_type == "global_namespace":
+                    await self._reindex_global_namespace(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "agent_namespace":
+                    await self._reindex_agent_namespace(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "user_namespace":
+                    await self._reindex_user_namespace(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "skill_namespace":
+                    await self._reindex_skill_namespace(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "resource":
+                    await self._reindex_resource(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "skill":
+                    await self._reindex_skill(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                elif object_type == "memory":
+                    await self._reindex_memory(
+                        uri=uri,
+                        mode=mode,
+                        run=run,
+                    )
+                else:
+                    raise OpenVikingError(
+                        f"Unsupported reindex type: {object_type}",
+                        code="UNSUPPORTED_URI",
+                        details={"uri": uri},
+                    )
+
+                if telemetry_id:
+                    await wait_tracker.wait_for_request(telemetry_id)
+                    self._apply_embedding_wait_status(
+                        counters,
+                        wait_tracker.build_queue_status(telemetry_id),
+                    )
+        finally:
+            if telemetry_id:
+                wait_tracker.cleanup(telemetry_id)
 
         return {
             "status": "completed",
@@ -393,11 +464,17 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(uri=uri, context_type="resource", ctx=ctx)
+            await self._run_semantic_processor(
+                uri=uri,
+                context_type="resource",
+                ctx=ctx,
+                lock=run.lock,
+            )
             await self._reindex_resource_vectors(uri=uri, counters=counters, ctx=ctx)
             return
         await self._reindex_resource_vectors(uri=uri, counters=counters, ctx=ctx)
@@ -407,9 +484,10 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         if mode == "semantic_and_vectors":
             await self._regenerate_skill_semantics(uri=uri, ctx=ctx)
         await self._reindex_skill_vectors(uri=uri, counters=counters, ctx=ctx)
@@ -419,17 +497,28 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(uri=uri, context_type="memory", ctx=ctx)
+            await self._run_semantic_processor(
+                uri=uri,
+                context_type="memory",
+                ctx=ctx,
+                lock=run.lock,
+            )
             await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
             return
         await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
 
     async def _run_semantic_processor(
-        self, *, uri: str, context_type: str, ctx: RequestContext
+        self,
+        *,
+        uri: str,
+        context_type: str,
+        ctx: RequestContext,
+        lock: LockLease = NO_LOCK,
     ) -> None:
         processor = SemanticProcessor()
         msg = SemanticMsg(
@@ -442,7 +531,7 @@ class ReindexExecutor:
             role=ctx.role.value,
             skip_vectorization=True,
         )
-        await processor.on_dequeue({"data": msg.to_json()})
+        await processor.on_dequeue({"data": msg.to_json()}, lock=lock.as_borrowed())
 
     async def _reindex_resource_vectors(
         self,
@@ -586,9 +675,10 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         normalized_uri = uri.rstrip("/")
         target_root = normalized_uri if normalized_uri else uri
         viking_fs = get_viking_fs()
@@ -608,8 +698,7 @@ class ReindexExecutor:
                     await self._reindex_user_namespace(
                         uri=user_root,
                         mode=mode,
-                        counters=counters,
-                        ctx=ctx,
+                        run=run,
                     )
                 return
 
@@ -638,7 +727,9 @@ class ReindexExecutor:
                 "semantic_and_vectors" if mode == "semantic_and_vectors" else "vectors_only"
             )
             await self._reindex_memory(
-                uri=memory_root, mode=memory_mode, counters=counters, ctx=ctx
+                uri=memory_root,
+                mode=memory_mode,
+                run=run,
             )
 
         if mode == "semantic_and_vectors":
@@ -649,8 +740,7 @@ class ReindexExecutor:
                 target_root=target_root,
                 directories=resource_directories,
                 files=resource_files,
-                counters=counters,
-                ctx=ctx,
+                run=run,
             )
 
         await self._reindex_resource_vectors_from_entries(
@@ -666,9 +756,10 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         normalized_uri = uri.rstrip("/")
         target_root = normalized_uri if normalized_uri else uri
         viking_fs = get_viking_fs()
@@ -688,8 +779,7 @@ class ReindexExecutor:
                     await self._reindex_agent_namespace(
                         uri=agent_root,
                         mode=mode,
-                        counters=counters,
-                        ctx=ctx,
+                        run=run,
                     )
                 return
 
@@ -723,14 +813,20 @@ class ReindexExecutor:
                 "semantic_and_vectors" if mode == "semantic_and_vectors" else "vectors_only"
             )
             await self._reindex_memory(
-                uri=memory_root, mode=memory_mode, counters=counters, ctx=ctx
+                uri=memory_root,
+                mode=memory_mode,
+                run=run,
             )
 
         for skill_root in sorted(set(skill_roots)):
             skill_mode = (
                 "semantic_and_vectors" if mode == "semantic_and_vectors" else "vectors_only"
             )
-            await self._reindex_skill(uri=skill_root, mode=skill_mode, counters=counters, ctx=ctx)
+            await self._reindex_skill(
+                uri=skill_root,
+                mode=skill_mode,
+                run=run,
+            )
 
         if mode == "semantic_and_vectors":
             (
@@ -740,8 +836,7 @@ class ReindexExecutor:
                 target_root=target_root,
                 directories=resource_directories,
                 files=resource_files,
-                counters=counters,
-                ctx=ctx,
+                run=run,
             )
 
         await self._reindex_resource_vectors_from_entries(
@@ -757,9 +852,10 @@ class ReindexExecutor:
         *,
         uri: str,
         mode: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
+        run: _ReindexRunContext,
     ) -> None:
+        counters = run.counters
+        ctx = run.ctx
         target_root = "viking://"
         viking_fs = get_viking_fs()
         try:
@@ -801,16 +897,14 @@ class ReindexExecutor:
             await self._reindex_user_namespace(
                 uri=user_root,
                 mode=mode,
-                counters=counters,
-                ctx=ctx,
+                run=run,
             )
 
         for agent_root in sorted(set(agent_roots)):
             await self._reindex_agent_namespace(
                 uri=agent_root,
                 mode=mode,
-                counters=counters,
-                ctx=ctx,
+                run=run,
             )
 
         if mode == "semantic_and_vectors":
@@ -821,8 +915,7 @@ class ReindexExecutor:
                 target_root=target_root,
                 directories=resource_directories,
                 files=resource_files,
-                counters=counters,
-                ctx=ctx,
+                run=run,
             )
 
         await self._reindex_resource_vectors_from_entries(
@@ -1229,17 +1322,20 @@ class ReindexExecutor:
                 code="FAILED_PRECONDITION",
                 details={"uri": uri},
             )
-
-        result = await TextEmbeddingHandler(service.vikingdb_manager).on_dequeue(
-            {"data": msg.to_json()}
-        )
-        if result is None:
+        wait_tracker = get_request_wait_tracker()
+        wait_tracker.register_embedding_root(msg.telemetry_id, msg.id)
+        enqueued = await service.vikingdb_manager.enqueue_embedding_msg(msg)
+        if not enqueued:
+            wait_tracker.mark_embedding_failed(
+                msg.telemetry_id,
+                msg.id,
+                f"Failed to enqueue reindex vector for {uri}",
+            )
             raise OpenVikingError(
-                f"Failed to reindex vector for {uri}",
+                f"Failed to enqueue reindex vector for {uri}",
                 code="PROCESSING_ERROR",
                 details={"uri": uri, "level": int(level)},
             )
-        logger.debug("Reindexed vector for %s level=%s", uri, int(level))
 
     async def _fetch_existing_record(
         self,

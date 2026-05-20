@@ -278,6 +278,22 @@ class LockManager:
             return None
         return current
 
+    def adopt_handle(self, handle_id: str, lock_paths: List[str]) -> Optional[LockHandle]:
+        handle = self.get_handle(handle_id)
+        if handle is not None:
+            return handle
+
+        adopted = LockHandle(id=handle_id)
+        for lock_path in dict.fromkeys(lock_paths):
+            if self._path_lock.is_lock_owned_by(lock_path, handle_id):
+                adopted.add_lock(lock_path)
+        if not adopted.locks:
+            return None
+
+        self._handles[adopted.id] = adopted
+        self._mark_handle_active(adopted)
+        return adopted
+
     def is_path_locked(self, path: str, ignore_stale: bool = True) -> bool:
         """Check whether *path* is currently locked.
 

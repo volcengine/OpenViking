@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
@@ -79,7 +80,7 @@ class SemanticDagExecutor:
         semantic_msg_id: Optional[str] = None,
         telemetry_id: str = "",
         recursive: bool = True,
-        lifecycle_lock_handle_id: str = "",
+        lock: LockLease = NO_LOCK,
         is_code_repo: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
@@ -95,7 +96,7 @@ class SemanticDagExecutor:
         self._semantic_msg_id = semantic_msg_id
         self._telemetry_id = telemetry_id
         self._recursive = recursive
-        self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
+        self._lock = lock
         self._is_code_repo = is_code_repo
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
@@ -119,7 +120,6 @@ class SemanticDagExecutor:
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
-        self._refresh_task: Optional[asyncio.Task] = None
 
     def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
         """Create on_complete callback for incremental update or full update."""
@@ -144,7 +144,7 @@ class SemanticDagExecutor:
                     self._target_uri,
                     ctx=self._ctx,
                     file_change_status=self._file_change_status,
-                    lifecycle_lock_handle_id=self._lifecycle_lock_handle_id,
+                    lock=self._lock,
                 )
                 logger.info(
                     f"[SyncDiff] Diff computed: "
@@ -169,20 +169,16 @@ class SemanticDagExecutor:
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
 
-        # Start lifecycle lock refresh loop if we hold a lock
-        if self._lifecycle_lock_handle_id:
-            self._refresh_task = asyncio.create_task(self._lock_refresh_loop())
-
         try:
             await self._dispatch_dir(root_uri, parent_uri=None)
             await self._root_done.wait()
         except Exception:
-            await self._release_lifecycle_lock()
+            await self._lock.close()
             raise
 
         original_on_complete = self._create_on_complete_callback()
 
-        # Wrap on_complete to release lifecycle lock after all processing
+        # Release owned semantic locks after downstream vectorization finishes.
         async def wrapped_on_complete() -> None:
             try:
                 if original_on_complete:
@@ -192,7 +188,7 @@ class SemanticDagExecutor:
                         self._telemetry_id, self._semantic_msg_id
                     )
             finally:
-                await self._release_lifecycle_lock()
+                await self._lock.close()
 
         async with self._vectorize_lock:
             task_count = self._vectorize_task_count
@@ -611,7 +607,7 @@ class SemanticDagExecutor:
             abstract=abstract,
             ctx=self._ctx,
             is_stale=self._is_stale,
-            lifecycle_lock_handle_id=self._lifecycle_lock_handle_id,
+            lock=self._lock,
             log_prefix="[SemanticDag]",
         )
         if not wrote:
@@ -647,7 +643,7 @@ class SemanticDagExecutor:
                 abstract = self._processor._extract_abstract_from_overview(overview)
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
-            # Write directly — protected by the outer lifecycle tree lock
+            # Write directly, protected by the outer semantic lock.
             try:
                 wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
                 if not wrote:
@@ -700,46 +696,6 @@ class SemanticDagExecutor:
                 self._vectorize_task_count += 1
             else:  # directory
                 self._vectorize_task_count += 2
-
-    async def _lock_refresh_loop(self) -> None:
-        """Periodically refresh lifecycle lock to prevent stale expiry."""
-        from openviking.storage.transaction import get_lock_manager
-
-        try:
-            interval = get_lock_manager()._path_lock._lock_expire / 2
-        except Exception:
-            interval = 150.0
-
-        while True:
-            try:
-                await asyncio.sleep(interval)
-                handle = get_lock_manager().get_handle(self._lifecycle_lock_handle_id)
-                if handle:
-                    await get_lock_manager().refresh_lock(handle)
-                else:
-                    break
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"[SemanticDag] Lock refresh failed: {e}")
-
-    async def _release_lifecycle_lock(self) -> None:
-        """Stop refresh loop and release lifecycle lock."""
-        if self._refresh_task and not self._refresh_task.done():
-            self._refresh_task.cancel()
-            self._refresh_task = None
-        if not self._lifecycle_lock_handle_id:
-            return
-        handle_id = self._lifecycle_lock_handle_id
-        self._lifecycle_lock_handle_id = ""
-        try:
-            from openviking.storage.transaction import get_lock_manager
-
-            handle = get_lock_manager().get_handle(handle_id)
-            if handle:
-                await get_lock_manager().release(handle)
-        except Exception as e:
-            logger.warning(f"[SemanticDag] Failed to release lifecycle lock {handle_id}: {e}")
 
     def get_stats(self) -> DagStats:
         return DagStats(

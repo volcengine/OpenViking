@@ -8,11 +8,13 @@ import pytest
 from openviking.storage.queuefs.semantic_dag import DagStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.transaction import BorrowedLockLease
 
 
 class _FakeHandle:
     def __init__(self, handle_id: str):
         self.id = handle_id
+        self.locks = ["/fake/root/.path.ovlock"]
 
 
 class _FakeLockManager:
@@ -48,17 +50,17 @@ class _FakeVikingFS:
 
 
 @pytest.mark.asyncio
-async def test_semantic_processor_does_not_release_lock_owned_by_dag(monkeypatch):
+async def test_semantic_processor_borrows_caller_owned_lock(monkeypatch):
     processor = SemanticProcessor()
     lock_manager = _FakeLockManager()
 
     class _FakeDagExecutor:
         def __init__(self, **kwargs):
-            self.lifecycle_lock_handle_id = kwargs.get("lifecycle_lock_handle_id", "")
+            self.lock = kwargs["lock"]
 
         async def run(self, root_uri):
             assert root_uri == "viking://resources/demo"
-            assert self.lifecycle_lock_handle_id == "lock-1"
+            assert self.lock.handle_id == "lock-1"
 
         def get_stats(self):
             return DagStats()
@@ -81,8 +83,8 @@ async def test_semantic_processor_does_not_release_lock_owned_by_dag(monkeypatch
             uri="viking://resources/demo",
             context_type="resource",
             recursive=False,
-            lifecycle_lock_handle_id="lock-1",
-        ).to_dict()
+        ).to_dict(),
+        lock=BorrowedLockLease.from_handle(lock_manager, lock_manager.get_handle("lock-1")),
     )
 
     assert lock_manager.release_calls == []

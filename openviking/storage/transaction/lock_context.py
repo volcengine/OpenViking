@@ -6,6 +6,7 @@ from typing import Optional
 
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction.lock_handle import LockHandle
+from openviking.storage.transaction.lock_lease import OwnedLockLease
 from openviking.storage.transaction.lock_manager import LockManager
 
 
@@ -34,6 +35,7 @@ class LockContext:
         self._owns_handle = handle is None
         self._locks_before: list[str] = []
         self._acquired_lock_paths: list[str] = []
+        self._owned_lease: Optional[OwnedLockLease] = None
 
     async def __aenter__(self) -> LockHandle:
         if self._handle is None:
@@ -72,12 +74,17 @@ class LockContext:
             raise LockAcquisitionError(
                 f"Failed to acquire {self._lock_mode} lock for {self._paths}"
             )
+        if self._owns_handle and self._handle.locks:
+            self._owned_lease = OwnedLockLease.from_handle(self._manager, self._handle)
         return self._handle
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._handle:
             if self._owns_handle:
-                await self._manager.release(self._handle)
+                if self._owned_lease:
+                    await self._owned_lease.close()
+                else:
+                    await self._manager.release(self._handle)
             else:
                 await self._manager.release_selected(self._handle, self._acquired_lock_paths)
         return False
