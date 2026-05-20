@@ -7,6 +7,8 @@ Implements BaseClient interface using direct service calls (embedded mode).
 
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.storage.viking_fs import GrepEngine
+
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
 from openviking.telemetry import TelemetryRequest
@@ -371,7 +373,7 @@ class LocalClient(BaseClient):
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
         level_limit: int = 5,
-        engine: str = "auto",
+        engine: GrepEngine = "auto",
         switch_to_remote_threshold: int = 1000,
         remote_return_limit: int = 100,
     ) -> Dict[str, Any]:

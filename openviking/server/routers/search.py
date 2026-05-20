@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
+from openviking.storage.viking_fs import GrepEngine
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
@@ -111,7 +112,7 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = None
     level_limit: int = 5
-    engine: Literal["auto", "fs"] = "auto"
+    engine: GrepEngine = "auto"
     switch_to_remote_threshold: int = Field(default=1000, ge=0, description="L2 record count threshold to switch to vikingdb; 0 means always use vikingdb")
     remote_return_limit: int = Field(default=100, ge=1, le=100000, description="Maximum files recalled by vikingdb bm25")
 

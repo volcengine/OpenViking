@@ -22,7 +22,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+
+# Grep engine mode type alias — import this instead of repeating Literal["auto", "fs"]
+GrepEngine = Literal["auto", "fs"]
 
 from openviking.core.namespace import (
     NamespaceShapeError,
@@ -228,7 +231,8 @@ class VikingFS:
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
         self._encryptor = encryptor
-        self._count_cache: Dict[str, tuple] = {}  # uri → (count, timestamp)
+        self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
+        self._count_cache_max_size = 1024
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -688,7 +692,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 5,
         ctx: Optional[RequestContext] = None,
-        engine: str = "auto",
+        engine: GrepEngine = "auto",
         switch_to_remote_threshold: int = 1000,
         remote_return_limit: int = 100,
     ) -> Dict:
@@ -748,7 +752,7 @@ class VikingFS:
                 ctx=ctx,
             )
 
-    async def _resolve_grep_engine(self, engine: str, uri: str, ctx,
+    async def _resolve_grep_engine(self, engine: GrepEngine, uri: str, ctx,
                                     switch_to_remote_threshold: int = 1000) -> str:
         """Resolve the actual grep engine to use."""
         if engine == "fs":
@@ -821,6 +825,11 @@ class VikingFS:
         count = await vector_store.count(
             filter=And([PathScope("uri", uri), Eq("level", 2)]), ctx=ctx
         )
+        # Evict oldest entries if cache exceeds max size
+        if len(self._count_cache) >= self._count_cache_max_size:
+            oldest_keys = sorted(self._count_cache, key=lambda k: self._count_cache[k][1])
+            for k in oldest_keys[:len(oldest_keys) // 2]:
+                del self._count_cache[k]
         self._count_cache[cache_key] = (count, now)
         return count
 
@@ -856,12 +865,15 @@ class VikingFS:
 
         # Step 1: vikingdb recall candidate files
         try:
+            # Split regex alternation (e.g. "error|warning|fail") into individual keywords
+            # for bm25 search. Limit to 10 keywords per VikingDB API constraint.
+            keywords = [kw.strip() for kw in pattern.split("|") if kw.strip()][:10]
             filter_expr = And([
                 PathScope("uri", uri),
                 Eq("level", 2),
             ])
             result = await vector_store.search_by_keywords(
-                keywords=[pattern],
+                keywords=keywords,
                 mode="bm25",
                 fields=["content"],
                 limit=remote_return_limit,

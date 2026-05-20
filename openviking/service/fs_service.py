@@ -8,6 +8,8 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import Any, Dict, List, Optional
 
+from openviking.storage.viking_fs import GrepEngine
+
 from openviking.core.namespace import context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
@@ -241,7 +243,7 @@ class FSService:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         level_limit: int = 5,
-        engine: str = "auto",
+        engine: GrepEngine = "auto",
         switch_to_remote_threshold: int = 1000,
         remote_return_limit: int = 100,
     ) -> Dict:

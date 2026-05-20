@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.storage.viking_fs import GrepEngine
+
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
 from openviking.telemetry import TelemetryRequest
@@ -475,7 +477,7 @@ class AsyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
-        engine: str = "auto",
+        engine: GrepEngine = "auto",
         switch_to_remote_threshold: int = 1000,
         remote_return_limit: int = 100,
     ) -> Dict:

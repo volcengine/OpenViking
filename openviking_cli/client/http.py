@@ -11,6 +11,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.storage.viking_fs import GrepEngine
+
 import httpx
 
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
@@ -740,7 +742,7 @@ class AsyncHTTPClient(BaseClient):
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
-        engine: str = "auto",
+        engine: GrepEngine = "auto",
         switch_to_remote_threshold: int = 1000,
         remote_return_limit: int = 100,
     ) -> Dict[str, Any]:
