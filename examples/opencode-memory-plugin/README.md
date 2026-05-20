@@ -16,13 +16,17 @@ In practice, that means:
 
 This example focuses on explicit memory access, filesystem-style browsing, and session-to-memory synchronization inside OpenCode.
 
+It also includes a `tool.execute.before` hook that intercepts `read`/`glob`/`grep` calls targeting `viking://` URIs and redirects the agent to the correct memory tools (`memread`/`membrowse`/`memsearch`).
+
 ## What It Does
 
-- Exposes four memory tools for OpenCode agents:
+- Exposes seven memory tools for OpenCode agents:
   - `memsearch`
   - `memread`
   - `membrowse`
   - `memcommit`
+  - `memwrite`
+  - `memimport`
 - Automatically maps each OpenCode session to an OpenViking session
 - Streams user and assistant messages into OpenViking
 - Uses background `commit` tasks to avoid repeated synchronous timeout failures
@@ -156,6 +160,31 @@ Parameters:
 
 Returns background task progress or completion details, including `task_id`, per-category `memories_extracted`, and `archived`.
 
+### `memwrite`
+
+Write content to a specific file in OpenViking memory at a given `viking://` URI.
+
+Parameters:
+
+- `uri`: complete `viking://` URI for the file to write
+- `content`: the content to write
+- `mode?`: `replace | append` — overwrite or add to the end (default: `replace`)
+
+Parent directories are created automatically if they don't exist.
+
+### `memimport`
+
+Import resources into the OpenViking knowledge base.
+
+Parameters:
+
+- `path`: URL or local file path to import. URLs are fetched server-side; local files are uploaded first. For directories, zip them and pass the `.zip` path.
+- `to?`: target `viking://` URI for the imported resource (must be in resources scope)
+- `reason?`: reason for adding this resource (improves search relevance)
+- `wait?`: wait for semantic processing to complete (default: `false`)
+
+Content is automatically parsed, indexed, and made searchable.
+
 ## Usage Examples
 
 Search and then read:
@@ -186,6 +215,26 @@ Force a mid-session commit:
 
 ```typescript
 const result = await memcommit({})
+```
+
+Write a note to memory:
+
+```typescript
+const result = await memwrite({
+  uri: "viking://user/memories/notes.md",
+  content: "# Design Decision\n\nUse PostgreSQL for the audit log.",
+  mode: "replace"
+})
+```
+
+Import external documentation:
+
+```typescript
+const result = await memimport({
+  path: "https://example.com/api-docs.html",
+  to: "viking://resources/external/api-docs/resource-example.md",
+  reason: "API reference for integration project"
+})
 ```
 
 ## Memory Recall
