@@ -7,6 +7,8 @@ import {
 const LLM_PATH = '/post/agent-runtime/llm.txt';
 const ZOUK_DELIVERY_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md';
 const ZOUK_LIFECYCLE_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy';
+const OPENVIKING_MCP_DOC = 'https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md';
+const OPENVIKING_CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md';
 
 const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
 
@@ -49,8 +51,8 @@ const AgentRuntime = ({ t }) => {
   return (
     <Article>
       <Lead>{T({
-        en: 'A CLI agent like Claude Code is designed for one human at one terminal. To make it a building block for a product — where agents receive messages while idle, participate in multi-agent workflows, and survive restarts — you need a daemon. This post builds one from scratch, in four progressive steps, with runnable code at each stage.',
-        zh: 'Claude Code 这样的 CLI agent 是为一个人坐在一个终端前设计的。要把它变成产品的构建模块——让 agent 在空闲时接收消息、参与多 agent 工作流、在重启后继续存活——你需要一个 daemon。本文从零开始，分四步递进构建一个 daemon，每一步都有可运行的代码。',
+        en: 'A CLI agent like Claude Code is designed for one human at one terminal. To make it a building block for a product — where agents receive messages while idle, participate in multi-agent workflows, survive restarts, and share durable context — you need a daemon plus a memory plane. This post builds the daemon in four runnable steps, then shows how OpenViking can provide the shared context layer.',
+        zh: 'Claude Code 这样的 CLI agent 是为一个人坐在一个终端前设计的。要把它变成产品的构建模块——让 agent 在空闲时接收消息、参与多 agent 工作流、在重启后继续存活，并共享长期上下文——你需要一个 daemon，也需要一层 memory plane。本文先用四个可运行步骤构建 daemon，再讨论如何用 OpenViking 接上共享 context layer。',
       })}</Lead>
 
       <H2 id="step-1">{T({ en: 'Step 1: Spawn and Talk to Claude', zh: '第一步：启动 Claude 并与之对话' })}</H2>
@@ -531,6 +533,50 @@ node 4b_chat_daemon.js
 
       <Hr ornament />
 
+      <H2 id="step-5">{T({ en: 'Step 5: Move Agent Memory to OpenViking', zh: '第五步：把 agent 记忆接到 OpenViking' })}</H2>
+
+      <P>{T({
+        en: 'Once agents can receive messages, the next question is where durable context lives. A local file such as MEMORY.md is useful as a fast recovery index for one agent process, but it is not enough for a team platform. A platform needs a shared context plane: searchable, scoped, auditable, and usable across machines, restarts, and multiple agents.',
+        zh: 'Agent 能收消息之后，下一个问题是长期上下文放在哪里。像 MEMORY.md 这样的本地文件适合作为单个 agent 的快速恢复索引，但它不够支撑团队平台。平台需要一个共享的 context plane：可检索、有权限边界、可审计，并且能跨机器、跨重启、跨 agent 使用。',
+      })}</P>
+
+      <P>{T({
+        en: 'OpenViking plays that role. The point is not to upload the whole chat transcript forever. The useful writeback is distilled context: facts, user preferences, decisions, handoff notes, tool results, and resource references that should survive the current CLI process.',
+        zh: 'OpenViking 扮演的就是这层 memory plane。重点不是把完整聊天 transcript 无脑上云，而是写入蒸馏后的上下文：事实、偏好、决策、handoff、工具结果、资源引用，以及其他应该跨当前 CLI 进程保留下来的内容。',
+      })}</P>
+
+      <H3>{T({ en: 'Two integration surfaces', zh: '两层集成边界' })}</H3>
+
+      <Ol>
+        <Li><strong>{T({ en: 'Agent / runtime layer', zh: 'Agent / runtime 层' })}</strong>{T({
+          en: ' — run an OpenViking memory client or context client, either as a plugin or through the OpenViking MCP endpoint. It retrieves relevant memory/resources at startup or prompt submit, writes back distilled updates during the run, and commits a durable handoff before compaction, reset, or sleep.',
+          zh: '——通过 plugin 或 OpenViking MCP endpoint 接一个 memory client / context client。启动或 prompt submit 时检索相关 memory/resource 并注入上下文；运行过程中增量 writeback；compaction、reset、sleep 前写 durable handoff。',
+        })}</Li>
+        <Li><strong>{T({ en: 'Platform / server layer', zh: 'Platform / server 层' })}</strong>{T({
+          en: ' — do provisioning and governance. The platform binds workspace/account/user/agent identity, issues scoped credentials or bearer tokens, exposes the OpenViking endpoint to daemons/runtimes, and owns permission checks, key rotation, audit, resource ownership, and cross-agent sharing boundaries.',
+          zh: '——负责 provisioning + governance。平台绑定 workspace/account/user/agent 身份，签发 scoped credential 或 bearer token，把 OpenViking endpoint 提供给 daemon/runtime，并负责权限、key rotation、审计、资源归属和跨 agent 共享边界。',
+        })}</Li>
+      </Ol>
+
+      <Callout type="warn">
+        <P>{T({
+          en: 'Do not put OpenViking API keys in browser code. The browser can show context inspection UI, but credentials should stay on the server, daemon, or runtime side.',
+          zh: '不要把 OpenViking API key 放进浏览器。浏览器可以展示 context inspect / search / debug UI，但凭证应该留在 server、daemon 或 runtime 侧。',
+        })}</P>
+      </Callout>
+
+      <P>{T({
+        en: 'The UI work is not just “visualization.” A useful platform lets humans inspect, search, debug, and manage context: where a memory came from, why it was injected, why a query missed, which agent owns it, and whether sensitive content should be deleted, exported, or re-scoped.',
+        zh: 'UI 侧也不只是“可视化”。真正有用的平台能力是 inspect / search / debug / manage：一条 memory 的来源是什么，为什么被注入，为什么没命中，属于哪个 agent，敏感内容是否需要删除、导出或重新划分权限。',
+      })}</P>
+
+      <P>{T({
+        en: 'A concrete Claude Code version already exists as an OpenViking memory plugin, and a runtime-agnostic path is the OpenViking MCP endpoint.',
+        zh: '这条路已经有可落地形态：Claude Code 可以用 OpenViking memory plugin；更通用的运行时可以直接接 OpenViking MCP endpoint。',
+      })} <A href={OPENVIKING_CLAUDE_PLUGIN_DOC}>{T({ en: 'Claude Code memory plugin', zh: 'Claude Code memory plugin' })}</A>{T({ en: ' and ', zh: ' 和 ' })}<A href={OPENVIKING_MCP_DOC}>{T({ en: 'OpenViking MCP guide', zh: 'OpenViking MCP 接入指南' })}</A>{T({ en: ' are the reference paths.', zh: ' 是参考路径。' })}</P>
+
+      <Hr ornament />
+
       <H2 id="recap">{T({ en: 'The Build Order', zh: '构建顺序' })}</H2>
 
       <Ol>
@@ -538,6 +584,7 @@ node 4b_chat_daemon.js
         <Li><strong>{T({ en: 'Split server and daemon', zh: '拆分 server 和 daemon' })}</strong>{T({ en: ' — server handles users and routing. Daemon handles the local process. WebSocket in between.', zh: '——server 处理用户和路由，daemon 处理本地进程，中间用 WebSocket 连接。' })}</Li>
         <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a shared product event shape. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成产品统一事件格式。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
         <Li><strong>{T({ en: 'Deliver agent messages', zh: '实现 agent 消息投递' })}</strong>{T({ en: ' — route each new message into the right running, idle, or restarted agent process.', zh: '——每条新消息都按进程状态投递给正确的 agent；只有重启进程时才用保存的 session 接回上下文。' })}</Li>
+        <Li><strong>{T({ en: 'Externalize memory', zh: '记忆上云' })}</strong>{T({ en: ' — connect agents to OpenViking as a shared context plane with scoped credentials, retrieval, writeback, audit, and human management UI.', zh: '——把 agent 接到 OpenViking 这层共享 context plane，用 scoped credential 做检索、写回、审计和人工管理。' })}</Li>
       </Ol>
 
       <P>{T({
@@ -645,8 +692,8 @@ export default {
   meta: {
     title: { en: 'Building an Agent Daemon', zh: '构建 Agent Daemon' },
     description: {
-      en: 'Four runnable demos that turn a CLI agent into a managed daemon — from process spawning to multi-agent games to agent message delivery.',
-      zh: '四个可运行的示例，将 CLI agent 逐步变成托管 daemon——从进程管理到多 agent 对弈，再到 agent 消息投递。',
+      en: 'Four runnable demos plus one OpenViking integration step that turn a CLI agent into a managed daemon with message delivery and shared durable context.',
+      zh: '四个可运行示例加一个 OpenViking 集成步骤，将 CLI agent 逐步变成有消息投递和共享长期上下文的托管 daemon。',
     },
     cover: '/assets/covers/runtime.png',
     publishedAt: '2026-05-08',

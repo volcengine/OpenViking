@@ -7,7 +7,7 @@ Author: zayn
 
 ## Summary
 
-This post explains how to turn a CLI agent such as Claude Code into a product-grade daemon. A CLI agent is normally designed for one human at one terminal. A product runtime needs agents that can receive messages, participate in multi-agent workflows, use shared cloud resources, keep conversation context, and map each new product event to the right local runtime process.
+This post explains how to turn a CLI agent such as Claude Code into a product-grade daemon, then connect it to a shared context plane. A CLI agent is normally designed for one human at one terminal. A product runtime needs agents that can receive messages, participate in multi-agent workflows, use shared cloud resources, keep conversation context, and map each new product event to the right local runtime process.
 
 The architecture is a split boundary:
 
@@ -24,6 +24,8 @@ The daemon does not need to understand product semantics. It manages process lif
 - Runnable examples: https://github.com/ZaynJarvis/agent-runtime
 - Zouk delivery routing details: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md
 - Zouk idle delivery and wake policy: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy
+- OpenViking MCP integration: https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md
+- Claude Code memory plugin: https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md
 
 ## Step 1: Spawn And Talk To Claude
 
@@ -93,6 +95,23 @@ Session resume is only one implementation detail in the cached-idle branch. The 
 
 From the chat-platform view, human-to-agent and agent-to-agent conversations are ordinary platform messages. The server selects relevant messages and pushes them over WebSocket as `agent:deliver` to the right agent daemon. When the agent needs to reply, read history, or check pending messages, it calls MCP tools such as `send_message`, `read_history`, and `check_messages` back into the platform API.
 
+## Step 5: Move Agent Memory To OpenViking
+
+After agents can receive messages, the next question is where durable context lives. Local files such as `MEMORY.md` are useful as a fast recovery index for one agent process, but they are not enough for a team platform. A platform needs a shared context plane: searchable, scoped, auditable, and usable across machines, restarts, and multiple agents.
+
+OpenViking is that memory plane. The point is not to upload the whole chat transcript forever. Useful writeback is distilled context: facts, user preferences, decisions, handoff notes, tool results, and resource references that should survive the current CLI process.
+
+There are two integration surfaces:
+
+- Agent/runtime layer: run an OpenViking memory client or context client, either as a plugin or through the OpenViking MCP endpoint. It retrieves relevant memory/resources at startup or prompt submit, writes back distilled updates during the run, and commits a durable handoff before compaction, reset, or sleep.
+- Platform/server layer: do provisioning and governance. The platform binds workspace/account/user/agent identity, issues scoped credentials or bearer tokens, exposes the OpenViking endpoint to daemons/runtimes, and owns permission checks, key rotation, audit, resource ownership, and cross-agent sharing boundaries.
+
+Do not put OpenViking API keys in browser code. The browser can show context inspection UI, but credentials should stay on the server, daemon, or runtime side.
+
+The UI work is not just visualization. A useful platform lets humans inspect, search, debug, and manage context: where a memory came from, why it was injected, why a query missed, which agent owns it, and whether sensitive content should be deleted, exported, or re-scoped.
+
+A concrete Claude Code version already exists as an OpenViking memory plugin. A runtime-agnostic path is the OpenViking MCP endpoint.
+
 ## Runtime Drivers
 
 The daemon architecture is runtime-agnostic. A runtime driver knows how to:
@@ -136,3 +155,4 @@ Busy delivery modes:
 2. Split server and daemon: the server handles users, routing, and shared cloud resources; the daemon handles local processes.
 3. Normalize and inject tools: translate runtime events into a shared product event shape and inject MCP tools.
 4. Deliver agent messages: route each new message into the right running, idle, or restarted agent process.
+5. Externalize memory: connect agents to OpenViking as a shared context plane with scoped credentials, retrieval, writeback, audit, and human management UI.
