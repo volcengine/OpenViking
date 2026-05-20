@@ -20,7 +20,6 @@ function StreamJsonDemo({ T }) {
           en: 'Expandable example: stdin JSON and stdout stream',
           zh: '可展开演示：stdin 输入 JSON 与 stdout 输出流',
         })}</span>
-        <span className="runtime-io-demo__hint">{T({ en: 'folded by default', zh: '默认折叠' })}</span>
       </summary>
       <div className="runtime-io-demo__body">
         <P className="runtime-io-demo__intro">{T({

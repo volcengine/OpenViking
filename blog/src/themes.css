@@ -135,7 +135,6 @@ button { font: inherit; color: inherit; }
 .runtime-io-demo > summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 14px;
   padding: 12px 14px;
   cursor: pointer;
@@ -161,13 +160,6 @@ button { font: inherit; color: inherit; }
 }
 .runtime-io-demo[open] > summary::before { content: "-"; }
 .runtime-io-demo__title { flex: 1 1 auto; min-width: 0; font-weight: 500; }
-.runtime-io-demo__hint {
-  flex: 0 0 auto;
-  color: var(--th-mute);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
 .runtime-io-demo__body {
   border-top: 1px solid var(--th-line);
   padding: 14px;
@@ -180,7 +172,7 @@ button { font: inherit; color: inherit; }
 }
 .runtime-io-demo__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 .runtime-io-demo__panel {
@@ -220,8 +212,6 @@ button { font: inherit; color: inherit; }
     align-items: flex-start;
     gap: 10px;
   }
-  .runtime-io-demo__hint { display: none; }
-  .runtime-io-demo__grid { grid-template-columns: 1fr; }
 }
 
 .b-quote { margin: 32px 0; padding: 0 0 0 24px; border-left: 3px solid var(--th-accent); font-style: normal; font-size: 1.1em; line-height: 1.5; color: var(--th-ink); }
