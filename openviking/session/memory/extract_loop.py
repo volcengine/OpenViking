@@ -419,6 +419,38 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         operations.resolved_links = resolved_links
 
+    def _pair_link_uris(self, from_uris: List[str], to_uris: List[str]) -> List[tuple[str, str]]:
+        namespace_pairs = []
+        seen_pairs = set()
+
+        for from_uri in from_uris:
+            from_namespace = from_uri.split("/memories/", 1)[0]
+            for to_uri in to_uris:
+                if from_uri == to_uri:
+                    continue
+                if from_namespace != to_uri.split("/memories/", 1)[0]:
+                    continue
+                pair = (from_uri, to_uri)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                namespace_pairs.append(pair)
+
+        if namespace_pairs:
+            return namespace_pairs
+
+        all_pairs = []
+        for from_uri in from_uris:
+            for to_uri in to_uris:
+                if from_uri == to_uri:
+                    continue
+                pair = (from_uri, to_uri)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                all_pairs.append(pair)
+        return all_pairs
+
     def _resolve_links(self, raw_links: List, upsert_operations: List = None) -> List[StoredLink]:
         """Resolve WikiLinks with page_ids to StoredLinks with URIs.
 
@@ -481,33 +513,29 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 )
                 continue
 
-            for from_uri in from_uris:
-                for to_uri in to_uris:
-                    if from_uri == to_uri:
-                        continue
+            for from_uri, to_uri in self._pair_link_uris(from_uris, to_uris):
+                link_key = (
+                    from_uri,
+                    to_uri,
+                    link.link_type,
+                    link.weight,
+                    link.match_text,
+                    link.description,
+                )
+                if link_key in seen_links:
+                    continue
+                seen_links.add(link_key)
 
-                    link_key = (
-                        from_uri,
-                        to_uri,
-                        link.link_type,
-                        link.weight,
-                        link.match_text,
-                        link.description,
-                    )
-                    if link_key in seen_links:
-                        continue
-                    seen_links.add(link_key)
-
-                    stored_link = StoredLink(
-                        from_uri=from_uri,
-                        to_uri=to_uri,
-                        link_type=link.link_type,
-                        weight=link.weight,
-                        match_text=link.match_text,
-                        description=link.description,
-                        created_at=now,
-                    )
-                    resolved_links.append(stored_link)
+                stored_link = StoredLink(
+                    from_uri=from_uri,
+                    to_uri=to_uri,
+                    link_type=link.link_type,
+                    weight=link.weight,
+                    match_text=link.match_text,
+                    description=link.description,
+                    created_at=now,
+                )
+                resolved_links.append(stored_link)
 
         return resolved_links
 

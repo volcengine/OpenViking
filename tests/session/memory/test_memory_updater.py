@@ -347,6 +347,74 @@ class TestMemoryUpdater:
         assert result.deleted_uris == [deleted_uri]
         mock_viking_fs.read_file.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
+        caroline_uri = "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
+        melanie_uri = "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        profile_uri = "viking://user/Caroline/memories/profile.md"
+
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events/{{ year }}/{{ month }}/{{ day }}",
+            filename_template="{{ event_name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        store = {}
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={
+                        "event_name": "career_education_planning",
+                        "content": "Career planning conversation",
+                    },
+                    memory_type="events",
+                    uris=[caroline_uri, melanie_uri],
+                    page_id=101,
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=profile_uri,
+                    to_uri=caroline_uri,
+                    match_text="career",
+                    description="Caroline's profile references her career plans",
+                )
+            ],
+        )
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+        await updater.apply_operations(operations=operations, ctx=ctx)
+
+        caroline = parse_memory_file_with_fields(store[caroline_uri])
+        melanie = parse_memory_file_with_fields(store[melanie_uri])
+
+        assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
+        assert melanie.get("backlinks", []) == []
+
 
 # The TestApplyWriteWithContentInFields tests are outdated because WriteOp no longer exists
 # The _apply_write method now accepts any flat model (dict or Pydantic model) that

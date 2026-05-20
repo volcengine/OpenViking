@@ -477,8 +477,10 @@ class MemoryUpdater:
                         metadata[key] = val
 
             # Handle links/backlinks fields: merge with existing
-            incoming_links = getattr(resolved_op, "_incoming_links", [])
-            incoming_backlinks = getattr(resolved_op, "_incoming_backlinks", [])
+            incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
+            incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
+            incoming_links = incoming_links_by_uri.get(uri, [])
+            incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
             has_existing_links = old_content is not None
             if (
                 incoming_links
@@ -526,8 +528,8 @@ class MemoryUpdater:
         # Collect all URIs that will be upserted
         upserted_uris = set()
         for op in operations.upsert_operations:
-            op._incoming_links = []
-            op._incoming_backlinks = []
+            op._incoming_links_by_uri = {uri: [] for uri in op.uris}
+            op._incoming_backlinks_by_uri = {uri: [] for uri in op.uris}
             for uri in op.uris:
                 upserted_uris.add(uri)
 
@@ -537,13 +539,13 @@ class MemoryUpdater:
             if link.from_uri in upserted_uris:
                 for op in operations.upsert_operations:
                     if link.from_uri in op.uris:
-                        op._incoming_links.append(link)
+                        op._incoming_links_by_uri[link.from_uri].append(link)
                         break
             # Backlink -> stored in to_uri's "backlinks"
             if link.to_uri in upserted_uris:
                 for op in operations.upsert_operations:
                     if link.to_uri in op.uris:
-                        op._incoming_backlinks.append(link)
+                        op._incoming_backlinks_by_uri[link.to_uri].append(link)
                         break
 
     async def _apply_links_to_existing_files(

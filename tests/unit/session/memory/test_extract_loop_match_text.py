@@ -101,7 +101,7 @@ class TestResolveOperations:
 
 
 class TestResolveLinksMultiUri:
-    def test_shared_page_id_fans_out_all_uri_combinations(self):
+    def test_shared_page_id_pairs_matching_user_uris_only(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
         loop._extract_context = Mock()
         loop._extract_context.page_id_map = Mock()
@@ -136,14 +136,6 @@ class TestResolveLinksMultiUri:
         assert {(link.from_uri, link.to_uri) for link in resolved} == {
             (
                 "viking://user/a/memories/experiences/source.md",
-                "viking://user/a/memories/experiences/target.md",
-            ),
-            (
-                "viking://user/a/memories/experiences/source.md",
-                "viking://user/b/memories/experiences/target.md",
-            ),
-            (
-                "viking://user/b/memories/experiences/source.md",
                 "viking://user/a/memories/experiences/target.md",
             ),
             (
