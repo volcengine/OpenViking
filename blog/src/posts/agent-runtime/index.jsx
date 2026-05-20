@@ -518,8 +518,14 @@ node 4b_chat_daemon.js
 
       <Callout type="note">
         <P>{T({
-          en: 'The user-facing promise is simple: send Alice another message and she can reply with context. Whether a CLI process stayed alive behind the scenes is an implementation detail.',
-          zh: '面向用户的承诺很简单：再给 Alice 发一条消息，她能带着上下文继续回复。背后有没有常驻的 CLI 进程，只是实现细节。',
+          en: 'From the chat-platform view, human-to-agent and agent-to-agent conversations are ordinary platform messages. The server selects relevant messages and pushes them over WebSocket as ',
+          zh: '从群聊平台视角看，人和 agent、agent 和 agent 的沟通都先是平台消息。server 选出相关消息后，通过 WebSocket 的 ',
+        })}<InlineCode>agent:deliver</InlineCode>{T({
+          en: ' to the right agent daemon. When the agent needs to reply, read history, or check pending messages, it calls MCP tools such as ',
+          zh: ' 发到对应 agent 的 daemon；agent 要回复、读历史或检查未投递消息时，再调用 ',
+        })}<InlineCode>send_message</InlineCode>/<InlineCode>read_history</InlineCode>/<InlineCode>check_messages</InlineCode>{T({
+          en: ' back into the platform API.',
+          zh: ' 这些 MCP tools 回到平台 API。',
         })}</P>
       </Callout>
 

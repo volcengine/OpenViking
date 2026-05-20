@@ -91,6 +91,8 @@ The demo uses four delivery paths:
 
 Session resume is only one implementation detail in the cached-idle branch. The product-level concept is agent message delivery. Zouk's production docs split this into two layers: `agent-delivery-routing.md` decides which agents receive `agent:deliver`; `agent-lifecycle.md` decides how live-idle and cached-idle agents are woken.
 
+From the chat-platform view, human-to-agent and agent-to-agent conversations are ordinary platform messages. The server selects relevant messages and pushes them over WebSocket as `agent:deliver` to the right agent daemon. When the agent needs to reply, read history, or check pending messages, it calls MCP tools such as `send_message`, `read_history`, and `check_messages` back into the platform API.
+
 ## Runtime Drivers
 
 The daemon architecture is runtime-agnostic. A runtime driver knows how to:
