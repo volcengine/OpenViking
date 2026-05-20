@@ -231,7 +231,7 @@ Tell the user:
 Run:
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 Trigger fallback to Path B only if the output contains any of these strings:

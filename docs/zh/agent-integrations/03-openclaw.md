@@ -11,7 +11,7 @@
 | 组件 | 版本要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.4.8 |
 
 插件以远程模式连接到已有的 OpenViking 服务，安装前请确保有可访问的 HTTP 服务——参见 [部署指南](../guides/03-deployment.md)。快速检查：
 
@@ -27,29 +27,21 @@ openclaw --version
 > bash cleanup-memory-openviking.sh
 > ```
 
-## 通过 ClawHub 安装（推荐）
+## 安装
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-```
-
-随后运行交互式配置向导：
-
-```bash
-openclaw openviking setup
-```
-
-向导会提示填写远程 OpenViking 服务地址和可选的 API Key，并将配置写入 `$OPENCLAW_STATE_DIR/openclaw.json`（默认：`~/.openclaw/openclaw.json`）。
-
-重启 gateway：
-
-```bash
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
+openclaw openviking status --json
 ```
 
-## 通过 `ov-install` 安装（替代方案）
+`setup` 向导会将配置写入 `$OPENCLAW_STATE_DIR/openclaw.json`（默认：`~/.openclaw/openclaw.json`）并激活 context-engine slot。
 
-`ov-install` 一键完成插件部署：
+<details>
+<summary><b>备用方案：通过 <code>ov-install</code> 安装</b></summary>
+
+当 ClawHub 不可用（被限流、离线或认证问题）时，可使用 `ov-install` 备用路径：
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -63,28 +55,37 @@ ov-install
 ov-install --workdir ~/.openclaw-second
 
 # 锁定到某个发布版本
-ov-install -y --version 0.2.9
+ov-install --base-url http://your-server:1933 --plugin-version=0.2.9
 ```
 
 之后升级：
 
 ```bash
-npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
+npm install -g openclaw-openviking-setup-helper@latest && ov-install --base-url http://your-server:1933
 ```
 
 ### `ov-install` 参数
 
-| 参数                       | 含义                                                            |
-| -------------------------- | --------------------------------------------------------------- |
-| `--workdir PATH`           | OpenClaw 数据目录                                               |
-| `--version VER`            | 插件版本（如 `0.2.9` → 插件 `v0.2.9`）                          |
-| `--current-version`        | 查看当前已安装的插件版本                                        |
-| `--plugin-version REF`     | 仅指定插件版本，自动识别：npm 版本（如 `2026.5.8`）或 npm dist-tag（如 `dev`）走 npm；其它 ref（如 `v0.3.16`、`main`）走 GitHub 仓库；默认 `npm latest` |
+| 参数                          | 含义                                                            |
+| ----------------------------- | --------------------------------------------------------------- |
+| `--workdir PATH`              | OpenClaw 数据目录（默认 `~/.openclaw`）                         |
+| `--plugin-version=VER`        | 插件版本：npm 版本（如 `2026.5.8`）、npm dist-tag（如 `dev`）或 Git ref（如 `v0.3.16`、`main`）。默认：npm `latest` |
 | `--plugin-source=npm\|github` | 插件下载来源（默认 `npm`）                                       |
-| `--plugin-package=NAME`    | npm 插件包名（默认 `@openviking/openclaw-plugin`）              |
-| `--github-repo owner/repo` | 指定插件来源仓库，默认 `volcengine/OpenViking`                  |
-| `--update`                 | 只升级插件                                                      |
-| `-y`                       | 非交互模式，使用默认配置                                        |
+| `--plugin-package=NAME`       | npm 插件包名（默认 `@openviking/openclaw-plugin`）              |
+| `--github-repo owner/repo`    | 指定插件来源仓库（默认 `volcengine/OpenViking`）                |
+| `--current-version`           | 查看当前已安装的插件版本并退出                                  |
+| `--update`                    | 仅升级插件到指定的 `--plugin-version`                           |
+| `--rollback`                  | 回滚上次插件升级                                                |
+| `--uninstall`                 | 卸载插件                                                        |
+| `--base-url URL`              | OpenViking 服务地址                                              |
+| `--api-key KEY`               | OpenViking API Key                                               |
+| `--agent-prefix PREFIX`       | Agent 前缀，用于记忆命名空间隔离                                |
+| `--account-id ID`             | 多租户 Account ID（仅 root-key 部署需要）                        |
+| `--user-id ID`                | 多租户 User ID（仅 root-key 部署需要）                           |
+| `--force-slot`                | 强制替换 contextEngine slot（当其他插件占用时）                  |
+| `--allow-offline`             | 服务不可达时仍保存配置                                           |
+
+</details>
 
 ## 插件配置
 
