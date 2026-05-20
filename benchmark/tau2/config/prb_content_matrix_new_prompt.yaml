@@ -4,7 +4,7 @@ benchmark:
   name: tau2_prb_content_matrix_new_prompt
   strategy_concurrency: 16
   task_max_concurrency: 5
-  corpus_prepare_concurrency: 2
+  corpus_prepare_concurrency: 1
 
 strategies:
   - id: no_memory

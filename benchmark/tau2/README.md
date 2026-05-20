@@ -100,6 +100,42 @@ benchmark/tau2/run_full_eval.sh \
   --execute
 ```
 
+## Reproduce the PR-B Evidence
+
+The PR-B headline and content-shape ablation use
+`config/prb_content_matrix_new_prompt.yaml`. It runs the no-memory control plus
+trajectory top4, experience top2, and 4000-character budget variants across
+`retail + airline` with 8 repeats.
+
+First run one tiny end-to-end smoke against a clean local OpenViking service:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/prb_content_matrix_new_prompt.yaml \
+  --domain retail \
+  --strategy-id new_traj_fixed_first_user_prewrite \
+  --num-tasks 1 \
+  --train-num-tasks 1 \
+  --repeat-count 1 \
+  --strict-preflight \
+  --execute
+```
+
+Then run the full PR-B matrix:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/prb_content_matrix_new_prompt.yaml \
+  --run-id prb_content_matrix_new_prompt_full8 \
+  --strict-preflight \
+  --execute
+```
+
+The main result is written to
+`benchmark/tau2/result/prb_content_matrix_new_prompt_full8/scoreboard.json`.
+Per-cell outputs live under `cell_results/`; corpus identity and generated
+memory checks live under `memory_corpora/`.
+
 For a small E2E smoke, keep both the eval and train slices tiny:
 
 ```bash
