@@ -27,7 +27,7 @@ The daemon does not need to understand product semantics. It manages process lif
 - OpenViking MCP integration: https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md
 - Claude Code memory plugin: https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md
 
-## Step 1: Spawn And Talk To Claude
+## I: Spawn And Talk To Claude
 
 Claude Code supports programmatic JSON-over-stdio mode:
 
@@ -57,7 +57,7 @@ Three event types matter for the first demo:
 
 When a process exits, save the session ID. A later process can resume the conversation with `--resume <session_id>`.
 
-## Step 2: Split Into Server And Daemon
+## II: Split Into Server And Daemon
 
 The server side is product-facing. It manages users, channels, permissions, cloud resources, and routing. It does not need to know Claude's stdin/stdout protocol.
 
@@ -65,7 +65,7 @@ The daemon side is local-runtime-facing. It starts the CLI agent, keeps track of
 
 This boundary avoids putting local execution directly into the web app while still letting the agent use shared cloud resources.
 
-## Step 3: Add Multi-Agent And MCP Tools
+## III: Add Multi-Agent And MCP Tools
 
 Raw Claude `stream-json` events are runtime-specific. A multi-agent product should normalize them into one shared event shape. The outer fields, such as `type`, `agentId`, and `entries`, tell the product how to route and display the event. Runtime-specific details stay inside the event body. This lets the product handle Claude, Codex, Cursor, and other runtimes through one interface.
 
@@ -80,7 +80,7 @@ The daemon normalizes Claude events into the shared event shape, for example:
 { "type": "agent:event", "agent": "black", "kind": "tool_use", "payload": { "name": "place_stone", "input": { "x": 7, "y": 7 } } }
 ```
 
-## Step 4: Deliver Messages To Agents
+## IV: Deliver Messages To Agents
 
 A chat product needs a path from "new user message" to "the right agent process sees it." The server turns user messages into `agent:deliver` events. The daemon receives each delivery and decides how to hand it to the local process.
 
@@ -95,7 +95,7 @@ Session resume is only one implementation detail in the cached-idle branch. The 
 
 From the chat-platform view, human-to-agent and agent-to-agent conversations are ordinary platform messages. The server selects relevant messages and pushes them over WebSocket as `agent:deliver` to the right agent daemon. When the agent needs to reply, read history, or check pending messages, it calls MCP tools such as `send_message`, `read_history`, and `check_messages` back into the platform API.
 
-## Step 5: Move Agent Memory To OpenViking
+## V: Externalize Memory
 
 After agents can receive messages, the next question is where durable context lives. Local files such as `MEMORY.md` are useful as a fast recovery index for one agent process, but they are not enough for a team platform. A platform needs a shared context plane: searchable, scoped, auditable, and usable across machines, restarts, and multiple agents.
 

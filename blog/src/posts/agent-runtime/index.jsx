@@ -55,7 +55,7 @@ const AgentRuntime = ({ t }) => {
         zh: 'Claude Code 这样的 CLI agent 是为一个人坐在一个终端前设计的。要把它变成产品的构建模块——让 agent 在空闲时接收消息、参与多 agent 工作流、在重启后继续存活，并共享长期上下文——你需要一个 daemon，也需要一层 memory plane。本文先用四个可运行步骤构建 daemon，再讨论如何用 OpenViking 接上共享 context layer。',
       })}</Lead>
 
-      <H2 id="step-1">{T({ en: 'Step 1: Spawn and Talk to Claude', zh: '第一步：启动 Claude 并与之对话' })}</H2>
+      <H2 id="step-1">{T({ en: 'I: Spawn and Talk to Claude', zh: 'I: 启动 Claude 并与之对话' })}</H2>
 
       <P>{T({
         en: 'Claude Code supports a programmatic mode: pipe JSON in, get JSON out. This is the entire foundation.',
@@ -150,7 +150,7 @@ send(proc2, "What is my secret code?");
 
       <Hr ornament />
 
-      <H2 id="step-2">{T({ en: 'Step 2: Split Into Server and Daemon', zh: '第二步：拆分成 Server 和 Daemon' })}</H2>
+      <H2 id="step-2">{T({ en: 'II: Split Into Server and Daemon', zh: 'II: 拆分成 Server 和 Daemon' })}</H2>
 
       <P>{T({
         en: 'The product owns users, permissions, message routing, and shared cloud resources. The agent needs local files, shell access, and tools. To let the agent use those cloud resources without putting local execution inside the web app, split the system: a cloud server coordinates, and a local daemon owns the agent process over WebSocket.',
@@ -227,7 +227,7 @@ node 1b_ws_daemon.js`}</Pre>
 
       <Hr ornament />
 
-      <H2 id="step-3">{T({ en: 'Step 3: Add Multi-Agent and MCP Tools', zh: '第三步：添加多 Agent 和 MCP 工具' })}</H2>
+      <H2 id="step-3">{T({ en: 'III: Add Multi-Agent and MCP Tools', zh: 'III: 添加多 Agent 和 MCP 工具' })}</H2>
 
       <P>{T({
         en: 'Raw stream-json events are Claude-specific. If you want to host multiple agents (possibly different runtimes), normalize them into one event shape: outer fields such as type, agentId, and entries tell the product how to route and display the event; the runtime-specific details stay inside. And if agents need to interact with the world, they need tools — injected by the daemon at spawn time via MCP.',
@@ -379,7 +379,7 @@ node 3b_gomoku_daemon.js white`}</Pre>
 
       <Hr ornament />
 
-      <H2 id="step-4">{T({ en: 'Step 4: Deliver Messages to Agents', zh: '第四步：把消息投递给 agent' })}</H2>
+      <H2 id="step-4">{T({ en: 'IV: Deliver Messages to Agents', zh: 'IV: 把消息投递给 agent' })}</H2>
 
       <P>{T({
         en: 'The gomoku demo is turn-based: the server asks an agent to move. A chat product is different. Users can send Alice a message at any time, so the platform needs a delivery path from "new chat message" to "the right agent process sees it".',
@@ -533,7 +533,7 @@ node 4b_chat_daemon.js
 
       <Hr ornament />
 
-      <H2 id="step-5">{T({ en: 'Step 5: Move Agent Memory to OpenViking', zh: '第五步：把 agent 记忆接到 OpenViking' })}</H2>
+      <H2 id="step-5">{T({ en: 'V: Externalize Memory', zh: 'V: 记忆上云' })}</H2>
 
       <P>{T({
         en: 'Once agents can receive messages, the next question is where durable context lives. A local file such as MEMORY.md is useful as a fast recovery index for one agent process, but it is not enough for a team platform. A platform needs a shared context plane: searchable, scoped, auditable, and usable across machines, restarts, and multiple agents.',
