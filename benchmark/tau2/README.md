@@ -5,7 +5,7 @@ evaluation. The scope is intentionally narrow:
 
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
-- trajectory-view retrieval treatment for the refined trajectory prompt.
+- trajectory memory retrieval treatment for the refined extraction prompt.
 
 Category rerank and other harness-only diagnostics are intentionally left out.
 
@@ -80,7 +80,7 @@ benchmark/tau2/run_full_eval.sh \
   --repeat-count 1
 ```
 
-Plan a one-cell trajectory-view smoke:
+Plan a one-cell trajectory memory smoke:
 
 ```bash
 benchmark/tau2/run_full_eval.sh \
@@ -104,8 +104,8 @@ benchmark/tau2/run_full_eval.sh \
 
 The PR-B headline and content-shape ablation use
 `config/prb_content_matrix_new_prompt.yaml`. It runs the no-memory control plus
-trajectory top4, experience top2, and 4000-character budget variants across
-`retail + airline` with 8 repeats.
+trajectory top4, experience top2, and representative 4000-character budget
+ablation routes across `retail + airline` with 8 repeats.
 
 First run one tiny end-to-end smoke against a clean local OpenViking service:
 
@@ -154,8 +154,8 @@ and `OPENAI_API_BASE` for LiteLLM before running upstream TAU-2.
 
 Start the OpenViking service before executing memory cells, and verify it with
 `ov status`. For evidence runs, use a clean OpenViking workspace/config and set
-`OPENVIKING_URL` explicitly so local custom memory templates do not pollute the
-Memory V2 baseline. For trajectory-view evidence, start the service from this
+`OPENVIKING_URL` explicitly so local template overrides do not pollute the
+Memory V2 baseline. For trajectory memory evidence, start the service from this
 branch and inspect generated trajectory files; changing `search_uri` alone does
 not prove the new trajectory prompt was used.
 
@@ -169,15 +169,6 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
   regenerate that step with the matched memories. The default benchmark
   retrieves 6 pre-write candidates and injects 2, which keeps extra candidates
   visible in traces without expanding the prompt budget;
-- optionally run an eval-time read selector that asks the agent LLM which
-  search candidates should be read and injected, then traces
-  `candidate_seen`, `selected_to_read`, `skipped_reason`, and `injected`;
-- optionally run a pre-write drift retry: if the regenerated write-like tool
-  calls differ from the tool calls used for the pre-write retrieval query, the
-  adapter retrieves once more against the revised write set and regenerates once.
-  Trace rows record `after_prewrite_regeneration` and
-  `before_write_tool_call_drift_retry`; this is a diagnostic guard against stale
-  pre-write context, not a task-specific rule;
 - optionally run an explicit scope-prompt treatment that keeps retrieved
   memories advisory and asks the agent to preserve the current task scope before
   write-like tool calls. Configs may provide either `scope_prompt_files` or a
@@ -201,30 +192,10 @@ corpus remain serial to preserve OpenViking write semantics.
 
 By default, trajectory extraction is transcript-only: the runner replays TAU-2
 messages into an OpenViking session and does not expose held-out reward or
-assertion results to the extractor. Strategies may opt into
-`train_outcome_mode: evaluator_report`, which appends train-split reward, DB
-match, termination, and evaluator check details to each training session before
-commit. Treat these strategies as oracle/evaluator-augmented variants with a
-separate claim boundary. Outcome messages are guarded as labels, not
-instructions to repeat the observed final action. Failed train samples are
-marked with `memory_role: failure_reflection_only` in the extraction input and
-tracked through `archive_uri/memory_diff.json` into
-`failure_memory_sidecar.json`. Because OpenViking `memory_diff` may omit
-generated search-scope trajectory files, the corpus prepare step also reads
-matches visible through the eval `search_uri` and marks memories whose readable
-result says the trajectory failed. Downstream retrieval can opt into
-`compress_failure_memories: true`, which rewrites those matched memories into
-short negative-boundary reflections at injection time instead of treating them
-as positive procedures. Non-transcript corpora record
-`train_outcome_message_version` so stale evaluator-augmented caches fail fast.
-
-Diagnostic eval cells may also opt into `memory_read_selector: true`, which asks
-the agent LLM to select which retrieved memories should be read and injected
-instead of injecting by rank alone. `terminal_continuation_check` is a separate
-diagnostic controller for handoff/refusal cases; it performs full agent
-regeneration and is therefore capped by `terminal_continuation_max_checks`
-(default `1`) per simulation. Treat continuation-controller runs as diagnostic
-unless paired against no-memory controls and latency is reported.
+assertion results to the extractor. The PR-B evidence config can also use a
+structured role/tool transcript, include the domain policy in the training
+session, skip failed train sessions when building positive procedure memory, and
+cap injected memory by total character budget for content-shape ablations.
 
 Eval cells run in parallel with `benchmark.strategy_concurrency` by default and
 can be overridden with `--strategy-concurrency`. This only parallelizes read-only

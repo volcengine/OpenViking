@@ -17,7 +17,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: trajectories
@@ -34,7 +34,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: trajectories
@@ -52,7 +52,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: trajectories
@@ -71,7 +71,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: experiences
@@ -88,7 +88,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: experiences
@@ -106,7 +106,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: experiences
@@ -119,91 +119,16 @@ strategies:
       retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
       airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
 
-  - id: new_traj_4000_first_user
-    label: PR-B new trajectory 4000-char first-user
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_contract_new_prompt_success_only
-    train_memory_mode: experience_only
-    train_transcript_format: custom_like
-    train_include_system_prompt: true
-    train_skip_failed_sessions: true
-    search_memory_type: trajectories
-    retrieval_mode: first_user
-    retrieval_top_k: 8
-    first_user_inject_top_k: 8
-    memory_inject_max_chars: 4000
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-
   - id: new_traj_4000_prewrite_only
     label: PR-B new trajectory 4000-char prewrite
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: trajectories
-    retrieval_mode: prewrite
-    retrieval_top_k: 8
-    prewrite_retrieval_top_k: 8
-    prewrite_inject_top_k: 8
-    memory_inject_max_chars: 4000
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-
-  - id: new_traj_4000_first_user_prewrite
-    label: PR-B new trajectory 4000-char first-user + prewrite
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_contract_new_prompt_success_only
-    train_memory_mode: experience_only
-    train_transcript_format: custom_like
-    train_include_system_prompt: true
-    train_skip_failed_sessions: true
-    search_memory_type: trajectories
-    retrieval_mode: first_user_prewrite
-    retrieval_top_k: 8
-    first_user_inject_top_k: 8
-    prewrite_retrieval_top_k: 8
-    prewrite_inject_top_k: 8
-    memory_inject_max_chars: 4000
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-
-  - id: new_exp_4000_first_user
-    label: PR-B new experience 4000-char first-user
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_contract_new_prompt_success_only
-    train_memory_mode: experience_only
-    train_transcript_format: custom_like
-    train_include_system_prompt: true
-    train_skip_failed_sessions: true
-    search_memory_type: experiences
-    retrieval_mode: first_user
-    retrieval_top_k: 8
-    first_user_inject_top_k: 8
-    memory_inject_max_chars: 4000
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-
-  - id: new_exp_4000_prewrite_only
-    label: PR-B new experience 4000-char prewrite
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_contract_new_prompt_success_only
-    train_memory_mode: experience_only
-    train_transcript_format: custom_like
-    train_include_system_prompt: true
-    train_skip_failed_sessions: true
-    search_memory_type: experiences
     retrieval_mode: prewrite
     retrieval_top_k: 8
     prewrite_retrieval_top_k: 8
@@ -219,7 +144,7 @@ strategies:
     train_required: true
     corpus_id: memory_v2_contract_new_prompt_success_only
     train_memory_mode: experience_only
-    train_transcript_format: custom_like
+    train_transcript_format: role_tool_blocks
     train_include_system_prompt: true
     train_skip_failed_sessions: true
     search_memory_type: experiences

@@ -5,23 +5,15 @@ benchmark:
 
 strategies:
   - id: memory_v2_trajectory_view
-    label: OpenViking Memory V2 trajectory-view first-user recall
+    label: OpenViking Memory V2 trajectory first-user recall
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
     train_memory_mode: experience_only
     search_memory_type: trajectories
     retrieval_mode: first_user
-  - id: memory_v2_trajectory_prewrite
-    label: OpenViking Memory V2 trajectory-view pre-write recall
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_view
-    train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: first_user_prewrite
   - id: memory_v2_trajectory_view_scope
-    label: OpenViking Memory V2 trajectory-view first-user recall with scope prompt
+    label: OpenViking Memory V2 trajectory first-user recall with scope prompt
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
@@ -32,26 +24,23 @@ strategies:
       retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
       airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
   - id: memory_v2_trajectory_prewrite_only
-    label: OpenViking Memory V2 trajectory-view pre-write-only recall
+    label: OpenViking Memory V2 trajectory pre-write-only recall
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
     train_memory_mode: experience_only
     search_memory_type: trajectories
     retrieval_mode: prewrite
-  - id: memory_v2_trajectory_prewrite_scope
-    label: OpenViking Memory V2 trajectory-view pre-write recall with scope prompt
+  - id: memory_v2_trajectory_prewrite
+    label: OpenViking Memory V2 trajectory first-user + pre-write recall
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
     train_memory_mode: experience_only
     search_memory_type: trajectories
     retrieval_mode: first_user_prewrite
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
   - id: memory_v2_trajectory_prewrite_only_scope
-    label: OpenViking Memory V2 trajectory-view pre-write-only recall with scope prompt
+    label: OpenViking Memory V2 trajectory pre-write-only recall with scope prompt
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
@@ -61,197 +50,14 @@ strategies:
     scope_prompt_files:
       retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
       airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_prewrite_only_scope_write_consequence_final_response_check
-    label: OpenViking Memory V2 trajectory-view pre-write-only scope with final-response consequence grounding check
+  - id: memory_v2_trajectory_prewrite_scope
+    label: OpenViking Memory V2 trajectory first-user + pre-write recall with scope prompt
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
     train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    write_consequence_final_response_check: true
-    write_consequence_final_response_max_checks: 1
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_prewrite_only_scope_read_selector
-    label: OpenViking Memory V2 trajectory-view pre-write-only scope with LLM memory read selector
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_view
-    train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    memory_read_selector: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_prewrite_only_scope_terminal_plan_state_check
-    label: OpenViking Memory V2 trajectory-view pre-write-only scope with terminal plan-state continuation classifier
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_view
-    train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    terminal_plan_state_check: true
-    terminal_plan_state_max_checks: 1
-    terminal_continuation_text_check: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_prewrite_only_scope_drift_retry
-    label: OpenViking Memory V2 trajectory-view pre-write-only scope with write-set drift retry
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_view
-    train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    prewrite_drift_retry: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_prewrite_only_scope_read_selector_drift_retry
-    label: OpenViking Memory V2 trajectory-view pre-write-only scope with LLM read selector and write-set drift retry
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_view
-    train_memory_mode: experience_only
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    memory_read_selector: true
-    prewrite_drift_retry: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_first_user
-    label: OpenViking Memory V2 evaluator-augmented trajectory first-user recall
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: first_user
-  - id: memory_v2_trajectory_evaluator_first_user_scope
-    label: OpenViking Memory V2 evaluator-augmented trajectory first-user recall with scope prompt
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: first_user
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_prewrite_only
-    label: OpenViking Memory V2 evaluator-augmented trajectory pre-write-only recall
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-  - id: memory_v2_trajectory_evaluator_first_user_prewrite
-    label: OpenViking Memory V2 evaluator-augmented trajectory first-user + pre-write recall
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
     search_memory_type: trajectories
     retrieval_mode: first_user_prewrite
-  - id: memory_v2_trajectory_evaluator_prewrite_only_scope
-    label: OpenViking Memory V2 evaluator-augmented trajectory pre-write-only recall with scope prompt
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_first_user_prewrite_scope
-    label: OpenViking Memory V2 evaluator-augmented trajectory first-user + pre-write recall with scope prompt
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: first_user_prewrite
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_prewrite_only_scope_failure_compressed
-    label: OpenViking Memory V2 evaluator trajectory pre-write-only scope with compressed failure reflections
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    compress_failure_memories: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_prewrite_only_scope_failure_compressed_read_selector
-    label: OpenViking Memory V2 evaluator trajectory pre-write-only scope with compressed failure reflections and LLM read selector
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    compress_failure_memories: true
-    memory_read_selector: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_prewrite_only_scope_failure_compressed_drift_retry
-    label: OpenViking Memory V2 evaluator trajectory pre-write-only scope with compressed failure reflections and write-set drift retry
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: prewrite
-    compress_failure_memories: true
-    prewrite_drift_retry: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_first_user_scope_failure_compressed
-    label: OpenViking Memory V2 evaluator trajectory first-user scope with compressed failure reflections
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: first_user
-    compress_failure_memories: true
-    scope_prompt_files:
-      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
-      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
-  - id: memory_v2_trajectory_evaluator_first_user_prewrite_scope_failure_compressed
-    label: OpenViking Memory V2 evaluator trajectory first-user + pre-write scope with compressed failure reflections
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_trajectory_evaluator_report_v3_failure_reflection
-    train_memory_mode: experience_only
-    train_outcome_mode: evaluator_report
-    search_memory_type: trajectories
-    retrieval_mode: first_user_prewrite
-    compress_failure_memories: true
     scope_prompt_files:
       retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
       airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
