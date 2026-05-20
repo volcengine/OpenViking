@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Article, Lead, P, H2, H3, Pre, Quote, Callout, Hr,
-  Ol, Li, Ul, A, InlineCode, Tag,
+  Ol, Li, Ul, A, InlineCode, Tag, Table,
 } from '../../blog-components';
 
 const AgentRuntime = ({ t }) => {
@@ -484,6 +484,76 @@ node 4b_chat_daemon.js
           zh: '让产品负责协调，让 daemon 负责本地进程，让工具成为 agent 改变共享状态的唯一方式。',
         })}
       </Quote>
+
+      <Hr ornament />
+
+      <H2 id="drivers">{T({ en: 'Beyond Claude: Runtime Drivers', zh: '不止 Claude：运行时驱动' })}</H2>
+
+      <P>{T({
+        en: 'Every example above uses Claude Code, but the daemon architecture is runtime-agnostic. The trick is a thin abstraction called a ',
+        zh: '以上所有示例都使用 Claude Code，但 daemon 架构与运行时无关。关键是一个叫做 ',
+      })}<strong>{T({ en: 'runtime driver', zh: '运行时驱动' })}</strong>{T({
+        en: ' — each driver knows how to spawn a specific CLI, parse its event stream, and encode messages into its stdin protocol:',
+        zh: ' 的薄抽象层——每个 driver 知道如何启动一个特定的 CLI、解析它的事件流、将消息编码成它的 stdin 协议：',
+      })}</P>
+
+      <Pre lang="ts" filename="driver interface">{`interface Driver {
+  id: string;
+  spawn(ctx: SpawnContext): { process: ChildProcess };
+  parseLine(line: string): ParsedEvent[];
+  encodeStdinMessage(text: string, sessionId: string | null): string | null;
+  buildSystemPrompt(config: AgentConfig, agentId: string): string;
+  busyDeliveryMode: "notification" | "direct" | "none";
+}`}</Pre>
+
+      <P>{T({
+        en: 'In practice, agent CLIs fall into three protocol families:',
+        zh: '实际上，agent CLI 分为三类协议：',
+      })}</P>
+
+      <Table
+        headers={[
+          T({ en: 'Protocol', zh: '协议' }),
+          T({ en: 'Runtimes', zh: '运行时' }),
+          T({ en: 'How it works', zh: '工作方式' }),
+        ]}
+        rows={[
+          [
+            T({ en: 'stream-json', zh: 'stream-json' }),
+            'Claude, Cursor',
+            T({ en: 'NDJSON over stdio. Events: system.init, assistant (text/tool_use/thinking), result.', zh: 'stdio 上的 NDJSON。事件：system.init、assistant（text/tool_use/thinking）、result。' }),
+          ],
+          [
+            T({ en: 'ACP (JSON-RPC)', zh: 'ACP (JSON-RPC)' }),
+            'Codex, Hermes, OpenCode, Coco',
+            T({ en: 'JSON-RPC 2.0 over stdio. Methods: session/new, session/prompt, session/update. MCP servers passed in session/new.', zh: 'stdio 上的 JSON-RPC 2.0。方法：session/new、session/prompt、session/update。MCP 服务器在 session/new 中传入。' }),
+          ],
+          [
+            T({ en: 'Custom JSON events', zh: '自定义 JSON 事件' }),
+            'Copilot, Gemini',
+            T({ en: 'JSON event streams with runtime-specific shapes. One-shot per turn — no stdin delivery.', zh: '运行时特有的 JSON 事件流。每轮单次——不支持 stdin 投递。' }),
+          ],
+        ]}
+      />
+
+      <P>{T({
+        en: 'The delivery mode matters for product behavior. When a message arrives while the agent is busy:',
+        zh: '投递模式影响产品行为。当 agent 忙碌时收到新消息：',
+      })}</P>
+
+      <Ul>
+        <Li><InlineCode>direct</InlineCode>{T({ en: ' (Codex, Hermes) — pipe into the active turn via stdin. Agent sees it mid-work.', zh: '（Codex、Hermes）——通过 stdin 注入活跃回合。Agent 在工作中看到它。' })}</Li>
+        <Li><InlineCode>notification</InlineCode>{T({ en: ' (Claude) — store and surface via check_messages tool. Agent polls when ready.', zh: '（Claude）——存储并通过 check_messages 工具暴露。Agent 准备好时轮询。' })}</Li>
+        <Li><InlineCode>none</InlineCode>{T({ en: ' (Copilot, Gemini) — queue until the turn ends, then restart with the queued message.', zh: '（Copilot、Gemini）——排队等回合结束，然后用排队的消息重启。' })}</Li>
+      </Ul>
+
+      <P>{T({
+        en: 'The daemon absorbs all of this. The server sends ',
+        zh: 'Daemon 吸收了所有差异。Server 发送 ',
+      })}<InlineCode>agent:deliver</InlineCode>{T({
+        en: ' regardless of runtime — the driver decides how to get the message to the agent.',
+        zh: '，不管运行时是什么——由 driver 决定如何把消息送达 agent。',
+      })}</P>
 
       <Hr ornament />
 
