@@ -53,19 +53,19 @@ _PREFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _CORRECTION_RE = re.compile(
-    r"(?:actually|correction|correct|wrong|not that|不是|不对|纠正|更正|错了|改为|应该是)",
+    r"(?:actually|correction|wrong|not that|不是|不对|纠正|更正|错了|改为|应该是)",
     re.IGNORECASE,
 )
 _ERROR_RE = re.compile(
-    r"(?:error|exception|traceback|failed|failure|bug|fix|root cause|报错|错误|异常|失败|修复|根因)",
+    r"(?:error|exception|traceback|failed|failure|bug|\bfix(?:es|ing)?\b|root cause|报错|错误|异常|失败|修复|根因)",
     re.IGNORECASE,
 )
 _OPEN_ISSUE_RE = re.compile(
-    r"(?:todo|follow up|blocker|blocked|unresolved|open issue|question|待办|跟进|阻塞|未解决|问题|风险)",
+    r"(?:todo|follow up|blocker|blocked|unresolved|open issue|open question|待办|跟进|阻塞|未解决|风险)",
     re.IGNORECASE,
 )
 _GOAL_RE = re.compile(
-    r"(?:goal|objective|task|we need|let's|目标|任务|计划|实现|设计|方案)",
+    r"(?:goal|objective|\btask\b|we need|let's|目标|任务|计划|实现|设计|方案)",
     re.IGNORECASE,
 )
 _PLUGIN_RE = re.compile(
@@ -101,6 +101,22 @@ _SIGNAL_WEIGHTS = [
     (_DATE_RE, 1.5),
     (_GOAL_RE, 1.0),
 ]
+_KIND_PRIORITY = {
+    "error": 0,
+    "correction": 0,
+    "fallback": 0,
+    "url": 1,
+    "path": 1,
+    "function": 1,
+    "component": 1,
+    "plugin": 2,
+    "recall": 2,
+    "preference": 2,
+    "date_or_plan": 2,
+    "open_issue": 3,
+    "goal": 4,
+    "latest_message": 5,
+}
 
 
 @dataclass(frozen=True)
@@ -117,6 +133,7 @@ class PreprocessorOptions:
     min_full_tokens_for_compact: int = 600
     min_absolute_savings_tokens: int = 500
     max_tool_output_chars: int = 300
+    max_tool_spans: int = 3
 
 
 @dataclass(frozen=True)
@@ -199,6 +216,7 @@ def _resolve_adaptive_options(
         min_full_tokens_for_compact=opts.min_full_tokens_for_compact,
         min_absolute_savings_tokens=opts.min_absolute_savings_tokens,
         max_tool_output_chars=opts.max_tool_output_chars,
+        max_tool_spans=opts.max_tool_spans,
     )
 
 
@@ -230,14 +248,6 @@ def build_wm_compact_packet(
         for signal in section_signals.get(section, [])
     ]
 
-    # Cap structured facts per kind priority: error > path > url > correction >
-    # preference > date > open_issue > function > goal > latest_message
-    _KIND_PRIORITY = {
-        "error": 0, "correction": 0, "fallback": 0, "url": 1, "path": 1,
-        "function": 1, "component": 1, "plugin": 2, "recall": 2,
-        "preference": 2, "date_or_plan": 2, "open_issue": 3, "goal": 4,
-        "latest_message": 5,
-    }
     if len(structured_facts) > opts.max_facts_total:
         structured_facts.sort(key=lambda f: _KIND_PRIORITY.get(f.kind, 9))
         structured_facts = structured_facts[: opts.max_facts_total]
@@ -248,15 +258,17 @@ def build_wm_compact_packet(
     if expanded_budget:
         span_budget = int(span_budget * 1.5)
 
+    session_meta = {
+        "archive_uri": archive_uri,
+        "first_message_id": first_message_id or (messages[0].id if messages else ""),
+        "last_message_id": last_message_id or (messages[-1].id if messages else ""),
+        "message_count": len(messages),
+    }
+
     selected_spans = _select_spans(normalized, span_budget, opts)
     view = _render_wm_update_view(
         latest_overview=latest_overview,
-        session_meta={
-            "archive_uri": archive_uri,
-            "first_message_id": first_message_id or (messages[0].id if messages else ""),
-            "last_message_id": last_message_id or (messages[-1].id if messages else ""),
-            "message_count": len(messages),
-        },
+        session_meta=session_meta,
         section_signals=section_signals,
         structured_facts=structured_facts,
         selected_spans=selected_spans,
@@ -285,10 +297,7 @@ def build_wm_compact_packet(
         saved_tokens_est=max(0, full_tokens - compact_tokens),
     )
     session_meta = {
-        "archive_uri": archive_uri,
-        "first_message_id": first_message_id or (messages[0].id if messages else ""),
-        "last_message_id": last_message_id or (messages[-1].id if messages else ""),
-        "message_count": len(messages),
+        **session_meta,
         "full_messages_tokens_est": full_tokens,
         "compact_packet_tokens_est": compact_tokens,
     }
@@ -522,13 +531,19 @@ def _select_spans(
     selected: List[SelectedSpan] = []
     used_tokens = 0
     selected_terms: List[Set[str]] = []
+    tool_spans_selected = 0
     for score, item in scored:
-        text = _truncate_span(str(item["text"]), options.max_span_chars)
+        is_tool = bool(item["has_tool"])
+        if is_tool and tool_spans_selected >= options.max_tool_spans:
+            continue
+
+        span_source = str(item.get("clean_text") or item["text"])
+        text = _truncate_span(span_source, options.max_span_chars)
         token_estimate = estimate_tokens(text)
         if used_tokens + token_estimate > budget_tokens and selected:
             continue
         terms = _terms(text)
-        if selected_terms and not bool(item["has_tool"]):
+        if selected_terms and not is_tool:
             max_similarity = max(_jaccard(terms, existing) for existing in selected_terms)
             if max_similarity > options.mmr_similarity_threshold:
                 continue
@@ -544,6 +559,8 @@ def _select_spans(
         )
         selected_terms.append(terms)
         used_tokens += token_estimate
+        if is_tool:
+            tool_spans_selected += 1
         if used_tokens >= budget_tokens:
             break
 
@@ -645,7 +662,16 @@ def _truncate_span(text: str, max_chars: int) -> str:
         return text[:max_chars].rstrip() + "\n...[truncated]"
 
     if len(selected_indices) < len(middle):
-        result += "\n...[truncated: kept " + str(len(selected_indices) + 2) + "/" + str(n) + " paragraphs]"
+        suffix = (
+            "\n...[truncated: kept "
+            + str(len(selected_indices) + 2)
+            + "/"
+            + str(n)
+            + " paragraphs]"
+        )
+        if len(result) + len(suffix) > max_chars:
+            result = result[: max_chars - len(suffix)].rstrip()
+        result += suffix
     return result
 
 

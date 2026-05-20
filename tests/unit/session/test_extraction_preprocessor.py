@@ -184,6 +184,42 @@ def test_metadata_headers_do_not_pollute_risk_flags_or_scoring():
     assert "fallback_or_degradation" not in packet.risk_flags
 
 
+def test_error_regex_avoids_prefix_and_fixed_false_positives():
+    messages = [
+        _msg(1, "assistant", "Please use a fixed-width font and keep the prefix as /api/v2."),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=1,
+            min_absolute_savings_tokens=0,
+        ),
+    )
+
+    assert "error_or_fix" not in packet.risk_flags
+
+
+def test_selected_spans_strip_metadata_headers_from_llm_view():
+    metadata = 'Sender (untrusted metadata): ```json {"status":"completed"}```'
+    messages = [
+        _msg(1, "assistant", f"{metadata}\n\n好的，我来帮你写个函数。"),
+    ]
+
+    packet = build_wm_compact_packet(
+        messages,
+        options=PreprocessorOptions(
+            fallback_if_compact_ratio_above=10.0,
+            min_full_tokens_for_compact=1,
+            min_absolute_savings_tokens=0,
+        ),
+    )
+
+    assert "Sender (untrusted metadata)" not in packet.selected_spans[0].text
+    assert "好的，我来帮你写个函数。" in packet.selected_spans[0].text
+
+
 def test_rendered_packet_contains_all_sections_and_source_ids():
     messages = [
         _msg(1, "user", "目标：减少 token。文件 openviking/session/session.py。"),
