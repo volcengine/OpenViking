@@ -63,14 +63,14 @@ This boundary avoids putting local execution directly into the web app while sti
 
 ## Step 3: Add Multi-Agent And MCP Tools
 
-Raw Claude `stream-json` events are runtime-specific. A multi-agent product needs a generic envelope so the product does not care whether a worker is Claude, Codex, Cursor, or another runtime.
+Raw Claude `stream-json` events are runtime-specific. A multi-agent product should normalize them into one shared event shape. The outer fields, such as `type`, `agentId`, and `entries`, tell the product how to route and display the event. Runtime-specific details stay inside the event body. This lets the product handle Claude, Codex, Cursor, and other runtimes through one interface.
 
 Agents also need tools. The daemon can inject MCP tools at spawn time by writing a runtime config that points at a local MCP server. The post demonstrates two Claude agents playing Gomoku through MCP tools:
 
 - `view_board()` reads the current board from a game server.
 - `place_stone(x, y)` sends a move to the game server.
 
-The daemon normalizes Claude events into an envelope such as:
+The daemon normalizes Claude events into the shared event shape, for example:
 
 ```json
 { "type": "agent:event", "agent": "black", "kind": "tool_use", "payload": { "name": "place_stone", "input": { "x": 7, "y": 7 } } }
@@ -123,7 +123,7 @@ Busy delivery modes:
 
 1. Own the process: spawn the CLI agent as a child process, talk JSON over stdin/stdout, and save session IDs.
 2. Split server and daemon: the server handles users, routing, and shared cloud resources; the daemon handles local processes.
-3. Normalize and inject tools: translate runtime events into a product envelope and inject MCP tools.
+3. Normalize and inject tools: translate runtime events into a shared product event shape and inject MCP tools.
 4. Add session resurrection: kill idle processes and resume them on demand.
 
 The core rule: let the product own coordination, let the daemon own local execution, and let tools be the only way an agent changes shared state.

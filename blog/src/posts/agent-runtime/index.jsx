@@ -227,8 +227,8 @@ node 1b_ws_daemon.js`}</Pre>
       <H2 id="step-3">{T({ en: 'Step 3: Add Multi-Agent and MCP Tools', zh: '第三步：添加多 Agent 和 MCP 工具' })}</H2>
 
       <P>{T({
-        en: 'Raw stream-json events are Claude-specific. If you want to host multiple agents (possibly different runtimes), you need an envelope. And if agents need to interact with the world, they need tools — injected by the daemon at spawn time via MCP.',
-        zh: 'stream-json 事件是 Claude 特有的。如果你想托管多个 agent（甚至不同运行时），你需要一个信封协议。如果 agent 需要与外部世界交互，它需要工具——由 daemon 在启动时通过 MCP 注入。',
+        en: 'Raw stream-json events are Claude-specific. If you want to host multiple agents (possibly different runtimes), normalize them into one event shape: outer fields such as type, agentId, and entries tell the product how to route and display the event; the runtime-specific details stay inside. And if agents need to interact with the world, they need tools — injected by the daemon at spawn time via MCP.',
+        zh: 'stream-json 事件是 Claude 特有的。如果你想托管多个 agent（甚至不同运行时），先把它们转成同一种事件格式：外层字段说明事件类型、agentId 和内容列表，产品按这一层做路由和展示；各运行时自己的细节放在里面。agent 要和外部世界交互时，再由 daemon 在启动时通过 MCP 注入工具。',
       })}</P>
 
       <P>{T({
@@ -312,8 +312,8 @@ ws.on("message", (data) => {
 });`}</Pre>
 
       <P>{T({
-        en: 'The daemon also normalizes Claude\'s stream-json into a generic envelope — so the game server doesn\'t care whether it\'s Claude, Codex, or something else:',
-        zh: 'Daemon 还会将 Claude 的 stream-json 归一化为通用信封——这样游戏服务器不关心运行的是 Claude、Codex 还是别的什么：',
+        en: 'The daemon also normalizes Claude\'s stream-json into that shared event shape — so the game server doesn\'t care whether it\'s Claude, Codex, or something else:',
+        zh: 'Daemon 还会把 Claude 的 stream-json 归一化成这种统一事件格式——这样游戏服务器不关心运行的是 Claude、Codex 还是别的什么：',
       })}</P>
 
       <Pre lang="js" filename="normalizeAndEmit()">{`function normalizeAndEmit(agentId, ev) {
@@ -509,7 +509,7 @@ node 4b_chat_daemon.js
       <Ol>
         <Li><strong>{T({ en: 'Own the process', zh: '接管进程' })}</strong>{T({ en: ' — spawn Claude as a child, talk JSON over stdin/stdout. Save the session ID.', zh: '——以子进程方式启动 Claude，通过 stdin/stdout 传 JSON。保存 session ID。' })}</Li>
         <Li><strong>{T({ en: 'Split server and daemon', zh: '拆分 server 和 daemon' })}</strong>{T({ en: ' — server handles users and routing. Daemon handles the local process. WebSocket in between.', zh: '——server 处理用户和路由，daemon 处理本地进程，中间用 WebSocket 连接。' })}</Li>
-        <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a generic envelope. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成通用信封。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
+        <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a shared product event shape. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成产品统一事件格式。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
         <Li><strong>{T({ en: 'Add session resurrection', zh: '添加 session 复活' })}</strong>{T({ en: ' — kill idle processes, resume them on demand. The agent becomes serverless.', zh: '——杀掉空闲进程，按需恢复。Agent 变成无服务器的。' })}</Li>
       </Ol>
 
@@ -610,7 +610,7 @@ node 4b_chat_daemon.js
       <Ul>
         <Li><InlineCode>0_run_claude.js</InlineCode>{T({ en: ' — basic spawn + NDJSON communication', zh: '——基础启动 + NDJSON 通信' })}</Li>
         <Li><InlineCode>1a_ws_server.js</InlineCode> + <InlineCode>1b_ws_daemon.js</InlineCode>{T({ en: ' — WebSocket server/daemon split', zh: '——WebSocket server/daemon 拆分' })}</Li>
-        <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — envelope normalization (zouk protocol)', zh: '——信封归一化（zouk 协议）' })}</Li>
+        <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — event-shape normalization (zouk protocol)', zh: '——事件格式归一化（zouk 协议）' })}</Li>
         <Li><InlineCode>3a</InlineCode>/<InlineCode>3b</InlineCode>/<InlineCode>3c</InlineCode>{T({ en: ' — two-agent gomoku game with MCP tools', zh: '——双 agent 五子棋对弈 + MCP 工具' })}</Li>
         <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with session resurrection', zh: '——聊天平台 + session 复活' })}</Li>
         <Li><InlineCode>test_resume.js</InlineCode>{T({ en: ' — session resume proof', zh: '——session 恢复验证' })}</Li>
