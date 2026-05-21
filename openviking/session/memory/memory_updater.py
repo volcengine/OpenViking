@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
-    MemoryField,
     MemoryFile,
     ResolvedOperation,
     ResolvedOperations,
@@ -26,7 +25,6 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.utils import flat_model_to_dict
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
@@ -323,13 +321,17 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        unresolved_ops = [resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris]
+        unresolved_ops = [
+            resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris
+        ]
         if unresolved_ops:
             missing = [
                 f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
                 for resolved_op in unresolved_ops
             ]
-            raise ValueError(f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}")
+            raise ValueError(
+                f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
+            )
 
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)

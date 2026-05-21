@@ -14,8 +14,8 @@ from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
-from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
@@ -111,7 +111,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
                     text_parts.append(part.text)
 
         return resolve_output_language("\n".join(text_parts))
-
 
     def get_output_language(self) -> str:
         return self._output_language
@@ -336,7 +335,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             tracer.error(f"Failed to read {uri}: {e}")
             return None
 
-    async def search_files(self, query: str, search_uris: List[str] = None, limit: int = 5) -> List[str]:
+    async def search_files(
+        self, query: str, search_uris: List[str] = None, limit: int = 5
+    ) -> List[str]:
         """Search via MemorySearchTool, returns list of URIs."""
         search_tool = get_tool("search")
         if not search_tool:
@@ -433,7 +434,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         call_id_seq = 0
         # Step 2: Execute search for each ls directory (instead of ls)
-        read_tool = get_tool("read")
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx

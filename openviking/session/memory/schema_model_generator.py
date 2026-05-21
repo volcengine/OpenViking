@@ -267,6 +267,7 @@ class SchemaModelGenerator:
 
         # Add links field for link extraction (only when enabled globally)
         from openviking_cli.utils.config import get_openviking_config
+
         config = get_openviking_config()
         link_enabled = config.memory.link_enabled if config.memory else False
         if link_enabled:

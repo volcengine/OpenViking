@@ -12,7 +12,7 @@ Usage:
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -262,7 +262,7 @@ def _render_graph_html(nodes: List[Dict], edges: List[Dict]) -> str:
     edges_json = _script_safe_json(vis_edges)
     type_colors_json = _script_safe_json(TYPE_COLORS)
 
-    return fr"""<!DOCTYPE html>
+    return rf"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">

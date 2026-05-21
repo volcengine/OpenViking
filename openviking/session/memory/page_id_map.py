@@ -14,7 +14,7 @@ page_id information is injected into LLM context by annotating read results
 with [page_id: N], not by generating a separate mapping table.
 """
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional
 
 from openviking_cli.utils import get_logger
 
@@ -47,7 +47,6 @@ class PageIdMap:
     def resolve(self, page_id: int) -> Optional[str]:
         """Resolve page_id to URI."""
         return self._id_to_uri.get(page_id)
-
 
     @property
     def has_links_enabled(self) -> bool:
