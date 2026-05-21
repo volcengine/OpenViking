@@ -115,7 +115,7 @@ export function summarizeConnectionIdentity(
   connection: ConnectionDraft,
   serverMode: ServerMode,
 ): ConnectionIdentitySummary {
-  if (serverMode === 'dev-implicit') {
+  if (serverMode === 'dev') {
     return { labelKey: 'identitySummary.devImplicit' }
   }
 

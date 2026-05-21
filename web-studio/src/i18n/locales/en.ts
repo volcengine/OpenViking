@@ -55,10 +55,11 @@ const en = {
       toggle: 'Toggle theme',
     },
     serverMode: {
+      apiKey: 'api_key',
       checking: 'Detecting',
-      devImplicit: 'Server Identity',
-      explicitAuth: 'Explicit Auth',
+      dev: 'dev',
       offline: 'Offline',
+      trusted: 'trusted',
     },
   },
   connection: {
@@ -472,11 +473,38 @@ const en = {
     },
     filePreview: {
       cancel: 'Cancel',
+      directoryLevels: {
+        abstract: {
+          label: 'Abstract',
+          title: 'Short semantic abstract',
+        },
+        overview: {
+          label: 'Overview',
+          title: 'Directory overview',
+        },
+      },
+      directoryNoSelection: 'Select a chip to show folder context.',
+      directoryNoSummary:
+        'No abstract or overview available for this folder.',
       edit: 'Edit',
       emptyFile: '(empty file)',
       emptyPrompt: 'Select a file to preview it here',
+      folder: 'Folder',
       imageFailed: 'Image failed to load.',
       imageLoading: 'Loading image...',
+      jsonl: {
+        collapse: 'Collapse',
+        collapseRow: 'Collapse row {{index}}',
+        dialogMode: 'Dialog',
+        emptyJsonl: 'Empty JSONL.',
+        emptyMessage: 'Empty message',
+        expand: 'Expand',
+        expandRow: 'Expand row {{index}}',
+        noArguments: 'No arguments',
+        rawMode: 'JSONL',
+        recordCount: '{{count}} record(s)',
+        toolcall: 'toolcall',
+      },
       largeFileSkipped: 'This file is large and was not loaded automatically.',
       loadingContent: 'Reading content...',
       loadingEditor: 'Loading editor...',
