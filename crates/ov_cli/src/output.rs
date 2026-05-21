@@ -92,11 +92,16 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
     if let Some(obj) = value.as_object() {
         if !obj.is_empty() {
             if let Some(rendered) = render_session_context(obj, compact) {
-                println!("{}", rendered);
+                println!("{}", append_profile_section(rendered, obj));
                 return;
             }
 
             if let Some(rendered) = render_session_archive(obj, compact) {
+                println!("{}", append_profile_section(rendered, obj));
+                return;
+            }
+
+            if let Some(rendered) = value_to_table_with_profile(&value, compact) {
                 println!("{}", rendered);
                 return;
             }
@@ -145,7 +150,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                         }
                     }
                 }
-                println!("{}", lines.join("\n"));
+                println!("{}", append_profile_section(lines.join("\n"), obj));
                 return;
             }
 
@@ -185,7 +190,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     rows.push(serde_json::Value::Object(row));
                 }
                 if let Some(table) = format_array_to_table(&rows, compact) {
-                    println!("{}", table);
+                    println!("{}", append_profile_section(table, obj));
                     return;
                 }
             }
@@ -194,7 +199,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             if dict_lists.len() == 1 && prim_lists.is_empty() {
                 let (_key, items) = &dict_lists[0];
                 if let Some(table) = format_array_to_table(items, compact) {
-                    println!("{}", table);
+                    println!("{}", append_profile_section(table, obj));
                     return;
                 }
             }
@@ -222,7 +227,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 }
                 if !merged.is_empty() {
                     if let Some(table) = format_array_to_table(&merged, compact) {
-                        println!("{}", table);
+                        println!("{}", append_profile_section(table, obj));
                         return;
                     }
                 }
@@ -246,7 +251,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     let padded_key = pad_cell(k, max_key_width, false);
                     output.push_str(&format!("{}  {}\n", padded_key, content));
                 }
-                println!("{}", output);
+                println!("{}", append_profile_section(output, obj));
                 return;
             }
         }
@@ -261,6 +266,41 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             serde_json::to_string_pretty(&result).unwrap_or_default()
         );
     }
+}
+
+fn value_to_table_with_profile(value: &serde_json::Value, compact: bool) -> Option<String> {
+    let rendered = value_to_table(value, compact)?;
+    let obj = value.as_object()?;
+    Some(append_profile_section(rendered, obj))
+}
+
+fn append_profile_section(
+    rendered: String,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    let Some(profile) = obj.get("profile").and_then(|v| v.as_array()) else {
+        return rendered;
+    };
+    if profile.is_empty() {
+        return rendered;
+    }
+
+    let lines: Vec<String> = profile
+        .iter()
+        .map(|line| match line {
+            serde_json::Value::String(s) => s.clone(),
+            other => format_value(other),
+        })
+        .collect();
+    if lines.is_empty() {
+        return rendered;
+    }
+
+    let mut out = rendered.trim_end_matches('\n').to_string();
+    out.push_str("\n\nprofile\n");
+    out.push_str(&lines.join("\n"));
+    out.push('\n');
+    out
 }
 
 fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
@@ -845,5 +885,38 @@ mod tests {
         let (rendered, skip_padding) = truncate_string(&long_abstract, true, 10);
         assert_eq!(rendered, long_abstract);
         assert!(skip_padding);
+    }
+
+    #[test]
+    fn test_profile_section_is_preserved_for_table_objects_with_list_payloads() {
+        let value = json!({
+            "items": [
+                {"id": "1", "name": "alpha"},
+                {"id": "2", "name": "beta"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = value_to_table_with_profile(&value, true);
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "id  name   type",
+                    " 1  alpha  item",
+                    " 2  beta   item",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
     }
 }
