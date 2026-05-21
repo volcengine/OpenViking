@@ -16,7 +16,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 _SCRIPT_MIN_CHARS = 2
-_SCRIPT_MIN_RATIO = 0.10
+_SCRIPT_MIN_RATIO = 0.20
 _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
@@ -174,10 +174,12 @@ def _resolve_system_fallback_language(default_language: str = "en") -> str:
     except Exception:
         pass
 
+    # Honor explicit TZ when set, mainly for Unix-like systems and CI/container environments.
     language = _language_from_timezone_value(os.environ.get("TZ", ""))
     if language:
         return language
 
+    # Fall back to local timezone names; on Windows this may expose Standard Time names via time.tzname.
     language = _language_from_local_timezone()
     if language:
         return language
