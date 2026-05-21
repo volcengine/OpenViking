@@ -137,17 +137,14 @@ class OpenVikingUsage:
 def read_true_token_csv(csv_path: Path) -> tuple[int, int, int, int]:
     if not csv_path.exists():
         return 0, 0, 0, 0
+    totals = [0, 0, 0, 0]
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        return 0, 0, 0, 0
-    last_row = rows[-1]
-    return (
-        read_int(last_row, "embedding_input_tokens"),
-        read_int(last_row, "embedding_output_tokens"),
-        read_int(last_row, "vlm_llm_input_tokens"),
-        read_int(last_row, "vlm_llm_output_tokens"),
-    )
+        for row in csv.DictReader(f):
+            totals[0] += read_int(row, "embedding_input_tokens")
+            totals[1] += read_int(row, "embedding_output_tokens")
+            totals[2] += read_int(row, "vlm_llm_input_tokens")
+            totals[3] += read_int(row, "vlm_llm_output_tokens")
+    return totals[0], totals[1], totals[2], totals[3]
 
 
 def resolve_hermes_state_db(value: str | None) -> Path | None:
