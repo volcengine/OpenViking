@@ -32,8 +32,8 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Aggregated reverse proxy — fronts OV (1933) on port 1934 under one stable
-  # origin. Always enabled, plain HTTP by default.
+  # Legacy reverse proxy — port 1934 is retained for existing deployments.
+  # New setups can connect directly to openviking:1933.
   #
   # For public HTTPS: edit the Caddyfile to add a domain block, set
   # OPENVIKING_PUBLIC_BASE_URL in .env, uncomment the 80/443 port lines
