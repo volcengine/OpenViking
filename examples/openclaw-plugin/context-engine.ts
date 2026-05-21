@@ -25,6 +25,8 @@ type AgentMessage = {
   timestamp?: unknown;
 };
 
+type ExtractedTurnMessage = ReturnType<typeof extractNewTurnMessages>["messages"][number];
+
 type ContextEngineInfo = {
   id: string;
   name: string;
@@ -403,6 +405,10 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
       const toolName = typeof p.tool_name === "string" ? p.tool_name : undefined;
       const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
       const output = typeof p.tool_output === "string" ? p.tool_output : "";
+      const ref = typeof p.tool_output_ref === "string" ? p.tool_output_ref : "";
+      const originalChars = typeof p.tool_output_original_chars === "number"
+        ? p.tool_output_original_chars
+        : undefined;
 
       if (toolId) {
         // Structured path: emit canonical toolCall + toolResult pair (works for any role)
@@ -413,9 +419,15 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
           arguments: p.tool_input ?? {},
         });
 
-        const resultText = (status === "completed" || status === "error")
+        let resultText = (status === "completed" || status === "error")
           ? (output || "(no output)")
           : "(interrupted — tool did not complete)";
+        if (ref && !resultText.includes(ref)) {
+          const suffix = originalChars !== undefined
+            ? `\n[tool-result-ref] ${ref} original_chars=${originalChars}`
+            : `\n[tool-result-ref] ${ref}`;
+          resultText += suffix;
+        }
         const resultPayload: Record<string, unknown> = {
           role: "toolResult",
           toolCallId: toolId,
@@ -467,6 +479,36 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
     }
   }
 
+  return result;
+}
+
+function isToolOnlyMessage(msg: ExtractedTurnMessage): boolean {
+  return msg.role === "user" && msg.parts.length > 0 && msg.parts.every((part) => part.type === "tool");
+}
+
+function coalesceConsecutiveToolMessages(messages: ExtractedTurnMessage[]): ExtractedTurnMessage[] {
+  const result: ExtractedTurnMessage[] = [];
+  let pendingTools: ExtractedTurnMessage | undefined;
+
+  const flush = () => {
+    if (pendingTools) {
+      result.push(pendingTools);
+      pendingTools = undefined;
+    }
+  };
+
+  for (const msg of messages) {
+    if (isToolOnlyMessage(msg)) {
+      if (!pendingTools) {
+        pendingTools = { role: "user", parts: [] };
+      }
+      pendingTools.parts.push(...msg.parts);
+      continue;
+    }
+    flush();
+    result.push(msg);
+  }
+  flush();
   return result;
 }
 
@@ -1275,7 +1317,8 @@ export function createMemoryOpenVikingContextEngine(params: {
             ? afterTurnParams.prePromptMessageCount
             : 0;
 
-        const { messages: extractedMessages, newCount } = extractNewTurnMessages(messages, start);
+        const { messages: extractedMessagesRaw, newCount } = extractNewTurnMessages(messages, start);
+        const extractedMessages = coalesceConsecutiveToolMessages(extractedMessagesRaw);
 
         if (extractedMessages.length === 0) {
           diag("afterTurn_skip", OVSessionId, {

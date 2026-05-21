@@ -1,0 +1,19 @@
+[
+  {
+    "id": "t1-retrieval-ingest",
+    "prompt": "你在做一次真实的检索链路评审。目标：梳理 OpenViking 从 API/Client 到 index engine 的检索契约。请只读取以下文件，每个只读一次：\n1) /root/.openclaw/workspace/OpenViking/docs/en/api/06-retrieval.md\n2) /root/.openclaw/workspace/OpenViking/openviking_cli/client/sync_http.py\n3) /root/.openclaw/workspace/OpenViking/openviking_cli/retrieve/types.py\n4) /root/.openclaw/workspace/OpenViking/src/index/index_engine.cpp\n输出 JSON：\n{api_contract:{inputs:[...],outputs:[...],error_shapes:[...]},pipeline:[{stage,file,function,contract}],mismatch_candidates:[{name,where_detected,why}],evidence:[{file,function,line,why}]}"
+  },
+  {
+    "id": "t2-contract-design",
+    "prompt": "基于上轮结果，优先使用已整理的上下文；只有在关键信息缺失时，才补充一次原文回查并说明原因。选 1 个最重要 mismatch，设计最小契约收敛方案（不改代码）。输出 JSON：\n{target_mismatch,proposed_contract_delta:{before,after},affected_components:[{file,owner_role}],compatibility_strategy:[{consumer,impact,mitigation}],rollout_plan:[{phase,goal,exit_criteria}]}"
+  },
+  {
+    "id": "t3-implementation-outline",
+    "prompt": "基于前两轮内容，给出实施大纲（函数级，不改代码）。输出 JSON：\n{change_outline:[{file,functions:[{name,action,expected_result}]}],data_validation_rules:[{rule,reason}],observability_additions:[{signal,location,why}],verification_matrix:[{scenario,expected_result}]}"
+  },
+  {
+    "id": "t4-rfc-summary",
+    "prompt": "基于前 3 轮内容，输出 RFC 风格摘要。输出 JSON：\n{problem,decision,alternatives_considered:[{option,reject_reason}],impact_assessment:{correctness,latency,operability},risk_register:[{risk,level,owner,mitigation}],go_no_go_criteria:[{criterion,measure}]}"
+  }
+]
+

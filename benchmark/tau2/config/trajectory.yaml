@@ -1,0 +1,63 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_trajectory_view
+
+strategies:
+  - id: memory_v2_trajectory_view
+    label: OpenViking Memory V2 trajectory first-user recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user
+  - id: memory_v2_trajectory_view_scope
+    label: OpenViking Memory V2 trajectory first-user recall with scope prompt
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+  - id: memory_v2_trajectory_prewrite_only
+    label: OpenViking Memory V2 trajectory pre-write-only recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: prewrite
+  - id: memory_v2_trajectory_prewrite
+    label: OpenViking Memory V2 trajectory first-user + pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+  - id: memory_v2_trajectory_prewrite_only_scope
+    label: OpenViking Memory V2 trajectory pre-write-only recall with scope prompt
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: prewrite
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+  - id: memory_v2_trajectory_prewrite_scope
+    label: OpenViking Memory V2 trajectory first-user + pre-write recall with scope prompt
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md

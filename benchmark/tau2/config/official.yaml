@@ -4,4 +4,9 @@ benchmark:
   name: tau2_openviking_official_user_simulator
 
 eval:
+  protocol: official_live_user
+  require_fixed_first_user: false
   user_simulator_policy: official
+  fixed_first_user_fixtures:
+    retail:
+    airline:
