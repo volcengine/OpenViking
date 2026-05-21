@@ -24,6 +24,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.utils.line_numbers import (
+    add_line_numbers,
+    every_line_has_line_numbers,
+    extract_start_line_number,
+    strip_line_numbers,
+)
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -219,43 +225,6 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
         best_content = line
 
     return best_score, best_content
-
-
-# ============================================================================
-# Line Number Utilities (from RooCode)
-# ============================================================================
-
-
-def add_line_numbers(content: str, start_line: int = 1) -> str:
-    """Add line numbers to content."""
-    lines = content.split("\n")
-    numbered_lines = [f"{start_line + i} | {line}" for i, line in enumerate(lines)]
-    return "\n".join(numbered_lines)
-
-
-def strip_line_numbers(content: str, aggressive: bool = False) -> str:
-    """
-    Strip line numbers from content.
-
-    Args:
-        content: Content with line numbers
-        aggressive: If True, strip all line numbers regardless of format
-    """
-    if aggressive:
-        # Aggressive: remove anything that looks like a line number at the start
-        return re.sub(r"^\s*\d+\s*[|:]\s*", "", content, flags=re.MULTILINE)
-    else:
-        # Standard: only strip "N | " format
-        return re.sub(r"^\d+\s*\|\s*", "", content, flags=re.MULTILINE)
-
-
-def every_line_has_line_numbers(content: str) -> bool:
-    """Check if every line in content has a line number."""
-    lines = content.split("\n")
-    if not lines:
-        return False
-    # Check if all lines match the pattern "N | " at the start
-    return all(re.match(r"^\d+\s*\|\s*", line) for line in lines)
 
 
 # ============================================================================
@@ -574,10 +543,9 @@ class MultiSearchReplaceDiffStrategy:
             ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
             if has_all_line_numbers and start_line == 0:
-                # Extract start line from first line
-                first_line = search_content.split("\n")[0]
-                if "|" in first_line:
-                    start_line = int(first_line.split("|")[0].strip())
+                inferred_start_line = extract_start_line_number(search_content)
+                if inferred_start_line is not None:
+                    start_line = inferred_start_line
 
             if has_all_line_numbers:
                 search_content = strip_line_numbers(search_content)
@@ -876,84 +844,8 @@ class MultiSearchReplaceDiffStrategy:
 
 
 # ============================================================================
-# MemoryPatchHandler
+# Structured patch application
 # ============================================================================
-
-
-class MemoryPatchHandler:
-    """Handler for applying patches to memory content."""
-
-    # Patch format markers
-    SEARCH_MARKER = "<<<<<<< SEARCH"
-    SPLIT_MARKER = "======="
-    REPLACE_MARKER = ">>>>>>> REPLACE"
-    LINE_NUMBER_PREFIX = ":start_line:"
-
-    def __init__(self, fuzzy_threshold: float = 1.0, buffer_lines: int = 40):
-        """
-        Initialize the patch handler.
-
-        Args:
-            fuzzy_threshold: Similarity threshold for fuzzy matching (0.0 to 1.0, default 1.0 = exact match)
-            buffer_lines: Number of extra context lines to search (default 40)
-        """
-        self._strategy = MultiSearchReplaceDiffStrategy(
-            fuzzy_threshold=fuzzy_threshold, buffer_lines=buffer_lines
-        )
-
-    def apply_content_patch(self, original_content: str, patch: str) -> str:
-        """
-        Apply SEARCH/REPLACE format patch to content.
-
-        Patch format:
-            <<<<<<< SEARCH
-            :start_line:10
-            -------
-            Original content
-            =======
-            New content
-            >>>>>>> REPLACE
-
-        Supports multiple SEARCH/REPLACE blocks in a single patch.
-
-        Args:
-            original_content: Original content string
-            patch: Patch string in SEARCH/REPLACE format
-
-        Returns:
-            Updated content
-
-        Raises:
-            PatchParseError: If patch format is invalid
-        """
-        if not patch or not patch.strip():
-            return original_content
-
-        # First validate marker sequencing - raise PatchParseError for invalid patches
-        valid_seq = validate_marker_sequencing(patch)
-        if not valid_seq["success"]:
-            raise PatchParseError(valid_seq["error"])
-
-        result = self._strategy.apply_diff(original_content, patch)
-
-        if result.success:
-            return result.content if result.content is not None else original_content
-        else:
-            error_msg = result.error or "Unknown error"
-            logger.warning(
-                f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}"
-            )
-            raise PatchParseError(f"Patch application failed: {error_msg}")
-
-    def _extract_replace_content(self, patch: str) -> str:
-        """Extract replace content from patch for fallback append."""
-        try:
-            matches = self._strategy._parse_diff_blocks(patch)
-            if matches:
-                return matches[-1].get("replaceContent", "")
-        except Exception:
-            pass
-        return patch
 
 
 def apply_str_patch(original_content: str, patch: StrPatch) -> str:
@@ -1044,10 +936,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
         if has_all_line_numbers and start_line == 0:
-            # Extract start line from first line
-            first_line = search_content.split("\n")[0]
-            if "|" in first_line:
-                start_line = int(first_line.split("|")[0].strip())
+            inferred_start_line = extract_start_line_number(search_content)
+            if inferred_start_line is not None:
+                start_line = inferred_start_line
 
         if has_all_line_numbers:
             search_content = strip_line_numbers(search_content)
@@ -1262,7 +1153,6 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
-        logger.warning("Patch application failed, skipping update")
         raise PatchParseError(
             f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}"
         )

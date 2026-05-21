@@ -27,7 +27,6 @@ import {
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
 import { ConnectionDialog } from '#/components/connection-dialog'
-import { Badge } from '#/components/ui/badge'
 import { buttonVariants } from '#/components/ui/button'
 import {
   DropdownMenu,
@@ -60,7 +59,6 @@ import {
   AppConnectionProvider,
   useAppConnection,
 } from '#/hooks/use-app-connection'
-import { describeServerMode } from '#/hooks/use-server-mode'
 import {
   useSessionList,
   useCreateSession,
@@ -352,9 +350,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const { openConnectionDialog, serverMode } = useAppConnection()
+  const { openConnectionDialog } = useAppConnection()
   const { setTheme, resolvedTheme } = useTheme()
-  const serverModeBadge = describeServerMode(serverMode)
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
@@ -483,10 +480,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
           <div className="flex items-center gap-1">
-            <Badge variant={serverModeBadge.variant} className="mr-1">
-              {t(serverModeBadge.labelKey, { ns: 'common' })}
-            </Badge>
-
             <button
               type="button"
               aria-label={t('theme.toggle', { ns: 'common' })}

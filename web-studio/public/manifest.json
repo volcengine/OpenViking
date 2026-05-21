@@ -3,10 +3,16 @@
   "name": "OpenViking Studio",
   "icons": [
     {
-      "src": "openviking-icon.png",
+      "src": "favicon-32.png",
       "type": "image/png",
-      "sizes": "1280x1280",
-      "purpose": "any maskable"
+      "sizes": "32x32",
+      "purpose": "any"
+    },
+    {
+      "src": "apple-touch-icon.png",
+      "type": "image/png",
+      "sizes": "180x180",
+      "purpose": "any"
     }
   ],
   "start_url": ".",

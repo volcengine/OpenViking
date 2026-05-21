@@ -56,7 +56,7 @@ const zhCN = {
     },
     serverMode: {
       checking: '检测中',
-      devImplicit: '开发模式',
+      devImplicit: '服务端身份',
       explicitAuth: '显式鉴权',
       offline: '未连接',
     },
@@ -64,8 +64,8 @@ const zhCN = {
   connection: {
     devMode: {
       description:
-        '当前服务使用隐式身份，通常不需要填写 account、user 和 API key。',
-      title: '已检测到开发模式',
+        '当前服务会自动提供身份，通常不需要填写 account、user 和 API key。',
+      title: '服务端托管身份',
     },
     dialog: {
       title: '连接与身份',
@@ -95,6 +95,19 @@ const zhCN = {
         label: 'User',
         placeholder: 'default',
       },
+    },
+    oauthOtp: {
+      title: 'OAuth 客户端 OTP',
+      description:
+        '生成一个短期一次性码，让 MCP 客户端凭此以所选身份完成 OAuth 授权。',
+      generate: '生成 OTP',
+      regenerate: '重新生成',
+      copy: '复制',
+      copied: '已复制',
+      codeLabel: '一次性码',
+      expiresIn: '{{seconds}} 秒后失效',
+      expired: '已过期 —— 请重新生成。',
+      generateError: '生成 OTP 失败：{{message}}',
     },
   },
   home: {
@@ -572,6 +585,51 @@ const zhCN = {
     empty: {
       description: '从侧边栏选择一个会话，或创建新会话。',
       title: '未选择会话',
+    },
+  },
+  oauth: {
+    identityPicker: {
+      useCurrent: '以当前身份授权',
+      noCurrent:
+        '尚未配置身份。请先在“连接与身份”中登录，或在下方临时粘贴一个 API key。',
+      useCustom: '使用其他 API key',
+      customKeyLabel: 'API key',
+      customKeyPlaceholder: '粘贴一个 API key（不会持久化）',
+    },
+    consent: {
+      title: '授权 {{clientName}}',
+      loading: '正在加载授权请求…',
+      expired: '此次授权已过期或不再有效，请从 MCP 客户端重新发起。',
+      missingPending: '缺少授权 ID，请打开 MCP 客户端给出的链接。',
+      requestSummary: '{{clientName}} 请求访问你的 OpenViking 工作区。',
+      redirectLabel: '回跳地址',
+      scopesLabel: '权限范围',
+      scopesNone: '（无）',
+      signInRequired:
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+      openConnectionDialog: '打开连接与身份',
+      authorize: '授权',
+      deny: '拒绝',
+      useAnotherDevice: '在另一台设备上授权 →',
+      waitingRedirect: '已授权——正在回跳到客户端…',
+      verifying: '正在验证…',
+      denying: '正在拒绝…',
+      denied: '已拒绝，可以关闭此页。',
+      verifyError: '授权失败：{{message}}',
+      noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
+    },
+    verify: {
+      title: '跨设备验证',
+      description: '请输入发起 MCP 客户端登录的那台设备上显示的 6 位验证码。',
+      codeLabel: '验证码',
+      codePlaceholder: '6 位验证码',
+      submit: '授权',
+      success: '已为 {{clientName}} 授权，可以关闭此页并回到原设备。',
+      successUnknownClient: '已授权，可以关闭此页并回到原设备。',
+      verifyError: '授权失败：{{message}}',
+      noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
+      signInRequired:
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
     },
   },
 } as const

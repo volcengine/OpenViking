@@ -90,6 +90,14 @@ class MemoryConfig(BaseModel):
             "is ignored and the login user from the request context is used instead."
         ),
     )
+    link_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction supports link extraction between "
+            "memory items (page_id, links field, and link resolution). When disabled (default), "
+            "no page_id or link fields are generated, and link resolution is skipped."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

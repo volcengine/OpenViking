@@ -13,7 +13,7 @@ type SortDirection = 'asc' | 'desc'
 interface FileListProps {
   entries: Array<VikingFsEntry>
   selectedFileUri: string | null
-  onOpenDirectory: (uri: string) => void
+  onOpenDirectory: (entry: VikingFsEntry) => void
   onOpenFile: (file: VikingFsEntry) => void
 }
 
@@ -78,7 +78,7 @@ export function FileList({
             type="button"
             onClick={() => {
               if (entry.isDir) {
-                onOpenDirectory(entry.uri)
+                onOpenDirectory(entry)
                 return
               }
               onOpenFile(entry)

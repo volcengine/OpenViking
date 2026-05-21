@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronRight,
   FolderOpen,
@@ -59,6 +60,31 @@ function isDirectoryUri(uri: string): boolean {
   return uri.endsWith('/')
 }
 
+const TREE_WIDTH_STORAGE_KEY = 'web-studio-resource-tree-width'
+const TREE_HEIGHT_STORAGE_KEY = 'web-studio-resource-tree-height'
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function readStoredNumber(
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+  const raw = window.localStorage.getItem(key)
+  if (raw === null) {
+    return fallback
+  }
+
+  const stored = Number(raw)
+  return Number.isFinite(stored) ? clampNumber(stored, min, max) : fallback
+}
+
 export function VikingFileManager({
   initialUri,
   initialFile,
@@ -105,6 +131,7 @@ export function VikingFileManager({
       modTime: '',
       modTimestamp: null,
       abstract: '',
+      overview: '',
     })
   }, [initialFile])
 
@@ -125,6 +152,16 @@ export function VikingFileManager({
     setSelectedFile(null)
   }, [])
 
+  const handleOpenDirectory = useCallback((entry: VikingFsEntry) => {
+    const normalized = normalizeDirUri(entry.uri)
+    setCurrentUri(normalized)
+    setSelectedFile({
+      ...entry,
+      uri: normalized,
+      isDir: true,
+    })
+  }, [])
+
   const handleNavigateFromSearch = useCallback((uri: string) => {
     if (isDirectoryUri(uri)) {
       const normalized = normalizeDirUri(uri)
@@ -143,6 +180,7 @@ export function VikingFileManager({
         modTime: '',
         modTimestamp: null,
         abstract: '',
+        overview: '',
       })
     }
   }, [])
@@ -257,65 +295,113 @@ export function VikingFileManager({
     return crumbs
   }, [currentUri])
 
-  const showTree = currentUri !== 'viking://' || selectedFile !== null
-  const showPreview = selectedFile !== null
+  const showPreview = selectedFile !== null || currentUri === 'viking://'
 
-  const [treeWidth, setTreeWidth] = useState(280)
+  const layoutRef = useRef<HTMLDivElement>(null)
+  const [treeWidth, setTreeWidth] = useState(() =>
+    readStoredNumber(TREE_WIDTH_STORAGE_KEY, 450, 180, 640),
+  )
+  const [treeHeight, setTreeHeight] = useState(() =>
+    readStoredNumber(TREE_HEIGHT_STORAGE_KEY, 46, 34, 72),
+  )
+  const [isResizingTree, setResizingTree] = useState(false)
   const dragging = useRef(false)
   const treeWidthRef = useRef(treeWidth)
+  const treeHeightRef = useRef(treeHeight)
   treeWidthRef.current = treeWidth
+  treeHeightRef.current = treeHeight
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragging.current = true
-    const startX = e.clientX
-    const startWidth = treeWidthRef.current
+  const treePaneStyle = useMemo(
+    () =>
+      ({
+        '--resource-tree-height': `${treeHeight}%`,
+        '--resource-tree-width': `${treeWidth}px`,
+      }) as CSSProperties,
+    [treeHeight, treeWidth],
+  )
 
-    const onMove = (ev: MouseEvent) => {
-      const newWidth = Math.min(
-        Math.max(startWidth + ev.clientX - startX, 160),
-        600,
-      )
-      setTreeWidth(newWidth)
-    }
-    const onUp = () => {
-      dragging.current = false
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
+  const handleResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      dragging.current = true
+      setResizingTree(true)
+
+      const isDesktop = window.matchMedia('(min-width: 768px)').matches
+      const startX = event.clientX
+      const startY = event.clientY
+      const startWidth = treeWidthRef.current
+      const startHeight = treeHeightRef.current
+      const layoutRect = layoutRef.current?.getBoundingClientRect()
+
+      const onMove = (moveEvent: PointerEvent) => {
+        if (isDesktop) {
+          const nextWidth = clampNumber(
+            startWidth + moveEvent.clientX - startX,
+            180,
+            640,
+          )
+          setTreeWidth(nextWidth)
+          window.localStorage.setItem(TREE_WIDTH_STORAGE_KEY, String(nextWidth))
+          return
+        }
+
+        const rect = layoutRef.current?.getBoundingClientRect() ?? layoutRect
+        if (!rect) {
+          const fallbackHeight = clampNumber(
+            startHeight +
+              ((moveEvent.clientY - startY) / Math.max(1, window.innerHeight)) *
+                100,
+            34,
+            72,
+          )
+          setTreeHeight(fallbackHeight)
+          window.localStorage.setItem(
+            TREE_HEIGHT_STORAGE_KEY,
+            String(fallbackHeight),
+          )
+          return
+        }
+
+        const y = moveEvent.clientY - rect.top
+        const nextHeight = clampNumber(
+          (y / Math.max(1, rect.height)) * 100,
+          34,
+          72,
+        )
+        setTreeHeight(nextHeight)
+        window.localStorage.setItem(TREE_HEIGHT_STORAGE_KEY, String(nextHeight))
+      }
+
+      const onUp = () => {
+        dragging.current = false
+        setResizingTree(false)
+        document.removeEventListener('pointermove', onMove)
+        document.removeEventListener('pointerup', onUp)
+        document.removeEventListener('pointercancel', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+
+      document.body.style.cursor = isDesktop ? 'col-resize' : 'row-resize'
+      document.body.style.userSelect = 'none'
+      document.addEventListener('pointermove', onMove)
+      document.addEventListener('pointerup', onUp)
+      document.addEventListener('pointercancel', onUp)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (!dragging.current) return
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
   }, [])
 
   const toolbar = (
     <div className="flex h-10 items-center gap-1 border-b px-3">
-      {!showTree && (
-        <>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            title={t('toolbar.refresh')}
-            onClick={() => void handleRefresh()}
-          >
-            <RefreshCcw className="size-4" />
-          </Button>
-          <Button
-            variant="secondary"
-            size="icon"
-            className="h-8 w-fit px-2"
-            title={t('toolbar.search')}
-            onClick={() => setPaletteOpen(true)}
-          >
-            <Search className="size-4" />
-          </Button>
-          <div className="mx-1 h-4 w-px bg-border" />
-        </>
-      )}
       <nav className="flex items-center gap-0.5 overflow-hidden text-sm text-muted-foreground">
         {breadcrumbs.map((crumb, i) => (
           <span key={crumb.uri} className="flex shrink-0 items-center gap-0.5">
@@ -330,104 +416,81 @@ export function VikingFileManager({
           </span>
         ))}
       </nav>
-      {!showTree ? (
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="h-8"
-            onClick={() => setTaskDialogOpen(true)}
-          >
-            {t('toolbar.processingTasks')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="h-8 gap-1.5"
-            onClick={() => setUploadDialogOpen(true)}
-          >
-            <Upload className="size-4" />
-            {t('toolbar.upload')}
-          </Button>
-        </div>
-      ) : null}
     </div>
   )
 
   return (
-    <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100vh-3.5rem)] flex-col md:-mx-6">
-      <div className="flex min-h-0 flex-1">
-        {showTree && (
-          <>
-            <section
-              className="flex min-h-0 flex-col bg-muted/30"
-              style={{ width: treeWidth, minWidth: treeWidth }}
+    <div className="web-studio-resource-fs -mx-4 -mt-6 -mb-4 flex h-[calc(100vh-3.5rem)] flex-col md:-mx-6">
+      <div ref={layoutRef} className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <section
+          className="flex h-[var(--resource-tree-height)] min-h-[190px] min-w-0 flex-col bg-muted/30 md:h-auto md:min-h-0 md:w-[var(--resource-tree-width)] md:min-w-[var(--resource-tree-width)]"
+          style={treePaneStyle}
+        >
+          <div className="flex h-10 items-center gap-1 overflow-hidden border-b px-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              title={t('toolbar.refresh')}
+              onClick={() => void handleRefresh()}
             >
-              <div className="flex h-10 items-center gap-1 overflow-hidden border-b px-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7"
-                  title={t('toolbar.refresh')}
-                  onClick={() => void handleRefresh()}
-                >
-                  <RefreshCcw className="size-4" />
-                </Button>
-                <div className="ml-auto flex w-fit items-center gap-1.5">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="h-8"
-                    onClick={() => setTaskDialogOpen(true)}
-                  >
-                    {t('toolbar.processingTasks')}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="h-8 gap-1.5"
-                    onClick={() => setUploadDialogOpen(true)}
-                  >
-                    <Upload className="size-4" />
-                    {t('toolbar.upload')}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    className="h-8 w-fit px-2"
-                    title={t('toolbar.search')}
-                    onClick={() => setPaletteOpen(true)}
-                  >
-                    <Search className="size-4" />
-                  </Button>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1">
-                <FileTree
-                  currentUri={currentUri}
-                  selectedFileUri={selectedFile?.uri ?? null}
-                  expandedKeys={expandedKeys}
-                  onExpandedKeysChange={setExpandedKeys}
-                  onSelectDirectory={updateUri}
-                  onSelectFile={setSelectedFile}
-                />
-              </div>
-            </section>
-            <div
-              className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/20 active:bg-primary/30"
-              onMouseDown={handleResizeStart}
+              <RefreshCcw className="size-4" />
+            </Button>
+            <div className="ml-auto flex w-fit items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8"
+                onClick={() => setTaskDialogOpen(true)}
+              >
+                {t('toolbar.processingTasks')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8 gap-1.5"
+                onClick={() => setUploadDialogOpen(true)}
+              >
+                <Upload className="size-4" />
+                {t('toolbar.upload')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-8 w-fit px-2"
+                title={t('toolbar.search')}
+                onClick={() => setPaletteOpen(true)}
+              >
+                <Search className="size-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1">
+            <FileTree
+              currentUri={currentUri}
+              selectedFileUri={selectedFile?.uri ?? null}
+              expandedKeys={expandedKeys}
+              onExpandedKeysChange={setExpandedKeys}
+              onSelectDirectory={handleOpenDirectory}
+              onSelectFile={setSelectedFile}
             />
-          </>
-        )}
+          </div>
+        </section>
+        <div
+          role="separator"
+          data-dragging={isResizingTree}
+          className="group flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center justify-center bg-transparent transition-colors hover:bg-primary/10 active:bg-primary/20 data-[dragging=true]:bg-primary/20 md:h-auto md:w-1 md:cursor-col-resize"
+          onPointerDown={handleResizeStart}
+        >
+          <span className="h-0.5 w-12 rounded-full bg-border transition-colors group-hover:bg-primary/50 md:h-8 md:w-0.5" />
+        </div>
 
         {showPreview ? (
           <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {toolbar}
-            <div className="mx-auto min-h-0 w-full max-w-5xl flex-1">
+            <div className="min-h-0 w-full flex-1">
               <FilePreview
                 file={selectedFile}
                 onClose={() => setSelectedFile(null)}
@@ -459,7 +522,7 @@ export function VikingFileManager({
                 <FileList
                   entries={entries}
                   selectedFileUri={null}
-                  onOpenDirectory={updateUri}
+                  onOpenDirectory={handleOpenDirectory}
                   onOpenFile={(file) => setSelectedFile(file)}
                 />
               )}

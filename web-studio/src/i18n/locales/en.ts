@@ -56,7 +56,7 @@ const en = {
     },
     serverMode: {
       checking: 'Detecting',
-      devImplicit: 'Development Mode',
+      devImplicit: 'Server Identity',
       explicitAuth: 'Explicit Auth',
       offline: 'Offline',
     },
@@ -64,8 +64,8 @@ const en = {
   connection: {
     devMode: {
       description:
-        'This server is using implicit identity, so account, user, and API key are usually not required.',
-      title: 'Development Mode Detected',
+        'This server provides identity automatically, so account, user, and API key are usually not required.',
+      title: 'Server-managed identity',
     },
     dialog: {
       title: 'Connection & Identity',
@@ -95,6 +95,19 @@ const en = {
         label: 'User',
         placeholder: 'default',
       },
+    },
+    oauthOtp: {
+      title: 'OAuth client OTP',
+      description:
+        'Generate a short-lived code that an MCP client can submit to authorize as the selected identity.',
+      generate: 'Generate OTP',
+      regenerate: 'Regenerate',
+      copy: 'Copy',
+      copied: 'Copied',
+      codeLabel: 'One-time code',
+      expiresIn: 'Expires in {{seconds}}s',
+      expired: 'Expired — generate a new code.',
+      generateError: 'Could not generate OTP: {{message}}',
     },
   },
   home: {
@@ -583,6 +596,57 @@ const en = {
     empty: {
       description: 'Select a session from the sidebar or create a new one.',
       title: 'No session selected',
+    },
+  },
+  oauth: {
+    identityPicker: {
+      useCurrent: 'Authorize as the current identity',
+      noCurrent:
+        'No identity set. Open Connection & Identity to sign in first, or use a different API key below.',
+      useCustom: 'Use a different API key',
+      customKeyLabel: 'API key',
+      customKeyPlaceholder: 'Paste an API key (not persisted)',
+    },
+    consent: {
+      title: 'Authorize {{clientName}}',
+      loading: 'Loading authorization request…',
+      expired:
+        'This authorization has expired or is no longer valid. Restart the flow from your MCP client.',
+      missingPending:
+        'Missing authorization id. Open the link your MCP client gave you.',
+      requestSummary:
+        '{{clientName}} is requesting access to your OpenViking workspace.',
+      redirectLabel: 'Redirect',
+      scopesLabel: 'Scopes',
+      scopesNone: '(none)',
+      signInRequired:
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+      openConnectionDialog: 'Open Connection & Identity',
+      authorize: 'Authorize',
+      deny: 'Deny',
+      useAnotherDevice: 'Use another device →',
+      waitingRedirect: 'Authorized — redirecting back to the client…',
+      verifying: 'Verifying…',
+      denying: 'Denying…',
+      denied: 'Denied. You can close this tab.',
+      verifyError: 'Authorization failed: {{message}}',
+      noApiKey: 'No API key available. Select an identity or paste a key.',
+    },
+    verify: {
+      title: 'Cross-device verify',
+      description:
+        'Enter the 6-character code shown on the device that started the MCP client login.',
+      codeLabel: 'Verification code',
+      codePlaceholder: '6-character code',
+      submit: 'Authorize',
+      success:
+        'Authorized for {{clientName}}. You can close this tab and return to the original device.',
+      successUnknownClient:
+        'Authorized. You can close this tab and return to the original device.',
+      verifyError: 'Authorization failed: {{message}}',
+      noApiKey: 'No API key available. Select an identity or paste a key.',
+      signInRequired:
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
 } as const

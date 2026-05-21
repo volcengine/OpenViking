@@ -184,10 +184,11 @@ Memory V2 cells run through a small TAU-2 agent adapter in this directory:
   regenerate that step with the matched memories. The default benchmark
   retrieves 6 pre-write candidates and injects 2, which keeps extra candidates
   visible in traces without expanding the prompt budget;
-- optionally run an explicit scope-prompt treatment that keeps retrieved
+- optionally run an explicit generic scope-prompt treatment that keeps retrieved
   memories advisory and asks the agent to preserve the current task scope before
-  write-like tool calls. Configs provide per-domain files through
-  `scope_prompt_files`;
+  write-like tool calls. The benchmark configs use a single benchmark-neutral
+  `scope_prompt_file`; the runner still accepts `scope_prompt_files` for custom
+  local experiments;
 - emit artifact metadata to identify the OpenViking account, agent,
   corpus, retrieval mode, and simulator policy used by each cell.
 

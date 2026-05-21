@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import (
@@ -67,7 +69,50 @@ def teardown_function() -> None:
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_prompt_manager_prefers_environment_templates_dir(tmp_path, monkeypatch):
+def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences():
+    template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
+    schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+    text = "\n".join(
+        [
+            schema["description"],
+            schema["fields"][0]["description"],
+        ]
+    )
+
+    assert "identity summary" in text
+    assert "5-8" in text
+    assert "Complete but minimal" in text
+    assert "Rewrite the full profile" in text
+    assert "Do not append" in text
+    assert "migrate" in text
+    assert "preferences" in text
+    assert "Do not keep concrete preference examples" in text
+    assert "patch" in text
+    assert "rewrite the whole profile" in text
+
+
+def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
+    template_path = PromptManager._get_bundled_templates_dir() / "memory" / "preferences.yaml"
+    schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+    text = "\n".join(
+        [
+            schema["description"],
+            schema["fields"][1]["description"],
+            schema["fields"][2]["description"],
+        ]
+    )
+
+    assert "Complete but minimal" in text
+    assert "3-8" in text
+    assert "800" in text
+    assert "split" in text
+    assert "semantic subtopics" in text
+    assert "evidenced by" in text
+    assert "as of" in text
+    assert "not become a second profile" in text
+
+
+def test_prompt_manager_prefers_env_templates_dir_over_config(tmp_path, monkeypatch):
     env_dir = tmp_path / "env-prompts"
     config_dir = tmp_path / "config-prompts"
     config_path = tmp_path / "ov.conf"
@@ -242,6 +287,7 @@ def test_context_provider_schema_directories_use_prompt_manager_resolved_templat
                 eager_prefetch=False,
                 prefetch_search_topn=5,
                 enable_vaka_template=False,
+                link_enabled=True,
             )
         ),
     )
@@ -274,6 +320,7 @@ def test_context_provider_schema_directories_prefer_custom_memory_dir_over_promp
                 eager_prefetch=False,
                 prefetch_search_topn=5,
                 enable_vaka_template=False,
+                link_enabled=False,
             )
         ),
     )
@@ -336,6 +383,7 @@ def test_context_provider_includes_vaka_dir_when_enabled(monkeypatch):
                 eager_prefetch=False,
                 prefetch_search_topn=5,
                 enable_vaka_template=True,
+                link_enabled=False,
             )
         ),
     )

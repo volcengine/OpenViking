@@ -4,7 +4,26 @@
 # ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
 FROM rust:1.91.1-trixie AS rust-toolchain
 
-# Stage 2: build Python environment with uv (builds Rust CLI + C++ extension from source)
+# Stage 2: build web-studio static bundle (Vite SPA). Runs before py-builder so
+# the dist can be copied into openviking/web_studio/dist/ and included in the
+# python wheel via package-data — no separate runtime COPY required.
+#
+# WEB_STUDIO_BASE_PATH is passed to `vite build --base=...` and is also
+# consumed at runtime by getRouterBasePath() through import.meta.env.BASE_URL,
+# so the SPA's asset URLs and TanStack Router basepath stay in sync.
+FROM node:20-bookworm-slim AS web-studio-builder
+WORKDIR /web-studio
+ARG TARGETPLATFORM
+ARG WEB_STUDIO_BASE_PATH=/studio/
+
+COPY web-studio/package.json web-studio/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} \
+    npm ci
+
+COPY web-studio/ ./
+RUN npm run build -- --base="${WEB_STUDIO_BASE_PATH}"
+
+# Stage 3: build Python environment with uv (builds Rust CLI + C++ extension from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
 
 # Reuse Rust toolchain from stage 1 so setup.py can compile ov CLI in-place.
@@ -49,6 +68,11 @@ COPY openviking_cli/ openviking_cli/
 COPY src/ src/
 COPY third_party/ third_party/
 
+# Bundle the prebuilt web-studio dist into the openviking python package so the
+# wheel produced by `uv sync` ships /studio assets out of the box (parallel to
+# the legacy openviking/console/static layout, just for the new SPA).
+COPY --from=web-studio-builder /web-studio/dist /app/openviking/web_studio/dist
+
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
 # Default to auto-refreshing uv.lock inside the ephemeral build context when it is
 # stale, so Docker builds stay unblocked after dependency changes. Set
@@ -82,26 +106,6 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             ;; \
     esac
 
-# Stage 3: build web-studio static bundle (Vite SPA).
-# Produces /web-studio/dist which the runtime stage mounts at /studio in the
-# OpenViking server. Lockfile-first dependency install keeps the layer cached
-# until package.json / lockfile actually change.
-#
-# WEB_STUDIO_BASE_PATH is passed to `vite build --base=...` and is also
-# consumed at runtime by getRouterBasePath() through import.meta.env.BASE_URL,
-# so the SPA's asset URLs and TanStack Router basepath stay in sync.
-FROM node:20-bookworm-slim AS web-studio-builder
-WORKDIR /web-studio
-ARG TARGETPLATFORM
-ARG WEB_STUDIO_BASE_PATH=/studio/
-
-COPY web-studio/package.json web-studio/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} \
-    npm ci
-
-COPY web-studio/ ./
-RUN npm run build -- --base="${WEB_STUDIO_BASE_PATH}"
-
 # Stage 4: runtime
 FROM python:3.13-slim-trixie
 
@@ -114,18 +118,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
-COPY --from=web-studio-builder /web-studio/dist /app/web-studio/dist
-COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
+COPY docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
 COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
- && chmod +x /usr/local/bin/openviking-console-entrypoint /usr/local/bin/openviking-pending-health
+ && chmod +x /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
     OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \
-    OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf" \
-    OPENVIKING_WEB_STUDIO_DIR="/app/web-studio/dist"
+    OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf"
 
-EXPOSE 1933 8020
+EXPOSE 1933
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
@@ -138,4 +140,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # JSON, or `docker exec` in and run `openviking-server init`.
 # Override command to run CLI, e.g.:
 # docker run --rm -v ~/.openviking:/app/.openviking <image> openviking --help
-ENTRYPOINT ["openviking-console-entrypoint"]
+ENTRYPOINT ["openviking-entrypoint"]

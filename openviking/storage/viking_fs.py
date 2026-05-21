@@ -1050,7 +1050,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
-        entries = await self.tree(uri, node_limit=1000000, ctx=ctx)
+        entries = await self.tree(uri, node_limit=1000000, level_limit=None, ctx=ctx)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
@@ -2003,12 +2003,12 @@ class VikingFS:
 
     async def _ensure_parent_dirs(self, path: str) -> None:
         """Recursively create all parent directories."""
-        parent = path.rstrip("/").rsplit("/", 1)[0]
         try:
             await self._async_agfs.ensure_parent_dirs(path)
         except Exception as e:
             logger.debug(f"Failed to ensure parent directories for {path}: {e}")
-        await self._mkdir_path_with_parents(parent)
+            parent = path.rstrip("/").rsplit("/", 1)[0]
+            await self._mkdir_path_with_parents(parent)
 
     async def _mkdir_path_with_parents(self, dir_path: str) -> None:
         parts = [part for part in dir_path.strip("/").split("/") if part]

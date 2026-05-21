@@ -272,11 +272,7 @@ def _project_http_request(
 
 def should_skip_audit_route(route: str) -> bool:
     """Return whether an HTTP route should be omitted from product audit."""
-    return (
-        route in AUDIT_EXCLUDED_ROUTES
-        or route.startswith("/console/")
-        or route.startswith("/api/v1/console/")
-    )
+    return route in AUDIT_EXCLUDED_ROUTES or route.startswith("/api/v1/console/")
 
 
 def retrieval_operation_for_http(method: str, route: str) -> str | None:

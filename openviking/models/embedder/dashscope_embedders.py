@@ -17,6 +17,7 @@ from openviking.models.embedder.base import (
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 _DASHSCOPE_DIMENSIONS: Dict[str, int] = {
@@ -97,9 +98,9 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             f"{self.api_base}/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
         )
 
-        # --- async clients (lazy) ---
-        self._async_openai_client: Optional[openai.AsyncOpenAI] = None
-        self._async_httpx_client: Optional[httpx.AsyncClient] = None
+        # --- async clients (lazy, event-loop scoped) ---
+        self._async_openai_client_cache = LoopScopedAsyncClientCache()
+        self._async_httpx_client_cache = LoopScopedAsyncClientCache()
 
     # ------------------------------------------------------------------
     # Token telemetry
@@ -174,20 +175,20 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # ------------------------------------------------------------------
 
     def _get_async_openai_client(self) -> openai.AsyncOpenAI:
-        if self._async_openai_client is None:
-            self._async_openai_client = openai.AsyncOpenAI(
+        return self._async_openai_client_cache.get(
+            lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=f"{self.api_base}/compatible-mode/v1",
             )
-        return self._async_openai_client
+        )
 
     def _get_async_httpx_client(self) -> httpx.AsyncClient:
-        if self._async_httpx_client is None:
-            self._async_httpx_client = httpx.AsyncClient(
+        return self._async_httpx_client_cache.get(
+            lambda: httpx.AsyncClient(
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=60.0,
             )
-        return self._async_httpx_client
+        )
 
     # ------------------------------------------------------------------
     # embed
@@ -415,20 +416,5 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             self._openai_client.close()
         if self._httpx_client is not None:
             self._httpx_client.close()
-        # --- async clients (event-loop-aware cleanup) ---
-        import asyncio
-
-        async def _close_async_clients() -> None:
-            if self._async_openai_client is not None:
-                await self._async_openai_client.close()
-            if self._async_httpx_client is not None:
-                await self._async_httpx_client.aclose()
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            loop.create_task(_close_async_clients())
-        else:
-            asyncio.run(_close_async_clients())
+        self._async_openai_client_cache.close_all_with_close()
+        self._async_httpx_client_cache.close_all_with_aclose()

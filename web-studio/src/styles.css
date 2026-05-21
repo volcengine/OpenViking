@@ -160,6 +160,31 @@
     height: 100%;
     overflow: hidden;
   }
+
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 1rem;
+      line-height: 1.5rem;
+    }
+  }
+}
+
+@media (max-width: 767px) {
+  .web-studio-resource-fs :where(.text-xs, .text-sm, .text-\[10px\], .text-\[11px\]) {
+    font-size: 1rem;
+    line-height: 1.5rem;
+  }
+
+  .web-studio-resource-fs :where(.prose-sm) {
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .web-studio-resource-fs :where(pre, code, table, th, td) {
+    font-size: 1rem;
+  }
 }
 
 /* ---- FindPalette animations ---- */
