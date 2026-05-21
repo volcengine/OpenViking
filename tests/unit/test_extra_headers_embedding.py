@@ -146,7 +146,7 @@ class TestExtraHeadersViaFactory:
             patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,
             patch(
                 "openviking.models.embedder.base.time.monotonic",
-                side_effect=[0.0, 0.0, 0.0, 1.2],
+                side_effect=[0.0, 0.0, 0.0, 3.2],
             ),
         ):
             await embedder.embed_async("hello")

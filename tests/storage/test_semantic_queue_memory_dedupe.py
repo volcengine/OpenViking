@@ -250,3 +250,67 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     )
 
     assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_vectorizes_changed_files_with_generated_summary(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    dir_uri = "viking://user/default/memories/preferences"
+    changed_uri = f"{dir_uri}/first.md"
+    captured_file_vectorize = []
+    captured_directory_vectorize = []
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del llm_sem, ctx
+        name = file_path.rsplit("/", 1)[-1]
+        return {"name": name, "summary": f"summary:{name}"}
+
+    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        del dir_uri, file_summaries, children_abstracts, llm_sem
+        return "overview"
+
+    async def write_semantics(**kwargs):
+        del kwargs
+        return True
+
+    async def vectorize_single_file(**kwargs):
+        captured_file_vectorize.append(kwargs)
+
+    async def vectorize_directory(**kwargs):
+        captured_directory_vectorize.append(kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryDirFS(),
+    )
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(processor, "_extract_abstract_from_overview", lambda overview: "abstract")
+    monkeypatch.setattr(
+        processor,
+        "_enforce_size_limits",
+        lambda overview, abstract: (overview, abstract),
+    )
+    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
+    monkeypatch.setattr(processor, "_vectorize_single_file", vectorize_single_file)
+    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri=dir_uri,
+            context_type="memory",
+            changes={"modified": [changed_uri]},
+        )
+    )
+
+    assert len(captured_file_vectorize) == 1
+    assert captured_file_vectorize[0]["parent_uri"] == dir_uri
+    assert captured_file_vectorize[0]["context_type"] == "memory"
+    assert captured_file_vectorize[0]["file_path"] == changed_uri
+    assert captured_file_vectorize[0]["summary_dict"] == {
+        "name": "first.md",
+        "summary": "summary:first.md",
+    }
+    assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
+    assert len(captured_directory_vectorize) == 1
+    assert captured_directory_vectorize[0]["uri"] == dir_uri

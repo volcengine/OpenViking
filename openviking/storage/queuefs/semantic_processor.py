@@ -29,9 +29,9 @@ from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
-from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
@@ -358,7 +358,14 @@ class SemanticProcessor(DequeueHandlerBase):
                                     msg.target_uri, ctx=self._current_ctx
                                 )
                                 # Check if target URI exists and is not the same as the source URI（避免重复处理）
-                                if target_exists and msg.uri != msg.target_uri:
+                                if msg.uri != msg.target_uri:
+                                    if msg.target_preexisting is None:
+                                        target_preexisting = target_exists
+                                    else:
+                                        target_preexisting = bool(msg.target_preexisting)
+                                else:
+                                    target_preexisting = target_exists
+                                if target_preexisting and msg.uri != msg.target_uri:
                                     is_incremental = True
                                     logger.info(
                                         f"Target URI exists, using incremental update: {msg.target_uri}"
@@ -387,6 +394,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 recursive=msg.recursive,
                                 lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
+                                sync_to_target=bool(target_uri and msg.uri != target_uri),
                                 changes=msg.changes,
                                 skip_vectorization=msg.skip_vectorization,
                                 coalesce_key=msg.coalesce_key,
@@ -578,6 +586,16 @@ class SemanticProcessor(DequeueHandlerBase):
                     await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
             completed_summaries = [s for s in file_summaries if s is not None]
+            # Incremental writes carry changes; full rebuild tasks do not.
+            if msg.changes:
+                paths_to_vectorize = changed_files
+            else:
+                paths_to_vectorize = set(file_paths)
+            file_vectorize_items = [
+                (file_path, summary)
+                for file_path, summary in zip(file_paths, file_summaries, strict=False)
+                if file_path in paths_to_vectorize and summary is not None
+            ]
             overview = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
@@ -616,9 +634,19 @@ class SemanticProcessor(DequeueHandlerBase):
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
                     semantic_msg_id=msg.id,
-                    total_count=2,
+                    total_count=2 + len(file_vectorize_items),
                     on_complete=_on_complete,
                     metadata={"uri": dir_uri},
+                )
+            for file_path, summary_dict in file_vectorize_items:
+                await self._vectorize_single_file(
+                    parent_uri=dir_uri,
+                    context_type="memory",
+                    file_path=file_path,
+                    summary_dict=summary_dict,
+                    ctx=ctx,
+                    semantic_msg_id=msg.id,
+                    preserve_existing_created_at=True,
                 )
             await self._vectorize_directory(
                 uri=dir_uri,
@@ -1392,6 +1420,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
         use_summary: bool = False,
+        preserve_existing_created_at: bool = False,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1405,4 +1434,5 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
+            preserve_existing_created_at=preserve_existing_created_at,
         )

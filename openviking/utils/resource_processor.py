@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
-from openviking.storage.errors import LockAcquisitionError
 from openviking.storage import VikingDBManager
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction import NO_LOCK, LockLease, OwnedLockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -255,6 +255,7 @@ class ResourceProcessor:
             original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: LockLease = NO_LOCK
+            target_preexisting = False
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import get_lock_manager
@@ -271,6 +272,7 @@ class ResourceProcessor:
                         )
                         result["root_uri"] = root_uri
                     else:
+                        target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                         resource_lock = await self._acquire_resource_lock(
                             lock_manager, dst_path, uri=root_uri
@@ -307,6 +309,7 @@ class ResourceProcessor:
                             lock=resource_lock,
                             temp_uris=[temp_uri_for_summarize],
                             is_code_repo=is_code_repo,
+                            target_preexisting=target_preexisting,
                             **kwargs,
                         )
                         if (

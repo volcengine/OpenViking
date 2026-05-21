@@ -116,58 +116,6 @@ async def test_memory_append_preserves_metadata(service):
     assert stored_result.memory_fields == expected_metadata
 
 
-@pytest.mark.asyncio
-async def test_memory_write_vector_refresh_includes_generated_summary(monkeypatch):
-    file_uri = "viking://user/default/memories/preferences/theme.md"
-    root_uri = "viking://user/default/memories/preferences"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-
-    captured = {}
-
-    async def _fake_generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
-        del self, llm_sem, ctx
-        return {"name": "theme.md", "summary": f"summary for {file_path}"}
-
-    async def _fake_vectorize_file(
-        *,
-        file_path,
-        summary_dict,
-        parent_uri,
-        context_type,
-        ctx,
-        semantic_msg_id=None,
-        use_summary=False,
-        preserve_existing_created_at=False,
-    ):
-        del ctx, semantic_msg_id, use_summary, preserve_existing_created_at
-        captured["file_path"] = file_path
-        captured["summary_dict"] = summary_dict
-        captured["parent_uri"] = parent_uri
-        captured["context_type"] = context_type
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticProcessor._generate_single_file_summary",
-        _fake_generate_single_file_summary,
-    )
-    monkeypatch.setattr(
-        "openviking.storage.content_write.vectorize_file",
-        _fake_vectorize_file,
-    )
-
-    await coordinator._vectorize_single_file(file_uri, context_type="memory", ctx=ctx)
-
-    assert captured["file_path"] == file_uri
-    assert captured["parent_uri"] == root_uri
-    assert captured["context_type"] == "memory"
-    assert captured["summary_dict"] == {
-        "name": "theme.md",
-        "summary": f"summary for {file_uri}",
-    }
-
-
 class _FakeHandle:
     def __init__(self, handle_id: str):
         self.id = handle_id
@@ -443,10 +391,6 @@ async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatc
         del uri, content, mode, ctx
         return None
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -456,7 +400,6 @@ async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatc
         raise DeadlineExceededError("queue processing", timeout)
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
 
@@ -539,10 +482,6 @@ async def test_create_mode_new_file_success(monkeypatch):
         write_calls.append((uri, content))
         return content
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -552,7 +491,6 @@ async def test_create_mode_new_file_success(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -581,18 +519,12 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
     monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
 
     write_calls = []
-    vectorize_calls = []
     refresh_calls = []
 
     async def _fake_write_in_place(uri, content, *, mode, ctx):
         del mode, ctx
         write_calls.append((uri, content))
         return content
-
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del ctx
-        vectorize_calls.append((uri, context_type))
-        return None
 
     async def _fake_enqueue_memory_refresh(**kwargs):
         refresh_calls.append(kwargs)
@@ -603,7 +535,6 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -615,7 +546,6 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
     assert result["root_uri"] == root_uri
     assert result["context_type"] == "memory"
     assert write_calls == [(canonical_uri, "new content")]
-    assert vectorize_calls == [(canonical_uri, "memory")]
     assert refresh_calls[0]["root_uri"] == root_uri
     assert refresh_calls[0]["modified_uri"] == canonical_uri
 
@@ -632,10 +562,6 @@ async def test_create_mode_existing_file_raises_409(monkeypatch):
         del uri, content, mode, ctx
         return None
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -645,7 +571,6 @@ async def test_create_mode_existing_file_raises_409(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -665,10 +590,6 @@ async def test_create_mode_invalid_extension_raises_400(monkeypatch):
         del uri, content, mode, ctx
         return None
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -678,7 +599,6 @@ async def test_create_mode_invalid_extension_raises_400(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -704,10 +624,6 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
         write_calls.append((uri, content))
         return content
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -717,7 +633,6 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -753,10 +668,6 @@ async def test_create_mode_valid_extensions_pass(monkeypatch):
             del uri, mode, ctx
             return content
 
-        async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-            del uri, context_type, ctx
-            return None
-
         async def _fake_enqueue_memory_refresh(**kwargs):
             del kwargs
             return None
@@ -766,7 +677,6 @@ async def test_create_mode_valid_extensions_pass(monkeypatch):
             return None
 
         monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-        monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
         monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
         monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -791,14 +701,10 @@ async def test_create_mode_memory_scope(monkeypatch):
         del uri, mode, ctx
         return content
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        # Verify memory-scope URIs take the memory write path
-        assert context_type == "memory"
-        del uri, ctx
-        return None
+    refresh_calls = []
 
     async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
+        refresh_calls.append(kwargs)
         return None
 
     async def _fake_wait_for_queues(*, timeout):
@@ -806,7 +712,6 @@ async def test_create_mode_memory_scope(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -814,6 +719,8 @@ async def test_create_mode_memory_scope(monkeypatch):
         uri=file_uri, content="content", mode="create", ctx=ctx, wait=True
     )
     assert result["context_type"] == "memory"
+    assert refresh_calls[0]["root_uri"] == root_uri
+    assert refresh_calls[0]["modified_uri"] == file_uri
 
 
 @pytest.mark.asyncio
@@ -867,10 +774,6 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
         del uri, content, ctx
         return None
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -880,7 +783,6 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
@@ -908,10 +810,6 @@ async def test_create_mode_regression_append_unchanged(monkeypatch):
         del uri, content, ctx
         return None
 
-    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
-        del uri, context_type, ctx
-        return None
-
     async def _fake_enqueue_memory_refresh(**kwargs):
         del kwargs
         return None
@@ -921,7 +819,6 @@ async def test_create_mode_regression_append_unchanged(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
