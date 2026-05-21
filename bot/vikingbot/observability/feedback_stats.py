@@ -288,6 +288,7 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
 
     feedback_events = metadata.get("feedback_events", [])
     response_outcomes = metadata.get("response_outcomes", {})
+    response_facts = metadata.get("response_facts", {})
     response_ids = _collect_response_ids(remaining_lines)
 
     feedback_by_response = {
@@ -295,7 +296,12 @@ def _read_session_metrics(session_path: Path, filters: dict[str, Any]) -> dict[s
         for event in feedback_events
         if isinstance(event, dict) and event.get("response_id")
     }
-    tracked_response_ids = feedback_by_response | {
+    tracked_response_ids = {
+        response_id
+        for response_id, payload in response_facts.items()
+        if isinstance(response_id, str) and response_id and isinstance(payload, dict)
+    }
+    tracked_response_ids |= feedback_by_response | {
         response_id
         for response_id, payload in response_outcomes.items()
         if isinstance(response_id, str) and response_id and isinstance(payload, dict)

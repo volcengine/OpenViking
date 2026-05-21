@@ -636,6 +636,59 @@ def test_compute_feedback_stats_preserves_all_assistant_responses_total_but_uses
     assert stats["sessions"][0]["positive_feedback_rate"] == 1.0
 
 
+def test_compute_feedback_stats_counts_response_facts_as_tracked_responses(temp_dir):
+    sessions_dir = temp_dir / "bot" / "sessions"
+    sessions_dir.mkdir(parents=True)
+
+    (sessions_dir / "feishu__demo__session-1.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "_type": "metadata",
+                        "session_key": "feishu__demo__session-1",
+                        "updated_at": "2026-05-01T10:00:00",
+                        "metadata": {
+                            "response_facts": {
+                                "resp-1": {"response_id": "resp-1"},
+                                "resp-2": {"response_id": "resp-2"},
+                            }
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 1",
+                        "response_id": "resp-1",
+                        "timestamp": "2026-05-01T10:00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "answer 2",
+                        "response_id": "resp-2",
+                        "timestamp": "2026-05-01T10:01:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stats = compute_feedback_stats(temp_dir / "bot", include_sessions=True)
+
+    assert stats["summary"]["responses_total"] == 2
+    assert stats["summary"]["tracked_responses_total"] == 2
+    assert stats["summary"]["responses_with_feedback"] == 0
+    assert stats["summary"]["feedback_total"] == 0
+    assert stats["summary"]["feedback_coverage"] == 0.0
+    assert stats["channels"]["feishu__demo"]["tracked_responses_total"] == 2
+    assert stats["sessions"][0]["tracked_responses_total"] == 2
+
+
 def test_compute_feedback_stats_counts_rating_feedback_via_outcomes(temp_dir):
     sessions_dir = temp_dir / "bot" / "sessions"
     sessions_dir.mkdir(parents=True)

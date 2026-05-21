@@ -198,7 +198,9 @@ vikingbot gateway
 - 访问 [飞书开放平台](https://open.feishu.cn/app)
 - 创建新应用 → 启用 **机器人** 功能
 - **权限**：添加 `im:message`（发送消息）
-- **事件**：添加 `im.message.receive_v1`（接收消息）
+- **事件**：至少添加以下事件
+  - `im.message.receive_v1`（接收消息）
+  - `im.message.reaction.created_v1`（接收用户对 bot 回复的点赞/点踩等表情反馈）
   - 选择 **长连接** 模式（需要先运行 vikingbot 来建立连接）
 - 从「凭证与基础信息」获取 **App ID** 和 **App Secret**
 - 发布应用
@@ -227,6 +229,7 @@ vikingbot gateway
 > `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
 > `botName`：用于在传给模型的群聊上下文中把 `@<open_id>` 提及替换为机器人名称，以及标注机器人自身发出的消息；留空则回退为 `"Bot"`。
 > `threadRequireMention`：群聊是否需要 `@` 机器人才响应。默认 `true` —— 普通群和话题群的所有消息都需要 `@`；设为 `false` 时，普通群无需 `@`，话题群仅首条消息无需 `@`，非 `DEBUG` 模式下后续回复仍需 `@`。
+> 如果你希望把飞书里的“赞/踩”表情统计进 `openviking_feedback_*` 指标，必须在飞书开放平台额外打开 `im.message.reaction.created_v1` 事件订阅；只开 `im.message.receive_v1` 时，聊天可正常工作，但表情反馈不会回调到 bot。
 
 **3. 运行**
 

@@ -558,6 +558,269 @@ openviking_feedback_channel_events_total{valid="1"}
 
 如果你不确定当前环境里有哪些可用 `channel_id`，可以先检查 bot 配置里启用的 `bot_api` channel；若配置不存在，对应请求会返回 `404 Channel '<channel_id>' not found`。
 
+## 自然语言反馈自动识别的补充验收
+
+上面的 7 个场景已经覆盖了显式 `/bot/v1/feedback`、follow-up outcome 和 channel 维度聚合。如果你已经启用了“自然语言反馈自动识别”，建议再补跑下面这 5 个场景，确认 `channel` 消息里的自然语言会被正确识别为 feedback，且不会把普通追问误判成反馈。
+
+这组补充验收建议使用一批全新的 `session_id`，避免和前面的历史样本相互干扰：
+
+- `realcase-08-nl-negative-rule`
+- `realcase-09-nl-positive-rule`
+- `realcase-10-nl-followup-no-feedback`
+- `realcase-11-nl-llm-positive`
+- `realcase-12-nl-low-confidence`
+
+这部分验收不只看 `/bot/v1/chat` 是否返回 200，还要同时检查：
+
+- 对应 session JSONL 是否已经落盘
+- `metadata.feedback_events` 是否新增了自动 feedback event
+- `metadata.response_outcomes` 是否反映了对应 outcome
+- `/metrics` 中的 feedback / outcome 指标是否按预期跳变
+
+session 文件一般位于 `<bot_data_path>/sessions/` 下，文件名遵循 `SessionKey.safe_name()` 规则。你不需要强依赖某个固定前缀，验收时直接按 `session_id` 对应的 session 文件查 `metadata.feedback_events` 和 `metadata.response_outcomes` 即可。
+
+### 补充场景 A：明确负反馈文案命中规则，自动记录 `thumb_down`
+
+目标：验证像“这完全没帮助”“答非所问”“that did not help”这类明确负反馈，不走显式 `/bot/v1/feedback`，也会在下一条用户消息到来时被自动记录为负反馈。
+
+执行步骤：
+
+1. 先用一个新 `session_id` 发起正常问答。
+2. 记录第一轮返回里的 `response_id`。
+3. 用同一个 `session_id` 再发一条自然语言负反馈，建议设置 `need_reply=false`，模拟“用户只是反馈，不期待 bot 再回复”。
+4. 检查 session 落盘和指标变化。
+
+第一轮提问：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-08-nl-negative-rule",
+    "user_id": "metrics-validation-user",
+    "message": "请简要说明 OpenViking 的主要用途。"
+  }'
+```
+
+第二轮自然语言反馈：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-08-nl-negative-rule",
+    "user_id": "metrics-validation-user",
+    "message": "这完全没帮助。",
+    "need_reply": false
+  }'
+```
+
+重点观察：
+
+- `openviking_feedback_events_total{valid="1"}`
+- `openviking_feedback_thumb_down_total{valid="1"}`
+- `openviking_feedback_negative_outcomes_total{valid="1"}`
+- `openviking_feedback_responses_with_feedback_total{valid="1"}`
+
+PromQL：
+
+```promql
+openviking_feedback_thumb_down_total{valid="1"}
+```
+
+```promql
+openviking_feedback_negative_outcomes_total{valid="1"}
+```
+
+session 文件里重点看：
+
+- `metadata.feedback_events[*].response_id` 是否指向第一轮 assistant 的 `response_id`
+- `metadata.feedback_events[*].feedback_type` 是否为 `thumb_down`
+- `metadata.feedback_events[*].feedback_reason` 是否为 `natural_language_rule`
+- `metadata.feedback_events[*].feedback_text` 是否保留了原始自然语言反馈
+
+预期变化：
+
+- 会变：`events_total`、`thumb_down_total`、`responses_with_feedback_total`、`negative_outcomes_total` 通常各增加 `1`
+- 不该变：不需要显式调用 `/bot/v1/feedback`，因此这一轮验收的目标就是确认“只靠自然语言消息也能完成同样的落盘与聚合”
+
+### 补充场景 B：明确正反馈文案命中规则，自动记录 `thumb_up`
+
+目标：验证像“谢谢，已经解决了”“有帮助”“可以了”这类明确正反馈，会自动记录为正反馈。
+
+第一轮提问：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-09-nl-positive-rule",
+    "user_id": "metrics-validation-user",
+    "message": "请用一句话解释 OpenViking 的 readiness 指标。"
+  }'
+```
+
+第二轮自然语言反馈：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-09-nl-positive-rule",
+    "user_id": "metrics-validation-user",
+    "message": "谢谢，已经解决了。",
+    "need_reply": false
+  }'
+```
+
+重点观察：
+
+- `openviking_feedback_events_total{valid="1"}`
+- `openviking_feedback_thumb_up_total{valid="1"}`
+- `openviking_feedback_positive_outcomes_total{valid="1"}`
+- `openviking_feedback_one_turn_resolution_rate{valid="1"}`
+
+PromQL：
+
+```promql
+openviking_feedback_thumb_up_total{valid="1"}
+```
+
+```promql
+openviking_feedback_positive_outcomes_total{valid="1"}
+```
+
+session 文件里重点看：
+
+- `metadata.feedback_events[*].feedback_type` 是否为 `thumb_up`
+- `metadata.feedback_events[*].feedback_reason` 是否为 `natural_language_rule`
+- `metadata.response_outcomes` 里对应 response 是否已被评为正向 outcome
+
+预期变化：
+
+- 会变：`events_total`、`thumb_up_total`、`responses_with_feedback_total`、`positive_outcomes_total` 通常各增加 `1`
+- 可能变化不明显：`one_turn_resolution_rate` 可能上升，也可能因为历史样本很多而接近不变
+
+### 补充场景 C：普通追问不应被误判为反馈
+
+目标：验证“为什么还是不行，下一步怎么做？”这类 follow-up，不应被自动识别成 feedback，而应继续按 follow-up / reask 逻辑处理。
+
+第一轮提问：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-10-nl-followup-no-feedback",
+    "user_id": "metrics-validation-user",
+    "message": "请说明 OpenViking 的 metrics 有什么作用。"
+  }'
+```
+
+第二轮 follow-up：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-10-nl-followup-no-feedback",
+    "user_id": "metrics-validation-user",
+    "message": "为什么还是不行，下一步怎么做？"
+  }'
+```
+
+重点观察：
+
+- `openviking_feedback_events_total{valid="1"}`
+- `openviking_feedback_reasked_outcomes_total{valid="1"}`
+
+session 文件里重点看：
+
+- `metadata.feedback_events` 不应因为第二轮 follow-up 新增自动 feedback
+- 第一轮 response 如被评估为 `reasked`，应体现在 `metadata.response_outcomes` 中
+
+预期变化：
+
+- 不该变：`events_total`、`thumb_up_total`、`thumb_down_total`、`responses_with_feedback_total` 不应因为这条普通追问直接增加
+- 可能会变：如果该消息被判定为 reask，`reasked_outcomes_total` 可能增加 `1`
+
+### 补充场景 D：模糊表达走 LLM fallback，高置信度时自动记录
+
+目标：验证规则没有命中时，系统会走 LLM fallback；只有当 `is_feedback=true` 且 `confidence >= 0.8` 时，才自动写入 feedback event。
+
+前提：
+
+- 当前环境中的 bot provider 可正常调用 LLM
+- 你能接受这一条用例的结果可能受模型判断影响，建议多观察 session 落盘中的 `feedback_reason`
+
+第一轮提问：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-11-nl-llm-positive",
+    "user_id": "metrics-validation-user",
+    "message": "请帮我概括 OpenViking 的核心能力。"
+  }'
+```
+
+第二轮模糊反馈：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "realcase-11-nl-llm-positive",
+    "user_id": "metrics-validation-user",
+    "message": "先这样吧。",
+    "need_reply": false
+  }'
+```
+
+session 文件里重点看：
+
+- `metadata.feedback_events[*].feedback_reason` 是否为 `natural_language_llm`
+- `metadata.feedback_events[*].feedback_type` 是否与模型判定一致
+- 该 feedback 是否仍然绑定到了上一条 assistant response
+
+预期变化：
+
+- 如果模型给出 `is_feedback=true` 且 `confidence >= 0.8`，则 `events_total`、`responses_with_feedback_total` 和对应正/负向 outcome total 会增加
+- 如果没有达到门限，则这条消息不会被自动记录；此时优先以 session 落盘结果为准，不要只根据“消息语气像反馈”做判断
+
+### 补充场景 E：低置信度不应自动记录
+
+目标：验证模糊表达即使走了 LLM fallback，只要置信度不够，就不会自动生成 feedback event。
+
+推荐消息：选择一条既不像明确表扬，也不像明确差评的短句，例如：
+
+```text
+嗯，我再看看。
+```
+
+执行方式和补充场景 D 相同，只是把第二轮消息替换为更模糊的表达。
+
+重点观察：
+
+- `metadata.feedback_events` 不应新增 `natural_language_llm` 自动记录
+- `openviking_feedback_events_total{valid="1"}` 不应因为这条模糊消息直接增加
+
+说明：
+
+- 这一条用例的关键不是“必须能稳定打出某个固定低置信度值”，而是确认系统遵循了门限规则
+- 如果你希望更稳定地验证这一点，优先查看 session 落盘中是否根本没有新增 feedback event
+
+### 补充验收时的排错顺序
+
+如果你看到 HTTP 200，但指标没有变化，建议按下面顺序排查：
+
+1. 先看第二条消息是否真的使用了与第一轮相同的 `session_id`。
+2. 再看 session 文件中是否已经有第一轮 assistant response 和对应 `response_id`。
+3. 检查 `metadata.feedback_events` 是否已新增事件，以及事件里的 `feedback_reason` 是 `natural_language_rule` 还是 `natural_language_llm`。
+4. 如果 session 已落盘但 `/metrics` 还没变化，等待下一次 scrape 后再看，不要只看单次瞬时查询。
+5. 如果只有显式 `/bot/v1/feedback` 能工作，而自然语言反馈不生效，优先检查当前部署是否已经包含自动识别逻辑。
+
 ### 一次性人工验收的推荐顺序
 
 如果你只想跑一遍最实用的人工验收，建议按下面顺序执行：
@@ -565,10 +828,13 @@ openviking_feedback_channel_events_total{valid="1"}
 1. 跑“场景 1”，确认 `/bot/v1/chat`、会话持久化和 `responses_total` 正常。
 2. 跑“场景 2”，确认 `thumb_up`、`positive_outcomes_total`、`coverage` 正常。
 3. 跑“场景 3”，确认 `thumb_down`、`negative_outcomes_total` 正常。
-4. 跑“场景 4”，确认 `reasked_outcomes_total` 正常。
-5. 跑“场景 5”，确认 `follow_up_without_feedback_outcomes_total` 正常。
-6. 跑“场景 6”，把 `resolved` 作为补充验证。
-7. 如果你的环境启用了 `bot_api` channel，再跑“场景 7”验证 channel 维度指标。
+4. 补跑“补充场景 A”和“补充场景 B”，确认明确正/负自然语言反馈可以自动入库。
+5. 补跑“补充场景 C”，确认普通 follow-up 不会被误判成 feedback。
+6. 如果环境启用了可用 LLM provider，再跑“补充场景 D”和“补充场景 E”验证 fallback 和置信度门限。
+7. 跑“场景 4”，确认 `reasked_outcomes_total` 正常。
+8. 跑“场景 5”，确认 `follow_up_without_feedback_outcomes_total` 正常。
+9. 跑“场景 6”，把 `resolved` 作为补充验证。
+10. 如果你的环境启用了 `bot_api` channel，再跑“场景 7”验证 channel 维度指标。
 
 ## 第 0 步：先看基线指标
 
