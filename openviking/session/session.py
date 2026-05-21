@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
@@ -19,6 +19,7 @@ from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.session.tool_result_store import ToolResultStore, make_preview, sha256_text
+from openviking.session.wm_constants import WM_SEVEN_SECTIONS
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
@@ -29,6 +30,7 @@ from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.session.compressor import SessionCompressor
+    from openviking.session.extraction_preprocessor import PreprocessorOptions
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 
@@ -54,16 +56,6 @@ def _wm_debug(msg: str) -> None:
 # `update_working_memory` tool to get a per-section decision, then let
 # the server do section-level merge against the previous WM.
 # =====================================================================
-
-WM_SEVEN_SECTIONS: List[str] = [
-    "Session Title",
-    "Current State",
-    "Task & Goals",
-    "Key Facts & Decisions",
-    "Files & Context",
-    "Errors & Corrections",
-    "Open Issues",
-]
 
 _WM_SECTION_OP_SCHEMA: Dict[str, Any] = {
     "oneOf": [
@@ -1922,6 +1914,141 @@ class Session:
         turn_count = len([m for m in messages if m.role == "user"])
         return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
+    @staticmethod
+    def _build_wm_preprocessor_options(memory_config: Any) -> "PreprocessorOptions":
+        from openviking.session.extraction_preprocessor import PreprocessorOptions
+
+        return PreprocessorOptions(
+            max_span_tokens=int(getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)),
+            min_span_tokens=int(getattr(memory_config, "wm_v2_preprocess_min_span_tokens", 200)),
+            max_span_chars=int(getattr(memory_config, "wm_v2_preprocess_max_span_chars", 1600)),
+            fallback_if_compact_ratio_above=float(
+                getattr(memory_config, "wm_v2_preprocess_fallback_ratio", 0.9)
+            ),
+            expand_budget_on_risk=bool(
+                getattr(memory_config, "wm_v2_preprocess_expand_budget_on_risk", True)
+            ),
+            max_facts_total=int(getattr(memory_config, "wm_v2_preprocess_max_facts_total", 24)),
+            min_full_tokens_for_compact=int(
+                getattr(memory_config, "wm_v2_preprocess_min_full_tokens", 600)
+            ),
+            min_absolute_savings_tokens=int(
+                getattr(memory_config, "wm_v2_preprocess_min_absolute_savings_tokens", 500)
+            ),
+            mmr_similarity_threshold=float(
+                getattr(memory_config, "wm_v2_preprocess_mmr_similarity_threshold", 0.72)
+            ),
+            max_tool_output_chars=int(
+                getattr(memory_config, "wm_v2_preprocess_max_tool_output_chars", 300)
+            ),
+            max_tool_spans=int(getattr(memory_config, "wm_v2_preprocess_max_tool_spans", 3)),
+        )
+
+    @staticmethod
+    def _record_wm_preprocessor_telemetry(
+        phase: str,
+        enabled: bool,
+        packet: Optional[Any] = None,
+        *,
+        exception: bool = False,
+    ) -> None:
+        telemetry = get_current_telemetry()
+        telemetry.set("wm.preprocess.phase", phase)
+        telemetry.set("wm.preprocess.enabled", enabled)
+        if not enabled:
+            return
+        if exception:
+            telemetry.set("wm.preprocess.fallback_reason", "exception")
+            return
+        if packet is None:
+            return
+        telemetry.set(
+            "wm.preprocess.full_messages_tokens_est",
+            packet.token_estimates.full_messages_tokens_est,
+        )
+        telemetry.set(
+            "wm.preprocess.compact_packet_tokens_est",
+            packet.token_estimates.compact_packet_tokens_est,
+        )
+        telemetry.set(
+            "wm.preprocess.saved_tokens_est",
+            packet.token_estimates.saved_tokens_est,
+        )
+        telemetry.set("wm.preprocess.selected_spans_count", len(packet.selected_spans))
+        telemetry.set("wm.preprocess.structured_facts_count", len(packet.structured_facts))
+        telemetry.set("wm.preprocess.risk_flags", list(packet.risk_flags))
+        telemetry.set("wm.preprocess.fallback_reason", packet.fallback_reason or "")
+
+    @classmethod
+    def _log_wm_preprocessor_result(cls, phase: str, packet: Any) -> None:
+        phase_upper = phase.upper()
+        if packet.should_fallback:
+            logger.info(
+                "WM_PREPROCESS %s FALLBACK: reason=%s full=%d compact=%d "
+                "saved=%d spans=%d facts=%d risk=%s",
+                phase_upper,
+                packet.fallback_reason,
+                packet.token_estimates.full_messages_tokens_est,
+                packet.token_estimates.compact_packet_tokens_est,
+                packet.token_estimates.saved_tokens_est,
+                len(packet.selected_spans),
+                len(packet.structured_facts),
+                packet.risk_flags,
+            )
+            return
+        logger.info(
+            "WM_PREPROCESS %s ACTIVE: full=%d compact=%d saved=%d (%d%%) spans=%d facts=%d risk=%s",
+            phase_upper,
+            packet.token_estimates.full_messages_tokens_est,
+            packet.token_estimates.compact_packet_tokens_est,
+            packet.token_estimates.saved_tokens_est,
+            int(
+                packet.token_estimates.saved_tokens_est
+                * 100
+                / max(packet.token_estimates.full_messages_tokens_est, 1)
+            ),
+            len(packet.selected_spans),
+            len(packet.structured_facts),
+            packet.risk_flags,
+        )
+
+    @classmethod
+    def _run_wm_preprocessor(
+        cls,
+        *,
+        messages: List[Message],
+        latest_archive_overview: str,
+        formatted_messages: str,
+        memory_config: Any,
+        phase: str,
+    ) -> Tuple[str, Optional[Any]]:
+        enabled = bool(getattr(memory_config, "wm_v2_preprocess_enabled", False))
+        cls._record_wm_preprocessor_telemetry(phase, enabled)
+        if not enabled:
+            return formatted_messages, None
+
+        try:
+            from openviking.session.extraction_preprocessor import build_wm_compact_packet
+
+            packet = build_wm_compact_packet(
+                messages,
+                latest_overview=latest_archive_overview,
+                options=cls._build_wm_preprocessor_options(memory_config),
+            )
+            cls._record_wm_preprocessor_telemetry(phase, enabled, packet)
+            cls._log_wm_preprocessor_result(phase, packet)
+            if packet.should_fallback:
+                return formatted_messages, packet
+            return packet.wm_update_view, packet
+        except Exception as e:
+            cls._record_wm_preprocessor_telemetry(phase, enabled, exception=True)
+            logger.warning(
+                "WM %s preprocessing failed (%s); using full messages",
+                phase,
+                e,
+            )
+            return formatted_messages, None
+
     async def _generate_archive_summary_async(
         self,
         messages: List[Message],
@@ -1948,7 +2075,8 @@ class Session:
 
         formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
 
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
         if not (vlm and vlm.is_available()):
             turn_count = len([m for m in messages if m.role == "user"])
             return (
@@ -1976,10 +2104,22 @@ class Session:
                 f"{len(latest_archive_overview or '')}B)"
             )
             try:
+                memory_config = getattr(config, "memory", None)
+                creation_messages, _packet = self._run_wm_preprocessor(
+                    messages=messages,
+                    latest_archive_overview=latest_archive_overview or "",
+                    formatted_messages=formatted,
+                    memory_config=memory_config,
+                    phase="creation",
+                )
+
+                # The WM creation/update prompts must tolerate two `messages`
+                # formats: the raw `_format_message_for_wm()` fallback shape
+                # and the compact packet shape emitted by the preprocessor.
                 prompt = render_prompt(
                     "compression.ov_wm_v2",
                     {
-                        "messages": formatted,
+                        "messages": creation_messages,
                         "latest_archive_overview": latest_archive_overview or "",
                     },
                 )
@@ -1996,13 +2136,21 @@ class Session:
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         _wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
         try:
+            memory_config = getattr(config, "memory", None)
+            update_messages, _packet = self._run_wm_preprocessor(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                formatted_messages=formatted,
+                memory_config=memory_config,
+                phase="update",
+            )
             reminders = Session._build_wm_section_reminders(latest_archive_overview)
             if reminders:
                 _wm_debug(f"section_reminders injected ({len(reminders)}B)")
             update_prompt = render_prompt(
                 "compression.ov_wm_v2_update",
                 {
-                    "messages": formatted,
+                    "messages": update_messages,
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
                 },

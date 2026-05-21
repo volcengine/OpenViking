@@ -90,6 +90,87 @@ class MemoryConfig(BaseModel):
             "is ignored and the login user from the request context is used instead."
         ),
     )
+    wm_v2_preprocess_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable compact pre-processing for Working Memory v2 incremental update prompts. "
+            "When disabled, WM v2 update uses the original full archived messages."
+        ),
+    )
+    wm_v2_preprocess_max_span_tokens: int = Field(
+        default=1200,
+        ge=100,
+        description="Maximum estimated tokens to spend on selected evidence spans.",
+    )
+    wm_v2_preprocess_min_span_tokens: int = Field(
+        default=200,
+        ge=0,
+        description="Minimum span budget floor after adaptive preprocessing adjustments.",
+    )
+    wm_v2_preprocess_max_span_chars: int = Field(
+        default=1600,
+        ge=100,
+        description="Maximum characters allowed in each selected evidence span.",
+    )
+    wm_v2_preprocess_fallback_ratio: float = Field(
+        default=0.9,
+        ge=0.1,
+        le=10.0,
+        description=(
+            "Fallback to full messages when compact packet tokens are greater than this "
+            "ratio of full message tokens."
+        ),
+    )
+    wm_v2_preprocess_min_full_tokens: int = Field(
+        default=600,
+        ge=0,
+        description=(
+            "Skip compact preprocessing when the estimated full message tokens are "
+            "below this threshold. Set to 0 to force compact even for short sessions."
+        ),
+    )
+    wm_v2_preprocess_min_absolute_savings_tokens: int = Field(
+        default=500,
+        ge=0,
+        description=(
+            "Fallback to full messages when compact preprocessing saves fewer than "
+            "this many estimated tokens, even if the ratio threshold passes."
+        ),
+    )
+    wm_v2_preprocess_mmr_similarity_threshold: float = Field(
+        default=0.72,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Maximum Jaccard similarity allowed between selected non-tool evidence "
+            "spans before they are considered redundant."
+        ),
+    )
+    wm_v2_preprocess_max_tool_spans: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Maximum number of tool-heavy spans that can bypass normal MMR "
+            "deduplication in a compact packet."
+        ),
+    )
+    wm_v2_preprocess_expand_budget_on_risk: bool = Field(
+        default=True,
+        description=(
+            "When enabled, risk flags can expand the evidence span budget before "
+            "compaction fallback is decided."
+        ),
+    )
+    wm_v2_preprocess_max_facts_total: int = Field(
+        default=24,
+        ge=0,
+        description="Maximum structured facts retained in a compact packet.",
+    )
+    wm_v2_preprocess_max_tool_output_chars: int = Field(
+        default=300,
+        ge=0,
+        description="Maximum characters preserved from each tool output in normalized spans.",
+    )
     link_enabled: bool = Field(
         default=False,
         description=(
