@@ -1,0 +1,134 @@
+memory_type: facts
+description: |
+  Compact, answerable fact memory. Use this memory type for precise facts that
+  should be retrievable without reading broad event/entity files.
+
+  # Extraction rules
+  - Extract only high-signal facts that can directly answer who/what/where/when/
+    which/how many questions.
+  - Prefer exact names, numbers, counts, dates, products, places, brands,
+    titles, ordered-list items, recommendations, current statuses, and progress.
+  - Keep each statement self-contained, searchable, and usually under 35 words.
+  - Do not extract vague summaries such as "the user discussed coupons".
+  - Do not duplicate profile, preference, or event memories unless the fact is a
+    compact lookup key that would otherwise require reading a long memory.
+
+  # Upsert behavior
+  - Choose a stable fact_key for the semantic fact, not for the sentence wording.
+  - If the new conversation updates the same current state/count/progress, reuse
+    the same fact_key and replace statement/object/time/ranges with the latest
+    value.
+  - For historical one-off facts, include the object or date in fact_key so
+    distinct facts do not overwrite each other.
+
+  # High-value examples
+  - User owns 38 pre-1920 coins as of 2023-05-30.
+  - Assistant recommended By Chloe as a restaurant option for the user.
+  - The 27th prompt parameter in the user's list is "Sound effects or music cues".
+  - User has listened to about 15 episodes of How I Built This.
+  - User's dog is a Golden Retriever.
+directory: "viking://user/{{ user_space }}/memories/facts"
+filename_template: "{{ fact_key }}.md"
+enabled: true
+operation_mode: "upsert"
+content_template: |
+  # {{ statement }}
+
+  subject: {{ subject }}
+  relation: {{ relation }}
+  object: {{ object }}
+  time: {{ time|default('N/A') }}
+  confidence: {{ confidence|default('N/A') }}
+
+  {{ statement }}
+
+  {% if qualifiers %}
+  qualifiers: {{ qualifiers }}
+  {% endif %}
+  {% if source_session_id %}
+  source_session_id: {{ source_session_id }}
+  {% endif %}
+  source_message_ranges: {{ ranges }}
+
+fields:
+  - name: fact_key
+    type: string
+    description: |
+      Stable filename id for this semantic fact. Use lowercase snake_case.
+      For current state/count/progress facts, reuse the same key when the value
+      changes, for example user_pre_1920_coin_collection_count.
+      For one-off historical facts, include the distinguishing object/date, for
+      example assistant_recommended_by_chloe or prompt_parameter_27.
+      Do not include slashes.
+    merge_op: immutable
+
+  - name: statement
+    type: string
+    description: |
+      One complete natural-language sentence containing the exact atomic fact.
+      It must be self-contained and optimized for retrieval, including key
+      names, places, numbers, products, and dates. For updated current-state
+      facts, replace this with the newest answerable statement.
+    merge_op: patch
+
+  - name: subject
+    type: string
+    description: |
+      Subject of the fact. Use "user" for the current user, or a specific person,
+      organization, product, or assistant when the fact is about that entity.
+    merge_op: immutable
+
+  - name: relation
+    type: string
+    description: |
+      Predicate/relation in lowercase snake_case, such as redeemed_coupon_at,
+      owns_count, upgraded_ram_to, moved_to, shops_at, saved_amount_with,
+      works_at, lives_in, prefers_for_task, or scheduled_for.
+    merge_op: immutable
+
+  - name: object
+    type: string
+    description: |
+      Object/value of the fact. Keep exact values and units, for example Target,
+      3 bikes, 16GB, suburbs, "$5", or 2023-05-22.
+      For current-state facts, replace this with the latest value.
+    merge_op: patch
+
+  - name: qualifiers
+    type: string
+    description: |
+      Optional compact JSON object string for constraints that make the fact
+      retrievable and disambiguated, such as:
+      {"product":"coffee creamer","coupon_value":"$5","channel":"Target Cartwheel app"}.
+      Use an empty string if there are no useful qualifiers.
+    merge_op: patch
+
+  - name: time
+    type: string
+    description: |
+      Concrete date/time for the fact when available, using YYYY-MM-DD or an ISO
+      timestamp. If the exact event date is unknown, use the mention date from
+      the source message range and say so in the statement when relevant.
+    merge_op: patch
+
+  - name: source_session_id
+    type: string
+    description: |
+      Optional external/source session id if it is explicitly visible in the
+      extraction context. Do not invent one. Use an empty string if unavailable.
+    merge_op: patch
+
+  - name: ranges
+    type: string
+    description: |
+      Conversation message index ranges that directly support this fact, format:
+      "start-end,start-end,..." or "7,9,11". Use the smallest supporting range.
+      For updated facts, replace this with the latest supporting range.
+    merge_op: patch
+
+  - name: confidence
+    type: float32
+    description: |
+      Confidence from 0.0 to 1.0. Use >=0.8 only when the fact is directly
+      stated or clearly confirmed. Use lower confidence for mild ambiguity.
+    merge_op: patch
