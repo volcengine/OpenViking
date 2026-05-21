@@ -20,6 +20,10 @@ on:
           - auto
           - dev
           - latest
+      package_ref:
+        description: "Git ref to package. Use main to publish the current main branch plugin while running this workflow from another branch."
+        required: false
+        default: "main"
       changelog:
         description: "Changelog text for this release."
         required: false
@@ -203,6 +207,7 @@ jobs:
           echo "resolved_version=${{ steps.resolve.outputs.version }}"
           echo "channel=${{ github.event.inputs.channel || 'auto' }}"
           echo "resolved_tags=${{ steps.resolve.outputs.tags }}"
+          echo "package_ref=${{ inputs.package_ref || 'main' }}"
           echo "publish_clawhub=${{ inputs.publish_clawhub }}"
           echo "publish_npm=${{ inputs.publish_npm }}"
           echo "changelog=${{ github.event.inputs.changelog || 'OpenViking plugin release via OIDC trusted publishing.' }}"
@@ -218,10 +223,39 @@ jobs:
       package_branch: ${{ steps.package_branch.outputs.branch }}
       source_url: ${{ steps.package_branch.outputs.source_url }}
       tarball_name: ${{ steps.pack.outputs.tarball_name }}
+      source_commit: ${{ steps.package_source.outputs.commit }}
+      source_ref: ${{ steps.package_source.outputs.ref }}
+      package_ref: ${{ steps.package_source.outputs.package_ref }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.package_ref || 'main' }}
+
+      - name: Resolve package source metadata
+        id: package_source
+        shell: bash
+        env:
+          PACKAGE_REF: ${{ inputs.package_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify HEAD^{commit})"
+          source_ref="$PACKAGE_REF"
+
+          if [[ "$PACKAGE_REF" == refs/* ]]; then
+            source_ref="$PACKAGE_REF"
+          elif git ls-remote --exit-code --heads origin "$PACKAGE_REF" >/dev/null 2>&1; then
+            source_ref="refs/heads/$PACKAGE_REF"
+          elif git ls-remote --exit-code --tags origin "$PACKAGE_REF" >/dev/null 2>&1; then
+            source_ref="refs/tags/$PACKAGE_REF"
+          fi
+
+          echo "package_ref=$PACKAGE_REF" >> "$GITHUB_OUTPUT"
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "Packaging source:"
+          echo "  package_ref=$PACKAGE_REF"
+          echo "  source_ref=$source_ref"
+          echo "  source_commit=$source_commit"
 
       - uses: actions/setup-node@v6
         with:
@@ -266,6 +300,8 @@ jobs:
           PACKAGE_DIR: ${{ steps.pack.outputs.package_dir }}
           VERSION: ${{ needs.guard.outputs.version }}
           BRANCH: clawhub-package-${{ github.run_id }}
+          SOURCE_REF: ${{ steps.package_source.outputs.ref }}
+          SOURCE_COMMIT: ${{ steps.package_source.outputs.commit }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -275,7 +311,10 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a "$PACKAGE_DIR"/. .
           git add .
-          git commit -m "chore(clawhub): package openviking plugin $VERSION"
+          git commit \
+            -m "chore(clawhub): package openviking plugin $VERSION" \
+            -m "Source ref: $SOURCE_REF" \
+            -m "Source commit: $SOURCE_COMMIT"
           git push --force origin "HEAD:$BRANCH"
           source_url="${GITHUB_REPOSITORY}@${BRANCH}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -336,10 +375,14 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
           TAGS: ${{ needs.guard.outputs.tags }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ github.sha }}
-          SOURCE_REF: ${{ github.ref }}
+          SOURCE_COMMIT: ${{ needs.prepare-package-source.outputs.source_commit }}
+          SOURCE_REF: ${{ needs.prepare-package-source.outputs.source_ref }}
         run: |
           set -euo pipefail
+          echo "Publishing ClawHub source metadata:"
+          echo "  source_repo=$SOURCE_REPO"
+          echo "  source_ref=$SOURCE_REF"
+          echo "  source_commit=$SOURCE_COMMIT"
           clawhub package publish "$SOURCE_URL" \
             --site https://clawhub.ai \
             --registry https://clawhub.ai \
