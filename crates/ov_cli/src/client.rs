@@ -23,6 +23,7 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         Self {
@@ -33,6 +34,7 @@ impl HttpClient {
                 account,
                 user,
                 timeout_secs,
+                profile_enabled,
                 extra_headers,
             ),
         }
@@ -66,7 +68,7 @@ impl HttpClient {
 
     // ============ HTTP Methods ============
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -74,7 +76,7 @@ impl HttpClient {
         self.base.get(path, params).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -82,7 +84,7 @@ impl HttpClient {
         self.base.post(path, body).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -90,7 +92,7 @@ impl HttpClient {
         self.base.put(path, body).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -98,7 +100,7 @@ impl HttpClient {
         self.base.delete(path, params).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -106,7 +108,7 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -115,7 +117,7 @@ impl HttpClient {
         self.base.patch(path, body, params).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -1175,6 +1177,7 @@ mod tests {
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            true,
             Some(extra_headers),
         );
 
@@ -1232,5 +1235,49 @@ mod tests {
             api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
             "[PROCESSING_ERROR] Parse error: boom"
         );
+    }
+
+    #[test]
+    fn unwrap_result_preserves_profile_for_non_object_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_result_drops_profile_for_scalar_typed_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
     }
 }

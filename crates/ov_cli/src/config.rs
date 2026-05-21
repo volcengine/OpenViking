@@ -44,6 +44,8 @@ pub struct Config {
     #[serde(default = "default_verbose")]
     pub verbose: bool,
     #[serde(default)]
+    pub profile: bool,
+    #[serde(default)]
     pub upload: UploadConfig,
     #[serde(default, alias = "extra_header")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -87,6 +89,7 @@ impl Default for Config {
             echo_command: true,
             show_progress: false,
             verbose: false,
+            profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
         }
@@ -330,6 +333,19 @@ mod tests {
         .expect("config should deserialize");
 
         assert!(config.extra_headers.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_profile_flag() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "profile": true
+            }"#,
+        )
+        .expect("config should deserialize with profile");
+
+        assert!(config.profile);
     }
 
     #[test]

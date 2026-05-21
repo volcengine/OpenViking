@@ -38,6 +38,7 @@ class SyncHTTPClient:
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         self._async_client = AsyncHTTPClient(
             url=url,
@@ -48,6 +49,7 @@ class SyncHTTPClient:
             user=user,
             timeout=timeout,
             extra_headers=extra_headers,
+            profile_enabled=profile_enabled,
         )
         self._initialized = False
 
