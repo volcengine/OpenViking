@@ -68,6 +68,11 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "id",
     "uri",
     "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "content",
     "account_id",
 ]
 
@@ -133,7 +138,20 @@ class _SingleAccountBackend:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
-        return {k: v for k, v in filtered.items() if v is not None}
+        result = {k: v for k, v in filtered.items() if v is not None}
+
+        # Ensure text fields required by the schema are present (even if empty).
+        # VikingDB requires all schema-defined fields in upsert data.
+        try:
+            coll = self._get_collection()
+            meta = self._get_meta_data(coll)
+            for field in meta.get("Fields", []):
+                if field.get("FieldType") == "text" and field.get("FieldName") not in result:
+                    result[field["FieldName"]] = ""
+        except Exception:
+            pass
+
+        return result
 
     # =========================================================================
     # Collection Management
