@@ -5,7 +5,7 @@
 - 服务健康检查与组件状态
 - 请求级 `telemetry`
 - 终端侧 `ov tui`
-- Web 侧 `OpenViking Console`
+- Web 侧 `Web Studio`（同 OV server，路径 `/studio`）
 - `/metrics` 时序指标
 
 如果你只想快速判断“该看哪里”，先看下面这张表。
@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `/health`、`observer/*` | 服务是否健康、队列是否堆积、VikingDB/VLM 状态 | 部署验收、值班巡检 |
 | `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录、受支持图片文件的预览 | 开发调试、核对资源是否真正落库 |
-| `OpenViking Console` | Web UI 里的文件浏览、检索、资源导入、租户与系统状态 | 不想手敲命令时做交互式排查 |
+| `Web Studio`（`/studio`） | 同 OV server 的 Web UI：Home 看 token / 检索 / context commits 趋势，Resources 浏览 URI，Retrieval 直接发 find，Request Logs 看审计日志 | 不想手敲命令时做交互式排查 |
 | `telemetry` | 单次请求耗时、token、向量检索、资源处理阶段 | 排查一次具体调用为什么慢、为什么结果异常 |
 | `/metrics` | 请求量趋势、错误率、时延分布、队列与探针状态 | Prometheus 抓取、Grafana 看板、告警规则 |
 
@@ -158,46 +158,29 @@ ov tui viking://resources
 
 TUI 更偏“数据面排查”。它适合回答“资源到底有没有进去”“向量到底有没有写进去”，但不直接展示单次请求的 token 或阶段耗时。
 
-## 用 OpenViking Console 做 Web 观测
+## 用 Web Studio 做 Web 观测
 
-仓库里还有一个独立的 Web Console，它不是主 CLI 的一部分，需要单独启动：
-
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933
-```
-
-然后打开：
+OV server 自身在 `/studio` 提供 Web Studio 前端 —— 不需要单独进程，跟着 `openviking-server` 一起起来就行。
 
 ```text
-http://127.0.0.1:8020/
+http://127.0.0.1:1933/studio
 ```
 
-第一次使用时，在 `Settings` 面板里填入 `X-API-Key`。
+第一次使用时，在右上角 Connection 对话框里填入 `X-API-Key`，base URL 默认就是当前同源（也就是 `/studio` 来自哪个域名，API 就走那个域名）。
 
-当前比较适合观测的面板有：
+当前比较适合观测的页面有：
 
-- `FileSystem`：浏览 URI、查看目录和文件
-- `Find`：直接发检索请求并查看结果
-- `Add Resource`：导入资源并查看返回结果
-- `Add Memory`：通过 session 提交一段内容，观察 memory 提交流程
-- `Tenants` / `Monitor`：查看租户、用户以及系统状态
+- `Home`（`/studio`）：今日 token 消耗、检索次数、context commits 趋势、agent 访问汇总 —— 直接读 `/api/v1/console/*` BFF
+- `Request Logs`（`/studio/request-logs`）：审计日志、按 account / user / agent / route 过滤，对应 `/api/v1/console/audit`
+- `Resources`（`/studio/resources`）：浏览 URI、查看目录和文件、上传资源
+- `Retrieval`（`/studio/retrieval`）：直接发 find / search / grep 请求并查看结果
+- `Sessions`（`/studio/sessions`）：浏览 session 历史、查看 message / memory 提交流程
 
-如果你要执行写操作，例如 `Add Resource`、`Add Memory`、租户或用户管理，需要带 `--write-enabled` 启动：
+写操作（`Add Resource`、`Add Memory`、租户/用户管理）通过当前已登录的 API key 鉴权，没有额外的 `--write-enabled` 开关需要打开。
 
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933 \
-  --write-enabled
-```
+从观测角度看，Studio 的一个优点是直接调用 `/api/v1/console/*` BFF 的统计接口（dashboard summary、token series、context commits、audit logs），跟旧 console 复用同一套数据，只是 UI 换了。对于 `find`、`add-resource` 和 `session commit` 这类操作，结果面板可以展开看 `telemetry.summary`。
 
-从观测角度看，Console 的一个优点是结果面板会直接显示接口返回值。对于 `find`、`add-resource` 和 `session commit` 这类操作，Console 代理层会默认帮你请求 `telemetry`，所以页面结果里通常可以直接看到 `telemetry.summary`。
-
-Console 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
+Studio 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
 
 ## 请求级 Telemetry
 
