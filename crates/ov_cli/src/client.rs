@@ -407,8 +407,11 @@ impl HttpClient {
         ignore_case: bool,
         node_limit: i32,
         level_limit: i32,
+        engine: Option<String>,
+        switch_to_remote_threshold: Option<i32>,
+        remote_return_limit: Option<i32>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "exclude_uri": exclude_uri,
             "pattern": pattern,
@@ -416,6 +419,15 @@ impl HttpClient {
             "node_limit": node_limit,
             "level_limit": level_limit,
         });
+        if let Some(eng) = engine {
+            body["engine"] = serde_json::json!(eng);
+        }
+        if let Some(threshold) = switch_to_remote_threshold {
+            body["switch_to_remote_threshold"] = serde_json::json!(threshold);
+        }
+        if let Some(limit) = remote_return_limit {
+            body["remote_return_limit"] = serde_json::json!(limit);
+        }
         self.post("/api/v1/search/grep", &body).await
     }
 
