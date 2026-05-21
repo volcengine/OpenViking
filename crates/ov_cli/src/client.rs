@@ -68,7 +68,7 @@ impl HttpClient {
 
     // ============ HTTP Methods ============
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -76,7 +76,7 @@ impl HttpClient {
         self.base.get(path, params).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -84,7 +84,7 @@ impl HttpClient {
         self.base.post(path, body).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -92,7 +92,7 @@ impl HttpClient {
         self.base.put(path, body).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -100,7 +100,7 @@ impl HttpClient {
         self.base.delete(path, params).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -108,7 +108,7 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -117,7 +117,7 @@ impl HttpClient {
         self.base.patch(path, body, params).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -1250,7 +1250,7 @@ mod tests {
             ]
         });
 
-        let result = crate::base_client::unwrap_success_envelope(body);
+        let result = crate::base_client::unwrap_success_envelope(body, true);
 
         assert_eq!(
             result,
@@ -1264,5 +1264,20 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn unwrap_result_drops_profile_for_scalar_typed_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
     }
 }

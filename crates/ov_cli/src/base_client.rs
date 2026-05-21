@@ -1,6 +1,7 @@
 use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::any::TypeId;
 use std::fs::File;
 use std::path::Path;
 use std::str::FromStr;
@@ -74,14 +75,24 @@ pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     }
 }
 
-pub fn unwrap_success_envelope(json: Value) -> Value {
+pub fn unwrap_success_envelope(json: Value, preserve_profile: bool) -> Value {
     let Some(result) = json.get("result") else {
         return json;
     };
 
+    if !preserve_profile {
+        return result.clone();
+    }
+
     let Some(profile) = json.get("profile") else {
         return result.clone();
     };
+
+    if let Some(result_obj) = result.as_object() {
+        let mut merged = result_obj.clone();
+        merged.insert("profile".to_string(), profile.clone());
+        return Value::Object(merged);
+    }
 
     let mut wrapped = serde_json::Map::new();
     wrapped.insert("result".to_string(), result.clone());
@@ -248,7 +259,10 @@ impl BaseClient {
         headers
     }
 
-    pub(crate) async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
+    pub(crate) async fn handle_response<T: DeserializeOwned + 'static>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T> {
         let status = response.status();
 
         if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
@@ -290,7 +304,8 @@ impl BaseClient {
             }
         }
 
-        let result = unwrap_success_envelope(json.clone());
+        let preserve_profile = TypeId::of::<T>() == TypeId::of::<Value>();
+        let result = unwrap_success_envelope(json.clone(), preserve_profile);
 
         serde_json::from_value(result).map_err(|e| {
             Error::Parse(format!(
@@ -319,7 +334,7 @@ impl BaseClient {
             .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
     }
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -338,7 +353,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -362,7 +377,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post_with_timeout<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_timeout<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -388,7 +403,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -412,7 +427,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -431,7 +446,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -455,18 +470,19 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .patch(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .json(body)
             .send()
             .await
@@ -475,24 +491,117 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .post(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .json(body)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
 
         self.handle_response(response).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unwrap_success_envelope_preserves_profile_for_value_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_drops_profile_for_scalar_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
+    }
+
+    #[test]
+    fn append_profile_query_adds_flag_when_enabled() {
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
+
+        let params = client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
+
+        assert_eq!(
+            params,
+            vec![
+                ("to_uri".to_string(), "viking://x".to_string()),
+                ("profile".to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn append_profile_query_keeps_existing_profile_flag() {
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
+
+        let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
+
+        assert_eq!(params, vec![("profile".to_string(), "1".to_string())]);
     }
 }
 
