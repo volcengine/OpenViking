@@ -475,6 +475,28 @@ export class OpenVikingClient {
     );
   }
 
+  async contentWrite(
+    uri: string,
+    content: string,
+    mode: "create" | "update" | "overwrite" = "create",
+    agentId?: string,
+  ): Promise<{
+    uri: string;
+    written_bytes: number;
+    content_updated: boolean;
+    semantic_status: string;
+    vector_status: string;
+  }> {
+    return this.request(
+      "/api/v1/content/write",
+      {
+        method: "POST",
+        body: JSON.stringify({ uri, content, mode }),
+      },
+      agentId,
+    );
+  }
+
   async readToolResult(
     sessionId: string,
     toolResultId: string,

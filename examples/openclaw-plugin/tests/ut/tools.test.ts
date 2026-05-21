@@ -315,21 +315,21 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store).toBeDefined();
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
+    expect(store!.description).toContain("content/write API");
   });
 
-  it("uses requesterSenderId to populate role_id for user writes", async () => {
+  it("calls content/write API with correct URI for default category", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
       }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
+      if (url.endsWith("/api/v1/content/write")) {
         return okResponse({
-          status: "completed",
-          archived: false,
-          memories_extracted: { core: 1 },
+          uri: "viking://user/default/memories/preferences/mem_abc123.ov.md",
+          written_bytes: 42,
+          content_updated: true,
+          semantic_status: "queued",
+          vector_status: "queued",
         });
       }
       return okResponse({});
@@ -344,31 +344,36 @@ describe("Tool: memory_store (behavioral)", () => {
     const tool = factory!({
       sessionId: "runtime-session",
       sessionKey: "agent:main:main",
-      requesterSenderId: "wx/user-01@abc",
     });
 
-    await tool.execute("tc-memory-store", { text: "hello from tool" });
+    const result = await tool.execute("tc-memory-store", { text: "hello from tool" });
 
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    const writeCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/content/write"),
     );
-    expect(messageCall).toBeDefined();
-    const [, init] = messageCall as [string, RequestInit];
+    expect(writeCall).toBeDefined();
+    const [, init] = writeCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
-    expect(body.role).toBe("user");
-    expect(body.role_id).toBe("wx_user-01_abc");
+    expect(body.uri).toMatch(/^viking:\/\/user\/default\/memories\/preferences\/mem_/);
+    expect(body.content).toBe("hello from tool");
+    expect(body.mode).toBe("create");
+
+    expect(result.content[0].text).toBe("Memory stored (42b) and queued for vector indexing.");
   });
 
-  it("uses a temporary session by default instead of the current tool session", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+  it("maps category parameter to correct subdirectory", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
       }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      if (url.endsWith("/api/v1/content/write")) {
+        return okResponse({
+          uri: "viking://user/default/memories/events/mem_def456.ov.md",
+          written_bytes: 30,
+          content_updated: true,
+          semantic_status: "queued",
+          vector_status: "queued",
+        });
       }
       return okResponse({});
     });
@@ -381,47 +386,31 @@ describe("Tool: memory_store (behavioral)", () => {
       sessionKey: "agent:main:main",
     });
 
-    await tool.execute("tc-memory-store", { text: "hello from tool" });
+    const result = await tool.execute("tc-memory-store", {
+      text: "event memory",
+      category: "event",
+    });
 
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    const writeCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/content/write"),
     );
-    expect(String(messageCall?.[0])).toContain("/api/v1/sessions/memory-store-");
+    expect(writeCall).toBeDefined();
+    const [, init] = writeCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.uri).toMatch(/^viking:\/\/user\/default\/memories\/events\/mem_/);
+    expect(result.content[0].text).toContain("queued for vector indexing");
   });
 
-  it("normalizes explicit memory_store sessionId without using current sessionKey", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith("/api/v1/system/status")) {
-        return okResponse({ user: "default" });
-      }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
-      }
-      return okResponse({});
-    });
+  it("returns error when text is empty", async () => {
+    const fetchMock = vi.fn(async () => okResponse({}));
     vi.stubGlobal("fetch", fetchMock);
 
     const { factoryTools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const tool = factoryTools.get("memory_store")!({
-      sessionId: "runtime-session",
-      sessionKey: "agent:main:main",
-    });
+    const tool = factoryTools.get("memory_store")!({});
 
-    await tool.execute("tc-memory-store", {
-      text: "hello from tool",
-      sessionId: "C:\\Users\\test",
-    });
-
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
-    );
-    expect(String(messageCall?.[0])).not.toContain("runtime-session");
-    expect(String(messageCall?.[0])).not.toContain("agent%3Amain%3Amain");
-    expect(String(messageCall?.[0])).toMatch(/\/api\/v1\/sessions\/[a-f0-9]{64}\/messages$/);
+    const result = await tool.execute("tc-memory-store", { text: "" });
+    expect(result.content[0].text).toBe("text is required");
   });
 });
 
