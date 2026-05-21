@@ -21,7 +21,20 @@ def _make_test_app():
         async def close(self):
             pass
 
-    return create_app(config=ServerConfig(), service=_Service())
+    return create_app(config=ServerConfig(profile_enabled=True), service=_Service())
+
+
+def _make_test_app_with_config(config: ServerConfig):
+    class _Service:
+        _initialized = True
+
+        async def initialize(self):
+            pass
+
+        async def close(self):
+            pass
+
+    return create_app(config=config, service=_Service())
 
 
 @pytest.mark.asyncio
@@ -62,6 +75,18 @@ async def test_profile_query_does_not_affect_following_request():
     assert isinstance(profiled.json()["profile"], list)
     assert plain.status_code == 200
     assert "profile" not in plain.json()
+
+
+@pytest.mark.asyncio
+async def test_profile_query_is_ignored_when_server_profile_disabled():
+    app = _make_test_app_with_config(ServerConfig(profile_enabled=False))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/health", params={"profile": "1"})
+
+    assert resp.status_code == 200
+    assert "profile" not in resp.json()
 
 
 @pytest.mark.asyncio

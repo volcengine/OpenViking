@@ -62,6 +62,9 @@ PROFILE_ROOTS = _build_profile_roots()
 
 
 def profile_enabled(request: Request) -> bool:
+    server_config = getattr(request.app.state, "config", None)
+    if server_config is not None and not getattr(server_config, "profile_enabled", False):
+        return False
     value = request.query_params.get("profile")
     if value is None:
         return False

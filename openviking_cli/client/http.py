@@ -144,6 +144,7 @@ class AsyncHTTPClient(BaseClient):
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -160,6 +161,7 @@ class AsyncHTTPClient(BaseClient):
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
         effective_user = user if user is not None else user_id
+        profile_load_requested = profile_enabled is None
         should_load_cli_config = (
             url is None
             or api_key is None
@@ -169,6 +171,7 @@ class AsyncHTTPClient(BaseClient):
             or timeout == 60.0
             or extra_headers is None
         )
+        cli_config = None
         if should_load_cli_config:
             cli_config = load_ovcli_config()
             if cli_config is not None:
@@ -181,6 +184,11 @@ class AsyncHTTPClient(BaseClient):
                     timeout = cli_config.timeout
                 if extra_headers is None:
                     extra_headers = cli_config.extra_headers
+        if profile_load_requested:
+            if cli_config is None:
+                cli_config = load_ovcli_config()
+            if cli_config is not None:
+                profile_enabled = cli_config.profile
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -194,6 +202,7 @@ class AsyncHTTPClient(BaseClient):
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
+        self._profile_enabled = bool(profile_enabled)
         self._upload_mode = None
         if should_load_cli_config and cli_config is not None and cli_config.upload is not None:
             self._upload_mode = cli_config.upload.mode
@@ -219,6 +228,7 @@ class AsyncHTTPClient(BaseClient):
             base_url=self._url,
             headers=headers,
             timeout=self._timeout,
+            params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)
 

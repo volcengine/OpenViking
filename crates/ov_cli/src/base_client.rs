@@ -120,6 +120,7 @@ pub struct BaseClient {
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
     pub(crate) agent_id: Option<String>,
+    pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -138,6 +139,7 @@ impl BaseClient {
             account: None,
             user: None,
             agent_id: None,
+            profile_enabled: false,
             extra_headers: None,
         }
     }
@@ -149,6 +151,7 @@ impl BaseClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         let http = ReqwestClient::builder()
@@ -163,8 +166,17 @@ impl BaseClient {
             account,
             user,
             agent_id,
+            profile_enabled,
             extra_headers,
         }
+    }
+
+    fn append_profile_query<'a>(&self, params: &'a [(String, String)]) -> Vec<(String, String)> {
+        let mut merged = params.to_vec();
+        if self.profile_enabled && !merged.iter().any(|(k, _)| k == "profile") {
+            merged.push(("profile".to_string(), "1".to_string()));
+        }
+        merged
     }
 
     pub fn base_url(&self) -> &str {
@@ -302,11 +314,12 @@ impl BaseClient {
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .get(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -320,11 +333,17 @@ impl BaseClient {
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
+        let request = self
             .http
             .post(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -341,10 +360,16 @@ impl BaseClient {
         let url = format!("{}{}", self.base_url, path);
         let client = self.create_client_with_timeout(timeout)?;
 
-        let response = client
+        let request = client
             .post(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -358,11 +383,17 @@ impl BaseClient {
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
+        let request = self
             .http
             .put(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -376,11 +407,12 @@ impl BaseClient {
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .delete(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -394,11 +426,17 @@ impl BaseClient {
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
+        let request = self
             .http
             .delete(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;

@@ -23,6 +23,7 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         Self {
@@ -33,6 +34,7 @@ impl HttpClient {
                 account,
                 user,
                 timeout_secs,
+                profile_enabled,
                 extra_headers,
             ),
         }
@@ -1175,6 +1177,7 @@ mod tests {
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            true,
             Some(extra_headers),
         );
 
