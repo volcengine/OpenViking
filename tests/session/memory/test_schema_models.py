@@ -9,7 +9,6 @@ import pytest
 import yaml
 
 from openviking.session.memory.dataclass import (
-    LinkType,
     MemoryField,
     MemoryTypeSchema,
     WikiLink,
@@ -221,7 +220,9 @@ class TestSchemaModelGenerator:
 
         page_id_field = model.model_fields["page_id"]
         assert page_id_field.is_required()
-        assert page_id_field.description == "Temporary page_id for identifying the target memory item."
+        assert (
+            page_id_field.description == "Temporary page_id for identifying the target memory item."
+        )
         assert model.model_validate({"page_id": 1, "field1": "value"}).page_id == 1
         with pytest.raises(ValueError):
             model.model_validate({"field1": "value"})
@@ -242,7 +243,9 @@ class TestSchemaModelGenerator:
 
         page_id_field = model.model_fields["page_id"]
         assert page_id_field.is_required()
-        assert page_id_field.description == "Temporary page_id for identifying the target memory item."
+        assert (
+            page_id_field.description == "Temporary page_id for identifying the target memory item."
+        )
 
         schema = model.model_json_schema()
         assert "page_id" in schema["required"]
@@ -265,6 +268,28 @@ class TestSchemaModelGenerator:
             model = generator.create_structured_operations_model(role_scope=None)
 
         assert "links" not in model.model_fields
+
+    def test_links_field_description_uses_shared_link_rules_when_links_enabled(
+        self, registry_with_sample
+    ):
+        from unittest.mock import patch
+
+        generator = SchemaModelGenerator([registry_with_sample.get("test_type")])
+        with patch(
+            "openviking_cli.utils.config.get_openviking_config"
+        ) as mock_get_openviking_config:
+            mock_get_openviking_config.return_value = type(
+                "Config",
+                (),
+                {"memory": type("MemoryCfg", (), {"link_enabled": True})()},
+            )()
+            model = generator.create_structured_operations_model(role_scope=None)
+
+        links_field = model.model_fields["links"]
+        assert links_field.description == (
+            "Links between memory pages. Follow the link rules above. "
+            "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
+        )
 
     def test_generate_all_models(self, real_registry):
         """Test generating models for all real schemas."""
@@ -510,7 +535,7 @@ class TestIntegration:
         generator = SchemaModelGenerator(registry)
 
         # Get the operations model
-        operations_model = generator.create_structured_operations_model()
+        generator.create_structured_operations_model()
 
         # Get JSON schema
         json_schema = generator.get_llm_json_schema()
