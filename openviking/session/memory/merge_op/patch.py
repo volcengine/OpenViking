@@ -31,7 +31,7 @@ class PatchOp(MergeOpBase):
 
     def get_output_schema_description(self, field_description: str) -> str:
         if self._field_type == FieldType.STRING:
-            return f"PATCH operation for '{field_description}'. Use SEARCH/REPLACE blocks to modify content. You must have read the current content first. For an existing memory, SEARCH must be copied from the target file bound to that operation's page_id/read context. If the read result includes `line_number<TAB>` prefixes, exclude those prefixes from SEARCH and REPLACE. Multi-line SEARCH must be contiguous; split non-adjacent edits into separate blocks."
+            return f"PATCH operation for '{field_description}'. Follow the shared SEARCH/REPLACE rules above."
         return f"Replace value for '{field_description}'"
 
     def apply(self, current_value: Any, patch_value: Any) -> Any:

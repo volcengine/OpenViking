@@ -276,9 +276,8 @@ class SchemaModelGenerator:
                 Field(
                     default_factory=list,
                     description=(
-                        "Links between memory pages. Only create links when the relationship is meaningful and clear. "
-                        "Use page_ids from read results (existing) or self-assigned >= 100 (new) for 'f' (from) and 't' (to). "
-                        "Set weight as a relative ranking score from 0 to 1; use higher values for the best link when multiple links compete for the same anchor or attention."
+                        "Links between memory pages. Follow the link rules above. "
+                        "Use page_ids for `f` and `t`. Use `weight` from 0 to 1 to rank competing links."
                     ),
                 ),
             )

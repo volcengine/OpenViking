@@ -67,6 +67,24 @@ export type OVMessagePart = {
   tool_output?: string;
   tool_status?: string;
   skill_uri?: string;
+  duration_ms?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  tool_output_ref?: string;
+  tool_output_truncated?: boolean;
+  tool_output_original_chars?: number;
+  tool_output_preview_chars?: number;
+  tool_output_sha256?: string;
+  tool_output_storage_uri?: string;
+  tool_output_mime_type?: string;
+  tool_output_source_ref?: string;
+  tool_output_source_offset?: number;
+  tool_output_source_limit?: number;
+  tool_output_externalization_error?: string;
+  tool_output_group_id?: string;
+  tool_output_externalized_reason?: string;
+  tool_output_group_original_chars?: number;
+  tool_output_group_budget_chars?: number;
 };
 
 export type OVMessage = {
@@ -94,6 +112,30 @@ export type SessionContextResult = {
     activeTokens: number;
     archiveTokens: number;
   };
+};
+
+export type ToolResultReadResult = {
+  tool_result_id: string;
+  content: string;
+  offset: number;
+  limit: number;
+  offset_unit: "unicode_code_point";
+  total_chars: number;
+  has_more: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type ToolResultSearchResult = {
+  tool_result_id: string;
+  matches: Array<{
+    offset: number;
+    offset_unit: "unicode_code_point";
+    snippet: string;
+  }>;
+};
+
+export type ToolResultListResult = {
+  tool_results: Array<Record<string, unknown>>;
 };
 
 export type SessionArchiveResult = {
@@ -433,6 +475,61 @@ export class OpenVikingClient {
     );
   }
 
+  async readToolResult(
+    sessionId: string,
+    toolResultId: string,
+    options?: { offset?: number; limit?: number; includeMetadata?: boolean },
+    agentId?: string,
+  ): Promise<ToolResultReadResult> {
+    const params = new URLSearchParams();
+    if (options?.offset !== undefined) params.set("offset", String(options.offset));
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.includeMetadata !== undefined) {
+      params.set("include_metadata", String(options.includeMetadata));
+    }
+    const query = params.toString();
+    return this.request<ToolResultReadResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}${query ? `?${query}` : ""}`,
+      {},
+      agentId,
+    );
+  }
+
+  async searchToolResult(
+    sessionId: string,
+    toolResultId: string,
+    queryText: string,
+    options?: { limit?: number; contextChars?: number },
+    agentId?: string,
+  ): Promise<ToolResultSearchResult> {
+    const params = new URLSearchParams({ q: queryText });
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.contextChars !== undefined) {
+      params.set("context_chars", String(options.contextChars));
+    }
+    return this.request<ToolResultSearchResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}/search?${params.toString()}`,
+      {},
+      agentId,
+    );
+  }
+
+  async listToolResults(
+    sessionId: string,
+    options?: { toolName?: string; limit?: number },
+    agentId?: string,
+  ): Promise<ToolResultListResult> {
+    const params = new URLSearchParams();
+    if (options?.toolName) params.set("tool_name", options.toolName);
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.request<ToolResultListResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results${query ? `?${query}` : ""}`,
+      {},
+      agentId,
+    );
+  }
+
   async uploadTempFile(filePath: string, agentId?: string): Promise<string> {
     const fileBytes = await readFile(filePath);
     const form = new FormData();
@@ -614,6 +711,20 @@ export class OpenVikingClient {
       tool_status?: string;
       tool_input?: Record<string, unknown>;
       tool_id?: string;
+      tool_output_ref?: string;
+      tool_output_truncated?: boolean;
+      tool_output_original_chars?: number;
+      tool_output_preview_chars?: number;
+      tool_output_sha256?: string;
+      tool_output_storage_uri?: string;
+      tool_output_mime_type?: string;
+      tool_output_source_ref?: string;
+      tool_output_source_offset?: number;
+      tool_output_source_limit?: number;
+      tool_output_group_id?: string;
+      tool_output_externalized_reason?: string;
+      tool_output_group_original_chars?: number;
+      tool_output_group_budget_chars?: number;
       uri?: string;
       abstract?: string;
       context_type?: "memory" | "resource" | "skill";

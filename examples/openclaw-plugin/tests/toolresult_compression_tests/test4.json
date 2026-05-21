@@ -1,0 +1,19 @@
+[
+  {
+    "id": "t1-pipeline-ingest",
+    "prompt": "你在做一次真实的集成链路评审。目标：梳理 openclaw-plugin 到 OpenViking 的记忆写入与回忆链路。请只读取以下文件，每个只读一次：\n1) /root/.openclaw/workspace/OpenViking/examples/openclaw-plugin/index.ts\n2) /root/.openclaw/workspace/OpenViking/examples/openclaw-plugin/context-engine.ts\n3) /root/.openclaw/workspace/OpenViking/examples/openclaw-plugin/client.js\n4) /root/.openclaw/workspace/OpenViking/docs/en/concepts/06-extraction.md\n输出 JSON：\n{pipeline_map:[{stage,component,file,function,input,output}],failure_points:[{name,where,symptom,severity}],consistency_requirements:[{requirement,why}],evidence:[{file,function,line,why}]}"
+  },
+  {
+    "id": "t2-reliability-design",
+    "prompt": "基于上轮结果，优先使用已整理的上下文；只有在关键信息缺失时，才补充一次原文回查并说明原因。针对 1 个最高优先 failure point，提出最小可靠性增强设计（不改代码）。输出 JSON：\n{target_failure_point,design_delta:{before,after},minimal_scope:[{file,change_intent}],failure_handling_policy:[{case,policy}],rollback:[{step,when_to_use}]}"
+  },
+  {
+    "id": "t3-implementation-guide",
+    "prompt": "基于前两轮内容，输出实施指引（函数级，不改代码）。输出 JSON：\n{implementation_guide:[{file,functions:[{name,planned_change,expected_effect}]}],observability_plan:[{signal,location,alert_condition}],verification_checklist:[{item,pass_condition}],known_tradeoffs:[{tradeoff,accepted_reason}]}"
+  },
+  {
+    "id": "t4-handoff-summary",
+    "prompt": "基于前 3 轮内容，输出交接摘要。输出 JSON：\n{problem_statement,proposed_solution,expected_reliability_gain,risk_register:[{risk,level,mitigation}],handoff_todo:[{owner,task,done_definition}],traceability:[{claim,evidence_file,evidence_function,evidence_line}]}"
+  }
+]
+

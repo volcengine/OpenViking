@@ -82,7 +82,27 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             ;; \
     esac
 
-# Stage 3: runtime
+# Stage 3: build web-studio static bundle (Vite SPA).
+# Produces /web-studio/dist which the runtime stage mounts at /studio in the
+# OpenViking server. Lockfile-first dependency install keeps the layer cached
+# until package.json / lockfile actually change.
+#
+# WEB_STUDIO_BASE_PATH is passed to `vite build --base=...` and is also
+# consumed at runtime by getRouterBasePath() through import.meta.env.BASE_URL,
+# so the SPA's asset URLs and TanStack Router basepath stay in sync.
+FROM node:20-bookworm-slim AS web-studio-builder
+WORKDIR /web-studio
+ARG TARGETPLATFORM
+ARG WEB_STUDIO_BASE_PATH=/studio/
+
+COPY web-studio/package.json web-studio/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} \
+    npm ci
+
+COPY web-studio/ ./
+RUN npm run build -- --base="${WEB_STUDIO_BASE_PATH}"
+
+# Stage 4: runtime
 FROM python:3.13-slim-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -94,6 +114,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
+COPY --from=web-studio-builder /web-studio/dist /app/web-studio/dist
 COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
 COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
@@ -101,7 +122,8 @@ RUN mkdir -p /app/.openviking \
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
     OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \
-    OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf"
+    OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf" \
+    OPENVIKING_WEB_STUDIO_DIR="/app/web-studio/dist"
 
 EXPOSE 1933 8020
 

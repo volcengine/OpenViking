@@ -134,6 +134,31 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
     expect(result[1]!.role).toBe("toolResult");
   });
 
+  it("preserves externalized tool result ref in toolResult text", () => {
+    const msg = {
+      role: "user",
+      parts: [
+        {
+          type: "tool",
+          tool_id: "call_big",
+          tool_name: "read",
+          tool_status: "completed",
+          tool_input: { path: "/tmp/big.txt" },
+          tool_output: "preview only",
+          tool_output_ref: "viking://session/s1/tool-results/tr_call_big_abc",
+          tool_output_original_chars: 120000,
+        },
+      ],
+    };
+
+    const result = convertToAgentMessages(msg);
+    const toolResult = result[1] as Record<string, unknown>;
+    const content = toolResult.content as Array<Record<string, string>>;
+    expect(content[0]!.text).toContain("preview only");
+    expect(content[0]!.text).toContain("viking://session/s1/tool-results/tr_call_big_abc");
+    expect(content[0]!.text).toContain("original_chars=120000");
+  });
+
   it("no tool_id → degrade to text (user role)", () => {
     const msg = {
       role: "user",

@@ -54,27 +54,17 @@ class TestPatchOp:
         assert "PATCH" in desc
         assert "test content" in desc
 
-    def test_get_output_schema_description_string_mentions_target_file_binding(self):
-        """String patch description should bind SEARCH to the target file content."""
+    def test_get_output_schema_description_string_mentions_shared_search_replace_rules(self):
+        """String patch description should defer to the shared SEARCH/REPLACE rules."""
         op = PatchOp(FieldType.STRING)
         desc = op.get_output_schema_description("test content")
-        assert "page_id" in desc
-        assert "SEARCH" in desc
-        assert "target file" in desc
+        assert "Follow the shared SEARCH/REPLACE rules above." in desc
 
-    def test_get_output_schema_description_string_mentions_contiguous_multiline_search(self):
-        """String patch description should forbid joining non-adjacent lines."""
+    def test_get_output_schema_description_string_drops_line_number_prefix_reminder(self):
+        """String patch description should rely on the shared line-prefix guidance."""
         op = PatchOp(FieldType.STRING)
         desc = op.get_output_schema_description("test content")
-        assert "Multi-line SEARCH must be contiguous" in desc
-        assert "split non-adjacent edits into separate blocks" in desc
-
-    def test_get_output_schema_description_string_mentions_line_number_prefix_exclusion(self):
-        """String patch description should forbid copying tab-prefixed line numbers."""
-        op = PatchOp(FieldType.STRING)
-        desc = op.get_output_schema_description("test content")
-        assert "line_number<TAB>" in desc
-        assert "exclude" in desc
+        assert "line_number<TAB>" not in desc
 
     def test_get_output_schema_description_other(self):
         """Non-string field description should mention replace."""

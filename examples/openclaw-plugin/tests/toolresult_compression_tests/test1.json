@@ -1,0 +1,14 @@
+[
+  {
+    "id": "t1-heavy-ingest",
+    "prompt": "严格执行：你必须且只允许调用4次 read 工具，按以下顺序读取，不允许读取其他文件，不允许 exec/rg。\n1) /root/.openclaw/workspace/kubernetes/pkg/kubelet/kubelet.go\n2) /root/.openclaw/workspace/kubernetes/pkg/scheduler/schedule_one.go\n3) /root/.openclaw/workspace/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/handlers/create.go\n4) /root/.openclaw/workspace/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/version/version.go\n读取后输出固定格式：\nMODULE_MAP:\n- module: <name>\n  file: <path>\n  responsibilities: [3条]\n  key_functions: [3个]\nCROSS_MODULE_RISKS:\n- [5条，每条1行]\n禁止输出其他章节。"
+  },
+  {
+    "id": "t2-no-tool-design",
+    "prompt": "禁止调用任何工具（如果调用则任务失败）。仅基于上一轮已有内容，输出固定格式：\nDESIGN_V1:\n- target_module: <1个>\n- problem_statement: <3行内>\n- minimal_change_scope: <最多2文件，允许只写方案不改代码>\n- behavior_invariants: [3条]\n- rollback_plan: [2条]\n不要新增章节。"
+  },
+  {
+    "id": "t3-no-tool-delivery",
+    "prompt": "禁止调用任何工具。输出固定模板（每项1-2行）：\nFILES_TOUCHED_PLAN\nBEFORE_BEHAVIOR\nAFTER_BEHAVIOR\nRISK\nNEXT_ACTION\n不要输出其他内容。"
+  }
+]
