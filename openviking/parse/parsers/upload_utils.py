@@ -306,14 +306,13 @@ async def upload_directory(
     async def _upload_one(idx: int, file_path: Path, target_uri: str) -> None:
         async with sem:
 
-            def _do() -> None:
+            def _read_and_encode() -> bytes:
                 content = file_path.read_bytes()
-                encoded = detect_and_convert_encoding(content, file_path)
-                agfs_path = viking_fs._uri_to_path(target_uri)
-                viking_fs.agfs.write(agfs_path, encoded)
+                return detect_and_convert_encoding(content, file_path)
 
             try:
-                await asyncio.to_thread(_do)
+                encoded = await asyncio.to_thread(_read_and_encode)
+                await viking_fs.write_file_bytes(target_uri, encoded)
             except Exception as exc:
                 errors[idx] = f"Failed to upload {file_path}: {exc}"
 

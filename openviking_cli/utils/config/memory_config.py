@@ -75,12 +75,27 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    enable_vaka_template: bool = Field(
+        default=False,
+        description=(
+            "When enabled, use vaka-specific memory templates (entities, profile) "
+            "from the bundled vaka/ subdirectory to override default templates."
+        ),
+    )
     enable_role_id_memory_isolate: bool = Field(
         default=False,
         description=(
             "When enabled, memory extraction uses role_id from messages to determine "
             "which user/agent the memory belongs to. When disabled (default), role_id "
             "is ignored and the login user from the request context is used instead."
+        ),
+    )
+    link_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction supports link extraction between "
+            "memory items (page_id, links field, and link resolution). When disabled (default), "
+            "no page_id or link fields are generated, and link resolution is skipped."
         ),
     )
 

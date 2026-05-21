@@ -98,8 +98,8 @@ def main():
         1. 使用预构建 wheel（推荐）：
    pip install openviking --upgrade --force-reinstall
 
-        2. 使用官方安装脚本（零 Python 开销）：
-   curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+        2. 使用 npm 安装原生 CLI 包（零 Python 开销）：
+   npm i -g @openviking/cli
 
         3. 从 GitHub Releases 下载（零 Python 开销）：
    https://github.com/volcengine/OpenViking/releases

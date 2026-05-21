@@ -32,12 +32,31 @@ class _FakePage:
     def __init__(self, text: str):
         self._text = text
         self.images = []
+        self.close_count = 0
+        self.flush_count = 0
 
     def extract_text(self):
         return self._text
 
     def extract_tables(self):
         return []
+
+    def flush_cache(self):
+        self.flush_count += 1
+
+    def close(self):
+        self.close_count += 1
+        self.flush_cache()
+
+
+class _FakeFontPage(_FakePage):
+    """Minimal page stub with character layout data for font heading detection."""
+
+    def __init__(self, *, page_number: int, chars: list[dict], height: int = 1000):
+        super().__init__("")
+        self.page_number = page_number
+        self.chars = chars
+        self.height = height
 
 
 class TestExtractBookmarks:
@@ -247,3 +266,54 @@ class TestConvertLocalBookmarks:
         assert meta["bookmarks_unresolved"] == 1
         assert meta["headings_found"] == 1
         assert meta["heading_source"] == "font_analysis"
+
+    @pytest.mark.asyncio
+    async def test_convert_local_closes_page_after_each_page(self):
+        parser = PDFParser()
+        pages = [_FakePage("Page one"), _FakePage("Page two")]
+        fake_pdf = SimpleNamespace(pages=pages)
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+        ):
+            await parser._convert_local("dummy.pdf", storage=MagicMock(), resource_name="dummy")
+
+        assert [page.close_count for page in pages] == [1, 1]
+        assert [page.flush_count for page in pages] == [1, 1]
+
+    def test_detect_headings_by_font_closes_pages(self):
+        parser = PDFParser()
+
+        def chars(text: str, size: float, top: float) -> list[dict]:
+            return [
+                {"text": char, "size": size, "top": top, "x0": idx} for idx, char in enumerate(text)
+            ]
+
+        pages = [
+            _FakeFontPage(
+                page_number=0,
+                chars=chars("Body text repeated", 10, 500) + chars("Heading", 14, 100),
+            ),
+            _FakeFontPage(
+                page_number=1,
+                chars=chars("Another heading", 14, 120),
+            ),
+            _FakeFontPage(
+                page_number=2,
+                chars=chars("Plain body", 10, 500),
+            ),
+            _FakeFontPage(
+                page_number=3,
+                chars=chars("More body", 10, 500),
+            ),
+        ]
+        fake_pdf = SimpleNamespace(pages=pages)
+
+        headings = parser._detect_headings_by_font(fake_pdf)
+
+        assert [heading["title"] for heading in headings] == ["Heading", "Another heading"]
+        assert [page.close_count for page in pages] == [2, 1, 1, 1]
+        assert [page.flush_count for page in pages] == [2, 1, 1, 1]

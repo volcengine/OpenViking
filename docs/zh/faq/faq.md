@@ -165,7 +165,7 @@ SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（emb
 await client.add_resource(
     "./document.pdf",
     reason="项目技术文档",  # 描述资源用途，提升检索质量
-    target="viking://resources/docs/"  # 指定存储位置
+    to="viking://resources/docs/"  # 指定存储位置
 )
 
 # 添加网页

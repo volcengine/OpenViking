@@ -3,14 +3,14 @@
 """ASTExtractor: language detection + dispatch to per-language extractors."""
 
 import importlib
-import logging
 from pathlib import Path
 from typing import Dict, Optional
 
 from openviking.parse.parsers.code.ast.languages.base import LanguageExtractor
 from openviking.parse.parsers.code.ast.skeleton import CodeSkeleton
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # File extension → internal language key
 _EXT_MAP: Dict[str, str] = {

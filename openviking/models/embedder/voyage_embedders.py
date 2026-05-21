@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Voyage AI dense embedder implementation."""
 
-import logging
 from typing import Any, Dict, List, Optional
 
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 VOYAGE_MODEL_DIMENSIONS = {
     "voyage-3": 1024,

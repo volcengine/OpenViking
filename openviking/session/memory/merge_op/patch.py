@@ -4,7 +4,7 @@
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-from typing import TYPE_CHECKING, Any, Type
+from typing import Any, Type
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -15,9 +15,6 @@ from openviking.session.memory.merge_op.base import (
     get_python_type_for_field,
 )
 
-if TYPE_CHECKING:
-    from openviking.session.memory.merge_op.patch_handler import MemoryPatchHandler
-
 
 class PatchOp(MergeOpBase):
     """Patch merge operation - SEARCH/REPLACE for strings, direct replace for others."""
@@ -26,7 +23,6 @@ class PatchOp(MergeOpBase):
 
     def __init__(self, field_type: FieldType):
         self._field_type = field_type
-        self._patch_handler: "MemoryPatchHandler | None" = None
 
     def get_output_schema_type(self, field_type: FieldType) -> Type[Any]:
         if field_type == FieldType.STRING:
@@ -35,7 +31,7 @@ class PatchOp(MergeOpBase):
 
     def get_output_schema_description(self, field_description: str) -> str:
         if self._field_type == FieldType.STRING:
-            return f"PATCH operation for '{field_description}'. Use SEARCH/REPLACE blocks to modify content. You must have read the current content first."
+            return f"PATCH operation for '{field_description}'. Follow the shared SEARCH/REPLACE rules above."
         return f"Replace value for '{field_description}'"
 
     def apply(self, current_value: Any, patch_value: Any) -> Any:

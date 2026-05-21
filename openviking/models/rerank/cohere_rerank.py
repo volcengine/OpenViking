@@ -8,15 +8,15 @@ Same interface: rerank_batch(query, documents) -> List[float]
 """
 
 # For logging, use Python's built-in logging
-import logging
 import time
 from typing import List, Optional
 
 import httpx
 
 from openviking.models.rerank.base import RerankBase
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CohereRerankClient(RerankBase):

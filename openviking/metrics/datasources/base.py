@@ -12,8 +12,8 @@ class EventMetricDataSource(MetricDataSource):
     """
     Shared base for datasources that emit push-style in-process metrics events.
 
-    Event datasources publish normalized payloads into the metrics event router instead of
-    writing to the registry directly, keeping business code decoupled from collector internals.
+    Event datasources publish normalized payloads into the shared observability event bus instead
+    of writing to the registry directly, keeping business code decoupled from collector internals.
     """
 
     KIND: ClassVar[str] = "event"
@@ -26,14 +26,14 @@ class EventMetricDataSource(MetricDataSource):
     @staticmethod
     def _emit(event_name: str, payload: dict) -> None:
         """
-        Emit one normalized metrics event through the global best-effort event router.
+        Emit one normalized event through the global best-effort observability event bus.
 
-        Missing metrics initialization is handled by the router path so callers can fire events
-        without adding explicit metrics-enabled guards around business logic.
+        Missing subscribers are handled by the bus path so callers can fire events without adding
+        explicit metrics-enabled guards around business logic.
         """
-        from openviking.metrics.global_api import try_dispatch_event
+        from openviking.observability.events import try_publish_event
 
-        try_dispatch_event(str(event_name), dict(payload))
+        try_publish_event(str(event_name), dict(payload))
 
 
 class StateMetricDataSource(MetricDataSource):

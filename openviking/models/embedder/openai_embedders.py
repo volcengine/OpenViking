@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI Embedder Implementation"""
 
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import openai
 
@@ -15,8 +14,9 @@ from openviking.models.embedder.base import (
 )
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -76,6 +76,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         input_type: Optional[str] = None,
         provider: str = "openai",
         configured_provider: Optional[str] = None,
+        encoding_format: Optional[Literal["float", "base64"]] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -100,6 +101,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
                           {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
+            encoding_format: Wire format for embedding values. ``None`` (default) lets the
+                            OpenAI Python SDK pick its default (currently ``base64``). Set to
+                            ``"float"`` to send/receive plain JSON arrays — the recommended
+                            workaround when the upstream gateway cannot deserialize base64
+                            embedding payloads correctly.
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
@@ -118,6 +124,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self.encoding_format = encoding_format
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
@@ -260,6 +267,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
         if self.dimension and self._should_send_dimensions():
             kwargs["dimensions"] = self.dimension
+        if self.encoding_format is not None:
+            kwargs["encoding_format"] = self.encoding_format
 
         extra_body = self._build_extra_body(is_query=is_query)
         if extra_body:

@@ -28,6 +28,7 @@ from typing import (
 import json_repair
 from pydantic import BaseModel, TypeAdapter
 
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -352,7 +353,7 @@ def parse_value_with_tolerance(value, annotation):
     try:
         return TypeAdapter(annotation).validate_python(parsed_value, strict=False)
     except Exception as e:
-        logger.warning(f"TypeAdapter validation failed: {e}")
+        tracer.info(f"TypeAdapter validation failed (recoverable): {e}")
 
         # For list types, try filtering invalid items
         if get_origin(annotation) is list and isinstance(parsed_value, list):
@@ -364,13 +365,13 @@ def parse_value_with_tolerance(value, annotation):
                         validated_item = TypeAdapter(item_type).validate_python(item, strict=False)
                         filtered_items.append(validated_item)
                     except Exception:
-                        logger.warning(f"Skipping invalid list item: {item}")
+                        tracer.info(f"Skipping invalid list item: {item}")
                         continue
 
             if filtered_items:
                 return filtered_items
             else:
-                logger.warning("All list items were filtered out, returning empty list")
+                tracer.info("All list items were filtered out, returning empty list")
                 return []
 
         # Re-raise for non-list types
@@ -408,7 +409,7 @@ def parse_json_with_stability(
         if not cleaned_content:
             return None, "No JSON content found after cleanup"
     except Exception as e:
-        logger.warning(f"Layer 1 cleanup failed: {e}")
+        tracer.error(f"Layer 1 cleanup failed: {e}")
         cleaned_content = content
 
     # Layer 2: Parse with json_repair
@@ -416,7 +417,7 @@ def parse_json_with_stability(
     try:
         parsed_data = json_repair.loads(cleaned_content)
     except Exception as e:
-        logger.warning(f"Layer 2 json_repair failed: {e}")
+        tracer.error(f"Layer 2 json_repair failed: {e}")
         # Fallback: try regular json.loads
         try:
             parsed_data = json.loads(cleaned_content)
@@ -427,7 +428,7 @@ def parse_json_with_stability(
     # Handle case where model returns [{"xxx": ...}] instead of {"xxx": ...}
     if isinstance(parsed_data, list) and len(parsed_data) > 0:
         parsed_data = parsed_data[0]
-        logger.info("Extracted first item from list response")
+        tracer.info("Extracted first item from list response")
 
     if not isinstance(parsed_data, dict):
         return None, f"Expected dict after parsing, got {type(parsed_data)}"
@@ -449,8 +450,8 @@ def parse_json_with_stability(
         # First try direct model validation
         return model_class.model_validate(parsed_data, strict=False), None
     except Exception as e:
-        logger.exception(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
-        logger.exception(f"content={content}")
+        tracer.info(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
+        tracer.info(f"content={content}")
         # Fallback: Apply value fault tolerance to each field individually
         try:
             field_types = get_type_hints(model_class)
@@ -462,7 +463,7 @@ def parse_json_with_stability(
                             field_value, field_types[field_name]
                         )
                     except Exception as field_e:
-                        logger.warning(f"Field {field_name} parsing failed: {field_e}")
+                        tracer.error(f"Field {field_name} parsing failed: {field_e}")
                         # Skip this field rather than failing the whole parse
                         continue
 

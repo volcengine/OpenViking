@@ -78,7 +78,7 @@ pip install openviking --upgrade --force-reinstall
 #### Rust CLI（可选）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+npm i -g @openviking/cli
 ```
 
 或从源码构建：
@@ -557,6 +557,8 @@ ov chat
 👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
 
 👉 **[查看：Claude Code 记忆插件示例](examples/claude-code-memory-plugin/README_CN.md)**
+
+👉 **[查看：LangChain / LangGraph 集成](./docs/zh/agent-integrations/05-langchain-langgraph.md)**
 
 ## VikingBot 部署详情
 

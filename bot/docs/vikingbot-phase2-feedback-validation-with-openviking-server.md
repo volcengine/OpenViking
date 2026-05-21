@@ -40,6 +40,13 @@ openviking-server --with-bot
 
 本文不把 `http://127.0.0.1:18790` 视为主验证入口。
 
+在执行本文前，建议先完成 Phase 1 验证，至少确认以下前置条件已经成立：
+
+1. `/bot/v1/chat` 返回体中稳定包含 `response_id`
+2. session JSONL metadata 首行中已存在按 `response_id` 组织的 `response_facts`
+
+Phase 2 的 `feedback_events` 关联验证，默认建立在这条 Phase 1 response identity + response facts 基础链路已经打通之上。
+
 ---
 
 ## 3. 当前已验证结论

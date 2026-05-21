@@ -332,6 +332,24 @@ def api_client():
     return client
 
 
+@pytest.fixture(scope="session", autouse=True)
+def ensure_resources_dir(api_client):
+    try:
+        resp = api_client.fs_mkdir("viking://resources")
+        if resp.status_code in (200, 409):
+            print("viking://resources 目录已就绪")
+        else:
+            stat_resp = api_client.fs_stat("viking://resources")
+            if stat_resp.status_code == 200:
+                print("viking://resources 目录已存在")
+            else:
+                print(
+                    f"警告: 无法确保 viking://resources 存在 (mkdir={resp.status_code}, stat={stat_resp.status_code})"
+                )
+    except Exception as e:
+        print(f"警告: ensure_resources_dir 异常: {e}")
+
+
 def pytest_collection_modifyitems(config, items):
     cache = config.cache
     lastfailed = cache.get("cache/lastfailed", {})

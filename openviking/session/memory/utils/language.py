@@ -65,7 +65,9 @@ def resolve_with_override(config, detect: Callable[[], str]) -> str:
 
 def resolve_output_language(text: str, config=None) -> str:
     """Resolve output language from text, honoring config override before detection."""
-    return resolve_with_override(config, lambda: _detect_language_from_text(text, "en"))
+    result = resolve_with_override(config, lambda: _detect_language_from_text(text, "en"))
+    # result = '中文（必须遵守）'
+    return result
 
 
 def resolve_output_language_from_conversation(conversation: str, config=None) -> str:

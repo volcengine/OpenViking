@@ -23,13 +23,14 @@ from openviking.server.config import (
     load_server_config,
     validate_server_config,
 )
-from openviking.server.dependencies import set_service
+from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import AuthMode, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
     bot_router,
+    console_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -44,6 +45,7 @@ from openviking.server.routers import (
     stats_router,
     system_router,
     tasks_router,
+    watches_router,
     webdav_router,
 )
 from openviking.service.core import OpenVikingService
@@ -160,6 +162,15 @@ def create_app(
 
     validate_server_config(config)
 
+    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+        sessions = getattr(service_obj, "sessions", None)
+        setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(setter):
+            setter(config.tool_output_externalization)
+
+    if service is not None:
+        _configure_session_tool_outputs(service)
+
     async def _deferred_init(service, app, config):
         """Run heavy initialization in background after server starts accepting requests."""
         await service.initialize()
@@ -209,15 +220,18 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
+        _configure_session_tool_outputs(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
         )
+        from openviking.observability.usage_audit import init_usage_audit_from_server_config
 
         init_metrics_from_server_config(config, app=app, service=service)
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
+        await init_usage_audit_from_server_config(config, app=app, service=service)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -273,7 +287,9 @@ def create_app(
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
+        from openviking.observability.usage_audit import shutdown_usage_audit
 
+        await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if oauth_gc_task is not None:
@@ -305,6 +321,7 @@ def create_app(
     )
 
     app.state.config = config
+    set_server_config(config)
 
     # Add CORS middleware
     app.add_middleware(
@@ -315,7 +332,30 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # Add HTTP observability middleware first (metrics, tracing)
+    # Body dump middleware must be registered BEFORE observability so it ends up
+    # nested inside the trace span (in Starlette, middleware added later wraps
+    # earlier-added ones — so earlier registration = inner layer).
+    if config.observability.dump_body.enabled:
+        from openviking.server.body_dump_middleware import (
+            create_dump_http_body_middleware,
+        )
+
+        _dump_body_fn = create_dump_http_body_middleware(
+            max_bytes=config.observability.dump_body.max_bytes,
+        )
+
+        @app.middleware("http")
+        async def dump_http_body(request: Request, call_next: Callable):
+            return await _dump_body_fn(request, call_next)
+
+        logger.info(
+            "HTTP body dump middleware enabled (max_bytes=%d) — bodies will be "
+            "attached to trace spans. Disable in production via "
+            "server.observability.dump_body.enabled=false.",
+            config.observability.dump_body.max_bytes,
+        )
+
+    # Add HTTP observability middleware (metrics, tracing).
     # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
     # We want timing to be the outermost layer to measure the full request duration.
     from openviking.observability.http_observability_middleware import (
@@ -472,6 +512,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
+    app.include_router(console_router)
     app.include_router(search_router)
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)
@@ -482,6 +523,7 @@ def create_app(
     app.include_router(observer_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
+    app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
@@ -564,25 +606,75 @@ def create_app(
     except Exception as e:  # noqa: BLE001
         logger.warning("Skipping OAuth router registration: %s", e)
 
-    # Favicon: shared with the console static assets so 1933/console use the same logo.
-    _static_dir = Path(__file__).resolve().parent.parent / "console" / "static"
+    # Web Studio SPA: serve the static bundle when present so the same OV
+    # server origin can host the new frontend at /studio. The directory is
+    # populated by the docker `web-studio-builder` stage; outside docker, set
+    # OPENVIKING_WEB_STUDIO_DIR to a local `web-studio/dist` to enable it.
+    # Favicon assets are bundled with web-studio (see web-studio/public/),
+    # so the top-level /favicon.* and /mcp/favicon.* routes are served from
+    # the same dist directory — no separate server-side static folder.
+    _studio_env = os.environ.get("OPENVIKING_WEB_STUDIO_DIR", "").strip()
+    if _studio_env:
+        _studio_dir = Path(_studio_env)
+    else:
+        _studio_dir = Path(__file__).resolve().parents[2] / "web-studio" / "dist"
+
     _favicon_headers = {"Cache-Control": "public, max-age=86400"}
     _favicon_files = {
         "/favicon.ico": ("favicon.ico", "image/x-icon"),
         "/favicon.png": ("favicon-32.png", "image/png"),
         "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+        "/mcp/favicon.ico": ("favicon.ico", "image/x-icon"),
+        "/mcp/favicon.png": ("favicon-32.png", "image/png"),
+        "/mcp/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
     }
+    _favicon_source = _studio_dir if _studio_dir.is_dir() else None
+    if _favicon_source is not None and all(
+        (_favicon_source / fname).is_file() for fname, _ in _favicon_files.values()
+    ):
 
-    def _make_favicon_handler(filename: str, media_type: str):
-        path = _static_dir / filename
+        def _make_favicon_handler(filename: str, media_type: str):
+            path = _favicon_source / filename
 
-        async def _handler():
-            return FileResponse(path, media_type=media_type, headers=_favicon_headers)
+            async def _handler():
+                return FileResponse(path, media_type=media_type, headers=_favicon_headers)
 
-        return _handler
+            return _handler
 
-    for _route, (_fname, _mime) in _favicon_files.items():
-        app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
+        for _route, (_fname, _mime) in _favicon_files.items():
+            app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
+
+    if _studio_dir.is_dir() and (_studio_dir / "index.html").is_file():
+        _studio_root = _studio_dir.resolve()
+        _studio_index = _studio_root / "index.html"
+        _studio_no_store = {"Cache-Control": "no-store"}
+
+        def _studio_response(path: Path, *, no_store: bool = False) -> FileResponse:
+            return FileResponse(path, headers=_studio_no_store if no_store else None)
+
+        @app.get("/studio", include_in_schema=False)
+        async def _studio_root_handler():
+            return _studio_response(_studio_index, no_store=True)
+
+        @app.get("/studio/{path:path}", include_in_schema=False)
+        async def _studio_assets(path: str):
+            # SPA fallback: serve real files when present, otherwise return
+            # index.html so TanStack Router can resolve the deep link.
+            try:
+                requested = (_studio_root / path).resolve()
+            except OSError:
+                return _studio_response(_studio_index, no_store=True)
+
+            if not requested.is_relative_to(_studio_root):
+                return _studio_response(_studio_index, no_store=True)
+
+            if requested.is_file():
+                return _studio_response(requested)
+            return _studio_response(_studio_index, no_store=True)
+
+        logger.info("Web Studio mounted at /studio from %s", _studio_root)
+    else:
+        logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.

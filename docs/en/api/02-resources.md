@@ -108,7 +108,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 ### add_resource
 
-Add a resource to the knowledge base. Supports local files/directories, URLs, and other sources.
+Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`.
 
 #### 1. API Implementation Overview
 
@@ -136,8 +136,8 @@ This endpoint is the core entry point for resource management, supporting adding
 |-----------|------|----------|---------|-------------|
 | path | string | No | - | Remote resource URL (HTTP/HTTPS/Git). Mutually exclusive with `temp_file_id` |
 | temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
-| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` and `parent_auto_create` |
-| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` and `parent_auto_create` |
+| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
+| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
 | reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
@@ -153,12 +153,13 @@ This endpoint is the core entry point for resource management, supporting adding
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
-- `to`, `parent`, and `parent_auto_create` cannot be specified together
+- `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - `watch_interval` only takes effect when `to` is provided
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
 
@@ -330,6 +331,99 @@ temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
 | `errors` | array | List of errors encountered during processing |
 | `warnings` | array | (Optional) List of warnings (only when `strict=False`) |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
+
+---
+
+### Watch Management
+
+List, inspect, update, and trigger watch tasks created via [`add_resource`](#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
+
+#### 1. API Implementation Overview
+
+This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
+
+**Operations**:
+- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
+- **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
+- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
+- **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
+- **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
+
+**Code Entry Points**:
+- `openviking/server/routers/watches.py` — REST router for `/api/v1/watches`
+- `crates/ov_cli/src/commands/watch.rs` — `ov task watch` CLI subcommand group
+- `openviking/server/mcp_endpoint.py` — MCP `list_watches` / `cancel_watch` tools and the `watch_interval` / `to` parameters on `add_resource`
+- `openviking/resource/watch_manager.py:WatchManager` — task persistence and scheduling primitives
+
+#### 2. Interface and Parameter Description
+
+For every single-task endpoint the path `{task_id}` can be replaced with a `?to_uri=` query argument. The CLI `<key>` argument is auto-classified: any value starting with `viking://` routes to the by-URI path, anything else is treated as a task ID (other URI schemes such as `http://` are rejected locally to avoid silent 404s).
+
+**`PATCH /watches` body** (all fields optional; at least one is required)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
+| is_active | bool | Toggle activation without losing the cadence (pause / resume). |
+| reason | string | Update the recorded reason for the watch. |
+| instruction | string | Update the semantic processing instruction. |
+
+Unrecognized fields are rejected with 422 (`extra="forbid"`). Fields left unset preserve their current values.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```bash
+# List active watch tasks (drop ?active_only to include paused ones)
+curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
+  -H "X-API-Key: your-key"
+
+# Pause a watch without losing its cadence
+curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d '{"is_active": false}'
+
+# Trigger an immediate refresh (fire-and-forget; returns before the re-ingest finishes)
+curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
+  -H "X-API-Key: your-key"
+
+# Resolve by URI instead of task ID
+curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI** (subcommands of `ov task watch`)
+
+```bash
+# List active watches (drop --active-only to include paused ones)
+ov task watch ls --active-only
+
+# Inspect a single watch (key may be either a viking:// URI or a task_id)
+ov task watch show viking://resources/guide.md
+
+# Pause / resume without losing the cadence
+ov task watch pause viking://resources/guide.md
+ov task watch resume viking://resources/guide.md
+
+# Update the cadence (or any combination of --active / --reason / --instruction)
+ov task watch update viking://resources/guide.md --interval 30
+
+# Trigger an immediate fire-and-forget refresh
+ov task watch trigger viking://resources/guide.md
+
+# Remove a watch task entirely
+ov task watch rm viking://resources/guide.md
+```
+
+**MCP** (agent control plane — minimum closure only)
+
+```text
+list_watches()                                            # one line per task; URIs only, no task_ids surfaced
+cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
+```
+
+Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval` and `to`.
 
 ---
 

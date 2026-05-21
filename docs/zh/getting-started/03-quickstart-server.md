@@ -7,6 +7,10 @@
 - 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall`）
 - 模型配置已就绪（参见 [快速开始](02-quickstart.md) 了解配置方法）
 
+> Python 3.14 说明（适用于火山方舟 / Volcengine Ark）：
+> 如果你的 `ov.conf` 中使用了 `provider = "volcengine"` / Ark runtime，当前建议优先使用 Python 3.13 及以下版本运行 `openviking-server`。
+> 这是因为 `volcengine-python-sdk[ark]` 仍会在 Python 3.14 下输出 Pydantic V1 兼容性警告，服务通常仍可运行，但启动命令和 `--version` 等输出会带有噪声，直到上游 SDK 去掉这层兼容逻辑。
+
 ## 启动服务
 
 确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：
@@ -73,7 +77,7 @@ client = ov.SyncHTTPClient(
 )
 ```
 
-> `user_key` 通过 Admin API 创建（参见 [认证文档](../../guides/04-authentication.md)），服务端可自动识别其所属租户。
+> `user_key` 通过 Admin API 创建（参见 [认证文档](../guides/04-authentication.md)），服务端可自动识别其所属租户。
 
 **管理操作：使用 `root_key`**
 
@@ -93,7 +97,7 @@ client = ov.SyncHTTPClient(
 > ⚠️ 使用 `root_key` 调用 `add_resource`、`find` 等租户级 API 时，如果未提供 `account`/`user`，会收到：
 > `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
 
-更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../../guides/04-authentication.md)。
+更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../guides/04-authentication.md)。
 
 **完整示例（使用 `user_key`）：**
 
@@ -158,7 +162,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## 使用 curl 连接
 
-远端 URL 可以直接放在 `path` 里。本地文件需要先调用 `POST /api/v1/resources/temp_upload` 上传，再用返回的 `temp_file_id` 调目标 API。`temp_upload` 默认使用本地临时存储；只有在你显式需要分布式共享临时上传时，才传 `upload_mode=shared`。在 Python HTTP client / CLI 流程里，也可以通过 `ovcli.conf` 中的 `upload.mode = "shared"` 选择这一模式。裸 HTTP 如果导入本地目录，需要先把目录打成 `.zip` 再上传。
+远端 URL 可以直接放在 `path` 里。本地文件需要先调用 `POST /api/v1/resources/temp_upload` 上传，再用返回的 `temp_file_id` 调目标 API。裸 HTTP 如果导入本地目录，需要先把目录打成 `.zip` 再上传。
 
 ```bash
 # Add a resource

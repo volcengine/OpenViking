@@ -111,6 +111,22 @@ class TestVikingFSBindingLocal:
 
         await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)
 
+    async def test_glob_matches_deep_markdown_files(self, viking_fs_binding_instance):
+        """Test glob recursively matches markdown files beyond tree's default depth."""
+        vfs = viking_fs_binding_instance
+        base_dir = f"binding_glob_test_{uuid.uuid4().hex}"
+        deep_dir_uri = f"viking://temp/{base_dir}/events/2023/05/08/"
+        deep_file_uri = f"{deep_dir_uri}entry.md"
+
+        await vfs.mkdir(deep_dir_uri)
+        await vfs.write(deep_file_uri, "# deep event")
+
+        result = await vfs.glob("**/*.md", uri=f"viking://temp/{base_dir}/")
+
+        assert deep_file_uri in result["matches"]
+
+        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)
+
     async def test_binary_operations(self, viking_fs_binding_instance):
         """Test VikingFS binary file operations."""
         vfs = viking_fs_binding_instance

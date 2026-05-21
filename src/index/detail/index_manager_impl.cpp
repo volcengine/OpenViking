@@ -345,7 +345,7 @@ int IndexManagerImpl::delete_data(
     int offset = vector_index_->get_offset_by_label(data.label);
     if (offset < 0) {
       SPDLOG_DEBUG("IndexManagerImpl::delete_data label={} not found",
-                  data.label);
+                   data.label);
       continue;
     } else {
       has_update = true;

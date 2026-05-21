@@ -123,8 +123,8 @@ Rust CLI（`ov`）は、OpenViking Serverとやり取りするための高性能
 # ソースからビルドしてインストール
 cargo install --path crates/ov_cli
 
-# またはクイックインストールスクリプトを使用（プリビルドバイナリをダウンロード）
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+# または公開済みの npm CLI パッケージをインストール（プリビルドバイナリをダウンロード）
+npm i -g @openviking/cli
 ```
 
 インストール後、`ov --help`を実行して利用可能なすべてのコマンドを確認できます。CLI接続設定は`~/.openviking/ovcli.conf`に記述します。
@@ -163,7 +163,7 @@ openviking/
 ├── crates/               # Rustコンポーネント
 │   └── ov_cli/           # Rust CLIクライアント
 │       ├── src/          # CLIソースコード
-│       └── install.sh    # クイックインストールスクリプト
+│       └── install.sh    # 非推奨スタブ（npm パッケージを使用、Install を参照）
 │
 ├── src/                  # C++拡張ソース（Python abi3）
 │

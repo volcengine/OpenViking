@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "clear|startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/session-start-commit.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-recall.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-capture.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/pre-compact-capture.mjs",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

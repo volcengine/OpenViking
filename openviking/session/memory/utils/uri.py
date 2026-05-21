@@ -7,21 +7,12 @@ URI generation and validation utilities.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
-
-if TYPE_CHECKING:
-    from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-    from openviking.session.memory.memory_updater import ExtractContext
+from typing import Any, Dict, Set
 
 import jinja2
 
-from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperations
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
-from openviking_cli.utils import get_logger
-
-logger = get_logger(__name__)
 
 
 def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
@@ -64,9 +55,6 @@ def render_template(
     # 渲染模板
     jinja_template = env.from_string(template)
     return jinja_template.render(**template_vars).strip()
-
-
-
 
 
 def generate_uri(
@@ -138,9 +126,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
     return True
 
 
-
-
-
 def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     """
     Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
@@ -204,10 +189,6 @@ def is_uri_allowed(
     return False
 
 
-
-from openviking.session.memory.utils.model import model_to_dict
-
-
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
     """
     Extract URI-friendly fields from a flat model, ignoring patch objects.
@@ -229,24 +210,3 @@ def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> 
         if name in schema_field_names and isinstance(value, (str, int, float, bool)):
             uri_fields[name] = value
     return uri_fields
-
-
-
-
-
-def supplement_operation_uris(
-    operations: ResolvedOperations,
-    registry: MemoryTypeRegistry,
-    extract_context: ExtractContext = None,
-    isolation_handler: MemoryIsolationHandler = None,
-):
-
-    logger.info(f"[supplement_operation_uris] isolation_handler: {isolation_handler}")
-    for operation in operations.upsert_operations:
-        memory_type_schema = registry.get(operation.memory_type)
-        uris = isolation_handler.calculate_memory_uris(
-            memory_type_schema=memory_type_schema,
-            operation=operation,
-            extract_context=extract_context,
-        )
-        operation.uris = uris

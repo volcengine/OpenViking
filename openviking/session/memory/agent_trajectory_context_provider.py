@@ -14,7 +14,6 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -24,19 +23,25 @@ TRAJECTORY_MEMORY_TYPE = "trajectories"
 
 
 class AgentTrajectoryContextProvider(SessionExtractContextProvider):
-    """Phase 1 provider: extract trajectory summaries from conversation."""
+    """Phase 1 provider: extract reusable trajectory-view memories."""
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Your job is to extract trajectory memories from agent conversations.
+        return f"""You are a memory extraction agent. Convert this session into reusable trajectory-view memories.
 
-Rules:
-- Strongly prefer ONE trajectory per conversation. Group all related tasks (e.g. booking, cancellation, refund) into a single trajectory if they share the same business domain.
-- Only output multiple trajectories when the conversation covers clearly unrelated domains.
-- Follow field descriptions in the schema.
-- Output JSON only.
+Each memory is a compact operation contract for a future agent, not a transcript.
+Capture trigger, prerequisites, verified boundaries, procedure, provenance,
+anti-patterns, and applicability. Split separate intents, pivots, enabling writes,
+and final writes into separate records; omit low-value side work. Use only schema
+operation-family enum values, not compound labels. Generalize away raw identifiers,
+names, exact dates, amounts, routes, and tool payloads. Do not let a later
+operation in the session rename, narrow, or extend an earlier operation record.
+Stop each record at its family boundary; do not include a second lifecycle-
+changing write in the same operation contract.
 
-All memory content must be written in {output_language}.
+Output JSON only: {{"trajectories": [...]}}. Include items only for reusable
+operation contracts supported by the session. Follow field descriptions in the
+schema. All content fields must be written in {output_language}.
 """
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:

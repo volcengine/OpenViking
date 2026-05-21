@@ -72,7 +72,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 | **SessionService** | Session management | session, sessions, commit, delete |
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
 | **RelationService** | Relation management | relations, link, unlink |
-| **PackService** | Import/export | export_ovpack, import_ovpack |
+| **PackService** | Import/export and backup/restore | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | Debug service | observer (ObserverService) |
 
 ## Dual-Layer Storage

@@ -1,4 +1,4 @@
-# @openclaw/openviking — OpenViking OpenClaw Plugin
+# @openviking/openclaw-plugin — OpenViking OpenClaw Plugin
 
 OpenClaw context-engine plugin for OpenViking remote memory, context database, RAG and semantic retrieval.
 
@@ -7,29 +7,29 @@ OpenClaw context-engine plugin for OpenViking remote memory, context database, R
 This page is for the **OpenClaw plugin package**:
 
 ```
-@openclaw/openviking
+@openviking/openclaw-plugin
 ```
 
 **Do NOT** install the plugin with `clawhub install openviking` — that installs the `openviking` AgentSkill (under `skills/openviking`), which is a different thing.
 
-For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openclaw/openviking`.
+For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openviking/openclaw-plugin`.
 
 ## Install (Natural Language)
 
 Ask your agent:
 
-> Install the OpenClaw plugin @openclaw/openviking for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
+> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
 
 Or in Chinese:
 
-> 帮我安装 OpenViking 远程记忆插件 @openclaw/openviking。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
+> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
 
 The agent will automatically run install → setup → restart → verify. No manual steps needed.
 
 ## Install (Command Line)
 
 ```bash
-openclaw plugins install @openclaw/openviking
+openclaw plugins install @openviking/openclaw-plugin
 openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
 openclaw openviking status --json
@@ -39,7 +39,7 @@ The `setup` command automatically activates the context-engine slot and validate
 
 ## Search Keywords
 
-@openclaw/openviking, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
+@openviking/openclaw-plugin, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
 
 ## Documentation
 
@@ -197,13 +197,14 @@ So `afterTurn()` is closer to "incremental append plus threshold-triggered async
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes six tools directly:
+Beyond automatic behavior, the plugin exposes seven tools directly:
 
 - `memory_recall`: explicit long-term memory search
 - `memory_store`: write text into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
-- `ov_import`: import a resource or skill; defaults to resource and uses `kind: "skill"` for skills
+- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
+- `add_skill`: import or register an OpenViking agent skill
 - `memory_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
@@ -212,7 +213,8 @@ They serve different roles:
 - `memory_recall` gives the model an explicit follow-up search path
 - `memory_store` is for immediately persisting clearly important information
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
-- `ov_import` lets the agent complete explicit import requests without asking the user to remember slash commands
+- `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
+- `add_skill` imports skills into OpenViking, while `add_resource` imports resources
 - `memory_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
@@ -227,8 +229,8 @@ Resource and skill imports are intentionally separate because they land in diffe
 The plugin also registers explicit slash commands for manual imports:
 
 ```text
-/ov-import ./README.md --to viking://resources/openviking-readme --wait
-/ov-import ./skills/install-openviking-memory --kind skill --wait
+/add-resource ./README.md --to viking://resources/openviking-readme --wait
+/add-skill ./skills/install-openviking-memory --wait
 /memory-search "OpenViking install" --uri viking://resources/openviking-readme
 /memory-search "memory install skill" --uri viking://agent/skills
 ```

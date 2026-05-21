@@ -37,7 +37,7 @@ class TestRm:
         for f in sample_directory.glob("**/*.txt"):
             await client.add_resource(path=str(f), reason="Test rm dir")
 
-        # Release lifecycle locks held by add_resource before rm
+        # Release resource locks held by add_resource before rm
         await release_all_locks()
         entries = await client.ls("viking://resources/")
         for data in entries:
