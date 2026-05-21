@@ -1073,7 +1073,7 @@ class Session:
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
-        task = tracker.create(
+        task = await tracker.create(
             "session_commit",
             resource_id=self.session_id,
             account_id=self.ctx.account_id,
@@ -1141,7 +1141,7 @@ class Session:
                     ),
                     blocked_by=f"archive_{archive_index - 1:03d}",
                 )
-                tracker.fail(
+                await tracker.fail(
                     task_id,
                     f"Previous archive archive_{archive_index - 1:03d} failed; "
                     "cannot continue session commit",
@@ -1150,7 +1150,11 @@ class Session:
                 )
                 return
 
-            tracker.start(task_id, account_id=self.ctx.account_id, user_id=self.ctx.user.user_id)
+            await tracker.start(
+                task_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
@@ -1158,7 +1162,7 @@ class Session:
                     # redo-log protection
                     if redo_enabled:
                         redo_task_id = str(uuid.uuid4())
-                        redo_log.write_pending(
+                        await redo_log.write_pending_async(
                             redo_task_id,
                             {
                                 "archive_uri": archive_uri,
@@ -1291,7 +1295,7 @@ class Session:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
                     if redo_enabled and redo_task_id:
-                        redo_log.mark_done(redo_task_id)
+                        await redo_log.mark_done_async(redo_task_id)
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:
@@ -1339,7 +1343,7 @@ class Session:
             # Write .done file last — signals that all state is finalized
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
-            tracker.complete(
+            await tracker.complete(
                 task_id,
                 {
                     "session_id": self.session_id,
@@ -1361,7 +1365,7 @@ class Session:
             logger.info(f"Session {self.session_id} memory extraction completed")
         except asyncio.CancelledError as e:
             if redo_enabled and redo_task_id:
-                redo_log.mark_done(redo_task_id)
+                await redo_log.mark_done_async(redo_task_id)
             try:
                 await self._write_failed_marker(
                     archive_uri,
@@ -1370,7 +1374,7 @@ class Session:
                 )
             except Exception:
                 logger.debug("Failed to write cancelled marker for session %s", self.session_id)
-            tracker.fail(
+            await tracker.fail(
                 task_id,
                 f"cancelled: {e}",
                 account_id=self.ctx.account_id,
@@ -1380,13 +1384,13 @@ class Session:
             raise
         except Exception as e:
             if redo_enabled and redo_task_id:
-                redo_log.mark_done(redo_task_id)
+                await redo_log.mark_done_async(redo_task_id)
             await self._write_failed_marker(
                 archive_uri,
                 stage="memory_extraction",
                 error=str(e),
             )
-            tracker.fail(
+            await tracker.fail(
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
             logger.exception(f"Memory extraction failed for session {self.session_id}")

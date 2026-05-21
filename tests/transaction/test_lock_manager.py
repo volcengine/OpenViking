@@ -61,17 +61,17 @@ class TestLockManagerBasic:
         assert len(handle.locks) == 2
 
         await lm.release(handle)
-        assert handle.id not in lm.get_active_handles()
+        assert handle.id not in await lm.get_active_handles_async()
 
     async def test_release_removes_from_active(self, lm, test_dir):
         handle = lm.create_handle()
 
         await lm.acquire_exact_path(handle, test_dir)
-        assert handle.id in lm.get_active_handles()
+        assert handle.id in await lm.get_active_handles_async()
 
         await lm.release(handle)
 
-        assert handle.id not in lm.get_active_handles()
+        assert handle.id not in await lm.get_active_handles_async()
 
     async def test_stop_releases_all(self, agfs_client, lm, test_dir):
         h1 = lm.create_handle()
@@ -83,7 +83,7 @@ class TestLockManagerBasic:
         await lm.acquire_exact_path(h2, sub)
 
         await lm.stop()
-        assert len(lm.get_active_handles()) == 0
+        assert len(await lm.get_active_handles_async()) == 0
 
     async def test_exact_path_allows_missing_target(self, lm):
         handle = lm.create_handle()
@@ -104,14 +104,15 @@ class TestLockManagerBasic:
 
     async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
         lm._redo_log = MagicMock()
-        lm._redo_log.list_pending.return_value = ["redo-task"]
-        lm._redo_log.read.return_value = {"archive_uri": "a", "session_uri": "b"}
+        lm._redo_log.list_pending_async = AsyncMock(return_value=["redo-task"])
+        lm._redo_log.read_async = AsyncMock(return_value={"archive_uri": "a", "session_uri": "b"})
+        lm._redo_log.mark_done_async = AsyncMock()
         lm._redo_session_memory = AsyncMock(side_effect=asyncio.CancelledError("shutdown"))
 
         with pytest.raises(asyncio.CancelledError):
             await lm._recover_pending_redo()
 
-        lm._redo_log.mark_done.assert_not_called()
+        lm._redo_log.mark_done_async.assert_not_awaited()
 
     async def test_start_skips_redo_recovery_when_disabled(self, client):
         lm_disabled = LockManager(

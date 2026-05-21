@@ -20,7 +20,7 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
@@ -36,6 +36,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
+_MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
 
@@ -51,6 +52,28 @@ def _filename_has_variables(schema: Any) -> bool:
 def _append_unique(paths: list[str], path: str) -> None:
     if path and path not in paths:
         paths.append(path)
+
+
+def _log_memory_lock_retry(
+    *,
+    retry_count: int,
+    max_retries: int,
+    last_warning_at: float,
+    phase_label: str = "",
+) -> float:
+    now = asyncio.get_running_loop().time()
+    max_label = max_retries or "unlimited"
+    prefix = f"[{phase_label}] " if phase_label else ""
+    message = (
+        f"{prefix}Failed to acquire memory locks, retrying "
+        f"(attempt={retry_count}, max={max_label})..."
+    )
+
+    if retry_count == 1 or now - last_warning_at >= _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS:
+        logger.warning(message)
+        return now
+
+    return last_warning_at
 
 
 def _render_memory_schema_locks(
@@ -250,6 +273,7 @@ class SessionCompressorV2:
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
 
                 # 循环重试获取锁（机制确保不会死锁）
                 while True:
@@ -268,9 +292,10 @@ class SessionCompressorV2:
                             f"{retry_count} retries (max={max_retries})"
                         )
 
-                    logger.warning(
-                        "Failed to acquire memory locks, retrying "
-                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
@@ -634,6 +659,7 @@ class SessionCompressorV2:
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
                 while True:
                     lock_acquired = await lock_manager.acquire_exact_tree_batch(
                         transaction_handle,
@@ -649,6 +675,12 @@ class SessionCompressorV2:
                             f"[{phase_label}] Failed to acquire memory locks after "
                             f"{retry_count} retries (max={max_retries})"
                         )
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                        phase_label=phase_label,
+                    )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
 
@@ -798,7 +830,6 @@ class SessionCompressorV2:
         This is the system-side management of source_trajectories — the LLM never
         outputs this field; the pipeline appends the batch after a write or edit.
         """
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:
             return

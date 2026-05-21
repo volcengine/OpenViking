@@ -27,7 +27,10 @@ async def write_semantic_sidecars(
         return False
 
     try:
-        from openviking.storage.transaction import LockContext, get_lock_manager
+        from openviking.storage.transaction import (
+            LockContext,
+            get_lock_manager,
+        )
 
         lock_manager = get_lock_manager()
     except Exception:
