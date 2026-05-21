@@ -9,7 +9,6 @@ import pytest
 import yaml
 
 from openviking.session.memory.dataclass import (
-    LinkType,
     MemoryField,
     MemoryTypeSchema,
     WikiLink,
