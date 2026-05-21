@@ -13,4 +13,3 @@ WM_SEVEN_SECTIONS: List[str] = [
     "Errors & Corrections",
     "Open Issues",
 ]
-

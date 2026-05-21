@@ -1547,24 +1547,16 @@ class Session:
         from openviking.session.extraction_preprocessor import PreprocessorOptions
 
         return PreprocessorOptions(
-            max_span_tokens=int(
-                getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)
-            ),
-            min_span_tokens=int(
-                getattr(memory_config, "wm_v2_preprocess_min_span_tokens", 200)
-            ),
-            max_span_chars=int(
-                getattr(memory_config, "wm_v2_preprocess_max_span_chars", 1600)
-            ),
+            max_span_tokens=int(getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)),
+            min_span_tokens=int(getattr(memory_config, "wm_v2_preprocess_min_span_tokens", 200)),
+            max_span_chars=int(getattr(memory_config, "wm_v2_preprocess_max_span_chars", 1600)),
             fallback_if_compact_ratio_above=float(
                 getattr(memory_config, "wm_v2_preprocess_fallback_ratio", 0.9)
             ),
             expand_budget_on_risk=bool(
                 getattr(memory_config, "wm_v2_preprocess_expand_budget_on_risk", True)
             ),
-            max_facts_total=int(
-                getattr(memory_config, "wm_v2_preprocess_max_facts_total", 24)
-            ),
+            max_facts_total=int(getattr(memory_config, "wm_v2_preprocess_max_facts_total", 24)),
             min_full_tokens_for_compact=int(
                 getattr(memory_config, "wm_v2_preprocess_min_full_tokens", 600)
             ),
@@ -1577,9 +1569,7 @@ class Session:
             max_tool_output_chars=int(
                 getattr(memory_config, "wm_v2_preprocess_max_tool_output_chars", 300)
             ),
-            max_tool_spans=int(
-                getattr(memory_config, "wm_v2_preprocess_max_tool_spans", 3)
-            ),
+            max_tool_spans=int(getattr(memory_config, "wm_v2_preprocess_max_tool_spans", 3)),
         )
 
     @staticmethod
@@ -1635,8 +1625,7 @@ class Session:
             )
             return
         logger.info(
-            "WM_PREPROCESS %s ACTIVE: full=%d compact=%d saved=%d (%d%%) "
-            "spans=%d facts=%d risk=%s",
+            "WM_PREPROCESS %s ACTIVE: full=%d compact=%d saved=%d (%d%%) spans=%d facts=%d risk=%s",
             phase_upper,
             packet.token_estimates.full_messages_tokens_est,
             packet.token_estimates.compact_packet_tokens_est,

@@ -178,9 +178,7 @@ def estimate_tokens(text: str) -> int:
     return estimate_embedding_input_tokens(text)
 
 
-def _resolve_adaptive_options(
-    full_tokens: int, opts: PreprocessorOptions
-) -> PreprocessorOptions:
+def _resolve_adaptive_options(full_tokens: int, opts: PreprocessorOptions) -> PreprocessorOptions:
     """Apply tiered adaptive parameters based on session size.
 
     * Tier 1 (< 2,000 tokens): lightweight – smaller spans/facts budget.
@@ -232,9 +230,7 @@ def build_wm_compact_packet(
 
     section_signals = _extract_section_signals(normalized)
     structured_facts = [
-        signal
-        for section in _SIGNAL_SECTIONS
-        for signal in section_signals.get(section, [])
+        signal for section in _SIGNAL_SECTIONS for signal in section_signals.get(section, [])
     ]
 
     if len(structured_facts) > opts.max_facts_total:
@@ -275,9 +271,7 @@ def build_wm_compact_packet(
         fallback_reason = "compact_not_smaller_enough"
     elif (full_tokens - compact_tokens) < opts.min_absolute_savings_tokens:
         fallback_reason = "savings_too_small"
-    elif "failed_tool" in risk_flags and not _has_selected_tool_span(
-        normalized, selected_spans
-    ):
+    elif "failed_tool" in risk_flags and not _has_selected_tool_span(normalized, selected_spans):
         fallback_reason = "failed_tool_not_selected"
 
     token_estimates = TokenEstimates(
@@ -303,7 +297,9 @@ def build_wm_compact_packet(
     )
 
 
-def _normalize_message(message: Message, index: int, options: Optional[PreprocessorOptions] = None) -> Dict[str, object]:
+def _normalize_message(
+    message: Message, index: int, options: Optional[PreprocessorOptions] = None
+) -> Dict[str, object]:
     parts: List[str] = []
     has_tool = False
     failed_tool = False
@@ -369,7 +365,7 @@ def _strip_metadata(text: str) -> str:
 
 
 def _extract_section_signals(
-    normalized_messages: Sequence[Dict[str, object]]
+    normalized_messages: Sequence[Dict[str, object]],
 ) -> Dict[str, List[SectionSignal]]:
     signals: Dict[str, List[SectionSignal]] = {section: [] for section in _SIGNAL_SECTIONS}
     seen: Set[tuple] = set()
@@ -380,31 +376,88 @@ def _extract_section_signals(
         clean_text = str(item["clean_text"])
         # Keep raw text for literal URL/path/function extraction, but use
         # clean_text for semantic matching so injected metadata cannot skew scoring/risk.
-        _add_regex_signals(signals, seen, "Files & Context", "url", _URL_RE, text, source_id, source_index)
-        _add_regex_signals(signals, seen, "Files & Context", "path", _PATH_RE, text, source_id, source_index)
-        _add_regex_signals(signals, seen, "Files & Context", "function", _FUNCTION_RE, text, source_id, source_index)
+        _add_regex_signals(
+            signals, seen, "Files & Context", "url", _URL_RE, text, source_id, source_index
+        )
+        _add_regex_signals(
+            signals, seen, "Files & Context", "path", _PATH_RE, text, source_id, source_index
+        )
+        _add_regex_signals(
+            signals,
+            seen,
+            "Files & Context",
+            "function",
+            _FUNCTION_RE,
+            text,
+            source_id,
+            source_index,
+        )
         # Semantic matching uses clean_text to avoid false positives from
         # OpenClaw metadata headers like "Sender (untrusted metadata)".
         if _CORRECTION_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Errors & Corrections", "correction", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals,
+                seen,
+                "Errors & Corrections",
+                "correction",
+                clean_text,
+                source_id,
+                source_index,
+            )
         if _ERROR_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Errors & Corrections", "error", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Errors & Corrections", "error", clean_text, source_id, source_index
+            )
         if _OPEN_ISSUE_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Open Issues", "open_issue", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Open Issues", "open_issue", clean_text, source_id, source_index
+            )
         if _PREFERENCE_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Key Facts & Decisions", "preference", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals,
+                seen,
+                "Key Facts & Decisions",
+                "preference",
+                clean_text,
+                source_id,
+                source_index,
+            )
         if _DATE_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Key Facts & Decisions", "date_or_plan", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals,
+                seen,
+                "Key Facts & Decisions",
+                "date_or_plan",
+                clean_text,
+                source_id,
+                source_index,
+            )
         if _GOAL_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Task & Goals", "goal", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Task & Goals", "goal", clean_text, source_id, source_index
+            )
         if _PLUGIN_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Files & Context", "plugin", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Files & Context", "plugin", clean_text, source_id, source_index
+            )
         if _RECALL_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Files & Context", "recall", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Files & Context", "recall", clean_text, source_id, source_index
+            )
         if _FALLBACK_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Errors & Corrections", "fallback", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals,
+                seen,
+                "Errors & Corrections",
+                "fallback",
+                clean_text,
+                source_id,
+                source_index,
+            )
         if _COMPONENT_RE.search(clean_text):
-            _add_sentence_signal(signals, seen, "Files & Context", "component", clean_text, source_id, source_index)
+            _add_sentence_signal(
+                signals, seen, "Files & Context", "component", clean_text, source_id, source_index
+            )
     if normalized_messages:
         latest = normalized_messages[-1]
         _add_signal(
@@ -622,7 +675,7 @@ def _truncate_span(text: str, max_chars: int) -> str:
     budget = max_chars - len(first) - len(last) - len("\n\n...\n\n")
     if budget <= 0:
         # Not enough room; keep first + indicator
-        return first[:max_chars - len("...[truncated]")].rstrip() + "\n...[truncated]"
+        return first[: max_chars - len("...[truncated]")].rstrip() + "\n...[truncated]"
 
     # Score and select middle paragraphs
     middle = paragraphs[1:-1]

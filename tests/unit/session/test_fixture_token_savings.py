@@ -8,12 +8,12 @@ Run: python3 -m pytest tests/unit/session/test_fixture_token_savings.py -v -s
 from __future__ import annotations
 
 import pytest
+
 from openviking.message import Message
 from openviking.message.part import TextPart, ToolPart
 from openviking.session.extraction_preprocessor import (
     PreprocessorOptions,
     build_wm_compact_packet,
-    estimate_tokens,
 )
 
 
@@ -79,22 +79,22 @@ for i in range(80):
     role = "user" if i % 3 == 0 else "assistant"
     if role == "user":
         texts = [
-            f"The error in openviking/session/session.py line {1400+i} says KeyError: 'missing_field'. "
-            f"I checked the config at /etc/openviking/ov.conf and the memory section looks correct. "
-            f"Can you look at the traceback from /var/log/openviking/error.log?",
-            f"I also found a problem in openviking_cli/utils/config/memory_config.py. "
-            f"The wm_v2_preprocess_enabled field isn't being picked up. "
-            f"See https://github.com/volcengine/OpenViking/issues/1800 for context.",
-            f"Actually, the root cause is in the Docker setup. "
-            f"The binding at openviking/lib/ragfs_python.abi3.so is missing. "
-            f"I added it to the Dockerfile at docker/Dockerfile line 45. "
-            f"Also need to update requirements.txt to include pathspec>=0.12.",
-            f"I prefer to keep the default conservative. Don't enable preprocessing by default. "
-            f"The fallback ratio should be 0.9, not any lower. "
-            f"And we must not change the creation path until update is validated.",
-            f"Deadline: we need this done by 2026-06-15. "
-            f"The plan is to validate on small fixtures first, then staging, then prod. "
-            f"Don't skip any validation step.",
+            f"The error in openviking/session/session.py line {1400 + i} says KeyError: 'missing_field'. "
+            "I checked the config at /etc/openviking/ov.conf and the memory section looks correct. "
+            "Can you look at the traceback from /var/log/openviking/error.log?",
+            "I also found a problem in openviking_cli/utils/config/memory_config.py. "
+            "The wm_v2_preprocess_enabled field isn't being picked up. "
+            "See https://github.com/volcengine/OpenViking/issues/1800 for context.",
+            "Actually, the root cause is in the Docker setup. "
+            "The binding at openviking/lib/ragfs_python.abi3.so is missing. "
+            "I added it to the Dockerfile at docker/Dockerfile line 45. "
+            "Also need to update requirements.txt to include pathspec>=0.12.",
+            "I prefer to keep the default conservative. Don't enable preprocessing by default. "
+            "The fallback ratio should be 0.9, not any lower. "
+            "And we must not change the creation path until update is validated.",
+            "Deadline: we need this done by 2026-06-15. "
+            "The plan is to validate on small fixtures first, then staging, then prod. "
+            "Don't skip any validation step.",
         ]
         LONG_DEBUG_MESSAGES.append(_msg(i, "user", texts[i % len(texts)]))
     else:
@@ -102,23 +102,29 @@ for i in range(80):
             _msg(
                 i,
                 "assistant",
-                f"I've identified the issue. The traceback at /var/log/openviking/error.log "
-                f"shows a missing key in the session commit phase. The fix involves updating "
-                f"openviking/session/session.py to handle the edge case. I also verified "
-                f"openviking_cli/utils/config/memory_config.py picks up the new fields correctly "
-                f"after the Dockerfile change. Running pytest tests/unit/session/ now to confirm.",
+                "I've identified the issue. The traceback at /var/log/openviking/error.log "
+                "shows a missing key in the session commit phase. The fix involves updating "
+                "openviking/session/session.py to handle the edge case. I also verified "
+                "openviking_cli/utils/config/memory_config.py picks up the new fields correctly "
+                "after the Dockerfile change. Running pytest tests/unit/session/ now to confirm.",
             )
         )
 
 TOOL_HEAVY_MESSAGES = []
 tool_names = [
-    "read_file", "write_file", "execute_command", "search_code",
-    "run_tests", "git_diff", "git_log", "find_references",
+    "read_file",
+    "write_file",
+    "execute_command",
+    "search_code",
+    "run_tests",
+    "git_diff",
+    "git_log",
+    "find_references",
 ]
 for i in range(60):
     if i % 5 == 0:
         TOOL_HEAVY_MESSAGES.append(
-            _msg(i, "user", f"Task step {i//5 + 1}: continue the refactoring.")
+            _msg(i, "user", f"Task step {i // 5 + 1}: continue the refactoring.")
         )
     elif i % 3 == 1:
         name = tool_names[i % len(tool_names)]
@@ -190,6 +196,7 @@ MIXED_MESSAGES = (
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
+
 
 def _run_and_report(messages, options=None, label=""):
     packet = build_wm_compact_packet(
@@ -322,7 +329,9 @@ class TestStructuredExtraction:
     def test_tool_atomicity(self):
         msgs = [
             _tool_msg(
-                1, "assistant", "pytest",
+                1,
+                "assistant",
+                "pytest",
                 tool_input={"cmd": "pytest tests/"},
                 tool_output="FAILED test_x.py::test_case",
                 tool_status="error",
