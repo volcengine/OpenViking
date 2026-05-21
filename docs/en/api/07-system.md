@@ -23,9 +23,11 @@ Basic health check endpoint. No authentication required. Returns service version
 
 **`profile` behavior**:
 - `profile` is implemented at the HTTP middleware layer and works for any OpenViking endpoint that returns JSON, not just `/health`.
+- The request flag only takes effect when the server enables `server.profile_enabled = true` in `ov.conf`; otherwise the server ignores `profile=1`.
 - `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
 - The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
 - The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
+- The `ov` CLI displays the returned `profile`. The Python HTTP client can trigger server-side profiling via `ovcli.conf.profile = true`, but most SDK methods still return only the business `result` and do not expose the top-level `profile` field directly.
 
 **`profile` column meanings**:
 - `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
@@ -68,6 +70,10 @@ print(f"Healthy: {healthy}")
 
 ```bash
 ov system health
+```
+
+```bash
+ov --profile health
 ```
 
 **Response Example**
