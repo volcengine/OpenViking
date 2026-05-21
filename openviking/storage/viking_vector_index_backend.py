@@ -65,22 +65,10 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
 ]
 
 URI_REWRITE_OUTPUT_FIELDS = [
+    "id",
     "uri",
-    "type",
-    "context_type",
-    "vector",
-    "sparse_vector",
-    "created_at",
-    "updated_at",
-    "active_count",
     "level",
-    "name",
-    "description",
-    "tags",
-    "abstract",
     "account_id",
-    "owner_user_id",
-    "owner_agent_id",
 ]
 
 
@@ -980,6 +968,25 @@ class VikingVectorIndexBackend:
         )
         if not records:
             return False
+        record_ids = [str(record["id"]) for record in records if record.get("id")]
+        if not record_ids:
+            logger.warning(
+                "update_uri_mapping found records without ids: uri=%s new_uri=%s account_id=%s",
+                canonical_uri,
+                canonical_new_uri,
+                ctx.account_id,
+            )
+            return False
+        full_records = await self.get(record_ids, ctx=ctx)
+        if not full_records:
+            logger.warning(
+                "update_uri_mapping failed to fetch full records: uri=%s new_uri=%s account_id=%s ids=%s",
+                canonical_uri,
+                canonical_new_uri,
+                ctx.account_id,
+                record_ids,
+            )
+            return False
 
         def _seed_uri_for_id(uri: str, level: int) -> str:
             if level == 0:
@@ -990,7 +997,7 @@ class VikingVectorIndexBackend:
 
         success = False
         ids_to_delete: List[str] = []
-        for record in records:
+        for record in full_records:
             if "id" not in record:
                 continue
             raw_level = record.get("level", 2)
@@ -1008,6 +1015,17 @@ class VikingVectorIndexBackend:
                 "id": new_id,
                 "uri": canonical_new_uri,
             }
+            vector = updated.get("vector")
+            if not vector:
+                logger.warning(
+                    "update_uri_mapping skipped record without dense vector: old_uri=%s new_uri=%s level=%s account_id=%s id=%s",
+                    canonical_uri,
+                    canonical_new_uri,
+                    level,
+                    ctx.account_id,
+                    record.get("id"),
+                )
+                continue
             if await self.upsert(updated, ctx=ctx):
                 success = True
                 old_id = record.get("id")
