@@ -56,7 +56,7 @@ const en = {
     },
     serverMode: {
       checking: 'Detecting',
-      devImplicit: 'Development Mode',
+      devImplicit: 'Server Identity',
       explicitAuth: 'Explicit Auth',
       offline: 'Offline',
     },
@@ -64,8 +64,8 @@ const en = {
   connection: {
     devMode: {
       description:
-        'This server is using implicit identity, so account, user, and API key are usually not required.',
-      title: 'Development Mode Detected',
+        'This server provides identity automatically, so account, user, and API key are usually not required.',
+      title: 'Server-managed identity',
     },
     dialog: {
       title: 'Connection & Identity',

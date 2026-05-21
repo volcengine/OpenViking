@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
@@ -78,6 +79,38 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 }
 
+function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft {
+  return {
+    accountId: connection.accountId.trim(),
+    apiKey: connection.apiKey.trim(),
+    baseUrl: normalizeBaseUrl(connection.baseUrl),
+    userId: connection.userId.trim(),
+  }
+}
+
+function applyConnection(connection: ConnectionDraft): void {
+  ovClient.setOptions({
+    baseUrl: connection.baseUrl,
+  })
+  ovClient.setConnection({
+    accountId: connection.accountId,
+    apiKey: connection.apiKey,
+    userId: connection.userId,
+  })
+}
+
+function readInitialConnection(): ConnectionDraft {
+  const storedConnection = readStoredConnection()
+  return normalizeConnectionDraft({
+    ...DEFAULT_CONNECTION,
+    ...storedConnection,
+    apiKey:
+      ovClient.getConnection().apiKey ||
+      storedConnection.apiKey ||
+      DEFAULT_CONNECTION.apiKey,
+  })
+}
+
 export function summarizeConnectionIdentity(
   connection: ConnectionDraft,
   serverMode: ServerMode,
@@ -115,30 +148,25 @@ export function AppConnectionProvider({
 }: {
   children: React.ReactNode
 }) {
-  const storedConnection = React.useMemo(() => readStoredConnection(), [])
-  const [connection, setConnection] = React.useState<ConnectionDraft>({
-    ...DEFAULT_CONNECTION,
-    ...storedConnection,
-    apiKey:
-      ovClient.getConnection().apiKey ||
-      storedConnection.apiKey ||
-      DEFAULT_CONNECTION.apiKey,
-  })
+  const queryClient = useQueryClient()
+  const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
+  if (initialConnectionRef.current === null) {
+    initialConnectionRef.current = readInitialConnection()
+    applyConnection(initialConnectionRef.current)
+  }
+
+  const [connection, setConnection] = React.useState<ConnectionDraft>(
+    initialConnectionRef.current,
+  )
   const [isConnectionDialogOpen, setConnectionDialogOpen] =
     React.useState(false)
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
   React.useEffect(() => {
-    ovClient.setOptions({
-      baseUrl: connection.baseUrl,
-    })
-    ovClient.setConnection({
-      accountId: connection.accountId,
-      apiKey: connection.apiKey,
-      userId: connection.userId,
-    })
+    applyConnection(connection)
     persistConnection(connection)
-  }, [connection])
+    void queryClient.invalidateQueries()
+  }, [connection, queryClient])
 
   React.useEffect(() => {
     let cancelled = false
@@ -180,12 +208,7 @@ export function AppConnectionProvider({
       isConnectionDialogOpen,
       openConnectionDialog: () => setConnectionDialogOpen(true),
       saveConnection: (next) =>
-        setConnection({
-          accountId: next.accountId.trim(),
-          apiKey: next.apiKey.trim(),
-          baseUrl: normalizeBaseUrl(next.baseUrl),
-          userId: next.userId.trim(),
-        }),
+        setConnection(normalizeConnectionDraft(next)),
       serverMode,
       setConnectionDialogOpen,
     }),

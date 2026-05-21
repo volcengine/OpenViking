@@ -46,6 +46,7 @@ const IMAGE_EXTS = [
   'avif',
 ]
 const MARKDOWN_EXTS = ['md', 'markdown', 'mdx']
+const JSONL_EXTS = ['jsonl', 'ndjson']
 const CODE_EXTS = [
   'js',
   'ts',
@@ -104,6 +105,12 @@ const BINARY_EXTS = [
   'bin',
 ]
 const TEXT_FILES = ['readme', 'license', 'dockerfile', 'makefile']
+const HIDDEN_SUMMARY_FILENAMES = new Set([
+  '.abstract',
+  '.abstract.md',
+  '.overview',
+  '.overview.md',
+])
 
 function pickFirstNonEmpty(values: Array<unknown>): unknown {
   for (const value of values) {
@@ -199,11 +206,18 @@ export function detectFileType(uri: string): VikingFileType {
   const name = fileNameFromUri(uri).toLowerCase()
   const ext = name.includes('.') ? name.split('.').pop() || '' : ''
 
+  if (uri.endsWith('/')) {
+    return 'directory'
+  }
+
   if (IMAGE_EXTS.includes(ext)) {
     return 'image'
   }
   if (MARKDOWN_EXTS.includes(ext)) {
     return 'markdown'
+  }
+  if (JSONL_EXTS.includes(ext)) {
+    return 'jsonl'
   }
   if (CODE_EXTS.includes(ext)) {
     return 'code'
@@ -268,6 +282,7 @@ export function normalizeFsEntry(
       modTime: '',
       modTimestamp: null,
       abstract: '',
+      overview: '',
     }
   }
 
@@ -326,6 +341,7 @@ export function normalizeFsEntry(
       abstract: String(
         pickFirstNonEmpty([item.abstract, item.summary, item.description]),
       ),
+      overview: String(pickFirstNonEmpty([item.overview, item.l1, item.L1])),
     }
   }
 
@@ -339,7 +355,12 @@ export function normalizeFsEntry(
     modTime: '',
     modTimestamp: null,
     abstract: '',
+    overview: '',
   }
+}
+
+function isHiddenSummaryEntry(entry: VikingFsEntry): boolean {
+  return !entry.isDir && HIDDEN_SUMMARY_FILENAMES.has(entry.name)
 }
 
 export function normalizeFsEntries(
@@ -349,7 +370,9 @@ export function normalizeFsEntries(
   const normalizedCurrentUri = normalizeDirUri(currentUri)
 
   if (Array.isArray(result)) {
-    return result.map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+    return result
+      .map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+      .filter((entry) => !isHiddenSummaryEntry(entry))
   }
 
   if (isRecord(result)) {
@@ -362,9 +385,9 @@ export function normalizeFsEntries(
     ]
     for (const bucket of buckets) {
       if (Array.isArray(bucket)) {
-        return bucket.map((item) =>
-          normalizeFsEntry(item, normalizedCurrentUri),
-        )
+        return bucket
+          .map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+          .filter((entry) => !isHiddenSummaryEntry(entry))
       }
     }
   }
@@ -424,6 +447,10 @@ export function normalizeReadContent(result: unknown): string {
     if (typeof content === 'string') {
       return content
     }
+  }
+
+  if (result === undefined) {
+    return ''
   }
 
   return JSON.stringify(result, null, 2)

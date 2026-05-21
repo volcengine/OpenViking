@@ -56,7 +56,7 @@ const zhCN = {
     },
     serverMode: {
       checking: '检测中',
-      devImplicit: '开发模式',
+      devImplicit: '服务端身份',
       explicitAuth: '显式鉴权',
       offline: '未连接',
     },
@@ -64,8 +64,8 @@ const zhCN = {
   connection: {
     devMode: {
       description:
-        '当前服务使用隐式身份，通常不需要填写 account、user 和 API key。',
-      title: '已检测到开发模式',
+        '当前服务会自动提供身份，通常不需要填写 account、user 和 API key。',
+      title: '服务端托管身份',
     },
     dialog: {
       title: '连接与身份',
