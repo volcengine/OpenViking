@@ -1,0 +1,159 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_prb_content_matrix_new_prompt
+  strategy_concurrency: 16
+  task_max_concurrency: 5
+  corpus_prepare_concurrency: 1
+
+strategies:
+  - id: no_memory
+    label: TAU-2 no-memory same-seed baseline
+    memory_backend: none
+
+  - id: new_traj_fixed_first_user
+    label: PR-B new trajectory fixed-count first-user top4
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: trajectories
+    retrieval_mode: first_user
+    retrieval_top_k: 4
+    first_user_inject_top_k: 4
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_traj_fixed_prewrite_only
+    label: PR-B new trajectory fixed-count prewrite top4
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: trajectories
+    retrieval_mode: prewrite
+    retrieval_top_k: 4
+    prewrite_retrieval_top_k: 4
+    prewrite_inject_top_k: 4
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_traj_fixed_first_user_prewrite
+    label: PR-B new trajectory fixed-count first-user + prewrite top4
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    retrieval_top_k: 4
+    first_user_inject_top_k: 4
+    prewrite_retrieval_top_k: 4
+    prewrite_inject_top_k: 4
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_exp_fixed_first_user
+    label: PR-B new experience fixed-count first-user top2
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: experiences
+    retrieval_mode: first_user
+    retrieval_top_k: 2
+    first_user_inject_top_k: 2
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_exp_fixed_prewrite_only
+    label: PR-B new experience fixed-count prewrite top2
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: experiences
+    retrieval_mode: prewrite
+    retrieval_top_k: 2
+    prewrite_retrieval_top_k: 2
+    prewrite_inject_top_k: 2
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_exp_fixed_first_user_prewrite
+    label: PR-B new experience fixed-count first-user + prewrite top2
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: experiences
+    retrieval_mode: first_user_prewrite
+    retrieval_top_k: 2
+    first_user_inject_top_k: 2
+    prewrite_retrieval_top_k: 2
+    prewrite_inject_top_k: 2
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_traj_4000_prewrite_only
+    label: PR-B new trajectory 4000-char prewrite
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: trajectories
+    retrieval_mode: prewrite
+    retrieval_top_k: 8
+    prewrite_retrieval_top_k: 8
+    prewrite_inject_top_k: 8
+    memory_inject_max_chars: 4000
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md
+
+  - id: new_exp_4000_first_user_prewrite
+    label: PR-B new experience 4000-char first-user + prewrite
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_operation_family_v1_success_only
+    train_memory_mode: experience_only
+    train_transcript_format: role_tool_blocks
+    train_include_system_prompt: true
+    train_skip_failed_sessions: true
+    search_memory_type: experiences
+    retrieval_mode: first_user_prewrite
+    retrieval_top_k: 8
+    first_user_inject_top_k: 8
+    prewrite_retrieval_top_k: 8
+    prewrite_inject_top_k: 8
+    memory_inject_max_chars: 4000
+    scope_prompt_files:
+      retail: benchmark/tau2/config/scope_prompts/retail_memory_scope.md
+      airline: benchmark/tau2/config/scope_prompts/airline_memory_scope.md

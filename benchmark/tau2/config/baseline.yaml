@@ -6,7 +6,9 @@ benchmark:
   train_split_name: train
   eval_split_name: test
   repeat_count: 8
+  strategy_concurrency: 8
   task_max_concurrency: 10
+  corpus_prepare_concurrency: 2
   max_steps: 200
   seed: 300
   agent: llm_agent
@@ -17,12 +19,25 @@ paths:
   tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
   tau2_cli: ${TAU2_CLI:-tau2}
   output_dir: benchmark/tau2/result
+  # Corpus writes are expensive and should be reused across eval run ids when
+  # the train split and memory prompt/config did not change.
+  corpus_cache_dir: benchmark/tau2/result/memory_corpora
 
 eval:
+  # Default OpenViking TAU-2 memory evidence uses the fixed-first-user full8
+  # protocol: retail + airline, 8 repeats, same seeds, first user turn pinned by
+  # fixtures, later user simulator turns still live.
+  protocol: fixed_first_user_full8
+  require_fixed_first_user: true
   # The runner default is official if this field is omitted. The OpenViking
   # memory benchmark config opts into a confirmation-aware TAU-2 user simulator
   # prompt; run_eval.py applies that small prompt patch idempotently when needed.
   user_simulator_policy: confirmation_aware
+  # Fixed-first-user fixtures keep the first simulated user turn stable while
+  # leaving later turns live. Main PR-B evidence requires these env vars.
+  fixed_first_user_fixtures:
+    retail: ${TAU2_RETAIL_FIXED_FIRST_USER_FILE:-}
+    airline: ${TAU2_AIRLINE_FIXED_FIRST_USER_FILE:-}
 
 model:
   agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
@@ -33,7 +48,10 @@ openviking:
   url: ${OPENVIKING_URL:-http://localhost:1933}
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  reuse_corpus_across_runs: true
   retrieval_top_k: 4
+  prewrite_retrieval_top_k: 6
+  prewrite_inject_top_k: 2
   replay_write_policy: read_only
 
 strategies:
