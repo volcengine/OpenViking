@@ -216,7 +216,8 @@ exclude = ["tests*", "docs*", "examples*"]
 [tool.setuptools.package-data]
 openviking = [
     "prompts/templates/**/*.yaml",
-    "console/static/**/*",
+    "server/static/**/*",
+    "web_studio/dist/**/*",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
     "bin/ov",

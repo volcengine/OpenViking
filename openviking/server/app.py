@@ -606,19 +606,11 @@ def create_app(
     except Exception as e:  # noqa: BLE001
         logger.warning("Skipping OAuth router registration: %s", e)
 
-    # Web Studio SPA: serve the static bundle when present so the same OV
-    # server origin can host the new frontend at /studio. The directory is
-    # populated by the docker `web-studio-builder` stage; outside docker, set
-    # OPENVIKING_WEB_STUDIO_DIR to a local `web-studio/dist` to enable it.
-    # Favicon assets are bundled with web-studio (see web-studio/public/),
-    # so the top-level /favicon.* and /mcp/favicon.* routes are served from
-    # the same dist directory — no separate server-side static folder.
-    _studio_env = os.environ.get("OPENVIKING_WEB_STUDIO_DIR", "").strip()
-    if _studio_env:
-        _studio_dir = Path(_studio_env)
-    else:
-        _studio_dir = Path(__file__).resolve().parents[2] / "web-studio" / "dist"
-
+    # Favicon routes — always registered so /favicon.* and /mcp/favicon.* never
+    # 404, even when web-studio isn't bundled. Source files live in
+    # openviking/server/static/ (shipped via package-data, ~30KB total) so they
+    # are available in every pip-install / docker / source-tree scenario.
+    _server_static_dir = Path(__file__).resolve().parent / "static"
     _favicon_headers = {"Cache-Control": "public, max-age=86400"}
     _favicon_files = {
         "/favicon.ico": ("favicon.ico", "image/x-icon"),
@@ -628,21 +620,29 @@ def create_app(
         "/mcp/favicon.png": ("favicon-32.png", "image/png"),
         "/mcp/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
     }
-    _favicon_source = _studio_dir if _studio_dir.is_dir() else None
-    if _favicon_source is not None and all(
-        (_favicon_source / fname).is_file() for fname, _ in _favicon_files.values()
-    ):
 
-        def _make_favicon_handler(filename: str, media_type: str):
-            path = _favicon_source / filename
+    def _make_favicon_handler(filename: str, media_type: str):
+        path = _server_static_dir / filename
 
-            async def _handler():
-                return FileResponse(path, media_type=media_type, headers=_favicon_headers)
+        async def _handler():
+            return FileResponse(path, media_type=media_type, headers=_favicon_headers)
 
-            return _handler
+        return _handler
 
-        for _route, (_fname, _mime) in _favicon_files.items():
-            app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
+    for _route, (_fname, _mime) in _favicon_files.items():
+        app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
+
+    # Web Studio SPA: serve the static bundle when present so the same OV
+    # server origin can host the new frontend at /studio. The directory is
+    # populated by the docker `web-studio-builder` stage and shipped inside
+    # the openviking python package (see pyproject.toml package-data). Outside
+    # docker, set OPENVIKING_WEB_STUDIO_DIR to a local `web-studio/dist` to
+    # enable a dev build without rebuilding the wheel.
+    _studio_env = os.environ.get("OPENVIKING_WEB_STUDIO_DIR", "").strip()
+    if _studio_env:
+        _studio_dir = Path(_studio_env)
+    else:
+        _studio_dir = Path(__file__).resolve().parent.parent / "web_studio" / "dist"
 
     if _studio_dir.is_dir() and (_studio_dir / "index.html").is_file():
         _studio_root = _studio_dir.resolve()
