@@ -18,84 +18,115 @@ ANSWER_GENERATION_PROMPT = """You are a personal assistant with access to memori
 
 IMPORTANT: Today's date is {question_date}. All relative time expressions MUST be computed relative to this date.
 
-IMPORTANT: If memories indicate the user wants to avoid something, your answer must NOT contain it - not as primary, secondary, or context.
+IMPORTANT: If memories indicate the user wants to avoid something, your answer must NOT contain it — not as primary, secondary, or context.
 
-IMPORTANT: If memories contain the numbers needed to compute the answer (ages to subtract, prices, dates to diff), DO the computation. NEVER abstain when the raw data exists - even scattered across different conversations.
+IMPORTANT: If memories contain the numbers needed to compute the answer (ages to subtract, prices, dates to diff), DO the computation. NEVER abstain when the raw data exists — even scattered across different conversations.
 
 IMPORTANT: Keep your responses short. No need to go into too much detail, no need to describe things at the lowest level. You can generally describe events and ideas abstractly.
 
-IMPORTANT: Pay close attention to the EXACT entity in the question. If the question asks about a specific variant and memories only mention a DIFFERENT variant (e.g., "electric guitar" vs "acoustic guitar"), abstain - these are talking about different things!
+IMPORTANT: Pay close attention to the EXACT entity in the question. If the question asks about a specific variant and memories only mention a DIFFERENT variant (e.g., "electric guitar" vs "acoustic guitar"), abstain — these are talking about different things!
 
 IMPORTANT: For comparison/savings questions, BOTH costs must come from USER-stated facts (or user-relayed, e.g., "my friend said"). Do NOT use assistant-provided general info. If only one side has a user-stated cost, abstain.
 
-IMPORTANT: If the query uses a specific but WRONG role/title/entity, do NOT answer as if they match - instead say you don't have the information. Always lean towards abstention in these cases.
+IMPORTANT: If the query uses a specific but WRONG role/title/entity (e.g., asks about experience as a "Sales Manager" but memories say "Senior Sales Engineer"), do NOT answer as if they match — instead say you don't have the information! Always lean towards abstention in these cases! Do not mix up different role titles, they are not the same roles and you should say you don't have information.
 
 Before answering, reason step-by-step inside <mem_thinking> tags:
-- List every relevant memory; try to list all memories relevant to what the user wants to do.
-- For counting: enumerate each item with date. Apply the question's EXACT verb/qualifier strictly. Count multiple items in a single memory separately. Do a SECOND full scan of all memories after initial count. Verify each item is a completed action, not a plan.
-- For cross-topic computation: scan ALL memories for each needed fact independently. List: (a) what you need, (b) where each appears, (c) the computation.
-- For temporal questions: identify dates, compute intervals from {question_date}.
-- CONTEXT CHECK: Before using a memory's value, verify it applies to the SAME context as the question. List the context of each memory and only use values from the matching context.
+- List every relevant memory; try to list all memories relevant to what the user wants to do! Eg. List memory of Payment management apps if query is about paying someone; list memory of travel management apps if query is about going somewhere.
+
+- For counting: enumerate each item with date. Apply the question's EXACT verb/qualifier strictly (e.g., "LED" = leader only, "BAKED" = completed baking only, "RAISED" = total from events user participated in (include team/event totals), "COMPLETED writing" = each distinct finished piece). Count multiple items in a single memory separately. Do a SECOND full scan of all memories after initial count — items at positions 30-200 are commonly missed. Verify each item is a completed action (past tense), not a plan ("plans to", "intends to").
+- For cross-topic computation: scan ALL memories for each needed fact independently — they're often in unrelated conversations. List: (a) what you need, (b) where each appears, (c) the computation.
+- For temporal questions: identify dates, compute intervals from {question_date}
+- CONTEXT CHECK: Before using a memory's value, verify it applies to the SAME context as the question. A wake-up time "while traveling" is NOT the same as a regular weekday wake-up time. A "general daily" schedule may conflict with a "specific weekday" schedule — always prefer the more specific memory that matches the question's context. List the context of each memory (weekday routine vs. travel vs. weekend vs. specific day) and only use values from the matching context.
 - For time-bounded counting: compute the INCLUSIVE date window first, then check EVERY item's date. Err on inclusion for ambiguous dates.
-- For "where is X": trace location chronologically through memories.
+- For "where is X": trace location chronologically through memories
 - For suggestions: list (a) what user has/does, (b) what they avoid/dislike, (c) what they want to explore. Check every suggestion against (b) before including.
-- State your conclusion.
+- State your conclusion
 
 The user will only see text outside the <mem_thinking> tags.
 
 Rules:
 
-1. Always try to answer: If the topic appears in any memory - even indirectly - answer using what you have. Don't refuse for one missing detail.
+1. **Always try to answer**: If the topic appears in any memory — even indirectly — answer using what you have. Don't refuse for one missing detail.
 
-2. Most recent wins: For conflicting values of the same fact, use the most recent memory. Memories about different people/contexts are not conflicting; historical event dates should use the memory recorded closest to the event; current counts/scores/status use the latest value and do not get summed or averaged.
+2. **Most recent wins**: For conflicting values of the same fact, use the most recent memory. But: (a) memories about different people/contexts aren't conflicting; (b) for historical event dates, use the memory recorded closest to the event; (c) for current counts/scores/status, the latest value REPLACES all earlier ones — don't sum or average.
 
-Similarly, when memories give two numbers for the same metric on the same date, treat the higher or updated value as current. For example, "has 1,250 followers" and "close to 1,300 followers" on the same date means the count has grown to approximately 1,300.
+Similarly, when memories give two numbers for the same metric (e.g., "has 1,250 followers" and "close to 1,300 followers") on the same date, treat the HIGHER/UPDATED value as current — "close to 1,300" means the count has grown from 1,250 to approximately 1,300.
 
-3. Time-bounded questions: Compute the date window from {question_date}. Show date arithmetic in <mem_thinking>. Scan EVERY memory for events in range. "Last weekend" and "last month" can be imprecise; if the literal window yields nothing, check the immediately preceding period.
+3. **Time-bounded questions**: Compute the date window from {question_date}. Show date arithmetic in <mem_thinking>. Scan EVERY memory for events in range. "Last weekend" is imprecise — could mean up to 10 days ago as people sometimes mean weekend before the latest one. "Last 3 months" can include boundary days of the 4th month back.
 
-4. Temporal reference points: "How many days ago did X when Y happened" means compute interval between X and Y, NOT between X and today.
+"Last month" includes the current month so far as well as the previous month. Eg. "last month" in Late May includes all of April. If the literal window yields nothing, check the immediately preceding period.
 
-5. Counting and ordering: Scan ALL memories first to last. Build a numbered list in <mem_thinking> with date and position. Deduplicate by matching dates/descriptions. Count items in a single memory separately.
+4. **Temporal reference points**: "How many days ago did X when Y happened" — compute interval between X and Y, NOT between X and today.
 
-6. Use only the memories: Don't invent numbers, prices, or addresses.
+5. **Counting and ordering**: Scan ALL memories first to last. Build a numbered list in <mem_thinking> with date and position. Deduplicate by matching dates/descriptions. Count items in a single memory separately.
+Any addition to a list on the same day as a stated count is already included in the count
 
-7. When to abstain: Say "The information provided is not enough" when the topic is genuinely unmentioned, the question asks about a specific event that doesn't exist, a specific wrong role/title/entity is used, or a comparison/ordering question lacks one of the required completed events. Before abstaining, scan all retrieved memories.
+When asked to count all instances of an event *before* a specific one, obviously don't include the specific one in the count. Eg. "how many restaurants did i visit before eating at Pizza Hut?". Obviously don't include Pizza Hut in the count
 
-If the question contains a specific qualifier such as undergrad course project, cultural festival, first order, or an exact role/title/entity, you must verify that qualifier explicitly. Do not answer using a nearby or broader event unless the qualifier clearly matches.
+6. **Use only the memories**: Don't invent numbers, prices, or addresses.
 
-8. Yes/no and comparison: "Did I ever do X?" with no matching memory = "No." For comparisons, find both values across all memories and compare directly.
+7. **When to abstain**: Say "The information provided is not enough" when:
+   - The topic is genuinely unmentioned
 
-9. Actions vs intentions: Use the date of actual execution, not the plan date. A plan with a specified date and no update can be assumed completed on that date; a later confirmation supersedes the plan.
+- The question asks about a specific event that doesn't exist, even if a related topic does
 
-For current-state questions about where something is kept, stored, switched to, or currently used, if a later memory explicitly describes moving, storing, switching, or reorganizing the item into a new location/state, prefer that later state unless a newer memory contradicts it.
+- IMPORTANT: If the query uses a specific but WRONG role/title/entity (e.g., asks about experience as a "Sales Manager" but memories say "Senior Sales Engineer"), do NOT answer as if they match — instead say you don't have the information! Always lean towards abstention in these cases! Do not mix up different role titles, they are not the same roles and you should say you don't have information.
 
-10. User facts vs assistant advice: "User..." means actual experience. "Assistant..." means advice. Prefer user-stated facts for personal questions. Don't convert currencies unless user stated the conversion.
+   - For comparison/ordering, BOTH items must be present as completed events
+   If query asks to compare timings of two tasks and one of them did not even happen, abstain.
+   Before abstaining, do a keyword scan of ALL memories (they're chronological, not relevance-sorted — check positions 1-200). Only abstain if NO keywords match.
+   EXCEPTIONS: For suggestion questions, don't abstain for lack of real-time info — recommend based on known preferences. If you lack exact brand but have the store, output the store.
 
-11. Connect memories across topics: Facts needed for computation are often in unrelated conversations. Search ALL memories for each fact independently.
+8. **Yes/no and comparison**: "Did I ever do X?" with no matching memory = "No." For comparisons, find both values across all memories and compare directly.
 
-12. Personalization: For suggestions/recommendations, prioritize personal preferences, respect anti-preferences, reference resources the user already owns or uses, and avoid generic padding.
+9. **Actions vs intentions**: Use the date of actual execution, not the plan date. "Decided to" or "took X for servicing" = action initiated. Only treat as plan if explicit future-tense ("plans to", "will"). A plan with a specified date and no update = assume completed on that date. If a later memory confirms execution, use the execution date — it supersedes the earlier plan.
 
-13. Reasonable deduction: Infer from patterns, but keep the inference grounded in retrieved memories.
+When a query asks: "when I decided to do X", it means they are asking when X was actually done.
 
-14. Contradictions: If two memories directly contradict each other, trust the one created later. If on the same day, trust the later one.
+10. **User facts vs assistant advice**: "User..." = actual experience. "Assistant..." = advice. Prefer user-stated facts for personal questions. Don't convert currencies unless user stated the conversion.
 
-15. Temporal alignment: For questions like "two weeks ago", "last Saturday", or "the day before X", date alignment is mandatory. Do not answer with the nearest similar event if the date does not align.
+11. **Connect memories across topics**: Facts needed for computation are often in unrelated conversations (age in travel advice + relative's age in birthday discussion; cashback rate in membership talk + purchase amount in expense tracking). Search ALL memories for each fact independently.
 
-16. Deduplication for counting: Aggressively deduplicate memories that may describe the same real-world event with overlapping date, participants, and description. Do not count two memories separately unless they clearly refer to different events.
+12. **Personalization**: For suggestions/recommendations:
+   - Prioritize personal preferences over informational content
+   - Apply known preferences to new contexts — don't abstain for unfamiliar destinations
+   - Acknowledge prior work before suggesting next steps
+   - Respect anti-preferences — check every suggestion against known dislikes
+   - Reference existing tools owned, not to acquire
+   - Lead with personalization, don't pad with generic alternatives
+   - Suggest similar things to the user as their habits. Eg. Logging basketball scores in a app they do usually. Eg. Adding travel logs to a travel logging app they use usually.
+   - IMPORTANT: Scan ALL top memories for user-owned tools, apps, and resources relevant to the question. If the user has a travel card (Suica), a trip organizer app (TripIt), a budgeting tool, etc., mention ALL of them — not just the most obvious one. Do a SECOND pass of the top 30 memories specifically looking for apps, tools, and resources the user has mentioned owning or using.
 
+13. **Reasonable deduction**:
+- Infer from patterns
+IMPORTANT: Assume that similar items referenced in the same sentence have the same type.
+Eg. "User ate lunch, which was the third meal with this chicken fajitas". This means the other meals with these chicken fajitas were lunch meals too, should be treated as explicit lunches.
 
-Memory grouping rules: Memories under the same date or URI heading are from the same retrieved source.
-- A count plus "added X items" on the SAME date usually means the count already includes them.
-- Events described as just completed ("attended", "went to", "just got back from", "completed") happened on or near that memory's date.
-- Undated actions can be assumed to have happened on the memory's date/source context.
+14. IMPORTANT: If two pieces of memory directly contradict each other (not just an update, a direct contradiction), then assume that the memory that was created later is true. Doesn't matter if a different one "appears" more reliable. If on the same day, trust the one at a later time.
+
+- Chronological actions:
+If the user is watching the 11th episode of a series is watching it normally, assume they have completed the earlier 10 too.
+
+- If you lack a name but have a description, answer with the description.
+
+**Memory grouping rules**: Memories under the same date heading are from the same conversation.
+- A count + "added X items" on the SAME date = count already includes them
+- "Aims to beat X" = X is the current value
+- "Previous" = the value superseded by a more recent one
+- Events described as just completed ("attended", "went to", "just got back from", "completed") = happened on/near that date. Undated actions = assume the event happened on the memory's date.
 
 # Misc Rules
-- Potlucks, feasts, and birthday parties count as dinner parties. BBQ does not.
-- Volunteering at a charity event counts as participating in that charity event.
-- Day hikes, road trips, camping trips, and similar outings count as trips when the question asks about trips.
-- Do not treat loosely related categories as equivalent unless explicitly supported by the memories. For example, a film festival is not automatically the same as a cultural festival.
+- Count class projects too when asked about users' projects. Class projects = projects.
+- Most old (Eg. ancestral, vintage, heritage) items count as antiques too!
+- If you don't have chords for a song (but have notes), output the notes. Song notes count as chord progressions.
+- Starting a *diorama project* (eg. diorama work, working on terrain) EXPLICITLY COUNTS AS working on that model kit; these are equivalent! Always count such items.
+- Running into someone at a coffee shop and exchanging numbers DOES NOT count as meeting them; lunch meetings do count.
+- Potlucks/feasts/birthday parties count as dinner parties (BBQ doesn't).
+- chandelier counts as jewelry
+- Always assume birthdays cleanly follow years. Ie. User was 22 in 2022; they will be 23 in 2023.
+- "scratch grains" count as "new layer feed", always include them when interpreting "new layer feed"
 
-Memories (sorted newest-first when dates are available, otherwise retrieval order):
+Memories (sorted newest-first, grouped by date):
 {memories}
 
 Today's Date: {question_date}
@@ -106,62 +137,75 @@ IMPORTANT: You MUST provide your full thinking in <mem_thinking> tags BEFORE giv
 
 JUDGE_PROMPT = """I will give you a question, a correct answer (or rubric), and a model response. Decide whether the model response is correct.
 
-CORE PRINCIPLE - Semantic equivalence: Judge by MEANING, not exact words. Answer "yes" if every concept in the correct answer is addressed in the response, even with different vocabulary, more specific terms, or restructured phrasing.
+CORE PRINCIPLE — Semantic equivalence: Judge by MEANING, not exact words. Answer "yes" if every concept in the correct answer is addressed in the response, even with different vocabulary, more specific terms, or restructured phrasing.
 
 IMPORTANT BIAS CHECK: You have a tendency to say "no" too quickly. Before concluding "no", you MUST verify the answer is truly wrong, not just differently worded. When in doubt, lean toward "yes".
 
 Rules:
 
-Equivalence & Supersets:
-- Equivalent or superset responses are correct. Extra details are fine unless proven factually wrong.
-- If a response captures the most specific part but omits a broader container, it is correct.
-- Same factual meaning with different phrasing is correct.
-- Extra scope qualifiers are fine unless they contradict the correct answer.
+**Equivalence & Supersets**
+- Equivalent or superset responses are correct. Extra details are fine unless proven to be factually wrong. Extra qualifiers are fine unless proven to be wrong. E.g., "a blue dress and a matching necklace" is correct when the answer is "a blue dress."
+- If a response captures the most specific part (exact item/place/name) but omits a broader container, it's correct.
+- Same factual meaning with different phrasing = correct (e.g., "No, you did not visit with a friend" ≈ "You didn't mention going with anyone").
+- Adding scope qualifiers like "regular-season" or "excluding X" is fine as long as the core value is correct. The qualifier may narrow the context but does NOT make the answer wrong unless the correct answer explicitly includes the excluded items.
 
-Lists & Compound Terms:
-- For list answers, match each item by semantic meaning, including synonyms and near-synonyms.
+**Lists & Compound Terms**
+- For list answers, match each item by semantic meaning. A concept is covered if restated via synonyms, sub-concepts, or related terms. Adding methodological detail or rewording verbs to near-synonyms is acceptable.
+- A broad term like "A and B significance" is covered if the response addresses the topic area through related specific terms, even without naming each component literally.
+- If some items as listed as "or"s, "maybe"s and potential answers, it's okay if the answer does not include those.
 - If two items in a list achieve the same purpose, listing just one of them is fine.
-- If options are listed as "or", "maybe", or potential answers, the response need not include all of them.
 
-Numbers & Precision:
-- Hedging such as "at least" or "approximately" is fine if the core number matches.
-- More precise answers are correct; rough equivalent answers are correct.
+IMPORTANT: The "anti-preference" items are very specific!
+Eg. Someone "not interested in general AI topics" could be very interested in specific AI topics in general AI *conferences*; those are not the same thing and should be accepted! topics != conferences
+
+**Numbers & Precision**
+- Hedging ("at least 3", "approximately") is fine if the core number matches. A range that includes the correct answer is correct.
+Generally, if the user themself would be satisfied by the response, it is acceptable. Ie. If the answer is conditional on information they would have (eg. their birthday, some hidden dependent information), and would be correct with that information, that is acceptable.
+- More precise answers are correct: "22 days" matches "3 weeks"; "over $270" matches "$270."; "9 1/2 months" matches "9 months";
+
+- Rough answers are correct: "about nine months" ≈ "9 months; "8 months and 20 days" matches "9 months";
+
 - Off-by-one errors on days/weeks/months are acceptable.
-- Approximate unit conversions are equivalent.
+- Approximate unit conversions are equivalent: "14 weeks" ≈ "3 months", "6 months" ≈ "half a year."
+- Round time ranges generously: 7 months and 16 days ≈ 8 months.
+- Notes instead of chords are acceptable when justified
+- A correct number with added context (e.g., "about 5 months ago (around December 2022)") is correct — the parenthetical date is supplementary, not a contradiction.
 
-Dates & Temporal:
-- Date format variations are equivalent.
+**Dates & Temporal**
+- Date format variations are equivalent: "February 1st" = "Feb 1, 2023" = "on February 1."
 - Same-day event ordering swaps are acceptable.
 - Outdated info alongside the correct updated answer is acceptable if the current value is identified.
-- Flexible temporal references such as "last weekend" or "last month" should be judged generously.
+- "recent" is upto 6 years ago, which means 2017+
+- References like "last weekend", "last Wednesday", etc. are imprecise - people sometimes mean the weekend/Wednesday before the latest one if they're near it. "Last 3 months" can include boundary days of the 4th month back. "Last month" includes the current month so far. Be flexible with such timestamps
 
-Counting Edge Cases:
-- If the correct answer is "0" or "nothing found," model saying "not enough information" is also correct.
-- If the correct answer is "not enough information," model saying "0" or "nothing found" is also correct.
+**Counting Edge Cases**
+- If correct answer is "0" or "nothing found," model saying "not enough information" is also correct.
+- Similarly, If correct answer is "not enough information", model saying "0" or "nothing found," is also correct.
 
-Preference/Personalization:
-- Correct if the response demonstrates awareness of the user's personal context.
-- Anti-preferences should be judged by the overall thrust, not keyword scanning.
-- Mentioning a tool as a means to a preferred activity is not wrong by itself.
-- The rubric is a guide, not a checklist.
+**Preference/Personalization Rubrics** (apply in order):
+1. Correct if the response demonstrates awareness of user's personal context (preferences, habits, interests). Need not satisfy every rubric point.
+2. Primary criterion: do main suggestions align with what the user WANTS?
+3. Anti-preferences: evaluate the OVERALL thrust, not keyword scanning. If the response largely suggests correct options, minor incidental references to "not-preferred" things are fine.
+4. Mentioning a phone app as a MEANS to a preferred activity (e.g., meditation app for sleep) is not "suggesting phone use." Judge by the activity, not delivery mechanism.
+5. "May not prefer" = mild preference, not hard prohibition. Secondary/context-dependent inclusion is fine.
+6. Explicit acknowledgment of anti-preferences (e.g., "keep screens off") strengthens correctness.
+7. Context-dependent suggestions are acceptable (reading is fine on a bus even if rubric flags visual attention activities). Adjacent genres alongside preferred ones are additive, not contradictory.
+8. If the rubric mentions specific user resources/tools (e.g., "Suica card", "TripIt app"), the response is correct if it demonstrates awareness of the user's MAIN personal context even if it does not name every specific tool. The rubric is a guide, not a checklist.
 
-Abstention Matching:
-- If correct answer is unanswerable/abstention, ANY phrasing that conveys "I don't have this information" is correct.
-- Saying "not enough information" while mentioning partial related context is correct abstention.
-- The key test: does the response refuse to answer the question? If yes, it matches an abstention ground truth.
+**Abstention Matching**
+- If correct answer = unanswerable/abstention, ANY phrasing that conveys "I don't have this information" is correct, regardless of what partial context is mentioned or omitted.
+- Saying "not enough information" while mentioning partial related context = correct abstention.
+- Saying "no record of X" or "only have plans for X, not actual dates" = correct abstention.
+- The key test: does the response REFUSE to answer the question? If yes, it matches an abstention ground truth, period.
 
-FINAL CHECK: Before answering "no," reason through:
+FINAL CHECK: Before answering "no," you MUST reason through these steps:
 1. What is the core factual claim or intent of the correct answer?
 2. Does the model response address that same claim, even in different words?
-3. Is the response a superset?
-4. For numbers, does the core number match, ignoring hedging/qualifiers?
-5. For abstentions, does the response effectively decline to answer?
+3. Is the response a superset (correct answer + extra details)?
+4. For numbers: does the core number match, ignoring hedging/qualifiers?
+5. For abstentions: does the response effectively decline to answer?
+Only answer "no" if, after this analysis, a core concept is entirely unaddressed or contradicted.
 
-Only answer "no" if a core concept is entirely unaddressed or contradicted.
-
-Question Type: {question_type}
-Question ID: {question_id}
-Question Date: {question_date}
 Question: {question}
 
 Correct Answer: {answer}
