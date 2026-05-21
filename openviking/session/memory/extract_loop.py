@@ -271,7 +271,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                             "content": self._build_patch_repair_instruction(patch_errors),
                         }
                     )
-                    tracer.info(f"Extended max_iterations to {max_iterations} for patch repair")
+                    tracer.info(
+                        f"Extended max_iterations to {max_iterations} for retry patch repair",
+                        console=True,
+                    )
                     continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
@@ -347,11 +350,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         if old_content is not None:
                             resolved_op.old_memory_file_content = old_content
                             immutable_fields = {
-                                field.name for field in schema.fields if field.merge_op != MergeOp.PATCH
+                                field.name
+                                for field in schema.fields
+                                if field.merge_op != MergeOp.PATCH
                             }
                             for field_name in immutable_fields:
                                 if field_name in old_content.extra_fields:
-                                    resolved_op.memory_fields[field_name] = old_content.extra_fields[field_name]
+                                    resolved_op.memory_fields[field_name] = (
+                                        old_content.extra_fields[field_name]
+                                    )
                     else:
                         resolved_op.uris = self._isolation_handler.calculate_memory_uris(
                             memory_type_schema=schema,
@@ -761,7 +768,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if operation.old_memory_file_content is None:
                 continue
             current_content = operation.old_memory_file_content.content or ""
-            target_uri = operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
+            target_uri = (
+                operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
+            )
             for field_name, patch_value in operation.memory_fields.items():
                 blocks = []
                 if isinstance(patch_value, StrPatch):
