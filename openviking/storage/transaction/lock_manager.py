@@ -16,6 +16,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
+_USE_MANAGER_DEFAULT_TIMEOUT = object()
 
 
 class LockManager:
@@ -45,6 +46,9 @@ class LockManager:
     @property
     def redo_recovery_enabled(self) -> bool:
         return self._redo_recovery_enabled
+
+    def _resolve_timeout(self, timeout: Optional[float]) -> Optional[float]:
+        return self._lock_timeout if timeout is _USE_MANAGER_DEFAULT_TIMEOUT else timeout
 
     def _mark_handle_active(self, handle: LockHandle) -> None:
         handle.last_active_at = time.time()
@@ -94,20 +98,26 @@ class LockManager:
         return handle
 
     async def acquire_exact_path(
-        self, handle: LockHandle, path: str, timeout: Optional[float] = None
+        self,
+        handle: LockHandle,
+        path: str,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_exact_path(
-            path, handle, timeout=timeout if timeout is not None else self._lock_timeout
+            path, handle, timeout=self._resolve_timeout(timeout)
         )
         if acquired:
             self._mark_handle_active(handle)
         return acquired
 
     async def acquire_tree(
-        self, handle: LockHandle, path: str, timeout: Optional[float] = None
+        self,
+        handle: LockHandle,
+        path: str,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_tree(
-            path, handle, timeout=timeout if timeout is not None else self._lock_timeout
+            path, handle, timeout=self._resolve_timeout(timeout)
         )
         if acquired:
             self._mark_handle_active(handle)
@@ -117,7 +127,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         """
         一次性对多个路径进行树锁加锁，使用有序加锁法防止死锁
@@ -151,7 +161,7 @@ class LockManager:
                 success = await self._path_lock.acquire_tree(
                     path,
                     handle,
-                    timeout=timeout if timeout is not None else self._lock_timeout,
+                    timeout=self._resolve_timeout(timeout),
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -171,7 +181,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         if not paths:
             self._mark_handle_active(handle)
@@ -186,7 +196,7 @@ class LockManager:
                 success = await self._path_lock.acquire_exact_path(
                     path,
                     handle,
-                    timeout=timeout if timeout is not None else self._lock_timeout,
+                    timeout=self._resolve_timeout(timeout),
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -207,7 +217,7 @@ class LockManager:
         handle: LockHandle,
         exact_paths: List[str],
         tree_paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         exact_set = set(exact_paths)
         tree_set = set(tree_paths)
@@ -228,13 +238,13 @@ class LockManager:
                     success = await self._path_lock.acquire_tree(
                         path,
                         handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=self._resolve_timeout(timeout),
                     )
                 else:
                     success = await self._path_lock.acquire_exact_path(
                         path,
                         handle,
-                        timeout=timeout if timeout is not None else self._lock_timeout,
+                        timeout=self._resolve_timeout(timeout),
                     )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -256,13 +266,13 @@ class LockManager:
         src: str,
         dst: str,
         src_is_dir: bool = True,
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         acquired = await self._path_lock.acquire_mv(
             src,
             dst,
             handle,
-            timeout=timeout if timeout is not None else self._lock_timeout,
+            timeout=self._resolve_timeout(timeout),
             src_is_dir=src_is_dir,
         )
         if acquired:

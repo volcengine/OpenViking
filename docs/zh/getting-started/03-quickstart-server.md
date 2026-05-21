@@ -77,7 +77,7 @@ client = ov.SyncHTTPClient(
 )
 ```
 
-> `user_key` 通过 Admin API 创建（参见 [认证文档](../../guides/04-authentication.md)），服务端可自动识别其所属租户。
+> `user_key` 通过 Admin API 创建（参见 [认证文档](../guides/04-authentication.md)），服务端可自动识别其所属租户。
 
 **管理操作：使用 `root_key`**
 
@@ -97,7 +97,7 @@ client = ov.SyncHTTPClient(
 > ⚠️ 使用 `root_key` 调用 `add_resource`、`find` 等租户级 API 时，如果未提供 `account`/`user`，会收到：
 > `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
 
-更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../../guides/04-authentication.md)。
+更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../guides/04-authentication.md)。
 
 **完整示例（使用 `user_key`）：**
 

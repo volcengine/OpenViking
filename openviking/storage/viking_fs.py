@@ -1057,7 +1057,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
-        entries = await self.tree(uri, node_limit=1000000, ctx=ctx)
+        entries = await self.tree(uri, node_limit=1000000, level_limit=None, ctx=ctx)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
@@ -2014,11 +2014,14 @@ class VikingFS:
 
     async def _ensure_parent_dirs(self, path: str) -> None:
         """Recursively create all parent directories."""
-        try:
-            await self._run_in_threadpool(self.agfs.ensure_parent_dirs, path)
-        except Exception as e:
-            # Log the error but continue
-            logger.debug(f"Failed to ensure parent directories for {path}: {e}")
+        parts = path.lstrip("/").split("/")
+        for i in range(1, len(parts)):
+            parent = "/" + "/".join(parts[:i])
+            try:
+                await self._run_in_threadpool(self.agfs.mkdir, parent)
+            except Exception as e:
+                if "exist" not in str(e).lower() and "already" not in str(e).lower():
+                    logger.debug(f"Failed to create parent directory {parent}: {e}")
 
     # ========== Relation Table Internal Methods ==========
 

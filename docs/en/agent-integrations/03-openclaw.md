@@ -11,7 +11,7 @@ Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree
 | Component | Required Version |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.4.8 |
 
 The plugin connects to an existing OpenViking server. Make sure you have one reachable over HTTP — see the [Deployment Guide](../guides/03-deployment.md). Quick check:
 
@@ -27,29 +27,21 @@ openclaw --version
 > bash cleanup-memory-openviking.sh
 > ```
 
-## Install via ClawHub (recommended)
+## Install
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-```
-
-Then run the interactive setup wizard:
-
-```bash
-openclaw openviking setup
-```
-
-The wizard prompts for your remote OpenViking server URL and optional API key, then writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
-
-Restart the gateway:
-
-```bash
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
+openclaw openviking status --json
 ```
 
-## Install via `ov-install` (alternative)
+The `setup` wizard writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`) and activates the context-engine slot.
 
-The `ov-install` helper automates plugin deployment:
+<details>
+<summary><b>Alternative: Install via <code>ov-install</code></b></summary>
+
+If ClawHub is unavailable (rate-limited, offline, or auth issues), use the `ov-install` backup path:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -63,28 +55,37 @@ Common variants:
 ov-install --workdir ~/.openclaw-second
 
 # Pin to a specific plugin release
-ov-install -y --version 0.2.9
+ov-install --base-url http://your-server:1933 --plugin-version=0.2.9
 ```
 
 To upgrade later:
 
 ```bash
-npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
+npm install -g openclaw-openviking-setup-helper@latest && ov-install --base-url http://your-server:1933
 ```
 
 ### `ov-install` parameters
 
-| Parameter                  | Meaning                                                            |
-| -------------------------- | ------------------------------------------------------------------ |
-| `--workdir PATH`           | Target OpenClaw data directory                                     |
-| `--version VER`            | Set plugin version (e.g. `0.2.9` → plugin `v0.2.9`)                |
-| `--current-version`        | Print the currently installed plugin version                       |
-| `--plugin-version REF`     | Set plugin version — auto-detected: npm version (e.g. `2026.5.8`) or npm dist-tag (e.g. `dev`) resolves via npm; other refs (e.g. `v0.3.16`, `main`) resolve via the GitHub repo; default `npm latest` |
-| `--plugin-source=npm\|github` | Plugin download source (default `npm`)                            |
-| `--plugin-package=NAME`    | npm plugin package name (default `@openviking/openclaw-plugin`)    |
-| `--github-repo owner/repo` | Use a different GitHub repo for plugin files (default `volcengine/OpenViking`) |
-| `--update`                 | Upgrade only the plugin                                            |
-| `-y`                       | Non-interactive mode, use default values                           |
+| Parameter                     | Meaning                                                            |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `--workdir PATH`              | Target OpenClaw data directory (default `~/.openclaw`)             |
+| `--plugin-version=VER`        | Plugin version: npm version (e.g. `2026.5.8`), npm dist-tag (e.g. `dev`), or Git ref (e.g. `v0.3.16`, `main`). Default: npm `latest` |
+| `--plugin-source=npm\|github` | Plugin download source (default `npm`)                             |
+| `--plugin-package=NAME`       | npm plugin package name (default `@openviking/openclaw-plugin`)    |
+| `--github-repo owner/repo`    | Use a different GitHub repo for plugin files (default `volcengine/OpenViking`) |
+| `--current-version`           | Print the currently installed plugin version and exit              |
+| `--update`                    | Upgrade only the plugin to the requested `--plugin-version`        |
+| `--rollback`                  | Roll back the last plugin upgrade                                  |
+| `--uninstall`                 | Uninstall the plugin                                               |
+| `--base-url URL`              | OpenViking server URL                                              |
+| `--api-key KEY`               | OpenViking API key                                                 |
+| `--agent-prefix PREFIX`       | Agent prefix for memory namespace isolation                        |
+| `--account-id ID`             | Multi-tenant account ID (root-key deployments only)                |
+| `--user-id ID`                | Multi-tenant user ID (root-key deployments only)                   |
+| `--force-slot`                | Force-replace the contextEngine slot if another plugin owns it     |
+| `--allow-offline`             | Save config even if the OpenViking server is unreachable           |
+
+</details>
 
 ## Plugin configuration
 

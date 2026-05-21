@@ -13,7 +13,7 @@ interface FileTreeProps {
   selectedFileUri?: string | null
   expandedKeys: Set<string>
   onExpandedKeysChange: (next: Set<string>) => void
-  onSelectDirectory: (uri: string) => void
+  onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile?: (entry: VikingFsEntry) => void
 }
 
@@ -24,7 +24,7 @@ interface TreeNodeProps {
   selectedFileUri?: string | null
   expandedKeys: Set<string>
   onExpandedKeysChange: (next: Set<string>) => void
-  onSelectDirectory: (uri: string) => void
+  onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile?: (entry: VikingFsEntry) => void
   prefetch?: (uri: string) => void
 }
@@ -106,7 +106,7 @@ function TreeNode({
 
   const handleSelect = useCallback(() => {
     if (entryRef.current.isDir) {
-      onSelectDirectory(entryRef.current.uri)
+      onSelectDirectory(entryRef.current)
     } else {
       onSelectFile?.(entryRef.current)
     }
@@ -215,13 +215,14 @@ const TreeNodeMemo = memo(TreeNode)
 
 const ROOT_ENTRY: VikingFsEntry = {
   uri: 'viking://',
-  name: fileNameFromUri('viking://'),
+  name: 'viking://',
   isDir: true,
   size: '',
   sizeBytes: null,
   modTime: '',
   modTimestamp: null,
   abstract: '',
+  overview: '',
 }
 
 export function FileTree({

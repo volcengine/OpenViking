@@ -1,0 +1,34 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_prb_scope_fairness
+  strategy_concurrency: 16
+  task_max_concurrency: 5
+  corpus_prepare_concurrency: 1
+
+openviking:
+  url: ${OPENVIKING_URL:-http://localhost:1933}
+
+strategies:
+  - id: no_memory
+    label: TAU-2 no-memory same-seed baseline
+    memory_backend: none
+
+  - id: no_memory_generic_scope
+    label: TAU-2 no-memory same-seed baseline with generic memory scope prompt
+    memory_backend: none
+    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+
+  - id: trajectory_top4_first_user_prewrite_generic_scope
+    label: Trajectory top4 first-user + pre-write with generic memory scope prompt
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_trajectory_view
+    train_memory_mode: experience_only
+    search_memory_type: trajectories
+    retrieval_mode: first_user_prewrite
+    retrieval_top_k: 4
+    first_user_inject_top_k: 4
+    prewrite_retrieval_top_k: 4
+    prewrite_inject_top_k: 4
+    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md

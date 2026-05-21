@@ -40,7 +40,6 @@ pip install openviking --upgrade --force-reinstall
        container_name: openviking
        ports:
          - "1933:1933"
-         - "8020:8020"
        volumes:
          - ~/.openviking:/app/.openviking
        restart: unless-stopped
@@ -50,7 +49,7 @@ pip install openviking --upgrade --force-reinstall
    docker-compose up -d
    ```
 
-   默认情况下，容器会同时启动 OpenViking API 服务（`1933`）、Console 界面（`8020`）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
+   默认情况下，容器会启动 OpenViking API 服务（`1933`，同时在 `/studio` 提供 Web Studio 前端）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
 
    如果运行平台不支持 bind mount，可以通过 `OPENVIKING_CONF_CONTENT` 环境变量传入完整的配置 JSON，或在容器启动后 `docker exec` 进去执行 `openviking-server init`。详见 [部署指南](../guides/03-deployment.md#无法使用-docker--v-时)。
 
@@ -65,7 +64,6 @@ pip install openviking --upgrade --force-reinstall
 >   openviking:
 >     image: ghcr.io/volcengine/openviking:latest
 >     ports:
->       - "8020:8020"
 >       - "1933:1934" # 将宿主机 1933 映射到容器 1934
 >     volumes:
 >       - ~/.openviking:/app/.openviking
@@ -152,8 +150,11 @@ try:
 
     # Add resource (supports URL, file, or directory)
     # Local directory scans respect .gitignore by default.
+    # Wait until semantic processing completes before inspecting the resource.
+    print("Wait for semantic processing...")
     add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        wait=True,
     )
     root_uri = add_result['root_uri']
 
@@ -166,10 +167,6 @@ try:
     if glob_result['matches']:
         content = client.read(glob_result['matches'][0])
         print(f"Content preview: {content[:200]}...\n")
-
-    # Wait for semantic processing to complete
-    print("Wait for semantic processing...")
-    client.wait_processed()
 
     # Get abstract and overview of the resource
     abstract = client.abstract(root_uri)
@@ -198,12 +195,13 @@ python example.py
 ### 预期输出
 
 ```
+Wait for semantic processing...
+
 Directory structure:
 ...
 
 Content preview: ...
 
-Wait for semantic processing...
 Abstract:
 ...
 

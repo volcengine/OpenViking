@@ -162,6 +162,15 @@ def create_app(
 
     validate_server_config(config)
 
+    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+        sessions = getattr(service_obj, "sessions", None)
+        setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(setter):
+            setter(config.tool_output_externalization)
+
+    if service is not None:
+        _configure_session_tool_outputs(service)
+
     async def _deferred_init(service, app, config):
         """Run heavy initialization in background after server starts accepting requests."""
         await service.initialize()
@@ -211,6 +220,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
+        _configure_session_tool_outputs(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
@@ -596,11 +606,11 @@ def create_app(
     except Exception as e:  # noqa: BLE001
         logger.warning("Skipping OAuth router registration: %s", e)
 
-    # Favicon: shared with the console static assets so 1933/console use the same logo.
-    # Some MCP clients (claude.ai connector cards) resolve the icon relative to the
-    # connector URL (e.g. {mcp_url}/favicon.ico) rather than the origin, so the same
-    # files are also exposed under /mcp/.
-    _static_dir = Path(__file__).resolve().parent.parent / "console" / "static"
+    # Favicon routes — always registered so /favicon.* and /mcp/favicon.* never
+    # 404, even when web-studio isn't bundled. Source files live in
+    # openviking/server/static/ (shipped via package-data, ~30KB total) so they
+    # are available in every pip-install / docker / source-tree scenario.
+    _server_static_dir = Path(__file__).resolve().parent / "static"
     _favicon_headers = {"Cache-Control": "public, max-age=86400"}
     _favicon_files = {
         "/favicon.ico": ("favicon.ico", "image/x-icon"),
@@ -612,7 +622,7 @@ def create_app(
     }
 
     def _make_favicon_handler(filename: str, media_type: str):
-        path = _static_dir / filename
+        path = _server_static_dir / filename
 
         async def _handler():
             return FileResponse(path, media_type=media_type, headers=_favicon_headers)
@@ -621,6 +631,50 @@ def create_app(
 
     for _route, (_fname, _mime) in _favicon_files.items():
         app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
+
+    # Web Studio SPA: serve the static bundle when present so the same OV
+    # server origin can host the new frontend at /studio. The directory is
+    # populated by the docker `web-studio-builder` stage and shipped inside
+    # the openviking python package (see pyproject.toml package-data). Outside
+    # docker, set OPENVIKING_WEB_STUDIO_DIR to a local `web-studio/dist` to
+    # enable a dev build without rebuilding the wheel.
+    _studio_env = os.environ.get("OPENVIKING_WEB_STUDIO_DIR", "").strip()
+    if _studio_env:
+        _studio_dir = Path(_studio_env)
+    else:
+        _studio_dir = Path(__file__).resolve().parent.parent / "web_studio" / "dist"
+
+    if _studio_dir.is_dir() and (_studio_dir / "index.html").is_file():
+        _studio_root = _studio_dir.resolve()
+        _studio_index = _studio_root / "index.html"
+        _studio_no_store = {"Cache-Control": "no-store"}
+
+        def _studio_response(path: Path, *, no_store: bool = False) -> FileResponse:
+            return FileResponse(path, headers=_studio_no_store if no_store else None)
+
+        @app.get("/studio", include_in_schema=False)
+        async def _studio_root_handler():
+            return _studio_response(_studio_index, no_store=True)
+
+        @app.get("/studio/{path:path}", include_in_schema=False)
+        async def _studio_assets(path: str):
+            # SPA fallback: serve real files when present, otherwise return
+            # index.html so TanStack Router can resolve the deep link.
+            try:
+                requested = (_studio_root / path).resolve()
+            except OSError:
+                return _studio_response(_studio_index, no_store=True)
+
+            if not requested.is_relative_to(_studio_root):
+                return _studio_response(_studio_index, no_store=True)
+
+            if requested.is_file():
+                return _studio_response(requested)
+            return _studio_response(_studio_index, no_store=True)
+
+        logger.info("Web Studio mounted at /studio from %s", _studio_root)
+    else:
+        logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.

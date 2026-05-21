@@ -5,8 +5,11 @@ Core domain data classes for memory system.
 """
 
 import json
+import re
 from datetime import datetime
+from enum import Enum
 from typing import (
+    Annotated,
     Any,
     Dict,
     List,
@@ -19,7 +22,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, model_validator
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -27,6 +30,109 @@ from openviking.session.memory.merge_op.base import (
 )
 
 T = TypeVar("T")
+
+
+# ============================================================================
+# Link Type and Link Models
+# ============================================================================
+
+
+LINK_TYPE_DEFAULT = "related_to"
+_LINK_TYPE_RE = re.compile(r"^[a-z]+(?:_[a-z]+){0,2}$")
+
+
+class LinkType(str, Enum):
+    """Legacy predefined link labels kept for compatibility in tests/call sites."""
+
+    RELATED_TO = LINK_TYPE_DEFAULT
+    BELONGS_TO = "belongs_to"
+    CAUSED_BY = "caused_by"
+    DERIVED_FROM = "derived_from"
+    CONTRADICTS = "contradicts"
+    EVOLVED_FROM = "evolved_from"
+
+
+class WikiLink(BaseModel):
+    """Link output by LLM during extraction, using temporary page_ids.
+
+    f and t use WithJsonSchema to appear as required int in the JSON schema
+    sent to the LLM, but parse as Optional[int] to tolerate null values.
+    Invalid links (null f/t) are filtered in _resolve_links.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_link_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_link_type = data.get("link_type")
+            if raw_link_type is not None:
+                normalized = str(raw_link_type).strip().lower().replace("-", "_").replace(" ", "_")
+                if _LINK_TYPE_RE.fullmatch(normalized):
+                    data["link_type"] = normalized
+                else:
+                    data["link_type"] = LINK_TYPE_DEFAULT
+
+            raw_weight = data.get("weight")
+            if raw_weight is not None:
+                try:
+                    data["weight"] = min(1.0, max(0.0, float(raw_weight)))
+                except (TypeError, ValueError):
+                    data["weight"] = 0.5
+        return data
+
+    f: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="From page_id. Use the page_id from the item's 'page_id' field."
+    )
+    t: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="To page_id. Use the page_id from the item's 'page_id' field."
+    )
+    link_type: str = Field(
+        LINK_TYPE_DEFAULT,
+        description=(
+            "A short relation label describing how the source relates to the target. "
+            "Prefer one of these lowercase snake_case values: belongs_to, related_to, "
+            "derived_from, caused_by, contradicts, evolved_from. "
+            "Use belongs_to for part-of/profile membership, related_to for general association, "
+            "derived_from for extracted/summary facts, caused_by for direct causation, "
+            "contradicts for mutually inconsistent facts, and evolved_from for time-based changes. "
+            "Do not invent new link_type values unless absolutely necessary."
+        ),
+    )
+    weight: float = Field(
+        0.5,
+        description=(
+            "Relative ranking score from 0 to 1; use higher values for the best link "
+            "when multiple links compete for the same anchor or attention."
+        ),
+    )
+    match_text: Annotated[
+        Optional[str],
+        WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    ] = Field(
+        ...,
+        description=(
+            "A single WORD from the original conversation to be linkified. "
+            "This field must always be included in link output. "
+            "Use a single exact word from the original conversation whenever possible; "
+            "only use null when no valid single-word anchor exists. "
+            "Rules: (1) must be a single word only (NOT a phrase or multi-word text); "
+            "(2) must exist verbatim in the original conversation messages; "
+            "(3) pick the most specific/identifying word"
+        ),
+    )
+    description: str = Field("", description="Brief explanation of the relationship")
+
+
+class StoredLink(BaseModel):
+    """Persisted link in MEMORY_FIELDS, with URIs instead of page_ids."""
+
+    from_uri: str
+    to_uri: str
+    link_type: str = LINK_TYPE_DEFAULT
+    weight: float = 0.5
+    match_text: Optional[str] = None  # single word, must exist verbatim in conversation
+    description: str = ""
+    created_at: str = ""
 
 
 # ============================================================================
@@ -42,6 +148,9 @@ class MemoryField(BaseModel):
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
     init_value: Optional[str] = Field(None, description="Initial value for this field")
+    searchable: bool = Field(
+        False, description="Whether this field's value contributes to embedding text"
+    )
 
 
 class MemoryTypeSchema(BaseModel):
@@ -93,17 +202,59 @@ class MemoryData(BaseModel):
         self.fields[field_name] = value
 
 
-class MemoryFileContent(BaseModel):
+class MemoryFile(BaseModel):
+    """Typed representation of a memory file's parsed content."""
+
     uri: Optional[str] = None
-    plain_content: str
-    memory_fields: Dict
+    content: str = ""
+    links: List[Dict[str, Any]] = []
+    backlinks: List[Dict[str, Any]] = []
+    memory_type: Optional[str] = None
+    extra_fields: Dict[str, Any] = {}
+
+    def plain_content(self) -> str:
+        from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+        return LinkRenderer.strip_links(self.content)
+
+    @classmethod
+    def from_parsed(cls, uri: Optional[str] = None, parsed: Dict[str, Any] = None) -> "MemoryFile":
+        """Build from parse_memory_file_with_fields result."""
+        if parsed is None:
+            parsed = {}
+        content = parsed.pop("content", "")
+        links = parsed.pop("links", []) or []
+        backlinks = parsed.pop("backlinks", []) or []
+        memory_type = parsed.pop("memory_type", None)
+        # Remaining keys are dynamic schema fields + system fields
+        return cls(
+            uri=uri,
+            content=content,
+            links=links,
+            backlinks=backlinks,
+            memory_type=memory_type,
+            extra_fields=parsed,
+        )
+
+    def to_metadata(self) -> Dict[str, Any]:
+        """Flatten to a dict suitable for serialize_with_metadata."""
+        metadata = dict(self.extra_fields)
+        metadata["content"] = self.content
+        if self.links:
+            metadata["links"] = self.links
+        if self.backlinks:
+            metadata["backlinks"] = self.backlinks
+        if self.memory_type:
+            metadata["memory_type"] = self.memory_type
+        return metadata
 
 
 class ResolvedOperation(BaseModel):
-    old_memory_file_content: Optional[MemoryFileContent]
+    old_memory_file_content: Optional[MemoryFile] = None
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
+    page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
 
     def is_edit(self):
         return self.old_memory_file_content is not None
@@ -111,8 +262,9 @@ class ResolvedOperation(BaseModel):
 
 class ResolvedOperations(BaseModel):
     upsert_operations: List[ResolvedOperation]
-    delete_file_contents: List[MemoryFileContent]
+    delete_file_contents: List[MemoryFile]
     errors: List[str]
+    resolved_links: List[StoredLink] = Field(default_factory=list)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0
@@ -191,12 +343,20 @@ class FaultTolerantBaseModel(BaseModel):
         - str -> int/float (目标是数字)
         - str/dict -> list (目标是 list)
         - list 元素类型容错
+        - 非法 LinkType -> related_to
         """
         origin_type = cls.get_origin_type(field_type)
 
         # json_repair 会把 None 转换成 'None'
         if value == "None" and origin_type is not str:
             return None
+
+        if isinstance(origin_type, type) and issubclass(origin_type, Enum):
+            if origin_type is LinkType:
+                try:
+                    return origin_type(value)
+                except (ValueError, TypeError):
+                    return LinkType.RELATED_TO
 
         if origin_type is str:
             return cls.any_to_str(value)

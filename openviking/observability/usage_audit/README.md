@@ -174,7 +174,6 @@ vector filter，也不从历史写入事件累计当前库存。
 - `/favicon.ico`
 - `/favicon.png`
 - `/apple-touch-icon.png`
-- `/console/*`
 - `/api/v1/console/*`
 
 ## Console BFF API
@@ -375,9 +374,7 @@ curl "http://127.0.0.1:1933/api/v1/console/dashboard/summary" \
   openviking/observability/events.py \
   openviking/observability/usage_audit \
   openviking/server/routers/console.py \
-  openviking/console/app.py \
-  tests/observability \
-  tests/misc/test_console_proxy.py
+  tests/observability
 ```
 
 ## 常见问题

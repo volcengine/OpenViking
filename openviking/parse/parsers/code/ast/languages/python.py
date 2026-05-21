@@ -51,7 +51,14 @@ def _extract_function(node, content_bytes: bytes) -> FunctionSig:
             body_node = child
 
     docstring = _first_string_child(body_node, content_bytes)
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_class(node, content_bytes: bytes) -> ClassSkeleton:
@@ -82,7 +89,14 @@ def _extract_class(node, content_bytes: bytes) -> ClassSkeleton:
                     if sub.type == "function_definition":
                         methods.append(_extract_function(sub, content_bytes))
 
-    return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
+    return ClassSkeleton(
+        name=name,
+        bases=bases,
+        docstring=docstring,
+        methods=methods,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_imports(node, content_bytes: bytes) -> List[str]:

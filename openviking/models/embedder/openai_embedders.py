@@ -14,6 +14,7 @@ from openviking.models.embedder.base import (
 )
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -147,7 +148,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
             self.client = openai.OpenAI(**self._client_kwargs)
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
         self._dimension = dimension
@@ -283,12 +284,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         return bool(self.api_base)
 
     def _get_async_client(self):
-        if self._async_client is None:
+        def _build_async_client():
             if self._provider == "azure":
-                self._async_client = openai.AsyncAzureOpenAI(**self._client_kwargs)
-            else:
-                self._async_client = openai.AsyncOpenAI(**self._client_kwargs)
-        return self._async_client
+                return openai.AsyncAzureOpenAI(**self._client_kwargs)
+            return openai.AsyncOpenAI(**self._client_kwargs)
+
+        return self._async_client_cache.get(_build_async_client)
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text

@@ -1,55 +1,78 @@
-# @openviking/openclaw-plugin — OpenViking OpenClaw 插件
+# OpenViking for OpenClaw
 
-OpenClaw 上下文引擎插件，用于接入 OpenViking 远程记忆、上下文数据库、RAG 和语义检索。
+将 [OpenViking](https://github.com/volcengine/OpenViking) 作为 OpenClaw 的长期上下文引擎：自动召回、会话归档、记忆抽取、语义检索和 RAG，连接远程 OpenViking 服务。
 
-## 重要：插件 vs Skill 区分
-
-本页面是 **OpenClaw 插件包**：
-
-```
-@openviking/openclaw-plugin
-```
-
-**不要** 使用 `clawhub install openviking` 安装插件——那安装的是 `openviking` AgentSkill（`skills/openviking` 下的技能描述），不是本插件。
-
-如需 **Agent 辅助安装插件**，让 agent 按 [INSTALL-AGENT.md](./INSTALL-AGENT.md) 执行。主安装方式仍然是 `openclaw plugins install @openviking/openclaw-plugin`。
-
-## 安装（自然语言）
-
-对你的 agent 说：
-
-> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
-
-Agent 会自动完成安装 → 配置 → 重启 → 验证，无需手动操作。
-
-## 安装（命令行）
+## 快速开始
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
 openclaw openviking status --json
 ```
 
-`setup` 命令会自动激活 context-engine slot 并验证服务器连接。
+四步完成。`setup` 命令会自动激活 context-engine slot 并验证连接。
 
-## 搜索关键词
+### 或者直接让 Agent 安装
 
-@openviking/openclaw-plugin, openclaw openviking 插件, openviking 远程记忆插件, OpenViking 上下文数据库插件, install-openviking-memory
+> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
 
-## 文档入口
+Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-AGENT.md](./INSTALL-AGENT.md)。
 
-- 安装与升级：[INSTALL-ZH.md](./INSTALL-ZH.md)
-- English install guide: [INSTALL.md](./INSTALL.md)
-- Agent 专用操作文档：[INSTALL-AGENT.md](./INSTALL-AGENT.md)
+## 工作原理
+
+| 阶段 | 行为 |
+|------|------|
+| **每轮对话后** (`afterTurn`) | 消息自动归档到 OpenViking session |
+| **`/compact` 时** (`compact`) | 归档消息被抽取为长期记忆 |
+| **回复前** (`assemble`) | 自动检索相关记忆并注入上下文 |
+
+## 工具
+
+安装后，插件为 Agent 提供以下工具：
+
+| 工具 | 用途 |
+|------|------|
+| `memory_recall` | 显式检索长期记忆 |
+| `memory_store` | 立即持久化重要信息 |
+| `memory_forget` | 按 URI 或查询删除记忆 |
+| `ov_archive_search` | 按关键词搜索历史 archive |
+| `ov_archive_expand` | 展开某个 archive 的原始消息 |
+| `add_resource` | 导入文档、URL 或 Git 仓库 |
+| `add_skill` | 导入 agent 技能 |
+| `memory_search` | 检索已导入的 resources 和 skills |
+
+## 数据流与隐私
+
+- **发送内容**：每轮 user/assistant 消息文本（已剥离注入的记忆块和元数据噪音）。
+- **发送去向**：仅发往你配置的 OpenViking 服务（`baseUrl`）。插件本身只与该服务通信；服务端对 embedding、VLM 等模型的调用取决于服务端配置。
+- **存储位置**：所有数据存储在你的 OpenViking 服务上，路径为 `viking://user/*`、`viking://agent/*`、`viking://session/*`。
+- **API Key**：通过 `X-OpenViking-Key` header 发送，不会被日志记录或转发。
+- **多租户隔离**：支持 `accountId`、`userId`、`agent_prefix` 三级租户隔离。
+
+## 验证
+
+```bash
+openclaw openviking status --json     # 一键健康检查
+openclaw config get plugins.slots.contextEngine  # 应输出：openviking
+```
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [INSTALL-ZH.md](./INSTALL-ZH.md) | 完整安装、升级、卸载指南 |
+| [INSTALL.md](./INSTALL.md) | English install guide |
+| [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent 专用操作文档 |
+
+> **插件 vs Skill**：本页面是 `@openviking/openclaw-plugin`（context-engine 插件）。**不要**使用 `clawhub install openviking`——那安装的是另一个 AgentSkill。
 
 ---
 
-## 技术概述
+<details>
+<summary><b>技术细节（面向集成方和工程师）</b></summary>
 
-使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
-
-以下内容是面向集成方和工程师的实现设计说明。
+在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
 
 ## 设计定位
 
@@ -311,3 +334,5 @@ ov tui
 ---
 
 安装、升级、卸载请查看 [INSTALL-ZH.md](./INSTALL-ZH.md)。
+
+</details>

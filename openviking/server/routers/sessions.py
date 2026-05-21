@@ -49,6 +49,24 @@ class ToolPartRequest(BaseModel):
     tool_input: Optional[Dict[str, Any]] = None
     tool_output: str = ""
     tool_status: str = "pending"
+    duration_ms: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    tool_output_ref: str = ""
+    tool_output_truncated: bool = False
+    tool_output_original_chars: Optional[int] = None
+    tool_output_preview_chars: Optional[int] = None
+    tool_output_sha256: str = ""
+    tool_output_storage_uri: str = ""
+    tool_output_mime_type: str = "text/plain"
+    tool_output_source_ref: str = ""
+    tool_output_source_offset: Optional[int] = None
+    tool_output_source_limit: Optional[int] = None
+    tool_output_externalization_error: str = ""
+    tool_output_group_id: str = ""
+    tool_output_externalized_reason: str = ""
+    tool_output_group_original_chars: Optional[int] = None
+    tool_output_group_budget_chars: Optional[int] = None
 
 
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
@@ -171,6 +189,68 @@ async def get_session(
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)
+
+
+@router.get("/{session_id}/tool-results")
+async def list_tool_results(
+    session_id: str = Path(..., description="Session ID"),
+    tool_name: Optional[str] = Query(None, description="Filter by tool name"),
+    limit: int = Query(50, ge=1, description="Maximum number of tool results"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """List externalized tool results for a session."""
+    service = get_service()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    result = await session.list_tool_results(tool_name=tool_name, limit=limit)
+    return Response(status="ok", result=_to_jsonable(result))
+
+
+@router.get("/{session_id}/tool-results/{tool_result_id}")
+async def read_tool_result(
+    session_id: str = Path(..., description="Session ID"),
+    tool_result_id: str = Path(..., description="Tool result ID"),
+    offset: int = Query(0, ge=0, description="Unicode character offset"),
+    limit: int = Query(20_000, description="Maximum Unicode characters to return"),
+    include_metadata: bool = Query(True, description="Include metadata in response"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Read an externalized tool result by Unicode character range."""
+    if limit < -1:
+        return error_response(
+            "INVALID_ARGUMENT",
+            "limit must be -1 or greater than or equal to 0",
+            details={"field": "limit", "value": limit},
+        )
+    service = get_service()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    result = await session.read_tool_result(
+        tool_result_id,
+        offset=offset,
+        limit=limit,
+        include_metadata=include_metadata,
+    )
+    return Response(status="ok", result=_to_jsonable(result))
+
+
+@router.get("/{session_id}/tool-results/{tool_result_id}/search")
+async def search_tool_result(
+    session_id: str = Path(..., description="Session ID"),
+    tool_result_id: str = Path(..., description="Tool result ID"),
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(20, ge=1, description="Maximum matches"),
+    context_chars: int = Query(300, ge=0, description="Context characters around each hit"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Search within an externalized tool result."""
+    service = get_service()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    result = await session.search_tool_result(
+        tool_result_id,
+        query=q,
+        limit=limit,
+        context_chars=context_chars,
+    )
+    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.get("/{session_id}/context")

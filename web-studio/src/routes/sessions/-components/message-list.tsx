@@ -7,7 +7,7 @@ import type { StreamToolCall } from '#/lib/sessions/types/chat'
 import type { Message } from '#/lib/sessions/types/message'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
 
-const OPENVIKING_ICON_SRC = resolvePublicAsset('openviking-icon.png')
+const OPENVIKING_ICON_SRC = resolvePublicAsset('favicon-32.png')
 
 // ---------------------------------------------------------------------------
 // CopyButton

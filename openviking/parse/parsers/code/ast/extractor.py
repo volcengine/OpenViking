@@ -89,6 +89,29 @@ class ASTExtractor:
             self._cache[lang] = None
             return None
 
+    def supports(self, file_name: str) -> bool:
+        """True if the file extension maps to a known language (parsing may still fail)."""
+        return self._detect_language(file_name) is not None
+
+    def extract(self, file_name: str, content: str) -> Optional[CodeSkeleton]:
+        """Return raw CodeSkeleton, or None for unsupported language / parse failure.
+
+        Consumers that need the structured object (line numbers, traversal) call
+        this; consumers that want the legacy formatted text use extract_skeleton.
+        """
+        lang = self._detect_language(file_name)
+        extractor = self._get_extractor(lang)
+        if extractor is None:
+            return None
+
+        try:
+            return extractor.extract(file_name, content)
+        except Exception as e:
+            logger.warning(
+                "AST extraction failed for '%s' (language: %s): %s", file_name, lang, e
+            )
+            return None
+
     def extract_skeleton(
         self, file_name: str, content: str, verbose: bool = False
     ) -> Optional[str]:
@@ -101,22 +124,10 @@ class ASTExtractor:
             verbose: If True, include full docstrings (for ast_llm / LLM input).
                      If False, only first line of each docstring (for ast / embedding).
         """
-        lang = self._detect_language(file_name)
-        extractor = self._get_extractor(lang)
-        if extractor is None:
+        skeleton = self.extract(file_name, content)
+        if skeleton is None:
             return None
-
-        try:
-            skeleton: CodeSkeleton = extractor.extract(file_name, content)
-            return skeleton.to_text(verbose=verbose)
-        except Exception as e:
-            logger.warning(
-                "AST extraction failed for '%s' (language: %s), falling back to LLM: %s",
-                file_name,
-                lang,
-                e,
-            )
-            return None
+        return skeleton.to_text(verbose=verbose)
 
 
 # Module-level singleton

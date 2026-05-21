@@ -24,7 +24,7 @@ from openviking.core.namespace import (
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -1088,8 +1088,8 @@ class ReindexExecutor:
         for file_uri in file_uris:
             counters.scanned_records += 1
             body = await self._safe_read_text(file_uri, ctx=ctx)
-            parsed_body = parse_memory_file_with_fields(body) if body else {"content": ""}
-            memory_content = parsed_body.get("content", "")
+            mf = MemoryFileUtils.read(body) if body else MemoryFile()
+            memory_content = mf.content
             existing = await self._fetch_existing_record(uri=file_uri, level=2, ctx=ctx)
             abstract = self._best_non_empty(
                 self._record_abstract(existing),

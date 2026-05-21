@@ -92,6 +92,16 @@ class TestLockManagerBasic:
 
         await lm.release(handle)
 
+    async def test_explicit_none_timeout_passes_through_as_infinite_wait(self, lm):
+        handle = lm.create_handle()
+        lm._path_lock = MagicMock()
+        lm._path_lock.acquire_tree = AsyncMock(return_value=True)
+
+        ok = await lm.acquire_tree(handle, "/local/test", timeout=None)
+
+        assert ok is True
+        lm._path_lock.acquire_tree.assert_awaited_once_with("/local/test", handle, timeout=None)
+
     async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
         lm._redo_log = MagicMock()
         lm._redo_log.list_pending.return_value = ["redo-task"]
