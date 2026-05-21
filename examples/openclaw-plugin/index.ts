@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 import { registerSetupCli } from "./commands/setup.js";
@@ -1192,11 +1193,22 @@ const contextEnginePlugin = {
         name: "memory_store",
         label: "Memory Store (OpenViking)",
         description:
-          "Store text in OpenViking memory pipeline by writing to a session and running memory extraction.",
+          "Store text directly as a memory in OpenViking via content/write API. " +
+          "Creates a memory file, stores the content, and queues vector indexing in a single call.",
         parameters: Type.Object({
           text: Type.String({ description: "Information to store as memory source text" }),
-          role: Type.Optional(Type.String({ description: "Session role, default user" })),
-          sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
+          category: Type.Optional(
+            Type.Union(
+              [
+                Type.Literal("preference"),
+                Type.Literal("entity"),
+                Type.Literal("event"),
+                Type.Literal("case"),
+                Type.Literal("pattern"),
+              ],
+              { description: "Memory category, maps to subdirectory (default: preference)" },
+            ),
+          ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (isBypassedSession(ctx)) {
@@ -1204,102 +1216,78 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           const { text } = params as { text: string };
-          const role =
-            typeof (params as { role?: string }).role === "string"
-              ? (params as { role: string }).role
-              : "user";
-          const explicitSessionId =
-            typeof (params as { sessionId?: unknown }).sessionId === "string" &&
-              (params as { sessionId: string }).sessionId.trim()
-              ? openClawSessionRefToOvStorageId((params as { sessionId: string }).sessionId)
-              : undefined;
+          const category =
+            typeof (params as { category?: string }).category === "string"
+              ? (params as { category: string }).category
+              : "preference";
+
+          if (!text?.trim()) {
+            return {
+              content: [{ type: "text", text: "text is required" }],
+              details: { action: "failed", error: "text is required" },
+            };
+          }
+
+          const subdirMap: Record<string, string> = {
+            preference: "preferences",
+            entity: "entities",
+            event: "events",
+            case: "cases",
+            pattern: "patterns",
+          };
+          const subdir = subdirMap[category] ?? "preferences";
 
           if (cfg.logFindRequests) {
             api.logger.info?.(
-              `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${explicitSessionId ?? "auto"})`,
+              `openviking: memory_store invoked (textLength=${text?.length ?? 0}, category=${category})`,
             );
           }
 
-          let sessionId = explicitSessionId;
-          let usedTempSession = false;
           try {
             const c = await getClient();
-            if (!sessionId) {
-              sessionId = `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-              usedTempSession = true;
+            const identity = await c.getResolvedIdentity(session.agentId);
+            const userId = identity.userId;
+            const slug = randomUUID().replace(/-/g, "").slice(0, 12);
+            const uri = `viking://user/${userId}/memories/${subdir}/mem_${slug}.md`;
+
+            if (cfg.logFindRequests) {
+              api.logger.info?.(
+                `openviking: memory_store writing to ${uri} (textLength=${text?.length ?? 0})`,
+              );
             }
-            const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
-            await c.addSessionMessage(
-              sessionId,
-              role,
-              [{ type: "text" as const, text }],
+
+            const result = await c.contentWrite(
+              uri,
+              text,
+              "create",
               session.agentId,
-              undefined,
-              roleId,
             );
-            const commitResult = await c.commitSession(sessionId, {
-              wait: true,
-              agentId: session.agentId,
-              keepRecentCount: 0,
-            });
-            const memoriesCount = totalCommitMemories(commitResult);
-            if (commitResult.status === "failed") {
-              api.logger.warn(
-                `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
-              );
-              return {
-                content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
-                details: {
-                  action: "failed",
-                  sessionId,
-                  status: "failed",
-                  error: commitResult.error,
-                  usedTempSession,
-                },
-              };
-            }
-            if (commitResult.status === "timeout") {
-              api.logger.warn(
-                `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
-              );
-              return {
-                content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
-                details: {
-                  action: "timeout",
-                  sessionId,
-                  status: "timeout",
-                  taskId: commitResult.task_id,
-                  usedTempSession,
-                },
-              };
-            }
-            if (memoriesCount === 0) {
-              api.logger.warn(
-                `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
-                  "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
-              );
-            } else {
-              api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
-            }
+            const written = result.written_bytes ?? 0;
+
             return {
               content: [
                 {
                   type: "text",
-                  text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
+                  text: `Memory stored (${written}b) and queued for vector indexing.`,
                 },
               ],
               details: {
                 action: "stored",
-                sessionId,
-                memoriesCount,
-                status: commitResult.status,
-                archived: commitResult.archived ?? false,
-                usedTempSession,
+                uri,
+                writtenBytes: written,
               },
             };
           } catch (err) {
             api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
-            throw err;
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to store memory: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
+              details: { action: "failed", error: String(err) },
+            };
           }
         },
       }),
