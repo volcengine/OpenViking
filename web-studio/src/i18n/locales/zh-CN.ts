@@ -55,10 +55,11 @@ const zhCN = {
       toggle: '切换主题',
     },
     serverMode: {
+      apiKey: 'api_key',
       checking: '检测中',
-      devImplicit: '服务端身份',
-      explicitAuth: '显式鉴权',
+      dev: 'dev',
       offline: '未连接',
+      trusted: 'trusted',
     },
   },
   connection: {

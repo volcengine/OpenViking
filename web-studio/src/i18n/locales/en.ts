@@ -55,10 +55,11 @@ const en = {
       toggle: 'Toggle theme',
     },
     serverMode: {
+      apiKey: 'api_key',
       checking: 'Detecting',
-      devImplicit: 'Server Identity',
-      explicitAuth: 'Explicit Auth',
+      dev: 'dev',
       offline: 'Offline',
+      trusted: 'trusted',
     },
   },
   connection: {

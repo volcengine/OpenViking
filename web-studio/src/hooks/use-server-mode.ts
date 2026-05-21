@@ -1,10 +1,8 @@
 import { getHealth } from '#/lib/ov-client'
 
-export type ServerMode =
-  | 'checking'
-  | 'dev-implicit'
-  | 'explicit-auth'
-  | 'offline'
+export type BackendAuthMode = 'api_key' | 'trusted' | 'dev'
+
+export type ServerMode = BackendAuthMode | 'checking' | 'offline'
 
 export type ServerModeBadge = {
   labelKey: string
@@ -13,6 +11,27 @@ export type ServerModeBadge = {
 
 export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function resolveServerModeFromHealthData(data: unknown): ServerMode {
+  if (!isRecord(data)) {
+    return 'offline'
+  }
+
+  switch (data.auth_mode) {
+    case 'api_key':
+      return 'api_key'
+    case 'dev':
+      return 'dev'
+    case 'trusted':
+      return 'trusted'
+    default:
+      return 'offline'
+  }
 }
 
 export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
@@ -30,10 +49,7 @@ export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
       throwOnError: true,
     })
 
-    const data = response.data as { user_id?: string }
-    return typeof data.user_id === 'string' && data.user_id.length > 0
-      ? 'dev-implicit'
-      : 'explicit-auth'
+    return resolveServerModeFromHealthData(response.data)
   } catch {
     return 'offline'
   }
@@ -41,12 +57,14 @@ export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
 
 export function describeServerMode(serverMode: ServerMode): ServerModeBadge {
   switch (serverMode) {
-    case 'dev-implicit':
-      return { labelKey: 'serverMode.devImplicit', variant: 'secondary' }
-    case 'explicit-auth':
-      return { labelKey: 'serverMode.explicitAuth', variant: 'outline' }
+    case 'api_key':
+      return { labelKey: 'serverMode.apiKey', variant: 'outline' }
+    case 'dev':
+      return { labelKey: 'serverMode.dev', variant: 'secondary' }
     case 'offline':
       return { labelKey: 'serverMode.offline', variant: 'destructive' }
+    case 'trusted':
+      return { labelKey: 'serverMode.trusted', variant: 'outline' }
     default:
       return { labelKey: 'serverMode.checking', variant: 'outline' }
   }
