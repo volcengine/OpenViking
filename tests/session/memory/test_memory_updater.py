@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -20,6 +22,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -90,6 +93,15 @@ class TestMemoryUpdateResult:
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
 
+    def test_extract_context_initializes_page_id_map(self):
+        extract_context = ExtractContext(
+            messages=[Message(id="1", role="user", parts=[TextPart(text="hi")])]
+        )
+
+        assert extract_context.page_id_map is not None
+        page_id = extract_context.page_id_map.get_page_id("viking://user/a/memories/profile.md")
+        assert page_id == 1
+
     def test_create(self):
         """Test creating a MemoryUpdater."""
         updater = MemoryUpdater()
@@ -114,60 +126,85 @@ class TestMemoryUpdater:
 
         assert updater._registry == registry
 
-    def test_page_id_edit_keeps_existing_uri_and_identity_fields(self):
-        """Existing page_id edits should keep the read page URI and immutable identity."""
-        registry = MemoryTypeRegistry(load_schemas=False)
-        registry.register(
-            MemoryTypeSchema(
-                memory_type="entities",
-                description="entity memory",
-                directory="viking://user/{{ user_space }}/memories/entities",
-                filename_template="{{ name }}.md",
-                fields=[
-                    MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
-                    MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
-                ],
-            )
+    @pytest.mark.asyncio
+    async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
+        registry = MagicMock()
+        registry.get.return_value = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[],
         )
 
-        existing_uri = "viking://user/alice/memories/entities/Melanie.md"
-        old_file = MemoryFile(
-            uri=existing_uri,
-            content="old content",
-            memory_type="entities",
-            extra_fields={"name": "Melanie"},
-        )
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        alice_uri = "viking://user/alice/memories/entities/SharedFact.md"
+        bob_uri = "viking://user/bob/memories/entities/SharedFact.md"
         operation = ResolvedOperation(
-            old_memory_file_content=old_file,
-            memory_fields={"name": "WrongName", "content": "new content"},
+            memory_fields={"name": "SharedFact", "content": "shared content"},
             memory_type="entities",
-            uris=[],
-            page_id=7,
+            uris=[alice_uri, bob_uri],
+            page_id=100,
         )
         operations = ResolvedOperations(
             upsert_operations=[operation],
             delete_file_contents=[],
             errors=[],
         )
+
+        extract_context = ExtractContext([])
+        extract_context.page_id_map.register_new_page_id(alice_uri, 100)
+        extract_context.page_id_map.register_new_page_id(bob_uri, 100)
         isolation_handler = MagicMock()
-        isolation_handler.calculate_memory_uris.return_value = [
-            "viking://user/alice/memories/entities/WrongName.md"
-        ]
-        extract_context = SimpleNamespace(page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri))
 
-        from openviking.session.memory.utils.uri import supplement_operation_uris
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
 
-        supplement_operation_uris(
+        result = await updater.apply_operations(
             operations=operations,
-            registry=registry,
+            ctx=ctx,
             extract_context=extract_context,
             isolation_handler=isolation_handler,
         )
 
-        assert operation.uris == [existing_uri]
-        assert operation.memory_fields["name"] == "Melanie"
-        assert operation.memory_fields["content"] == "new content"
+        assert set(operation.uris) == {alice_uri, bob_uri}
+        assert set(result.written_uris) == {alice_uri, bob_uri}
         isolation_handler.calculate_memory_uris.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_apply_operations_requires_pre_resolved_uris(self):
+        registry = MagicMock()
+        registry.get.return_value = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[],
+        )
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"name": "SharedFact", "content": "shared content"},
+                    memory_type="entities",
+                    uris=[],
+                    page_id=100,
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+        with pytest.raises(ValueError, match="missing resolved URIs"):
+            await updater.apply_operations(operations=operations, ctx=ctx)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -233,10 +270,6 @@ class TestMemoryUpdater:
             delete_file_contents=[],
             errors=[],
         )
-        monkeypatch.setattr(
-            "openviking.session.memory.memory_updater.supplement_operation_uris",
-            lambda *args, **kwargs: None,
-        )
 
         ctx = RequestContext(
             user=UserIdentifier("acme", "alice", "bot"),
@@ -296,10 +329,6 @@ class TestMemoryUpdater:
             ],
         )
 
-        monkeypatch.setattr(
-            "openviking.session.memory.memory_updater.supplement_operation_uris",
-            lambda *args, **kwargs: None,
-        )
 
         async def mock_apply_upsert(resolved_op, ctx, extract_context=None):
             return None
@@ -317,6 +346,74 @@ class TestMemoryUpdater:
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
         mock_viking_fs.read_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
+        caroline_uri = "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
+        melanie_uri = "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        profile_uri = "viking://user/Caroline/memories/profile.md"
+
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events/{{ year }}/{{ month }}/{{ day }}",
+            filename_template="{{ event_name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        store = {}
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={
+                        "event_name": "career_education_planning",
+                        "content": "Career planning conversation",
+                    },
+                    memory_type="events",
+                    uris=[caroline_uri, melanie_uri],
+                    page_id=101,
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=profile_uri,
+                    to_uri=caroline_uri,
+                    match_text="career",
+                    description="Caroline's profile references her career plans",
+                )
+            ],
+        )
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+        await updater.apply_operations(operations=operations, ctx=ctx)
+
+        caroline = parse_memory_file_with_fields(store[caroline_uri])
+        melanie = parse_memory_file_with_fields(store[melanie_uri])
+
+        assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
+        assert melanie.get("backlinks", []) == []
 
 
 # The TestApplyWriteWithContentInFields tests are outdated because WriteOp no longer exists

@@ -193,7 +193,6 @@ class ContentWriteCoordinator:
                 changed_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
-                lifecycle_lock_handle_id="",
                 change_type="added" if mode == "create" else "modified",
             )
             semantic_enqueued = True
@@ -371,7 +370,6 @@ class ContentWriteCoordinator:
         changed_uri: str,
         context_type: str,
         ctx: RequestContext,
-        lifecycle_lock_handle_id: str,
         change_type: str = "modified",
         target_uri: str = "",
     ) -> None:
@@ -388,7 +386,6 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
-            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             coalesce_key=(
                 build_semantic_coalesce_key(
                     context_type=context_type,
@@ -417,7 +414,6 @@ class ContentWriteCoordinator:
         root_uri: str,
         modified_uri: str,
         ctx: RequestContext,
-        lifecycle_lock_handle_id: str,
     ) -> None:
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -431,7 +427,6 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
-            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             coalesce_key=build_semantic_coalesce_key(
                 context_type="memory",
                 uri=root_uri,
@@ -548,7 +543,6 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 modified_uri=uri,
                 ctx=ctx,
-                lifecycle_lock_handle_id="",
             )
             await lock_manager.release(handle)
             released = True

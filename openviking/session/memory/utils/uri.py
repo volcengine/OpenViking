@@ -7,21 +7,12 @@ URI generation and validation utilities.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, Set
-
-if TYPE_CHECKING:
-    from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-    from openviking.session.memory.memory_updater import ExtractContext
+from typing import Any, Dict, Set
 
 import jinja2
 
-from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperations
-from openviking.session.memory.merge_op import MergeOp
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
-from openviking_cli.utils import get_logger
-
-logger = get_logger(__name__)
 
 
 def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
@@ -219,39 +210,3 @@ def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> 
         if name in schema_field_names and isinstance(value, (str, int, float, bool)):
             uri_fields[name] = value
     return uri_fields
-
-
-def supplement_operation_uris(
-    operations: ResolvedOperations,
-    registry: MemoryTypeRegistry,
-    extract_context: ExtractContext = None,
-    isolation_handler: MemoryIsolationHandler = None,
-):
-    logger.info(f"[supplement_operation_uris] isolation_handler: {isolation_handler}")
-    page_id_map = getattr(extract_context, "page_id_map", None) if extract_context is not None else None
-
-    for operation in operations.upsert_operations:
-        if operation.page_id is not None and page_id_map is not None:
-            resolved_uri = page_id_map.resolve(operation.page_id)
-            if resolved_uri:
-                operation.uris = [resolved_uri]
-                old_file = operation.old_memory_file_content
-                if old_file is not None:
-                    memory_type_schema = registry.get(operation.memory_type)
-                    immutable_fields = {
-                        field.name
-                        for field in memory_type_schema.fields
-                        if field.merge_op != MergeOp.PATCH
-                    }
-                    for field_name in immutable_fields:
-                        if field_name in old_file.extra_fields:
-                            operation.memory_fields[field_name] = old_file.extra_fields[field_name]
-                continue
-
-        memory_type_schema = registry.get(operation.memory_type)
-        uris = isolation_handler.calculate_memory_uris(
-            memory_type_schema=memory_type_schema,
-            operation=operation,
-            extract_context=extract_context,
-        )
-        operation.uris = uris

@@ -8,8 +8,25 @@ import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.page_id_map import PageIdMap
+from openviking.session.memory.memory_updater import ExtractContext
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_create_tool_context_uses_extract_context_page_id_map():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+
+    extract_context = provider.get_extract_context()
+    extract_context.page_id_map.get_page_id(
+        "viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md"
+    )
+
+    tool_ctx = provider.create_tool_context()
+
+    assert tool_ctx.page_id_map is extract_context.page_id_map
 
 
 @pytest.mark.asyncio
@@ -26,7 +43,6 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
     )
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
-    provider.set_page_id_map(PageIdMap())
     provider.search_files = AsyncMock(return_value=[])
 
     with patch(
@@ -59,7 +75,6 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     )
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
-    provider.set_page_id_map(PageIdMap())
 
     provider.search_files = AsyncMock(
         return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]

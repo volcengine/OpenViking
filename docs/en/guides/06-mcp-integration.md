@@ -103,7 +103,7 @@ no external proxy is needed.
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 9 tools:
+Once connected, OpenViking exposes 11 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -112,10 +112,14 @@ Once connected, OpenViking exposes 9 tools:
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
 | `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `to` (optional, target `viking://resources/...` URI; required when `watch_interval > 0`) |
+| `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
+| `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
+
+> **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 
 ### Adding local-file resources (progressive upload)
 

@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage import VikingDBManager
+from openviking.storage.transaction import NO_LOCK, LockLease, OwnedLockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
@@ -247,12 +249,12 @@ class ResourceProcessor:
                 except Exception:
                     pass
 
-            # ============ Phase 3.5: Source commit + lifecycle lock ============
+            # ============ Phase 3.5: Source commit + resource lock ============
             root_uri = result.get("root_uri")
             temp_uri = result.get("temp_uri")  # temp_doc_uri
             original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
-            lifecycle_lock_handle_id = ""
+            resource_lock: LockLease = NO_LOCK
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import get_lock_manager
@@ -263,22 +265,16 @@ class ResourceProcessor:
                 lock_manager = get_lock_manager()
                 try:
                     if candidate_uri:
-                        root_uri, lifecycle_lock_handle_id = await self._commit_unique_candidate(
+                        root_uri, resource_lock = await self._commit_unique_candidate(
                             candidate_uri=candidate_uri,
                             ctx=ctx,
                         )
                         result["root_uri"] = root_uri
                     else:
                         dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                        handle = lock_manager.create_handle()
-                        try:
-                            lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
-                                lock_manager, dst_path, uri=root_uri, handle=handle
-                            )
-                        except Exception:
-                            await lock_manager.release(handle)
-                            lifecycle_lock_handle_id = ""
-                            raise
+                        resource_lock = await self._acquire_resource_lock(
+                            lock_manager, dst_path, uri=root_uri
+                        )
                 except Exception:
                     stage_status = "error"
                     raise
@@ -304,15 +300,22 @@ class ResourceProcessor:
                     stage_start = time.perf_counter()
                     stage_status = "ok"
                     with telemetry.measure("resource.summarize"):
-                        await self._get_summarizer().summarize(
+                        summary_result = await self._get_summarizer().summarize(
                             resource_uris=[result["root_uri"]],
                             ctx=ctx,
                             skip_vectorization=skip_vec,
-                            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+                            lock=resource_lock,
                             temp_uris=[temp_uri_for_summarize],
                             is_code_repo=is_code_repo,
                             **kwargs,
                         )
+                        if (
+                            resource_lock.active
+                            and summary_result.get("status") == "success"
+                            and summary_result.get("enqueued_count", 0) > 0
+                        ):
+                            await resource_lock.handoff()
+                            resource_lock = NO_LOCK
                 except Exception as e:
                     logger.error(f"Summarization failed: {e}")
                     result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
@@ -327,28 +330,23 @@ class ResourceProcessor:
                         )
                     except Exception:
                         pass
-            elif lifecycle_lock_handle_id:
-                # No downstream worker will sync temp content or release the lifecycle lock.
-                from openviking.storage.transaction import get_lock_manager
 
-                lock_manager = get_lock_manager()
-                handle = lock_manager.get_handle(lifecycle_lock_handle_id)
-                if handle:
-                    if temp_uri:
-                        from openviking.pyagfs.helpers import cp as agfs_cp
+            if resource_lock.active:
+                if not should_summarize and temp_uri:
+                    from openviking.pyagfs.helpers import cp as agfs_cp
 
-                        viking_fs = get_viking_fs()
-                        src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                        await asyncio.to_thread(
-                            agfs_cp,
-                            viking_fs.agfs,
-                            src_path,
-                            dst_path,
-                            recursive=True,
-                        )
-                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
-                    await lock_manager.release(handle)
+                    viking_fs = get_viking_fs()
+                    src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                    dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                    await asyncio.to_thread(
+                        agfs_cp,
+                        viking_fs.agfs,
+                        src_path,
+                        dst_path,
+                        recursive=True,
+                    )
+                    await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                await resource_lock.close()
 
             # 恢复原始 temp_uri 用于输出
             if original_temp_uri is not None:
@@ -362,8 +360,8 @@ class ResourceProcessor:
         candidate_uri: str,
         ctx: RequestContext,
         max_attempts: int = 100,
-    ) -> tuple[str, str]:
-        """Pick the first free candidate URI and reserve it with a lifecycle TreeLock."""
+    ) -> tuple[str, OwnedLockLease]:
+        """Pick the first free candidate URI and reserve it with a resource TreeLock."""
         from openviking.storage.errors import ResourceBusyError
         from openviking.storage.transaction import get_lock_manager
 
@@ -376,46 +374,36 @@ class ResourceProcessor:
                 continue
 
             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-            handle = lock_manager.create_handle()
             try:
-                lifecycle_lock_handle_id = await self._acquire_lifecycle_lock(
-                    lock_manager, dst_path, uri=root_uri, handle=handle, timeout=0.0
+                resource_lock = await self._acquire_resource_lock(
+                    lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
-                return root_uri, lifecycle_lock_handle_id
+                return root_uri, resource_lock
             except ResourceBusyError:
-                await lock_manager.release(handle)
                 continue
-            except Exception:
-                await lock_manager.release(handle)
-                raise
 
         raise FileExistsError(
             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
         )
 
     @staticmethod
-    async def _acquire_lifecycle_lock(
+    async def _acquire_resource_lock(
         lock_manager,
         path: str,
         *,
         uri: str = "",
-        handle=None,
         timeout: Optional[float] = None,
-    ) -> str:
-        """Acquire per-resource TreeLock lifecycle lock or raise a structured conflict."""
+    ) -> OwnedLockLease:
+        """Acquire the per-resource TreeLock or raise a structured conflict."""
         from openviking.storage.errors import ResourceBusyError
 
-        owns_handle = handle is None
-        if handle is None:
-            handle = lock_manager.create_handle()
-        if await lock_manager.acquire_tree(handle, path, timeout=timeout):
-            return handle.id
-        if owns_handle:
-            await lock_manager.release(handle)
-        logger.warning(f"[ResourceProcessor] Failed to acquire lifecycle lock on {path}")
-        raise ResourceBusyError(
-            f"Resource is busy: {uri or path}",
-            uri=uri or path,
-            conflict_type="path_busy",
-            retryable=True,
-        )
+        try:
+            return await OwnedLockLease.acquire_tree(lock_manager, path, timeout=timeout)
+        except LockAcquisitionError as exc:
+            logger.warning(f"[ResourceProcessor] Failed to acquire resource lock on {path}")
+            raise ResourceBusyError(
+                f"Resource is busy: {uri or path}",
+                uri=uri or path,
+                conflict_type="path_busy",
+                retryable=True,
+            ) from exc

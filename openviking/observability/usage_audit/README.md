@@ -83,7 +83,7 @@ Observability Event Bus
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用 Usage/Audit |
 | `backend` | `"sqlite"` | 当前仅支持 SQLite |
-| `sqlite_path` | `null` | SQLite 文件路径；为空时使用 OpenViking workspace 下的 `usage_audit.sqlite3` |
+| `sqlite_path` | `null` | SQLite 文件路径；为空时使用 OpenViking workspace 下的 `_system/usage_audit/usage_audit.sqlite3` |
 | `queue_size` | `10000` | 后台写入队列大小 |
 | `batch_size` | `500` | 单次批量写入的最大事件数 |
 | `flush_interval_seconds` | `1.0` | worker 定时 flush 间隔 |
@@ -409,7 +409,7 @@ Console BFF 查询的是账号级聚合和审计明细，当前只允许 `ROOT` 
 如果没有配置 `sqlite_path`，默认在 OpenViking workspace 下：
 
 ```text
-<workspace>/usage_audit.sqlite3
+<workspace>/_system/usage_audit/usage_audit.sqlite3
 ```
 
 可以通过 `server.observability.usage_audit.sqlite_path` 显式指定。

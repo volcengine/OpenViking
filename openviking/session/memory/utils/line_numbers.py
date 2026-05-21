@@ -15,15 +15,12 @@ def split_content_lines(content: str) -> list[str]:
     return _LINE_SPLIT_RE.split(content)
 
 
-
 def add_line_numbers(content: str, start_line: int = 1) -> str:
     if not content:
         return ""
     return "\n".join(
-        f"{index + start_line}\t{line}"
-        for index, line in enumerate(split_content_lines(content))
+        f"{index + start_line}\t{line}" for index, line in enumerate(split_content_lines(content))
     )
-
 
 
 def slice_content_lines(content: str, offset: int = 0, limit: int = -1) -> str:
@@ -34,10 +31,8 @@ def slice_content_lines(content: str, offset: int = 0, limit: int = -1) -> str:
     return "\n".join(lines[offset:end])
 
 
-
 def line_count(content: str) -> int:
     return len(split_content_lines(content))
-
 
 
 def extract_start_line_number(content: str) -> Optional[int]:
@@ -48,11 +43,9 @@ def extract_start_line_number(content: str) -> Optional[int]:
     return int(match.group(1))
 
 
-
 def strip_line_numbers(content: str, aggressive: bool = False) -> str:
     pattern = _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE if aggressive else _LINE_NUMBER_PREFIX_RE
     return "\n".join(pattern.sub("", line) for line in split_content_lines(content))
-
 
 
 def every_line_has_line_numbers(content: str) -> bool:

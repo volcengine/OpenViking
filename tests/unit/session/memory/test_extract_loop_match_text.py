@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile, WikiLink
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema, ResolvedOperation, WikiLink
+from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.extract_loop import ExtractLoop
 
 
@@ -14,15 +16,73 @@ class AttrDict(dict):
     __getattr__ = dict.get
 
 
-class TestResolveLinksLogging:
+
+
+class TestResolveOperations:
+    @pytest.mark.asyncio
+    async def test_existing_page_id_keeps_existing_uri_and_identity_fields(self):
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            ],
+        )
+        existing_uri = "viking://user/alice/memories/entities/Melanie.md"
+        old_file = MemoryFile(
+            uri=existing_uri,
+            content="old content",
+            memory_type="entities",
+            extra_fields={"name": "Melanie"},
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {existing_uri: old_file}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri)
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                entities=[{"name": "WrongName", "content": "new content", "page_id": 7}],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.uris == [existing_uri]
+        assert operation.old_memory_file_content is old_file
+        assert operation.memory_fields["name"] == "Melanie"
+        assert operation.memory_fields["content"] == "new content"
+        isolation_handler.calculate_memory_uris.assert_not_called()
+
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
-        loop._page_id_map = Mock()
-        loop._page_id_map._id_to_uri = {100: "viking://agent/agent_sample_0/memories/trajectories/a.md"}
-        loop._page_id_map.resolve.side_effect = lambda page_id: {
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {
+            100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
+        }
+        loop._extract_context.page_id_map.resolve.side_effect = lambda page_id: {
             100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
         }.get(page_id)
-        loop._page_id_map.register_new_page_id = Mock()
+        loop._extract_context.page_id_map.register_new_page_id = Mock()
 
         raw_links = [WikiLink(f=100, t=102, match_text="trip")]
 
@@ -40,6 +100,51 @@ class TestResolveLinksLogging:
         )
 
 
+class TestResolveLinksMultiUri:
+    def test_shared_page_id_pairs_matching_user_uris_only(self):
+        loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())
+        loop._extract_context = Mock()
+        loop._extract_context.page_id_map = Mock()
+        loop._extract_context.page_id_map._id_to_uri = {}
+        loop._extract_context.page_id_map.resolve.return_value = None
+        loop._extract_context.page_id_map.register_new_page_id = Mock()
+
+        raw_links = [WikiLink(f=100, t=101, match_text="trip")]
+        upsert_operations = [
+            ResolvedOperation(
+                memory_fields={},
+                memory_type="experiences",
+                uris=[
+                    "viking://user/a/memories/experiences/source.md",
+                    "viking://user/b/memories/experiences/source.md",
+                ],
+                page_id=100,
+            ),
+            ResolvedOperation(
+                memory_fields={},
+                memory_type="experiences",
+                uris=[
+                    "viking://user/a/memories/experiences/target.md",
+                    "viking://user/b/memories/experiences/target.md",
+                ],
+                page_id=101,
+            ),
+        ]
+
+        resolved = loop._resolve_links(raw_links, upsert_operations=upsert_operations)
+
+        assert {(link.from_uri, link.to_uri) for link in resolved} == {
+            (
+                "viking://user/a/memories/experiences/source.md",
+                "viking://user/a/memories/experiences/target.md",
+            ),
+            (
+                "viking://user/b/memories/experiences/source.md",
+                "viking://user/b/memories/experiences/target.md",
+            ),
+        }
+
+
 class TestPageIdInstruction:
     @pytest.mark.asyncio
     async def test_run_always_includes_page_id_rules_when_links_disabled(self):
@@ -47,16 +152,20 @@ class TestPageIdInstruction:
         context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://user/alice/memories/experiences/chat.md"
+        ]
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),
@@ -90,7 +199,6 @@ class TestPageIdInstruction:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch("openviking.session.memory.extract_loop.supplement_operation_uris"),
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
@@ -115,16 +223,20 @@ class TestPageIdInstruction:
         context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://user/alice/memories/experiences/chat.md"
+        ]
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),
@@ -159,7 +271,6 @@ class TestPageIdInstruction:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch("openviking.session.memory.extract_loop.supplement_operation_uris"),
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=True))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
@@ -181,15 +292,17 @@ class TestFinalOperationsHydration:
         old_file = MemoryFile(uri="viking://user/Caroline/memories/experiences/chat.md", content="old")
 
         context_provider = Mock()
-        schema = SimpleNamespace(memory_type="experiences")
+        schema = SimpleNamespace(memory_type="experiences", fields=[])
         context_provider.get_memory_schemas.return_value = [schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = Mock()
+        extract_context = Mock()
+        extract_context.page_id_map = PageIdMap()
+        extract_context.page_id_map.get_page_id(old_file.uri)
+        context_provider.get_extract_context.return_value = extract_context
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {old_file.uri: old_file}
         context_provider.instruction.return_value = "test instruction"
-        context_provider.set_page_id_map = Mock()
         context_provider._get_registry.return_value = Mock()
 
         isolation_handler = Mock()
@@ -222,24 +335,14 @@ class TestFinalOperationsHydration:
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
-            patch(
-                "openviking.session.memory.extract_loop.supplement_operation_uris"
-            ) as mock_supplement_operation_uris,
             patch("openviking.session.memory.extract_loop.tracer.info") as mock_tracer_info,
         ):
             mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
 
-            def hydrate_existing_uri(operations, registry, extract_context, isolation_handler):
-                operations.upsert_operations[0].uris = [old_file.uri]
-
-            mock_supplement_operation_uris.side_effect = hydrate_existing_uri
-
             final_operations, _ = await loop.run()
 
-        context_provider.set_page_id_map.assert_called_once()
-        assert loop._page_id_map is not None
-        assert loop._page_id_map.resolve(1) == old_file.uri
+        assert extract_context.page_id_map.resolve(1) == old_file.uri
 
         op = final_operations.upsert_operations[0]
         assert op.page_id == 1

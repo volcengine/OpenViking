@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
-    MemoryField,
     MemoryFile,
     ResolvedOperation,
     ResolvedOperations,
@@ -25,9 +24,9 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
-from openviking.session.memory.utils import flat_model_to_dict
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.session.memory.utils.uri import render_template, supplement_operation_uris
+from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -43,6 +42,7 @@ class ExtractContext:
 
     def __init__(self, messages: List[Message]):
         self.messages = messages
+        self.page_id_map = PageIdMap()
 
     def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
         """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""
@@ -321,16 +321,20 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
+        unresolved_ops = [
+            resolved_op for resolved_op in operations.upsert_operations if not resolved_op.uris
+        ]
+        if unresolved_ops:
+            missing = [
+                f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+                for resolved_op in unresolved_ops
+            ]
+            raise ValueError(
+                f"Cannot apply operations: missing resolved URIs for {', '.join(missing)}"
+            )
+
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
-
-        # 为每个upsert operation填充需要更新的uri列表
-        supplement_operation_uris(
-            operations,
-            self._registry,
-            extract_context=extract_context,
-            isolation_handler=isolation_handler,
-        )
 
         # Apply unified operations - _apply_edit returns True if edited, False if written
         for resolved_op in operations.upsert_operations:
@@ -475,8 +479,10 @@ class MemoryUpdater:
                         metadata[key] = val
 
             # Handle links/backlinks fields: merge with existing
-            incoming_links = getattr(resolved_op, "_incoming_links", [])
-            incoming_backlinks = getattr(resolved_op, "_incoming_backlinks", [])
+            incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
+            incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
+            incoming_links = incoming_links_by_uri.get(uri, [])
+            incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
             has_existing_links = old_content is not None
             if (
                 incoming_links
@@ -524,8 +530,8 @@ class MemoryUpdater:
         # Collect all URIs that will be upserted
         upserted_uris = set()
         for op in operations.upsert_operations:
-            op._incoming_links = []
-            op._incoming_backlinks = []
+            op._incoming_links_by_uri = {uri: [] for uri in op.uris}
+            op._incoming_backlinks_by_uri = {uri: [] for uri in op.uris}
             for uri in op.uris:
                 upserted_uris.add(uri)
 
@@ -535,13 +541,13 @@ class MemoryUpdater:
             if link.from_uri in upserted_uris:
                 for op in operations.upsert_operations:
                     if link.from_uri in op.uris:
-                        op._incoming_links.append(link)
+                        op._incoming_links_by_uri[link.from_uri].append(link)
                         break
             # Backlink -> stored in to_uri's "backlinks"
             if link.to_uri in upserted_uris:
                 for op in operations.upsert_operations:
                     if link.to_uri in op.uris:
-                        op._incoming_backlinks.append(link)
+                        op._incoming_backlinks_by_uri[link.to_uri].append(link)
                         break
 
     async def _apply_links_to_existing_files(
