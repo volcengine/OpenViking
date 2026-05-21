@@ -1073,7 +1073,7 @@ class Session:
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
-        task = await tracker.create_async(
+        task = await tracker.create(
             "session_commit",
             resource_id=self.session_id,
             account_id=self.ctx.account_id,
@@ -1141,7 +1141,7 @@ class Session:
                     ),
                     blocked_by=f"archive_{archive_index - 1:03d}",
                 )
-                await tracker.fail_async(
+                await tracker.fail(
                     task_id,
                     f"Previous archive archive_{archive_index - 1:03d} failed; "
                     "cannot continue session commit",
@@ -1150,7 +1150,7 @@ class Session:
                 )
                 return
 
-            await tracker.start_async(
+            await tracker.start(
                 task_id,
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
@@ -1343,7 +1343,7 @@ class Session:
             # Write .done file last — signals that all state is finalized
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
-            await tracker.complete_async(
+            await tracker.complete(
                 task_id,
                 {
                     "session_id": self.session_id,
@@ -1374,7 +1374,7 @@ class Session:
                 )
             except Exception:
                 logger.debug("Failed to write cancelled marker for session %s", self.session_id)
-            await tracker.fail_async(
+            await tracker.fail(
                 task_id,
                 f"cancelled: {e}",
                 account_id=self.ctx.account_id,
@@ -1390,7 +1390,7 @@ class Session:
                 stage="memory_extraction",
                 error=str(e),
             )
-            await tracker.fail_async(
+            await tracker.fail(
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
             logger.exception(f"Memory extraction failed for session {self.session_id}")

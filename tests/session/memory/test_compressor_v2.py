@@ -15,6 +15,7 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.content import deserialize_metadata, serialize_with_metadata
@@ -276,6 +277,28 @@ def create_test_conversation() -> List[Message]:
 
 class TestCompressorV2:
     """Tests for SessionCompressorV2."""
+
+    @pytest.mark.asyncio
+    async def test_memory_lock_retry_logging_is_throttled(self, monkeypatch):
+        warnings = []
+        debug_logs = []
+        monkeypatch.setattr(compressor_v2_module.logger, "warning", warnings.append)
+        monkeypatch.setattr(compressor_v2_module.logger, "debug", debug_logs.append)
+
+        last_warning_at = compressor_v2_module._log_memory_lock_retry(
+            retry_count=1,
+            max_retries=0,
+            last_warning_at=0.0,
+        )
+        compressor_v2_module._log_memory_lock_retry(
+            retry_count=2,
+            max_retries=0,
+            last_warning_at=last_warning_at,
+        )
+
+        assert len(warnings) == 1
+        assert "attempt=1" in warnings[0]
+        assert debug_logs == []
 
     @pytest.mark.asyncio
     async def test_extract_long_term_memories_includes_latest_archive_overview(self):

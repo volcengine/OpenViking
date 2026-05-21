@@ -23,6 +23,8 @@ _READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
 # Default poll interval when waiting for a lock (seconds)
 _POLL_INTERVAL = 0.2
+_LOCK_TIMEOUT_WARNING_INTERVAL_SECONDS = 10.0
+_last_timeout_warning_at: dict[str, float] = {}
 
 
 @dataclass
@@ -52,6 +54,14 @@ def _parse_fencing_token(token: str) -> Tuple[str, int, str]:
         return rest, 0, lock_type
 
     return token, 0, LOCK_TYPE_EXACT
+
+
+def _log_timeout_waiting(message: str) -> None:
+    now = asyncio.get_running_loop().time()
+    last_warning_at = _last_timeout_warning_at.get(message, 0.0)
+    if not last_warning_at or now - last_warning_at >= _LOCK_TIMEOUT_WARNING_INTERVAL_SECONDS:
+        logger.warning(message)
+        _last_timeout_warning_at[message] = now
 
 
 class PathLockEngine:
@@ -457,7 +467,7 @@ class PathLockEngine:
                     await self._remove_lock_file(existing_exact_lock)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[EXACT] Timeout waiting for exact lock on: {path}")
+                    _log_timeout_waiting(f"[EXACT] Timeout waiting for exact lock on: {path}")
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
@@ -473,7 +483,7 @@ class PathLockEngine:
                             await self._remove_lock_file(same_path_lock)
                             continue
                         if asyncio.get_running_loop().time() >= deadline:
-                            logger.warning(f"[EXACT] Timeout waiting for lock: {path}")
+                            _log_timeout_waiting(f"[EXACT] Timeout waiting for lock: {path}")
                             return False
                         await asyncio.sleep(_POLL_INTERVAL)
                         continue
@@ -487,7 +497,7 @@ class PathLockEngine:
                     await self._remove_lock_file(ancestor_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(
+                    _log_timeout_waiting(
                         f"[EXACT] Timeout waiting for ancestor TREE lock: {ancestor_conflict}"
                     )
                     return False
@@ -578,7 +588,7 @@ class PathLockEngine:
                     await self._remove_lock_file(lock_path)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[TREE] Timeout waiting for lock on: {path}")
+                    _log_timeout_waiting(f"[TREE] Timeout waiting for lock on: {path}")
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
@@ -591,7 +601,7 @@ class PathLockEngine:
                     await self._remove_lock_file(ancestor_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(
+                    _log_timeout_waiting(
                         f"[TREE] Timeout waiting for ancestor TREE lock: {ancestor_conflict}"
                     )
                     return False
@@ -605,7 +615,7 @@ class PathLockEngine:
                     await self._remove_lock_file(exact_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[TREE] Timeout waiting for exact lock: {exact_conflict}")
+                    _log_timeout_waiting(f"[TREE] Timeout waiting for exact lock: {exact_conflict}")
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
@@ -617,7 +627,9 @@ class PathLockEngine:
                     await self._remove_lock_file(desc_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[TREE] Timeout waiting for descendant lock: {desc_conflict}")
+                    _log_timeout_waiting(
+                        f"[TREE] Timeout waiting for descendant lock: {desc_conflict}"
+                    )
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue

@@ -100,7 +100,7 @@ class ReindexExecutor:
 
         tracker = get_task_tracker()
         if wait:
-            if await tracker.has_running_async(
+            if await tracker.has_running(
                 REINDEX_TASK_TYPE,
                 uri,
                 account_id=ctx.account_id,
@@ -118,7 +118,7 @@ class ReindexExecutor:
                 ctx=ctx,
             )
 
-        task = await tracker.create_if_no_running_async(
+        task = await tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
             account_id=ctx.account_id,
@@ -447,7 +447,7 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
-        await tracker.start_async(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
             result = await self._run(
                 uri=uri,
@@ -455,14 +455,14 @@ class ReindexExecutor:
                 mode=mode,
                 ctx=ctx,
             )
-            await tracker.complete_async(
+            await tracker.complete(
                 task_id,
                 result,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
         except Exception as exc:
-            await tracker.fail_async(
+            await tracker.fail(
                 task_id,
                 str(exc),
                 account_id=ctx.account_id,
