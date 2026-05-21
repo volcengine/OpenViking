@@ -103,7 +103,7 @@ no external proxy is needed.
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 11 tools:
+Once connected, OpenViking exposes 14 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -117,6 +117,9 @@ Once connected, OpenViking exposes 11 tools:
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
+| `code_outline` | Show a file's symbol structure (classes, functions, methods, line ranges) without reading bodies. Survey a file before deciding what to `read`. | `uri` (must be a `viking://` **file** URI) |
+| `code_search` | Search symbol names (class / function / method) by substring across a `viking://` directory. Returns symbol type, class context, file URI, line range. Scans up to 200 source files. | `query`, `uri` (must be a `viking://` directory; narrow to subdir for deeper coverage) |
+| `code_expand` | Return the full source of a single named symbol, avoiding reading the entire file. | `uri` (file), `symbol` (`bar` for top-level or `Foo.bar` for a method) |
 | `health` | Check OpenViking service health | none |
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
