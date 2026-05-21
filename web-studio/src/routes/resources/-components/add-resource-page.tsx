@@ -164,6 +164,7 @@ export function AddResourceForm({
   const buildCommonBody = () => {
     const body: Record<string, unknown> = {
       parent: targetUri.trim() || undefined,
+      create_parent: true,
       strict,
       telemetry: true,
       wait: false,
