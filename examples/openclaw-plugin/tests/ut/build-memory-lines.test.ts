@@ -130,6 +130,17 @@ describe("buildMemoryLines", () => {
 
     expect(lines[0]).toContain("[memory]");
   });
+
+  it("defaults blank category to 'memory'", async () => {
+    const memories = [makeMemory({ category: "" })];
+    const readFn = vi.fn();
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: true,
+    });
+
+    expect(lines[0]).toBe("- [memory] Test memory abstract");
+  });
 });
 
 describe("buildMemoryLinesWithBudget", () => {
@@ -224,5 +235,21 @@ describe("buildMemoryLinesWithBudget", () => {
 
     expect(lines).toHaveLength(0);
     expect(estimatedTokens).toBe(0);
+  });
+
+  it("defaults blank category while applying the budget", async () => {
+    const memories = [makeMemory({ category: "", abstract: "short" })];
+    const readFn = vi.fn();
+
+    const { lines } = await buildMemoryLinesWithBudget(
+      memories,
+      readFn,
+      {
+        recallPreferAbstract: true,
+        recallMaxInjectedChars: 100,
+      },
+    );
+
+    expect(lines[0]).toBe("- [memory] short");
   });
 });

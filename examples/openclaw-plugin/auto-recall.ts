@@ -1,6 +1,9 @@
 import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
+  clampScore,
+  isVagueRecallQuery,
+  passesRecallScoreThreshold,
   pickMemoriesForInjection,
   postProcessMemories,
   summarizeInjectionMemories,
@@ -11,6 +14,7 @@ import { sanitizeUserTextForCapture } from "./text-utils.js";
 
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
+const VAGUE_RECALL_SCORE_FLOOR = 0.6;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
 type Logger = {
@@ -95,7 +99,8 @@ export async function buildMemoryLines(
   const lines: string[] = [];
   for (const item of memories) {
     const content = await resolveMemoryContent(item, readFn, options);
-    lines.push(`- [${item.category ?? "memory"}] ${content}`);
+    const category = item.category?.trim() || "memory";
+    lines.push(`- [${category}] ${content}`);
   }
   return lines;
 }
@@ -128,7 +133,8 @@ export async function buildMemoryLinesWithBudget(
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
-    const line = `- [${item.category ?? "memory"}] ${content}`;
+    const category = item.category?.trim() || "memory";
+    const line = `- [${category}] ${content}`;
     const separatorChars = lines.length > 0 ? 1 : 0;
     const projectedChars = totalChars + separatorChars + line.length;
 
@@ -215,13 +221,27 @@ export async function buildAutoRecallContext(params: {
         index === self.findIndex((m) => m.uri === memory.uri)
       );
       const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
-      const processed = postProcessMemories(leafOnly, {
+      const thresholded = leafOnly.filter((memory) =>
+        passesRecallScoreThreshold(memory, cfg.recallScoreThreshold)
+      );
+      const processed = postProcessMemories(thresholded, {
         limit: candidateLimit,
-        scoreThreshold: cfg.recallScoreThreshold,
+        scoreThreshold: 0,
       });
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
       if (memories.length === 0) {
+        return { memoryCount: 0, estimatedTokens: 0 };
+      }
+      if (
+        isVagueRecallQuery(queryText) &&
+        memories.every((memory) => clampScore(memory.score) < VAGUE_RECALL_SCORE_FLOOR)
+      ) {
+        verbose?.(
+          `openviking: skipping auto-recall injection for vague query; bestScore=${Math.max(
+            ...memories.map((memory) => clampScore(memory.score)),
+          ).toFixed(3)} threshold=${VAGUE_RECALL_SCORE_FLOOR}`,
+        );
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
