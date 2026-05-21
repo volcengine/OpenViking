@@ -74,6 +74,21 @@ pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     }
 }
 
+pub fn unwrap_success_envelope(json: Value) -> Value {
+    let Some(result) = json.get("result") else {
+        return json;
+    };
+
+    let Some(profile) = json.get("profile") else {
+        return result.clone();
+    };
+
+    let mut wrapped = serde_json::Map::new();
+    wrapped.insert("result".to_string(), result.clone());
+    wrapped.insert("profile".to_string(), profile.clone());
+    Value::Object(wrapped)
+}
+
 // ============ TimeoutConfig ============
 
 /// Dynamic timeout calculator based on file size
@@ -275,11 +290,7 @@ impl BaseClient {
             }
         }
 
-        let result = if let Some(result) = json.get("result") {
-            result.clone()
-        } else {
-            json.clone()
-        };
+        let result = unwrap_success_envelope(json.clone());
 
         serde_json::from_value(result).map_err(|e| {
             Error::Parse(format!(

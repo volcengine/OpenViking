@@ -1236,4 +1236,33 @@ mod tests {
             "[PROCESSING_ERROR] Parse error: boom"
         );
     }
+
+    #[test]
+    fn unwrap_result_preserves_profile_for_non_object_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
 }

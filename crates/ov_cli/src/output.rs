@@ -159,6 +159,9 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             let mut prim_lists: Vec<(String, &Vec<serde_json::Value>)> = Vec::new();
 
             for (key, val) in obj {
+                if key == "profile" {
+                    continue;
+                }
                 if let Some(arr) = val.as_array() {
                     if !arr.is_empty() {
                         if arr.iter().all(|item| item.is_object()) {
@@ -245,6 +248,9 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
 
                 let mut output = String::new();
                 for (k, v) in obj {
+                    if k == "profile" {
+                        continue;
+                    }
                     let is_uri = k == "uri";
                     let formatted_value = format_value(v);
                     let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
@@ -269,8 +275,31 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
 }
 
 fn value_to_table_with_profile(value: &serde_json::Value, compact: bool) -> Option<String> {
-    let rendered = value_to_table(value, compact)?;
     let obj = value.as_object()?;
+    let rendered = if let Some(rendered) = value_to_table(value, compact) {
+        rendered
+    } else {
+        let max_key_width = obj
+            .keys()
+            .filter(|k| k.as_str() != "profile")
+            .map(|k| k.width())
+            .max()
+            .unwrap_or(0)
+            .min(MAX_COL_WIDTH);
+
+        let mut output = String::new();
+        for (k, v) in obj {
+            if k == "profile" {
+                continue;
+            }
+            let is_uri = k == "uri";
+            let formatted_value = format_value(v);
+            let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
+            let padded_key = pad_cell(k, max_key_width, false);
+            output.push_str(&format!("{}  {}\n", padded_key, content));
+        }
+        output
+    };
     Some(append_profile_section(rendered, obj))
 }
 
@@ -330,6 +359,9 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
         let mut prim_lists: Vec<(String, &Vec<serde_json::Value>)> = Vec::new();
 
         for (key, val) in obj {
+            if key == "profile" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 if !arr.is_empty() {
                     if arr.iter().all(|item| item.is_object()) {
@@ -906,9 +938,39 @@ mod tests {
             rendered,
             Some(
                 [
-                    "id  name   type",
-                    " 1  alpha  item",
-                    " 2  beta   item",
+                    "id  name ",
+                    " 1  alpha",
+                    " 2  beta ",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
+    }
+
+    #[test]
+    fn test_profile_section_is_not_duplicated_for_plain_object_output() {
+        let value = json!({
+            "healthy": true,
+            "version": "0.1.x",
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = value_to_table_with_profile(&value, true);
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "healthy  true",
+                    "version  0.1.x",
                     "",
                     "profile",
                     "line one",
