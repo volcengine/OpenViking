@@ -2109,6 +2109,52 @@ class VikingFS:
         content = await self._encrypt_content(content, ctx=ctx)
         await self._run_in_threadpool(self.agfs.write, path, content)
 
+    async def cas_write_file(
+        self,
+        uri: str,
+        content: Union[str, bytes],
+        expected_mod_time: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> bool:
+        """Compare-and-swap write: only succeeds if the file's modTime matches.
+
+        Returns True if the write succeeded, False if a concurrent modification
+        was detected (modTime changed since the read).
+        """
+        self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+
+        try:
+            stat = await self._run_in_threadpool(self.agfs.stat, path)
+        except FileNotFoundError:
+            logger.debug("OCC stat failed for %s: file not found", uri)
+            return False
+        except Exception as e:
+            logger.warning("OCC stat failed for %s: %s", uri, e)
+            return False
+
+        current_mod_time = ""
+        if isinstance(stat, dict):
+            current_mod_time = str(stat.get("modTime", stat.get("mtime", "")))
+
+        if current_mod_time != expected_mod_time:
+            logger.warning(
+                "OCC conflict on %s: expected modTime=%s, current=%s",
+                uri,
+                expected_mod_time,
+                current_mod_time,
+            )
+            return False
+
+        await self._ensure_parent_dirs(path)
+
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        content = await self._encrypt_content(content, ctx=ctx)
+        await self._run_in_threadpool(self.agfs.write, path, content)
+        return True
+
     async def read_file(
         self,
         uri: str,
