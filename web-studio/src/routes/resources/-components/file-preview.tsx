@@ -113,25 +113,27 @@ type DirectoryLevelId = 'abstract' | 'overview'
 
 const DIRECTORY_LEVEL_META: Array<{
   id: DirectoryLevelId
-  label: string
+  labelKey: string
   name: string
-  title: string
+  titleKey: string
 }> = [
   {
     id: 'abstract',
-    label: 'Abstract',
+    labelKey: 'filePreview.directoryLevels.abstract.label',
     name: 'L0',
-    title: 'Short semantic abstract',
+    titleKey: 'filePreview.directoryLevels.abstract.title',
   },
   {
     id: 'overview',
-    label: 'Overview',
+    labelKey: 'filePreview.directoryLevels.overview.label',
     name: 'L1',
-    title: 'Directory overview',
+    titleKey: 'filePreview.directoryLevels.overview.title',
   },
 ]
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
+const JSONL_ROW_COLLAPSED_INDICATOR = '▸'
+const JSONL_ROW_EXPANDED_INDICATOR = '▾'
 const JSONL_TOOLCALL_STORAGE_KEY = 'web-studio-jsonl-toolcall'
 
 type JsonlRecord = {
@@ -610,6 +612,7 @@ function formatJsonlTime(value: string): string {
 }
 
 function JsonlRawRow({ record }: { record: JsonlRecord }) {
+  const { t } = useTranslation('resources')
   const [open, setOpen] = useState(false)
   const parsed = record.parsed
   const keys = isRecord(parsed) ? Object.keys(parsed) : []
@@ -626,10 +629,21 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
       <button
         type="button"
         className="flex items-center justify-end gap-1 border-r px-2 py-2 font-mono text-[11px] text-muted-foreground hover:text-foreground"
+        aria-expanded={open}
+        aria-label={t(
+          open
+            ? 'filePreview.jsonl.collapseRow'
+            : 'filePreview.jsonl.expandRow',
+          { index: record.index + 1 },
+        )}
         onClick={() => setOpen((current) => !current)}
       >
         <span>{record.index + 1}</span>
-        <span>{open ? '▾' : '▸'}</span>
+        <span aria-hidden="true">
+          {open
+            ? JSONL_ROW_EXPANDED_INDICATOR
+            : JSONL_ROW_COLLAPSED_INDICATOR}
+        </span>
       </button>
       <div className="min-w-0 px-3 py-2">
         {open ? (
@@ -666,6 +680,7 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
+  const { t } = useTranslation('resources')
   const afterTag = text.replace(/^\[tool:\s*[^\]]+\]\s*/, '')
   const parsed = useMemo(() => {
     if (!toolName || !afterTag.trim()) return null
@@ -682,22 +697,24 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
     </pre>
   ) : (
     <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-      {afterTag || 'No arguments'}
+      {afterTag || t('filePreview.jsonl.noArguments')}
     </pre>
   )
 }
 
 function JsonlMarkdownBody({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {content || 'Empty message'}
+        {content || t('filePreview.jsonl.emptyMessage')}
       </ReactMarkdown>
     </div>
   )
 }
 
 function JsonlMessageCard({ record }: { record: JsonlRecord }) {
+  const { t } = useTranslation('resources')
   const [expanded, setExpanded] = useState(false)
   const message = useMemo(() => getJsonlMessage(record), [record])
   const isTool = Boolean(message.toolName || message.kind === 'tool-result')
@@ -743,7 +760,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
         <JsonlMarkdownBody content={body} />
       ) : (
         <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-          {body || 'Empty message'}
+          {body || t('filePreview.jsonl.emptyMessage')}
         </pre>
       )}
 
@@ -758,7 +775,11 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
             className="ml-auto rounded border px-2 py-0.5 font-medium text-primary hover:border-primary"
             onClick={() => setExpanded((current) => !current)}
           >
-            {expanded ? 'Collapse' : 'Expand'}
+            {t(
+              expanded
+                ? 'filePreview.jsonl.collapse'
+                : 'filePreview.jsonl.expand',
+            )}
           </button>
         ) : null}
       </div>
@@ -767,6 +788,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlPreview({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   const [dialogMode, setDialogMode] = useState(true)
   const [showTools, setShowTools] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -793,7 +815,7 @@ function JsonlPreview({ content }: { content: string }) {
   if (!records.length) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Empty JSONL.
+        {t('filePreview.jsonl.emptyJsonl')}
       </div>
     )
   }
@@ -802,12 +824,14 @@ function JsonlPreview({ content }: { content: string }) {
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span className="font-medium text-primary">
-          {records.length} record{records.length === 1 ? '' : 's'}
+          {t('filePreview.jsonl.recordCount', { count: records.length })}
         </span>
         <div className="flex items-center gap-2">
           {dialogMode && hasTools ? (
             <label className="inline-flex cursor-pointer items-center gap-2">
-              <span className="font-medium">toolcall</span>
+              <span className="font-medium">
+                {t('filePreview.jsonl.toolcall')}
+              </span>
               <input
                 type="checkbox"
                 className="peer sr-only"
@@ -825,7 +849,11 @@ function JsonlPreview({ content }: { content: string }) {
           ) : null}
           <label className="inline-flex cursor-pointer items-center gap-2">
             <span className="font-medium">
-              {dialogMode ? 'Dialog' : 'JSONL'}
+              {t(
+                dialogMode
+                  ? 'filePreview.jsonl.dialogMode'
+                  : 'filePreview.jsonl.rawMode',
+              )}
             </span>
             <input
               type="checkbox"
@@ -1042,7 +1070,9 @@ export function FilePreview({
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{file.name}</div>
             <div className="text-xs text-muted-foreground">
-              {file.isDir ? 'Folder' : formatSize(file.sizeBytes ?? file.size)}{' '}
+              {file.isDir
+                ? t('filePreview.folder')
+                : formatSize(file.sizeBytes ?? file.size)}{' '}
               · {file.modTime || '-'}
             </div>
           </div>
@@ -1151,7 +1181,7 @@ export function FilePreview({
                               ? 'border-primary bg-primary text-primary-foreground'
                               : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground'
                           }`}
-                          title={level.title}
+                          title={t(level.titleKey)}
                           onClick={() =>
                             setActiveDirectoryLevels((current) => {
                               const next = new Set(current)
@@ -1173,7 +1203,9 @@ export function FilePreview({
                           >
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">
+                            {t(level.labelKey)}
+                          </span>
                         </button>
                       )
                     })}
@@ -1187,11 +1219,11 @@ export function FilePreview({
                   </div>
                 ) : availableDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    No abstract or overview available for this folder.
+                    {t('filePreview.directoryNoSummary')}
                   </div>
                 ) : visibleDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    Select a chip to show folder context.
+                    {t('filePreview.directoryNoSelection')}
                   </div>
                 ) : (
                   <div className="grid gap-5">
@@ -1202,9 +1234,11 @@ export function FilePreview({
                           <span className="font-mono font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">
+                            {t(level.labelKey)}
+                          </span>
                           <span className="text-muted-foreground">
-                            {level.title}
+                            {t(level.titleKey)}
                           </span>
                         </header>
                         <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
