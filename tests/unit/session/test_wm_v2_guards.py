@@ -9,7 +9,8 @@ so they don't need a running OpenViking server.
 
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
-from openviking.session.session import WM_SEVEN_SECTIONS, Session
+from openviking.session.session import Session
+from openviking.session.wm_constants import WM_SEVEN_SECTIONS
 
 # -----------------------------------------------------------------------
 # Helpers
