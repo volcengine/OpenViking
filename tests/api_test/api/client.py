@@ -257,6 +257,7 @@ class OpenVikingAPIClient:
         to: Optional[str] = None,
         reason: Optional[str] = None,
         parent: Optional[str] = None,
+        instruction: Optional[str] = None,
         wait: bool = False,
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
@@ -276,6 +277,8 @@ class OpenVikingAPIClient:
             payload["reason"] = reason
         if parent:
             payload["parent"] = parent
+        if instruction:
+            payload["instruction"] = instruction
         if wait:
             payload["wait"] = wait
         try:
@@ -606,6 +609,42 @@ class OpenVikingAPIClient:
         if timeout is not None:
             payload["timeout"] = timeout
         return self._request_with_retry("POST", url, json=payload)
+
+    def content_reindex(
+        self,
+        uri: str,
+        regenerate: bool = False,
+        wait: bool = True,
+    ) -> requests.Response:
+        mode = "full" if regenerate else "vectors_only"
+        endpoint = "/api/v1/content/reindex"
+        url = self._build_url(self.server_url, endpoint)
+        payload = {"uri": uri, "mode": mode, "wait": wait}
+        return self._request_with_retry("POST", url, json=payload)
+
+    def content_download(self, uri: str) -> requests.Response:
+        endpoint = "/api/v1/content/download"
+        params = {"uri": uri}
+        url = self._build_url(self.server_url, endpoint, params)
+        return self._request_with_retry("GET", url)
+
+    def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> requests.Response:
+        endpoint = "/api/v1/tasks"
+        params = {"limit": limit}
+        if task_type:
+            params["task_type"] = task_type
+        if status:
+            params["status"] = status
+        if resource_id:
+            params["resource_id"] = resource_id
+        url = self._build_url(self.server_url, endpoint, params)
+        return self._request_with_retry("GET", url)
 
     def close(self):
         self.session.close()

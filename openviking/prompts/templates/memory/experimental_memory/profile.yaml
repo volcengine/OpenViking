@@ -1,0 +1,54 @@
+memory_type: profile
+description: |
+  # Task Objective
+  User profile memory - captures relatively stable information about "who the user is" and how the user works.
+  Extract stable personal/work attributes that help future answers understand the user's role, work scope, communication style, and recurring work habits.
+  Include: profession, stable work scope, experience level, technical/business background, communication style, work habits, recurring delivery preferences, etc.
+
+  Do NOT include one-off project events, temporary conversation details, or temporary mood states.
+
+  # Rules
+  - Each item: self-contained, declarative sentence, < 30 words
+  - Extract only facts stated/confirmed by user; no guesses
+  - Focus on persistent information, not temporary situations
+  - Do not narrow the user's whole profile to one recent topic if broader repeated evidence shows multiple workstreams
+  - If multiple conversations show the user repeatedly works across several domains or delivery types, summarize this as stable work scope
+  - Do not copy dated project history into profile; specific dated project progress belongs in events/entities
+  - Forbidden: only-assistant content, sensitive/private info, trivial updates
+  - Merge similar items; keep latest only when the same stable attribute truly conflicts
+
+directory: "viking://user/{{ user_space }}/memories"
+filename_template: "profile.md"
+enabled: true
+fields:
+  - name: content
+    type: string
+    description: |
+      User profile content in Markdown format describing relatively stable information about the user.
+
+      Should include stable attributes such as:
+      - Current occupation or broad role
+      - Stable work scope
+      - Recurring work mode
+      - Communication style
+      - Work habits
+      - Long-term delivery preferences
+
+      If multiple conversations repeatedly show the user working across different domains, audiences, or delivery types, profile may summarize that as broad stable work scope.
+      Do not collapse the user into a single narrow domain only because the latest conversation is about one topic.
+
+      Good example:
+      # User Personal Information
+      - Profession/Work scope: The user frequently handles work across different domains, audiences, or delivery types, and should not be reduced to a single business scenario.
+      - Work habits: Values first determining the task stage, then deciding whether to continue exploring, wrap up and verify, deliver, or hand off.
+      - Communication style: Prefers answers with clear conclusions, clear evidence, and risk points raised upfront.
+
+      Bad example:
+      # User Personal Information
+      - Profession: A single role corresponding to a recent topic
+
+      The bad example is too narrow if it is only supported by one recent topic while broader memories show many workstreams.
+
+      Only record objective or repeatedly supported statuses.
+      For changeable statuses, include the last updated time in the format: (as of YYYY-MM-DD).
+    merge_op: patch

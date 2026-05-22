@@ -16,15 +16,14 @@ try:
 except ImportError:
     _HTTP_RETRY_AVAILABLE = False
 
-import logging
-
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger("gemini_embedders")
+logger = get_logger(__name__)
 
 _TEXT_BATCH_SIZE = 100
 

@@ -25,9 +25,11 @@ from openviking.service.task_tracker import set_task_tracker
 from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.utils.agfs_utils import resolve_queuefs_mount_point
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
@@ -120,9 +122,11 @@ class OpenVikingService:
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
+            queue_mount_point = resolve_queuefs_mount_point()
             self._queue_manager = init_queue_manager(
                 agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
+                mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
             )
@@ -317,7 +321,10 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
         )
-        self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = create_session_compressor(
+            vikingdb=self._vikingdb_manager,
+            skill_processor=self._skill_processor,
+        )
 
         # Start LockManager if initialized
         if self._lock_manager:
@@ -357,6 +364,7 @@ class OpenVikingService:
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
+            agfs_client=self._agfs_client,
         )
 
         self._initialized = True
@@ -416,6 +424,35 @@ class OpenVikingService:
             wait=wait,
             ctx=effective_ctx,
         )
+
+    async def check_consistency(
+        self,
+        *,
+        uri: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        if not self._initialized:
+            await self.initialize()
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        entries = await self._viking_fs.tree(
+            uri,
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=effective_ctx,
+        )
+        report = await check_index_consistency(
+            self._viking_fs,
+            self._vikingdb_manager,
+            uri,
+            entries,
+            effective_ctx,
+        )
+        return report.to_dict()
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""

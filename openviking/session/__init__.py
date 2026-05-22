@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 def create_session_compressor(
     vikingdb: VikingDBManager,
     memory_version: Optional[str] = None,
+    skill_processor=None,
 ) -> SessionCompressor:
     """
     Create a SessionCompressor instance based on configuration.
@@ -60,14 +61,14 @@ def create_session_compressor(
         try:
             from openviking.session.compressor_v2 import SessionCompressorV2
 
-            return SessionCompressorV2(vikingdb=vikingdb)
+            return SessionCompressorV2(vikingdb=vikingdb, skill_processor=skill_processor)
         except Exception as e:
             logger.warning(f"Failed to load v2 compressor, falling back to v1: {e}")
-            return SessionCompressor(vikingdb=vikingdb)
+            return SessionCompressor(vikingdb=vikingdb, skill_processor=skill_processor)
 
     # Default to v1
     logger.info("Using v1 memory compressor (legacy)")
-    return SessionCompressor(vikingdb=vikingdb)
+    return SessionCompressor(vikingdb=vikingdb, skill_processor=skill_processor)
 
 
 __all__ = [

@@ -124,7 +124,7 @@ while dir_queue:
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| `retrieval.score_propagation_alpha` | 0.5 | 分数传播混合中子节点自身分数的权重；`0.5` 表示 50% 子节点分数 + 50% 父节点分数 |
+| `retrieval.score_propagation_alpha` | 1.0 | 分数传播混合中子节点自身分数的权重；`1.0` 表示仅使用子节点自身分数，忽略父节点分数 |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
 | `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
 | `MAX_RELATIONS` | 5 | 每资源最大关联数 |

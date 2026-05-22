@@ -8,8 +8,6 @@ from typing import Any, Callable, Coroutine
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
-
-
 from vikingbot.session.manager import SessionManager
 
 # Default interval: 30 minutes
@@ -91,7 +89,8 @@ class HeartbeatService:
     def __init__(
         self,
         workspace: Path,
-        on_heartbeat: Callable[[str, str | None, dict[str, Any] | None], Coroutine[Any, Any, str]] | None = None,
+        on_heartbeat: Callable[[str, str | None, dict[str, Any] | None], Coroutine[Any, Any, str]]
+        | None = None,
         interval_s: int = DEFAULT_HEARTBEAT_INTERVAL_S,
         enabled: bool = True,
         sandbox_mode: str = "shared",
@@ -108,9 +107,9 @@ class HeartbeatService:
 
     def _is_session_stale(self, session_info: dict[str, Any]) -> bool:
         """Check whether a session has been inactive for too long."""
-        reference = _parse_session_timestamp(session_info.get("updated_at")) or _parse_session_timestamp(
-            session_info.get("created_at")
-        )
+        reference = _parse_session_timestamp(
+            session_info.get("updated_at")
+        ) or _parse_session_timestamp(session_info.get("created_at"))
         if reference is None:
             return False
 

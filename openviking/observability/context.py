@@ -20,7 +20,6 @@ Key features:
 from __future__ import annotations
 
 import contextvars
-import logging
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -36,8 +35,6 @@ except ImportError:
     otel_trace = None
     format_span_id = None
     format_trace_id = None
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

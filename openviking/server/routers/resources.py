@@ -4,21 +4,21 @@
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import (
-    require_remote_resource_source,
-)
+from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
@@ -137,6 +137,51 @@ async def temp_upload(
         fn=_upload,
     )
     return response_from_result(execution.result, telemetry=execution.telemetry)
+
+
+@router.post("/resources/temp_upload_signed")
+async def temp_upload_signed(
+    request: Request,
+    file: UploadFile = File(...),
+    token: str = Query(..., min_length=1),
+    upload_mode: str = Query("local"),
+):
+    """Upload via short-lived signed token. Used by the MCP progressive-upload flow.
+
+    No identity headers required — the token (issued by ``add_resource`` MCP for local-file
+    paths) carries the bound (account_id, user_id, agent_id). The token is consumed on first
+    use; subsequent attempts return 401. The server mints the ``temp_file_id`` at write time
+    and returns it in the response body; the agent then calls ``add_resource`` with that id.
+
+    Persistence flows through :class:`TempUploadStore`, so the same local/shared upload modes
+    and size limit (``temp_upload.shared_max_size_bytes``) as the auth'd ``/temp_upload`` route
+    apply here too.
+    """
+    try:
+        account_id, user_id, agent_id = upload_token_store.consume(token)
+    except UploadTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    try:
+        ctx = RequestContext(
+            user=UserIdentifier(account_id, user_id, agent_id),
+            role=Role.USER,
+            namespace_policy=AccountNamespacePolicy(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc
+
+    store = TempUploadStore.build(request.app.state.config)
+    try:
+        temp_file_id = await store.save_upload(file, upload_mode, ctx)
+    except InvalidArgumentError as exc:
+        # save_upload raises InvalidArgumentError for both bad mode and oversize.
+        # Map oversize specifically to 413; the rest stay 400.
+        msg = str(exc)
+        status = 413 if "exceeds size limit" in msg else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
+
+    return {"temp_file_id": temp_file_id}
 
 
 @router.post("/resources")

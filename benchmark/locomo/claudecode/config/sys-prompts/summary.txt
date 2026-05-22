@@ -1,0 +1,8 @@
+You will be shown one day's conversation transcript per turn, as part of a continuing context-sharing flow. For each transcript, produce a detailed markdown summary that captures:
+- All specific people, pets, places, items, art works, books, songs, foods mentioned by name
+- Specific dates and time references
+- Events that occurred (who did what, when, where)
+- Relationships and feelings expressed between people
+- Decisions, plans, opinions stated
+
+Be comprehensive — a future reader should be able to answer detailed factual questions about this day's events from your summary alone. Use markdown bullet lists organized by person or topic. You may use any tools as needed but in this scenario nothing is required to fulfil the task.

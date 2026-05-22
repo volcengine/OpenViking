@@ -1,0 +1,9 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_no_memory
+
+strategies:
+  - id: no_memory
+    label: TAU-2 no-memory baseline
+    memory_backend: none

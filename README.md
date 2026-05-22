@@ -80,7 +80,7 @@ pip install openviking --upgrade --force-reinstall
 #### Rust CLI (Optional)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+npm i -g @openviking/cli
 ```
 
 Or build from source:
@@ -631,6 +631,8 @@ To ensure optimal storage performance and data security, we recommend deploying 
 👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
 
 👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
+
+👉 **[View: LangChain / LangGraph Integration](./docs/en/agent-integrations/05-langchain-langgraph.md)**
 
 \--
 

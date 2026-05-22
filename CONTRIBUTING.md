@@ -121,8 +121,8 @@ Even if you do not plan to use `ov` directly, the Rust toolchain is still requir
 # Build and install from source
 cargo install --path crates/ov_cli
 
-# Or use the quick install script (downloads pre-built binary)
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+# Or install the published npm CLI package (downloads pre-built binary)
+npm i -g @openviking/cli
 ```
 
 After installation, run `ov --help` to see all available commands. CLI connection config goes in `~/.openviking/ovcli.conf`.
@@ -161,7 +161,7 @@ openviking/
 ├── crates/               # Rust components
 │   └── ov_cli/           # Rust CLI client
 │       ├── src/          # CLI source code
-│       └── install.sh    # Quick install script
+│       └── install.sh    # Deprecated stub (use npm package; see Install)
 │
 ├── src/                  # C++ extension sources (Python abi3)
 │

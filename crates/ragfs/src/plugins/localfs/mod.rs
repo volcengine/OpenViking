@@ -787,6 +787,20 @@ impl FileSystem for LocalFileSystem {
         Ok(())
     }
 
+    async fn ensure_parent_dirs(&self, path: &str, _mode: u32) -> Result<()> {
+        let local_path = self.resolve_path(path);
+
+        // Get parent directory
+        if let Some(parent) = local_path.parent() {
+            // Create all parent directories if they don't exist
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::plugin(format!("failed to create parent directories: {}", e)))?;
+        }
+
+        Ok(())
+    }
+
     async fn grep(
         &self,
         path: &str,

@@ -104,12 +104,21 @@ class LangfuseClient:
             self._metadata_by_response_id.pop(oldest_response_id, None)
             self._trace_context_by_response_id.pop(oldest_response_id, None)
 
-    def update_generation_metadata(self, response_id: str, metadata: dict[str, Any]) -> None:
-        """Merge provider-side generation metadata for later outcome updates."""
+    def update_generation_metadata(
+        self, response_id: str, metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Merge generation metadata and best-effort sync it to the tracked observation."""
         if not response_id or not metadata:
-            return
+            return self._metadata_by_response_id.get(response_id, {})
         current = self._metadata_by_response_id.setdefault(response_id, {})
         current.update(metadata)
+        generation = self._observations_by_response_id.get(response_id)
+        if generation is not None and hasattr(generation, "update"):
+            try:
+                generation.update(metadata=current)
+            except Exception as e:
+                logger.debug(f"Langfuse update generation metadata error: {e}")
+        return current.copy()
 
     def update_response_outcome(
         self,

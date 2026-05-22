@@ -125,10 +125,19 @@ class LuaExtractor(LanguageExtractor):
 
                 params = _extract_params(params_node, content_bytes)
 
+                fn_start = child.start_point[0] + 1
+                fn_end = child.end_point[0] + 1
                 if name_node.type == "identifier":
                     name = _node_text(name_node, content_bytes)
                     functions.append(
-                        FunctionSig(name=name, params=params, return_type="", docstring=doc)
+                        FunctionSig(
+                            name=name,
+                            params=params,
+                            return_type="",
+                            docstring=doc,
+                            line_start=fn_start,
+                            line_end=fn_end,
+                        )
                     )
                 elif name_node.type in ("dot_index_expression", "method_index_expression"):
                     # M.foo or M:foo — map to class method
@@ -137,11 +146,25 @@ class LuaExtractor(LanguageExtractor):
                         table_name = _node_text(id_children[0], content_bytes)
                         method_name = _node_text(id_children[1], content_bytes)
                         fn = FunctionSig(
-                            name=method_name, params=params, return_type="", docstring=doc
+                            name=method_name,
+                            params=params,
+                            return_type="",
+                            docstring=doc,
+                            line_start=fn_start,
+                            line_end=fn_end,
                         )
                         if table_name not in _classes:
                             _classes[table_name] = ClassSkeleton(
-                                name=table_name, bases=[], docstring="", methods=[]
+                                name=table_name,
+                                bases=[],
+                                docstring="",
+                                methods=[],
+                                line_start=fn_start,
+                                line_end=fn_end,
+                            )
+                        else:
+                            _classes[table_name].line_end = max(
+                                _classes[table_name].line_end, fn_end
                             )
                         _classes[table_name].methods.append(fn)
 

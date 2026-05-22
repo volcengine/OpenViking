@@ -251,7 +251,7 @@ class AsyncOpenViking:
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
-            to: Exact target URI (must not exist yet).
+            to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
@@ -342,6 +342,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """
         Complex search with session context.
@@ -370,6 +371,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            level=level,
         )
 
     async def find(
@@ -383,6 +385,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -396,6 +399,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            level=level,
         )
 
     # ============= FS methods =============
@@ -549,7 +553,12 @@ class AsyncOpenViking:
 
     # ============= Pack methods =============
 
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        include_vectors: bool = False,
+    ) -> str:
         """
         Export specified context path as .ovpack file.
 
@@ -561,9 +570,13 @@ class AsyncOpenViking:
             Exported file path
         """
         await self._ensure_initialized()
-        return await self._client.export_ovpack(uri, to)
+        return await self._client.export_ovpack(
+            uri,
+            to,
+            include_vectors=include_vectors,
+        )
 
-    async def backup_ovpack(self, to: str) -> str:
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
         """
         Back up public OpenViking scopes as a restore-only .ovpack file.
 
@@ -574,13 +587,14 @@ class AsyncOpenViking:
             Exported backup file path
         """
         await self._ensure_initialized()
-        return await self._client.backup_ovpack(to)
+        return await self._client.backup_ovpack(to, include_vectors=include_vectors)
 
     async def import_ovpack(
         self,
         file_path: str,
         parent: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """
         Import local .ovpack file to specified parent path.
@@ -589,6 +603,7 @@ class AsyncOpenViking:
             file_path: Local .ovpack file path
             parent: Target parent URI (e.g., viking://user/alice/resources/references/)
             on_conflict: One of "fail", "overwrite", or "skip"
+            vector_mode: One of "auto", "recompute", or "require"
 
         Returns:
             Imported root resource URI
@@ -598,12 +613,14 @@ class AsyncOpenViking:
             file_path,
             parent,
             on_conflict=on_conflict,
+            vector_mode=vector_mode,
         )
 
     async def restore_ovpack(
         self,
         file_path: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """
         Restore a backup .ovpack file to its original public scope roots.
@@ -611,6 +628,7 @@ class AsyncOpenViking:
         Args:
             file_path: Local backup .ovpack file path
             on_conflict: One of "fail", "overwrite", or "skip"
+            vector_mode: One of "auto", "recompute", or "require"
 
         Returns:
             Restored root URI
@@ -619,9 +637,15 @@ class AsyncOpenViking:
         return await self._client.restore_ovpack(
             file_path,
             on_conflict=on_conflict,
+            vector_mode=vector_mode,
         )
 
     # ============= Debug methods =============
+
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        await self._ensure_initialized()
+        return await self._client.check_consistency(uri)
 
     def get_status(self) -> Union[SystemStatus, Dict[str, Any]]:
         """Get system status.

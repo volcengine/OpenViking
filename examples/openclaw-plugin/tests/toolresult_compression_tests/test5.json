@@ -1,0 +1,18 @@
+[
+  {
+    "id": "t1-structured-ingest",
+    "prompt": "你在做一次会话链路接手。请只读取以下文件，并只关注指定函数：\n1) /root/.openclaw/workspace/openclaw/src/agents/command/session.ts -> resolveSession\n2) /root/.openclaw/workspace/openclaw/src/agents/command/session-store.ts -> updateSessionStoreAfterAgentRun\n3) /root/.openclaw/workspace/openclaw/src/agents/command/delivery.ts -> deliverAgentCommandResult\n4) /root/.openclaw/workspace/openclaw/src/agents/agent-command.ts -> prepareAgentCommandExecution, agentCommandInternal\n输出严格 JSON（仅此结构，不要额外字段）：\n{\n  \"chain_map\": [\n    {\"id\":\"S1\",\"stage\":\"session_resolve\",\"file\":\"\",\"function\":\"resolveSession\",\"input\":\"\",\"output\":\"\"},\n    {\"id\":\"S2\",\"stage\":\"session_store_update\",\"file\":\"\",\"function\":\"updateSessionStoreAfterAgentRun\",\"input\":\"\",\"output\":\"\"},\n    {\"id\":\"S3\",\"stage\":\"delivery\",\"file\":\"\",\"function\":\"deliverAgentCommandResult\",\"input\":\"\",\"output\":\"\"}\n  ],\n  \"evidence_index\": [\n    {\"evidence_id\":\"E1\",\"claim\":\"session key/session id resolution occurs before run\",\"file\":\"\",\"function\":\"\",\"line_hint\":\"\"},\n    {\"evidence_id\":\"E2\",\"claim\":\"usage and token fields are persisted in session store\",\"file\":\"\",\"function\":\"\",\"line_hint\":\"\"},\n    {\"evidence_id\":\"E3\",\"claim\":\"json response envelope is formed at delivery stage\",\"file\":\"\",\"function\":\"\",\"line_hint\":\"\"}\n  ]\n}"
+  },
+  {
+    "id": "t2-fixed-design",
+    "prompt": "基于上轮内容，做最小改造设计（不改代码），并固定目标为 E2 对应问题。输出严格 JSON（仅此结构）：\n{\n  \"target_evidence_id\": \"E2\",\n  \"problem_statement\": \"\",\n  \"minimal_scope\": [\n    {\"file\":\"/root/.openclaw/workspace/openclaw/src/agents/command/session-store.ts\",\"planned_change\":\"\"},\n    {\"file\":\"/root/.openclaw/workspace/openclaw/src/agents/agent-command.ts\",\"planned_change\":\"\"}\n  ],\n  \"invariants\": [\"\", \"\", \"\"],\n  \"rollback\": [\"\", \"\"]\n}"
+  },
+  {
+    "id": "t3-review-evidence-pack",
+    "prompt": "现在要提交设计评审材料。请为 E2 和 E3 各提供一段精确代码证据（每段 8-12 行，保留缩进）。优先基于前文；如果需要精确原文，请从第一轮已采集引用中回取。输出严格 JSON：\n{\n  \"evidence_pack\": [\n    {\"evidence_id\":\"E2\",\"file\":\"\",\"function\":\"\",\"line_range_hint\":\"\",\"code_snippet\":\"\"},\n    {\"evidence_id\":\"E3\",\"file\":\"\",\"function\":\"\",\"line_range_hint\":\"\",\"code_snippet\":\"\"}\n  ]\n}"
+  },
+  {
+    "id": "t4-final-summary",
+    "prompt": "输出交付摘要，严格 JSON（仅此结构）：\n{\n  \"context\": \"\",\n  \"root_cause_hypothesis\": \"\",\n  \"proposed_change\": \"\",\n  \"expected_impact\": \"\",\n  \"known_risks\": \"\",\n  \"next_step\": \"\",\n  \"traceability\": [\n    {\"claim\":\"session resolution\",\"evidence_id\":\"E1\"},\n    {\"claim\":\"usage persistence\",\"evidence_id\":\"E2\"},\n    {\"claim\":\"delivery envelope\",\"evidence_id\":\"E3\"}\n  ]\n}"
+  }
+]

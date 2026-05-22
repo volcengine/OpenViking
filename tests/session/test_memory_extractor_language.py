@@ -65,7 +65,7 @@ def test_detect_output_language_japanese_kana_and_kanji():
             "\u4eca\u65e5\u306f\u65b0\u6a5f\u80fd\u306e\u8a2d\u8a08\u3092\u9032\u3081\u307e\u3059",
         )
     ]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ja")
     assert language == "ja"
 
 
@@ -73,7 +73,7 @@ def test_detect_output_language_chinese_han_only():
     messages = [
         _msg("user", "\u4eca\u5929\u7ee7\u7eed\u4f18\u5316\u8bb0\u5fc6\u62bd\u53d6\u6a21\u5757")
     ]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ja")
     assert language == "zh-CN"
 
 
@@ -84,21 +84,21 @@ def test_detect_output_language_japanese_with_more_han_than_kana():
             "\u65b0\u6a5f\u80fd\u8a2d\u8a08\u306e\u65b9\u91dd\u3092\u78ba\u8a8d\u3057\u307e\u3059",
         )
     ]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ja")
     assert language == "ja"
 
 
 def test_detect_output_language_chinese_with_single_cyrillic():
     """Mixed Chinese with single Cyrillic char should be detected as Chinese, not Russian."""
     messages = [_msg("user", "\u8fd9\u662f\u4e2d\u6587 \u0414 \u518d\u7ee7\u7eed")]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ru")
     assert language == "zh-CN"
 
 
 def test_detect_output_language_japanese_with_single_cyrillic():
     """Mixed Japanese with single Cyrillic char should be detected as Japanese, not Russian."""
     messages = [_msg("user", "\u3053\u308c\u306f\u65e5\u672c\u8a9e \u042f ")]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ja")
     assert language == "ja"
 
 
@@ -110,7 +110,7 @@ def test_detect_output_language_russian_with_threshold():
             "\u042d\u0442\u043e \u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442",
         )
     ]
-    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="ru")
     assert language == "ru"
 
 
@@ -119,3 +119,14 @@ def test_detect_output_language_insufficient_cyrillic_fallback():
     messages = [_msg("user", "Hello \u0424 world")]
     language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
     assert language == "en"
+
+
+def test_detect_output_language_italian():
+    messages = [
+        _msg(
+            "user",
+            "Questo documento descrive le preferenze dell utente e il progetto da completare.",
+        )
+    ]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="it")
+    assert language == "it"

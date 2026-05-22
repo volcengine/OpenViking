@@ -54,7 +54,11 @@ CONVERSATION_1 = [
     {"role_id": "agent-a", "role": "assistant", "content": "好的记住了"},
     # user 告诉 agent 它的身份和风格
     {"role_id": "alice", "role": "user", "content": "你叫 Agent A，是我的技术助手，说话要简洁专业"},
-    {"role_id": "agent-a", "role": "assistant", "content": "好的，我记下了，我是 Agent A，技术助手，简洁专业"},
+    {
+        "role_id": "agent-a",
+        "role": "assistant",
+        "content": "好的，我记下了，我是 Agent A，技术助手，简洁专业",
+    },
 ]
 
 CONVERSATION_2 = [
@@ -63,7 +67,11 @@ CONVERSATION_2 = [
     {"role_id": "agent-b", "role": "assistant", "content": "好的"},
     # user 告诉另一个 agent 它的身份和风格
     {"role_id": "alice", "role": "user", "content": "你叫 Agent B，是我的生活助手，说话要亲切详细"},
-    {"role_id": "agent-b", "role": "assistant", "content": "好的，我记下了，我是 Agent B，生活助手，亲切详细"},
+    {
+        "role_id": "agent-b",
+        "role": "assistant",
+        "content": "好的，我记下了，我是 Agent B，生活助手，亲切详细",
+    },
 ]
 
 CONVERSATION_3 = [
@@ -139,13 +147,11 @@ def verify_isolation(url: str, api_key: str, account: str):
         ("密码", True, "alice", "agent-a", "alice+agent-a 应该能看到密码记忆"),
         ("密码", False, "alice", "agent-b", "alice+agent-b 不应看到密码"),
         ("蓝色", False, "alice", "agent-a", "alice+agent-a 不应看到颜色"),
-
         # === Agent Soul 记忆测试 ===
         # agent-a 的身份是"技术助手，简洁专业"
         ("技术助手", True, "alice", "agent-a", "alice+agent-a 应该能看到 agent-a 的 soul"),
         ("技术助手", False, "alice", "agent-b", "alice+agent-b 不应看到 agent-a 的 soul"),
         ("编程助手", False, "alice", "agent-b", "alice+agent-b 不应看到 agent-a 的 soul"),
-
         # agent-b 的身份是"生活助手，亲切详细"
         ("生活助手", True, "alice", "agent-b", "alice+agent-b 应该能看到 agent-b 的 soul"),
         ("生活助手", False, "alice", "agent-a", "alice+agent-a 不应看到 agent-b 的 soul"),
@@ -204,11 +210,13 @@ def verify_isolation(url: str, api_key: str, account: str):
 
 
 def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> list:
-    console.print(Panel(
-        f"[bold cyan]测试 Account: {account}[/bold cyan]",
-        style="magenta",
-        width=PANEL_WIDTH,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]测试 Account: {account}[/bold cyan]",
+            style="magenta",
+            width=PANEL_WIDTH,
+        )
+    )
 
     # 用 root key 创建 client
     client = ov.SyncHTTPClient(
@@ -240,7 +248,9 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
                 },
             )
             if resp.status_code == 200:
-                console.print(f"    - 账号 {account} 已创建 (user={isolate_user}, agent={isolate_agent})")
+                console.print(
+                    f"    - 账号 {account} 已创建 (user={isolate_user}, agent={isolate_agent})"
+                )
             elif "already exists" in resp.text:
                 console.print(f"    - 账号 {account} 已存在")
             else:
@@ -278,7 +288,7 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
             console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
 
         # 等待向量化完成
-        console.print(f"  [yellow]等待向量化完成...[/yellow]")
+        console.print("  [yellow]等待向量化完成...[/yellow]")
         client.wait_processed()
 
         # 验证隔离
@@ -287,6 +297,7 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
     except Exception as e:
         console.print(f"  [red]Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
         return []
 
@@ -303,19 +314,25 @@ def main():
     parser = argparse.ArgumentParser(description="群聊记忆测试 - 测试数据隔离")
     parser.add_argument("--url", default=DEFAULT_URL, help="Server URL")
     parser.add_argument("--root-key", default="default", help="Root API Key (默认: default)")
-    parser.add_argument("--mode", choices=["all", "ff", "ft", "tf", "tt"], default="all",
-                        help="测试模式: all=4种都测, ff/ft/tf/tt=只测指定模式")
-    parser.add_argument("--account", default=None,
-                        help="直接指定 account 名称（优先级高于 --mode）")
+    parser.add_argument(
+        "--mode",
+        choices=["all", "ff", "ft", "tf", "tt"],
+        default="all",
+        help="测试模式: all=4种都测, ff/ft/tf/tt=只测指定模式",
+    )
+    parser.add_argument(
+        "--account", default=None, help="直接指定 account 名称（优先级高于 --mode）"
+    )
     parser.add_argument("--wait", type=float, default=5.0, help="提交后等待秒数")
     args = parser.parse_args()
 
-    console.print(Panel(
-        "[bold]OpenViking 数据隔离测试[/bold]\n"
-        f"Server: {args.url}",
-        style="magenta",
-        width=PANEL_WIDTH,
-    ))
+    console.print(
+        Panel(
+            f"[bold]OpenViking 数据隔离测试[/bold]\nServer: {args.url}",
+            style="magenta",
+            width=PANEL_WIDTH,
+        )
+    )
 
     # 确定要测试的账号列表
     default_accounts = ["test-ff", "test-ft", "test-tf", "test-tt"]
@@ -334,18 +351,22 @@ def main():
         console.print()
 
     # 打印汇总
-    trace_info = "\n".join(f"  {acc}: {', '.join(tids)}" for acc, tids in all_trace_ids.items() if tids)
-    console.print(Panel(
-        f"[bold green]测试完成![/bold green]\n\n"
-        f"Trace IDs:\n{trace_info}\n\n"
-        "预期结果差异：\n"
-        "  ff: isolate_user=F, isolate_agent=F → 全部 ✓ (都不隔离)\n"
-        "  ft: isolate_user=F, isolate_agent=T → 3个 ✓ (只隔离 agent)\n"
-        "  tf: isolate_user=T, isolate_agent=F → 3个 ✓ (只隔离 user)\n"
-        "  tt: isolate_user=T, isolate_agent=T → 全部 ✓ (都隔离)",
-        style="green",
-        width=PANEL_WIDTH,
-    ))
+    trace_info = "\n".join(
+        f"  {acc}: {', '.join(tids)}" for acc, tids in all_trace_ids.items() if tids
+    )
+    console.print(
+        Panel(
+            f"[bold green]测试完成![/bold green]\n\n"
+            f"Trace IDs:\n{trace_info}\n\n"
+            "预期结果差异：\n"
+            "  ff: isolate_user=F, isolate_agent=F → 全部 ✓ (都不隔离)\n"
+            "  ft: isolate_user=F, isolate_agent=T → 3个 ✓ (只隔离 agent)\n"
+            "  tf: isolate_user=T, isolate_agent=F → 3个 ✓ (只隔离 user)\n"
+            "  tt: isolate_user=T, isolate_agent=T → 全部 ✓ (都隔离)",
+            style="green",
+            width=PANEL_WIDTH,
+        )
+    )
 
 
 if __name__ == "__main__":

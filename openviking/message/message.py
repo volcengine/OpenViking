@@ -108,6 +108,36 @@ class Message:
                 d["prompt_tokens"] = part.prompt_tokens
             if part.completion_tokens is not None:
                 d["completion_tokens"] = part.completion_tokens
+            if part.tool_output_ref:
+                d["tool_output_ref"] = part.tool_output_ref
+            if part.tool_output_truncated:
+                d["tool_output_truncated"] = part.tool_output_truncated
+            if part.tool_output_original_chars is not None:
+                d["tool_output_original_chars"] = part.tool_output_original_chars
+            if part.tool_output_preview_chars is not None:
+                d["tool_output_preview_chars"] = part.tool_output_preview_chars
+            if part.tool_output_sha256:
+                d["tool_output_sha256"] = part.tool_output_sha256
+            if part.tool_output_storage_uri:
+                d["tool_output_storage_uri"] = part.tool_output_storage_uri
+            if part.tool_output_mime_type and part.tool_output_mime_type != "text/plain":
+                d["tool_output_mime_type"] = part.tool_output_mime_type
+            if part.tool_output_source_ref:
+                d["tool_output_source_ref"] = part.tool_output_source_ref
+            if part.tool_output_source_offset is not None:
+                d["tool_output_source_offset"] = part.tool_output_source_offset
+            if part.tool_output_source_limit is not None:
+                d["tool_output_source_limit"] = part.tool_output_source_limit
+            if part.tool_output_externalization_error:
+                d["tool_output_externalization_error"] = part.tool_output_externalization_error
+            if part.tool_output_group_id:
+                d["tool_output_group_id"] = part.tool_output_group_id
+            if part.tool_output_externalized_reason:
+                d["tool_output_externalized_reason"] = part.tool_output_externalized_reason
+            if part.tool_output_group_original_chars is not None:
+                d["tool_output_group_original_chars"] = part.tool_output_group_original_chars
+            if part.tool_output_group_budget_chars is not None:
+                d["tool_output_group_budget_chars"] = part.tool_output_group_budget_chars
             return d
         return {}
 
@@ -147,6 +177,25 @@ class Message:
                         duration_ms=p.get("duration_ms"),
                         prompt_tokens=p.get("prompt_tokens"),
                         completion_tokens=p.get("completion_tokens"),
+                        tool_output_ref=p.get("tool_output_ref", ""),
+                        tool_output_truncated=bool(p.get("tool_output_truncated", False)),
+                        tool_output_original_chars=p.get("tool_output_original_chars"),
+                        tool_output_preview_chars=p.get("tool_output_preview_chars"),
+                        tool_output_sha256=p.get("tool_output_sha256", ""),
+                        tool_output_storage_uri=p.get("tool_output_storage_uri", ""),
+                        tool_output_mime_type=p.get("tool_output_mime_type", "text/plain"),
+                        tool_output_source_ref=p.get("tool_output_source_ref", ""),
+                        tool_output_source_offset=p.get("tool_output_source_offset"),
+                        tool_output_source_limit=p.get("tool_output_source_limit"),
+                        tool_output_externalization_error=p.get(
+                            "tool_output_externalization_error", ""
+                        ),
+                        tool_output_group_id=p.get("tool_output_group_id", ""),
+                        tool_output_externalized_reason=p.get(
+                            "tool_output_externalized_reason", ""
+                        ),
+                        tool_output_group_original_chars=p.get("tool_output_group_original_chars"),
+                        tool_output_group_budget_chars=p.get("tool_output_group_budget_chars"),
                     )
                 )
         return cls(

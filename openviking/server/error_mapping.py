@@ -9,9 +9,10 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
     AGFSHTTPError,
+    AGFSNotFoundError,
     AGFSTimeoutError,
 )
-from openviking.storage.errors import ResourceBusyError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -366,6 +367,8 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
 def is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, FileNotFoundError):
         return True
+    if isinstance(exc, AGFSNotFoundError):
+        return True
     if isinstance(exc, AGFSHTTPError) and exc.status_code == 404:
         return True
     message = str(exc).lower()
@@ -404,7 +407,21 @@ def map_exception(
     if isinstance(exc, OpenVikingError):
         return exc
     if isinstance(exc, ResourceBusyError):
-        return ConflictError(str(exc), resource=resource)
+        details: dict[str, Any] = {
+            "resource": exc.uri or resource,
+            "uri": exc.uri or resource,
+            "conflict_type": exc.conflict_type,
+            "retryable": exc.retryable,
+        }
+        return OpenVikingError(str(exc), code="CONFLICT", details=details)
+    if isinstance(exc, LockAcquisitionError):
+        details = {
+            "resource": resource,
+            "uri": resource,
+            "conflict_type": "path_busy",
+            "retryable": True,
+        }
+        return OpenVikingError(str(exc), code="CONFLICT", details=details)
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):

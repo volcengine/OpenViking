@@ -3,6 +3,27 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.17 (2026-05-15)
+
+### Highlights
+
+- **Agent Integrations**: New LangChain and LangGraph integration via `openviking.integrations.langchain` (`OpenVikingRetriever`, `with_openviking_context()`, `OpenVikingChatMessageHistory`, `OpenVikingContextMiddleware`, `OpenVikingStore` as a LangGraph store, `create_openviking_tools()`); revamped Codex / OpenCode plugins use lifecycle hooks for auto-recall, incremental capture, and PreCompact commit, and connect directly to the native `/mcp` endpoint.
+- **OVPack v2 and full backup/restore**: `ov export` / `ov import` support v2 manifests, file checksums, portable index scalar fields, optional dense vector snapshots, and conflict policies; new `ov backup` / `ov restore` cover full public-scope migration.
+- **Native CLI distribution**: New `@openviking/cli` npm package installs the platform `ov` binary via `npm i -g @openviking/cli`; Rust CLI release pipeline adds Linux musl artifacts, npm trusted publishing, and a broader integration test suite.
+- **Retrieval and filesystem**: `find` / `search` accept a `level` filter for L0 abstracts, L1 overviews, and L2 file hits. Resource files gained a Phase 1 WebDAV adapter, and `observer.filesystem` exposes filesystem-level observability.
+- **Console and Usage/Audit**: New Usage/Audit module and `/api/v1/console/*` BFF aggregate token usage, retrieval counts, context commit heatmaps, request audit logs, and context inventory from the existing observability event bus.
+- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; `storage.task_tracker.backend` adds a `persistent` backend for cross-instance task lookup.
+
+### Upgrade Notes
+
+- `storage.task_tracker.backend` is new. Single-instance deployments can keep the default `memory`; multi-instance or restart-survivable deployments should switch to `persistent`.
+- `vlm.backup` is a single-tier failover and only triggers on retryable errors (rate limit, `5xx`, connection failure, timeout). Auth, authorization, and billing failures do not trigger failover.
+- `vlm.extra_request_body` is merged into the OpenAI SDK / LiteLLM `extra_body`, useful for Ollama, OpenAI-compatible gateways, and providers requiring extra JSON fields.
+- New Codex memory plugin deployments should prefer `OPENVIKING_*` environment variables for tuning; the legacy `codex.*` block in `ov.conf` remains supported for backward compatibility but is no longer recommended.
+- OVPack dense vector snapshots require pure dense indexes; embedding provider, model, input, parameters, and dimension must match. Mismatches fall back to recompute under `--vector-mode auto` or fail under `--vector-mode require`.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.16...v0.3.17)
+
 ## v0.3.14 (2026-04-30)
 
 ### Highlights

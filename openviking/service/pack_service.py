@@ -10,10 +10,10 @@ from typing import Optional
 
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
-from openviking.storage.local_fs import backup_ovpack as local_backup_ovpack
-from openviking.storage.local_fs import export_ovpack as local_export_ovpack
-from openviking.storage.local_fs import import_ovpack as local_import_ovpack
-from openviking.storage.local_fs import restore_ovpack as local_restore_ovpack
+from openviking.storage.ovpack.operations import backup_ovpack as local_backup_ovpack
+from openviking.storage.ovpack.operations import export_ovpack as local_export_ovpack
+from openviking.storage.ovpack.operations import import_ovpack as local_import_ovpack
+from openviking.storage.ovpack.operations import restore_ovpack as local_restore_ovpack
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
@@ -43,7 +43,13 @@ class PackService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def export_ovpack(self, uri: str, to: str, ctx: RequestContext) -> str:
+    async def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        ctx: RequestContext,
+        include_vectors: bool = False,
+    ) -> str:
         """Export specified context path as .ovpack file.
 
         Args:
@@ -61,9 +67,15 @@ class PackService:
             to,
             ctx=ctx,
             vector_store=self._vector_store,
+            include_vectors=include_vectors,
         )
 
-    async def backup_ovpack(self, to: str, ctx: RequestContext) -> str:
+    async def backup_ovpack(
+        self,
+        to: str,
+        ctx: RequestContext,
+        include_vectors: bool = False,
+    ) -> str:
         """Back up all public OpenViking scopes as a restore-only .ovpack file."""
         viking_fs = self._ensure_initialized()
         return await local_backup_ovpack(
@@ -71,6 +83,7 @@ class PackService:
             to,
             ctx=ctx,
             vector_store=self._vector_store,
+            include_vectors=include_vectors,
         )
 
     async def import_ovpack(
@@ -79,6 +92,7 @@ class PackService:
         parent: str,
         ctx: RequestContext,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import local .ovpack file to specified parent path.
 
@@ -97,6 +111,8 @@ class PackService:
             file_path,
             parent,
             on_conflict=on_conflict,
+            vector_mode=vector_mode,
+            vector_store=self._vector_store,
             ctx=ctx,
         )
 
@@ -105,6 +121,7 @@ class PackService:
         file_path: str,
         ctx: RequestContext,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Restore a backup .ovpack file to its original public scope roots."""
         viking_fs = self._ensure_initialized()
@@ -113,4 +130,6 @@ class PackService:
             file_path,
             ctx=ctx,
             on_conflict=on_conflict,
+            vector_mode=vector_mode,
+            vector_store=self._vector_store,
         )

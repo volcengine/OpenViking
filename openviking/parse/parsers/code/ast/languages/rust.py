@@ -47,7 +47,14 @@ def _extract_function(node, content_bytes: bytes, docstring: str = "") -> Functi
         elif child.type == "generic_type":
             return_type = _node_text(child, content_bytes)
 
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_struct_or_trait(node, content_bytes: bytes, docstring: str = "") -> ClassSkeleton:
@@ -62,7 +69,14 @@ def _extract_struct_or_trait(node, content_bytes: bytes, docstring: str = "") ->
                 if sub.type == "type_identifier":
                     bases.append(_node_text(sub, content_bytes))
 
-    return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=[])
+    return ClassSkeleton(
+        name=name,
+        bases=bases,
+        docstring=docstring,
+        methods=[],
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_impl(node, content_bytes: bytes) -> ClassSkeleton:
@@ -80,7 +94,14 @@ def _extract_impl(node, content_bytes: bytes) -> ClassSkeleton:
                     doc = _preceding_doc(siblings, idx, content_bytes)
                     methods.append(_extract_function(sub, content_bytes, docstring=doc))
 
-    return ClassSkeleton(name=f"impl {name}", bases=[], docstring="", methods=methods)
+    return ClassSkeleton(
+        name=f"impl {name}",
+        bases=[],
+        docstring="",
+        methods=methods,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 class RustExtractor(LanguageExtractor):

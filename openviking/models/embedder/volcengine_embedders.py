@@ -14,6 +14,7 @@ from openviking.models.embedder.base import (
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -97,9 +98,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._ark_kwargs = ark_kwargs
-        self._async_client = None
-        self._ark_kwargs = ark_kwargs
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
         self._dimension = dimension
@@ -184,9 +183,9 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
-        return self._async_client
+        return self._async_client_cache.get(
+            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+        )
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
@@ -340,7 +339,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._ark_kwargs = ark_kwargs
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -407,9 +406,9 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
-        return self._async_client
+        return self._async_client_cache.get(
+            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+        )
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
@@ -528,7 +527,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._ark_kwargs = ark_kwargs
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
         self._dimension = dimension or 2048
 
     def _update_telemetry_token_usage(self, response) -> None:
@@ -601,9 +600,9 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        if self._async_client is None:
-            self._async_client = volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
-        return self._async_client
+        return self._async_client_cache.get(
+            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+        )
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()

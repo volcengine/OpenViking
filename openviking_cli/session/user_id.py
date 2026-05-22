@@ -1,9 +1,10 @@
 import hashlib
-import logging
 import re
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 # Validation pattern reused across different modules
 # Note: hyphen (-) must be at the end or escaped to avoid being interpreted as a range

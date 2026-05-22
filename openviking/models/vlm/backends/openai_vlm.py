@@ -4,13 +4,14 @@
 
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking_cli.utils import get_logger
 
 try:
     import openai
@@ -22,7 +23,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _DASHSCOPE_HOSTS = {
@@ -79,7 +80,7 @@ class OpenAIVLM(VLMBase):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._sync_client = None
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
 
@@ -102,24 +103,25 @@ class OpenAIVLM(VLMBase):
                 self._sync_client = openai.OpenAI(**kwargs)
         return self._sync_client
 
+    def _build_async_client(self):
+        """Create an async client for the current backend."""
+        if openai is None:
+            raise ImportError("Please install openai: pip install openai")
+        kwargs = _build_openai_client_kwargs(
+            self.provider,
+            self.api_key,
+            self.api_base,
+            self.api_version,
+            self.extra_headers,
+            self.timeout,
+        )
+        if self.provider == "azure":
+            return openai.AsyncAzureOpenAI(**kwargs)
+        return openai.AsyncOpenAI(**kwargs)
+
     def get_async_client(self):
-        """Get async client"""
-        if self._async_client is None:
-            if openai is None:
-                raise ImportError("Please install openai: pip install openai")
-            kwargs = _build_openai_client_kwargs(
-                self.provider,
-                self.api_key,
-                self.api_base,
-                self.api_version,
-                self.extra_headers,
-                self.timeout,
-            )
-            if self.provider == "azure":
-                self._async_client = openai.AsyncAzureOpenAI(**kwargs)
-            else:
-                self._async_client = openai.AsyncOpenAI(**kwargs)
-        return self._async_client
+        """Get an async client scoped to the current event loop."""
+        return self._async_client_cache.get(self._build_async_client)
 
     def _supports_enable_thinking(self) -> bool:
         """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
@@ -141,8 +143,11 @@ class OpenAIVLM(VLMBase):
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
+        extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
-            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
+            extra_body["enable_thinking"] = bool(thinking)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
     def _update_token_usage_from_response(
         self,
@@ -205,8 +210,9 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
@@ -218,7 +224,7 @@ class OpenAIVLM(VLMBase):
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
-        self._apply_provider_specific_extra_body(kwargs, thinking)
+        self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         max_tokens = self.max_tokens or 32768
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
@@ -233,8 +239,9 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -255,7 +262,7 @@ class OpenAIVLM(VLMBase):
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
-        self._apply_provider_specific_extra_body(kwargs, thinking)
+        self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         max_tokens = self.max_tokens or 32768
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
@@ -276,14 +283,15 @@ class OpenAIVLM(VLMBase):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, thinking)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -305,14 +313,15 @@ class OpenAIVLM(VLMBase):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, thinking)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -388,13 +397,17 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(
+            prompt, images, tools, tool_choice, messages, effective_thinking
+        )
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -416,13 +429,17 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
+        effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
+        kwargs = self._build_vision_kwargs(
+            prompt, images, tools, tool_choice, messages, effective_thinking
+        )
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

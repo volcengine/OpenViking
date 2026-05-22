@@ -4,9 +4,9 @@
 """
 Runtime utilities for the metrics subsystem.
 
-Currently this module defines a small in-process event router:
-- DataSources emit events by calling `openviking.metrics.global_api.try_dispatch_event(...)`.
-- The global API routes events to the matching Collector handler.
+Currently this module defines the metrics subscriber's event router:
+- DataSources publish events to the shared observability event bus.
+- Metrics subscribes with this router and routes each event to the matching Collector handler.
 
 This avoids wiring MetricRegistry into business code and keeps the write-path
 restricted to Collector implementations.

@@ -4,15 +4,14 @@ import argparse
 import json
 import os
 import shutil
-from urllib.parse import urlparse
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-
 
 PLAYER_IDS = [f"player_{i}" for i in range(1, 7)]
 WEREWOLF_CHANNEL_IDS = ["god", *PLAYER_IDS]
@@ -206,7 +205,11 @@ def prepare_workspace(workspace: Path) -> None:
 
 
 def validate_assets() -> None:
-    missing = [str(path) for path in (SOUL_GOD_PATH, SOUL_PLAYER_PATH, WEREWOLF_SERVER_PATH) if not path.exists()]
+    missing = [
+        str(path)
+        for path in (SOUL_GOD_PATH, SOUL_PLAYER_PATH, WEREWOLF_SERVER_PATH)
+        if not path.exists()
+    ]
     if missing:
         raise FileNotFoundError("Missing required demo files: " + ", ".join(missing))
 

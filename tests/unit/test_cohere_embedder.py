@@ -87,9 +87,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -113,9 +111,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -134,9 +130,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -156,9 +150,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024, [0.2] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024, [0.2] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
