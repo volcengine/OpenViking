@@ -1,40 +1,7 @@
 import argparse
 import csv
-import importlib
 import json
 import os
-import sys
-
-csv.field_size_limit(sys.maxsize)
-
-
-def _extract_engine(argv: list[str]) -> tuple[str, list[str]]:
-    engine = "vikingbot"
-    cleaned: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--engine":
-            if i + 1 >= len(argv):
-                raise SystemExit("--engine requires a value")
-            engine = argv[i + 1]
-            i += 2
-            continue
-        cleaned.append(arg)
-        i += 1
-    if engine not in {"vikingbot", "openviking"}:
-        raise SystemExit(f"Unsupported engine: {engine}")
-    return engine, cleaned
-
-
-def _delegate_openviking(argv: list[str]) -> None:
-    module = importlib.import_module("benchmark.locomo.openviking.stat_judge_result")
-    original_argv = sys.argv[:]
-    try:
-        sys.argv = [original_argv[0], *argv]
-        module.main()
-    finally:
-        sys.argv = original_argv
 
 
 def make_table(title: str, rows: list[tuple[str, str]]) -> list[str]:
@@ -55,24 +22,18 @@ def format_int(value: int) -> str:
     return f"{value:,}"
 
 
-def main(argv: list[str] | None = None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    engine, cleaned_argv = _extract_engine(argv)
-    if engine == "openviking":
-        _delegate_openviking(cleaned_argv)
-        return
-
+def main():
     parser = argparse.ArgumentParser(description="Statistics for judge result csv")
     parser.add_argument(
         "--input",
         default="./result/locomo_qa_result_only_sys_memory.csv",
         help="Path to judge result csv file, default: ./result/judge_result.csv",
     )
-    args = parser.parse_args(cleaned_argv)
+    args = parser.parse_args()
 
     if not os.path.exists(args.input):
         print(f"Error: File not found: {args.input}")
-        raise SystemExit(1)
+        exit(1)
 
     correct = 0
     wrong = 0

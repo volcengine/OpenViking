@@ -1,45 +1,14 @@
 import argparse
-import csv
-import importlib
 import json
+import subprocess
+import time
+import csv
 import os
 import re
-import subprocess
-import sys
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-
-
-def _extract_engine(argv: list[str]) -> tuple[str, list[str]]:
-    engine = "vikingbot"
-    cleaned: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--engine":
-            if i + 1 >= len(argv):
-                raise SystemExit("--engine requires a value")
-            engine = argv[i + 1]
-            i += 2
-            continue
-        cleaned.append(arg)
-        i += 1
-    if engine not in {"vikingbot", "openviking"}:
-        raise SystemExit(f"Unsupported engine: {engine}")
-    return engine, cleaned
-
-
-def _delegate_openviking(argv: list[str]) -> None:
-    module = importlib.import_module("benchmark.locomo.openviking.run_eval")
-    original_argv = sys.argv[:]
-    try:
-        sys.argv = [original_argv[0], *argv]
-        module.main()
-    finally:
-        sys.argv = original_argv
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -154,7 +123,11 @@ def load_locomo_qa(
     question_index: int | None = None,
     invalid_questions: set | None = None,
 ) -> list[dict]:
-    """加载LoCoMo数据集的QA部分，支持JSON和CSV格式"""
+    """加载LoCoMo数据集的QA部分，支持JSON和CSV格式
+
+    Args:
+        invalid_questions: 无效题目问题内容集合，用于标记无效题目
+    """
     if input_path.lower().endswith(".csv"):
         return load_csv_qa(input_path, count, default_time)
 
@@ -180,9 +153,16 @@ def load_locomo_qa(
     else:
         samples = data
 
-    for sample in samples:
+    for s_idx, sample in enumerate(samples):
         original_id = sample.get("sample_id", "")
-        data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+        # Find the sample's index in the full dataset
+        if sample_index is not None:
+            try:
+                data_idx = int(sample_index)
+            except ValueError:
+                data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+        else:
+            data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
         sample_id = f"sample_{data_idx}"
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
@@ -202,8 +182,6 @@ def load_locomo_qa(
                     f"question index {question_index} out of range (0-{len(qa_items) - 1})"
                 )
             qa = qa_items[question_index]
-            if qa.get("category") == 5:
-                continue
             evidence_list = qa.get("evidence", [])
             question_id = f"{sample_id}_qa{question_index}"
             qa_list.append(
@@ -226,8 +204,6 @@ def load_locomo_qa(
             )
         else:
             for q_idx, qa in enumerate(qa_items):
-                if qa.get("category") == 5:
-                    continue
                 evidence_list = qa.get("evidence", [])
                 question_id = f"{sample_id}_qa{q_idx}"
                 qa_list.append(
@@ -261,7 +237,7 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_users: list[str] | None = None,
-) -> tuple[str, dict, float, int, list, str, str]:
+) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
     if sample_id:
@@ -281,6 +257,7 @@ def run_vikingbot_chat(
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
         try:
+            # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
             # 忽略 /new 命令的错误
@@ -288,14 +265,14 @@ def run_vikingbot_chat(
 
     # 如果有 question_time，注入到 prompt 中
     if question_time:
-        prompt = f"Current date: {question_time}. Answer the question directly: {question}"
+        input = f"Current date: {question_time}. Answer the question directly: {question}"
     else:
-        prompt = f"Answer the question directly: {question}"
+        input = f"Answer the question directly: {question}"
 
     cmd = ["vikingbot", "chat"]
     if config:
         cmd.extend(["--config", config])
-    cmd.extend(["-m", prompt, "-e"])
+    cmd.extend(["-m", input, "-e"])
     # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
@@ -305,11 +282,13 @@ def run_vikingbot_chat(
             cmd.extend(["--memory-user", user])
     start_time = time.time()
     try:
+        # print(f'cmd={cmd}')
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
         end_time = time.time()
         time_cost = end_time - start_time
 
         output = result.stdout.strip()
+        # 解析返回的json结果，处理换行、多余前缀等特殊情况
         try:
             resp_json = json.loads(output, strict=False)
             response = resp_json.get("text", "")
@@ -319,24 +298,12 @@ def run_vikingbot_chat(
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
-            relevant_memories = resp_json.get("relevant_memories", "")
-            debug_trace = json.dumps(resp_json.get("debug_trace", {}), ensure_ascii=False)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as e:
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-            relevant_memories = ""
-            debug_trace = ""
-        return (
-            response,
-            token_usage,
-            time_cost,
-            iteration,
-            tools_used_names,
-            relevant_memories,
-            debug_trace,
-        )
+        return response, token_usage, time_cost, iteration, tools_used_names
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -344,18 +311,15 @@ def run_vikingbot_chat(
             0,
             0,
             [],
-            "",
-            "",
         )
     except subprocess.TimeoutExpired:
+        time_cost = 0
         return (
             "[TIMEOUT]",
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            0,
+            time_cost,
             0,
             [],
-            "",
-            "",
         )
 
 
@@ -372,8 +336,6 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
             if question:
                 processed_questions.add(question)
     return processed_questions
-
-
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
@@ -384,13 +346,8 @@ def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> Non
         writer.writerow(row)
 
 
-def main(argv: list[str] | None = None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    engine, cleaned_argv = _extract_engine(argv)
-    if engine == "openviking":
-        _delegate_openviking(cleaned_argv)
-        return
-
+def main():
+    # 基于脚本所在目录计算默认数据文件路径
     script_dir = Path(__file__).parent.resolve()
     default_input = str(script_dir / ".." / "data" / "locomo10.json")
     default_errors = str(script_dir / ".." / "data" / "errors.json")
@@ -456,7 +413,7 @@ def main(argv: list[str] | None = None):
         action="store_true",
         help="Skip questions already present in the output file",
     )
-    args = parser.parse_args(cleaned_argv)
+    args = parser.parse_args()
 
     # 如果指定了 question-index，自动设置 count=1
     if args.question_index is not None and args.count is None:
@@ -471,6 +428,7 @@ def main(argv: list[str] | None = None):
     if os.path.exists(errors_path):
         with open(errors_path, "r", encoding="utf-8") as f:
             errors_data = json.load(f)
+        # 按问题内容建立集合
         if errors_data and isinstance(errors_data[0], dict):
             invalid_questions = {item["question"] for item in errors_data}
         else:
@@ -512,6 +470,10 @@ def main(argv: list[str] | None = None):
         qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
         print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
 
+    # 过滤掉 category=5 的问题
+    qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]
+    print(f"Filtered to {len(qa_list)} questions after removing category=5")
+
     # 加载已处理的问题
     processed_questions = load_processed_questions(args.output, skip_done=args.skip_done)
     remaining = total - len(processed_questions)
@@ -535,8 +497,6 @@ def main(argv: list[str] | None = None):
         "time_cost",
         "iteration",
         "tools_used_names",
-        "relevant_memories",
-        "debug_trace",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -571,41 +531,31 @@ def main(argv: list[str] | None = None):
         if speakers:
             print(f"  [memory users: {speakers}]")
 
-        (
-            response,
-            token_usage,
-            time_cost,
-            iteration,
-            tools_used_names,
-            relevant_memories,
-            debug_trace,
-        ) = run_vikingbot_chat(
+        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
             question,
             question_time,
-            qa_item.get("original_sample_id") or sample_id,
+            qa_item.get("original_sample_id"),
             question_id,
             args.config,
-            memory_users=None if not args.group_chat else speakers,
+            None if not args.group_chat else speakers,
         )
 
         row = {
             "sample_id": qa_item["sample_id"],
             "question_index": qa_item.get("question_index", ""),
             "result": "",
-            "is_invalid": qa_item.get("is_invalid", False),
             "question": question,
             "answer": answer,
             "category": qa_item.get("category", ""),
             "question_time": question_time or "",
-            "evidence": json.dumps(qa_item.get("evidence", []), ensure_ascii=False),
-            "evidence_text": json.dumps(qa_item.get("evidence_text", []), ensure_ascii=False),
+            "evidence": json.dumps(qa_item.get("evidence", [])),
+            "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
             "response": response,
             "token_usage": json.dumps(token_usage, ensure_ascii=False),
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-            "relevant_memories": relevant_memories,
-            "debug_trace": debug_trace,
+            "is_invalid": qa_item.get("is_invalid", False),
         }
 
         # 线程安全的结果收集
@@ -645,10 +595,12 @@ def main(argv: list[str] | None = None):
 
     # 使用线程池处理：全局并行，每个 question 独立 session
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
+        # 提交所有任务
         futures = []
         for idx, qa_item in enumerate(remaining_qa, 1):
             futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
 
+        # 等待所有任务完成
         for future in as_completed(futures):
             try:
                 future.result()

@@ -10,7 +10,6 @@
 #   ./run_full_eval.sh 0 2 --skip-import --group-chat   # 跳过导入，单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
-#   ./run_full_eval.sh --engine openviking 0 2                     # 单轮 search 模式
 
 set -e
 
@@ -26,10 +25,9 @@ for arg in "$@"; do
         echo ""
         echo "开关参数:"
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
-        echo "  --group-chat      仅 vikingbot 模式使用：传 --memory-user"
+        echo "  --group-chat      群聊模式，设置 role_id/speaker，传 --memory-user"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
-        echo "  --engine MODE     评测引擎: vikingbot(默认) 或 openviking"
         exit 0
     fi
 done
@@ -39,7 +37,6 @@ SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
-ENGINE="vikingbot"
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -114,11 +111,6 @@ for arg in "$@"; do
         PREV_ARG=""
         continue
     fi
-    if [ "$PREV_ARG" = "--engine" ]; then
-        ENGINE="$arg"
-        PREV_ARG=""
-        continue
-    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
@@ -126,9 +118,6 @@ for arg in "$@"; do
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     elif [ "$arg" = "--retry-wrong" ]; then
-        PREV_ARG="$arg"
-        continue
-    elif [ "$arg" = "--engine" ]; then
         PREV_ARG="$arg"
         continue
     fi
@@ -147,10 +136,6 @@ for arg in "$@"; do
         SKIP_NEXT=true
         continue
     fi
-    if [ "$arg" = "--engine" ]; then
-        SKIP_NEXT=true
-        continue
-    fi
     if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
@@ -160,15 +145,6 @@ done
 COMMON_OPTS=()
 if [ "$GROUP_CHAT" = "true" ]; then
     COMMON_OPTS+=("--group-chat")
-fi
-COMMON_OPTS+=("--engine" "$ENGINE")
-
-IMPORT_OPTS=("--engine" "$ENGINE" "--openviking-url" "$OPENVIKING_URL")
-if [ "$ENGINE" = "vikingbot" ]; then
-    IMPORT_OPTS+=("--account" "$ACCOUNT")
-    if [ "$GROUP_CHAT" = "true" ]; then
-        IMPORT_OPTS+=("--group-chat")
-    fi
 fi
 
 SAMPLE=${ARGS[0]}
@@ -213,7 +189,9 @@ if [ -n "$RETRY_WRONG" ]; then
         --input "$INPUT_FILE" \
         --retry-wrong "$RETRY_WRONG" \
         --force-ingest \
-        "${IMPORT_OPTS[@]}"
+        --account "$ACCOUNT" \
+        --openviking-url "$OPENVIKING_URL" \
+        "${COMMON_OPTS[@]}"
 
     echo "等待数据处理完成..."
     sleep 30
@@ -229,10 +207,10 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 裁判打分
     echo "[3/3] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20 --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20
 
     # 统计结果
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE" --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
 
     echo ""
     echo "=== 错题重跑完成 ==="
@@ -255,7 +233,7 @@ if [ -z "$SAMPLE" ]; then
         echo "[1/4] 跳过导入数据..."
     else
         echo "[1/4] 导入数据..."
-        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest "${IMPORT_OPTS[@]}"
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
         echo "等待 1 分钟..."
         sleep 60
     fi
@@ -266,11 +244,11 @@ if [ -z "$SAMPLE" ]; then
 
     # 裁判打分
     echo "[3/4] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40 --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
 
     # 计算结果
     echo "[4/4] 计算结果..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE" --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
 
     echo ""
     echo "=== 全量评测完成 ==="
@@ -326,7 +304,9 @@ if [ -n "$QUESTION_INDEX" ]; then
             --sample "$SAMPLE_INDEX" \
             --question-index "$QUESTION_INDEX" \
             --force-ingest \
-            "${IMPORT_OPTS[@]}"
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL" \
+            "${COMMON_OPTS[@]}"
 
         echo "Waiting for data processing..."
         sleep 3
@@ -357,7 +337,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         echo "[3/3] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1 --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1
 
     # 输出结果
     echo ""
@@ -424,7 +404,9 @@ PY
             --input "$INPUT_FILE" \
             --sample "$SAMPLE_INDEX" \
             --force-ingest \
-            "${IMPORT_OPTS[@]}"
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL" \
+            "${COMMON_OPTS[@]}"
 
         echo "Waiting for data processing..."
         sleep 10
@@ -454,7 +436,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5 --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -462,7 +444,7 @@ PY
     else
         echo "[4/4] Calculating statistics..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE" --engine "$ENGINE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
 
     echo ""
     echo "=== 批量评测完成 ==="

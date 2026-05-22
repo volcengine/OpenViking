@@ -1,65 +1,15 @@
 import argparse
-import asyncio
 import csv
-import importlib
 import json
 import os
-import sys
-from pathlib import Path
-
-from dotenv import load_dotenv
+import asyncio
 from openai import AsyncOpenAI
-
-csv.field_size_limit(sys.maxsize)
-
-try:
-    from benchmark.locomo.openviking.locomo_prompts import (
-        JUDGE_SYSTEM_PROMPT,
-        get_judge_prompt,
-        get_judge_prompt_with_evidence,
-        preprocess_answer,
-    )
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "openviking"))
-    from locomo_prompts import (  # type: ignore
-        JUDGE_SYSTEM_PROMPT,
-        get_judge_prompt,
-        get_judge_prompt_with_evidence,
-        preprocess_answer,
-    )
+from dotenv import load_dotenv
+from pathlib import Path
 
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
-
-
-def _extract_engine(argv: list[str]) -> tuple[str, list[str]]:
-    engine = "vikingbot"
-    cleaned: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--engine":
-            if i + 1 >= len(argv):
-                raise SystemExit("--engine requires a value")
-            engine = argv[i + 1]
-            i += 2
-            continue
-        cleaned.append(arg)
-        i += 1
-    if engine not in {"vikingbot", "openviking"}:
-        raise SystemExit(f"Unsupported engine: {engine}")
-    return engine, cleaned
-
-
-def _delegate_openviking(argv: list[str]) -> None:
-    module = importlib.import_module("benchmark.locomo.openviking.judge")
-    original_argv = sys.argv[:]
-    try:
-        sys.argv = [original_argv[0], *argv]
-        asyncio.run(module.main())
-    finally:
-        sys.argv = original_argv
 
 
 async def grade_answer(
@@ -69,7 +19,7 @@ async def grade_answer(
         You are an expert grader that determines if answers to questions match a gold standard answer
         """
 
-    accuracy_prompt = f"""
+    ACCURACY_PROMPT = f"""
     Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given the following data:
         (1) a question (posed by one user to another user),
         (2) a 'gold' (ground truth) answer,
@@ -100,12 +50,13 @@ async def grade_answer(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": accuracy_prompt},
+                {"role": "user", "content": ACCURACY_PROMPT},
             ],
             temperature=0,
             timeout=60,
         )
         content = resp.choices[0].message.content.strip()
+        # 提取JSON内容
         start_idx = content.find("{")
         end_idx = content.rfind("}")
         if start_idx != -1 and end_idx != -1:
@@ -119,74 +70,6 @@ async def grade_answer(
         return False, f"[API ERROR] {str(e)}"
 
 
-async def grade_answer_locomo(
-    llm_client,
-    model: str,
-    category: int,
-    question: str,
-    gold_answer: str,
-    response: str,
-    evidence_text: str = "",
-) -> tuple[bool, str]:
-    processed_answer = preprocess_answer(category, gold_answer)
-    if evidence_text:
-        accuracy_prompt = get_judge_prompt_with_evidence(
-            category,
-            question,
-            processed_answer,
-            response,
-            evidence_text,
-        )
-    else:
-        accuracy_prompt = get_judge_prompt(
-            category,
-            question,
-            processed_answer,
-            response,
-        )
-
-    try:
-        resp = await llm_client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-                {"role": "user", "content": accuracy_prompt},
-            ],
-            temperature=0,
-            timeout=60,
-        )
-        content = resp.choices[0].message.content.strip()
-        start_idx = content.find("{")
-        end_idx = content.rfind("}")
-        if start_idx != -1 and end_idx != -1:
-            json_str = content[start_idx : end_idx + 1].strip()
-            result = json.loads(json_str)
-            is_correct = result.get("label", "WRONG").strip().upper() == "CORRECT"
-            reasoning = result.get("reasoning", "")
-            return is_correct, reasoning
-        return False, f"[PARSE ERROR] Invalid response: {content}"
-    except Exception as e:
-        return False, f"[API ERROR] {str(e)}"
-
-
-def _parse_evidence_text(raw: str) -> str:
-    if not raw:
-        return ""
-    raw = raw.strip()
-    if not raw:
-        return ""
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return raw
-
-    if isinstance(parsed, list):
-        return "\n".join(str(item) for item in parsed if str(item).strip())
-    if isinstance(parsed, str):
-        return parsed
-    return ""
-
-
 def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     """加载待评分的回答，返回所有行和表头"""
     if not os.path.exists(input_path):
@@ -195,19 +78,14 @@ def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     with open(input_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames.copy()
+        # 新增reasoning列如果不存在
         if "reasoning" not in fieldnames:
             fieldnames.append("reasoning")
         rows = list(reader)
     return rows, fieldnames
 
 
-async def main(argv: list[str] | None = None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    engine, cleaned_argv = _extract_engine(argv)
-    if engine == "openviking":
-        _delegate_openviking(cleaned_argv)
-        return
-
+async def main():
     parser = argparse.ArgumentParser(
         description="VikingBot QA judge script, same logic as openclaw evaluation"
     )
@@ -234,12 +112,7 @@ async def main(argv: list[str] | None = None):
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"
     )
-    parser.add_argument(
-        "--locomo-judge-prompt",
-        action="store_true",
-        help="Use LoCoMo-specific judge prompt. Default uses the original vikingbot judge prompt.",
-    )
-    args = parser.parse_args(cleaned_argv)
+    args = parser.parse_args()
 
     if not args.token:
         print("Error: API token is required")
@@ -248,26 +121,28 @@ async def main(argv: list[str] | None = None):
         print("     ARK_API_KEY=你的key")
         print("  2. 或者通过 --token 参数传入")
         print("  3. 或者设置环境变量: export ARK_API_KEY=你的key")
-        raise SystemExit(1)
+        exit(1)
 
+    # 加载数据
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    ungraded = [
-        i
-        for i, row in enumerate(rows)
-        if not row.get("result") and str(row.get("category", "")).strip() != "5"
-    ]
+    # 筛选未评分的行
+    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:
         print("All answers already graded, exit")
         return
 
+    # 初始化OpenAI客户端
     client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
+
+    # 并发处理
     semaphore = asyncio.Semaphore(args.parallel)
-    file_lock = asyncio.Lock()
+    file_lock = asyncio.Lock()  # 用于同步文件写入
 
     async def save_results():
+        """保存当前所有结果到CSV文件，使用临时文件+原子替换避免文件损坏"""
         async with file_lock:
             temp_file = f"{args.input}.tmp"
             with open(temp_file, "w", encoding="utf-8", newline="") as f:
@@ -283,35 +158,20 @@ async def main(argv: list[str] | None = None):
             gold = row["answer"]
             response = row["response"]
             print(f"Grading {idx + 1}/{total}: {question[:60]}...")
-            if args.locomo_judge_prompt:
-                category = int(str(row.get("category", "0") or "0"))
-                evidence_text = _parse_evidence_text(row.get("evidence_text", ""))
-                is_correct, reasoning = await grade_answer_locomo(
-                    client,
-                    args.model,
-                    category,
-                    question,
-                    gold,
-                    response,
-                    evidence_text,
-                )
-            else:
-                is_correct, reasoning = await grade_answer(
-                    client,
-                    args.model,
-                    question,
-                    gold,
-                    response,
-                )
+            is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
+
+            # 处理完一条就立即保存结果
             await save_results()
             print(f"Saved result for {idx + 1}/{total}: {row['result']}")
+
             return idx, row
 
     tasks = [process_row(idx) for idx in ungraded]
     await asyncio.gather(*tasks)
 
+    # 统计结果
     correct = sum(1 for row in rows if row.get("result") == "CORRECT")
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0
