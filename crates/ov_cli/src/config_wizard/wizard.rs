@@ -173,6 +173,16 @@ pub(crate) fn edit_api_key_choice_labels(
     }
 }
 
+pub(crate) fn should_prompt_root_identity(
+    api_key_role: Option<ApiKeyRole>,
+    api_key_was_entered: bool,
+    account: Option<&str>,
+    user: Option<&str>,
+) -> bool {
+    api_key_role == Some(ApiKeyRole::Root)
+        && (api_key_was_entered || is_blank(account) || is_blank(user))
+}
+
 fn print_header() {
     let lines = wizard_header_lines();
     println!();
@@ -1240,9 +1250,12 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         config,
                         api_key_role,
                     }) => {
-                        if api_key_role == Some(ApiKeyRole::Root)
-                            && (account.is_none() || user.is_none())
-                        {
+                        if should_prompt_root_identity(
+                            api_key_role,
+                            false,
+                            account.as_deref(),
+                            user.as_deref(),
+                        ) {
                             identity_mode = Some(IdentityMode::RootKey);
                             stage = Stage::Account;
                             continue;
@@ -1371,6 +1384,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
     let mut account: Option<String> = None;
     let mut user: Option<String> = None;
     let mut identity_mode: Option<IdentityMode> = None;
+    let mut api_key_was_entered = false;
 
     loop {
         match stage {
@@ -1390,6 +1404,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     account = config.config.account.clone();
                     user = config.config.user.clone();
                     identity_mode = None;
+                    api_key_was_entered = false;
                     stage = Stage::Name;
                 }
                 PromptResult::Back => return Ok(false),
@@ -1458,10 +1473,14 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     0,
                     &helper_lines,
                 )? {
-                    PromptResult::Value(0) => stage = Stage::Validate,
+                    PromptResult::Value(0) => {
+                        api_key_was_entered = false;
+                        stage = Stage::Validate;
+                    }
                     PromptResult::Value(1) => stage = Stage::ApiKeyInput,
                     PromptResult::Value(_) => {
                         api_key = None;
+                        api_key_was_entered = false;
                         if kind == ConfigKind::SelfManaged
                             && self_managed_allows_empty_api_key(&url)
                         {
@@ -1511,6 +1530,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 )? {
                     PromptResult::Value(value) => {
                         api_key = empty_to_none(value);
+                        api_key_was_entered = api_key.is_some();
                         if kind == ConfigKind::SelfManaged
                             && api_key.is_none()
                             && self_managed_allows_empty_api_key(&url)
@@ -1564,6 +1584,9 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 match prompt_identity_value(ui, "Update a saved config.", "User ID", mode)? {
                     PromptResult::Value(value) => {
                         user = Some(value);
+                        if identity_mode == Some(IdentityMode::RootKey) {
+                            api_key_was_entered = false;
+                        }
                         stage = Stage::Validate;
                     }
                     PromptResult::Back => {
@@ -1590,9 +1613,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         config,
                         api_key_role,
                     }) => {
-                        if api_key_role == Some(ApiKeyRole::Root)
-                            && (account.is_none() || user.is_none())
-                        {
+                        if should_prompt_root_identity(
+                            api_key_role,
+                            api_key_was_entered,
+                            account.as_deref(),
+                            user.as_deref(),
+                        ) {
                             identity_mode = Some(IdentityMode::RootKey);
                             stage = Stage::Account;
                             continue;
@@ -2442,6 +2468,10 @@ fn empty_to_none(value: String) -> Option<String> {
     }
 }
 
+fn is_blank(value: Option<&str>) -> bool {
+    value.is_none_or(|value| value.trim().is_empty())
+}
+
 fn print_cancelled(ui: &mut LiveRegion) -> Result<()> {
     ui.clear()?;
     println!();
@@ -2493,13 +2523,13 @@ mod tests {
         extract_models_from_status_payload, identity_prompt_parts, input_live_lines,
         logo_glass_color, main_action_labels, next_step_copy, ov_logo_width,
         saved_summary_render_parts, select_live_lines, self_managed_api_key_helper_lines,
-        self_managed_validation_failure_choices, status_box_lines, status_box_lines_with_runtime,
-        status_box_width, status_payload_is_healthy, tagline_ice_color, validate_config_name,
-        volcengine_api_key_helper_lines, wizard_header_lines, wordmark_gradient_color,
-        wordmark_lines, wordmark_width,
+        self_managed_validation_failure_choices, should_prompt_root_identity, status_box_lines,
+        status_box_lines_with_runtime, status_box_width, status_payload_is_healthy,
+        tagline_ice_color, validate_config_name, volcengine_api_key_helper_lines,
+        wizard_header_lines, wordmark_gradient_color, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
-    use crate::config_wizard::store::{ConfigEntry, ConfigKind, ConfigStore};
+    use crate::config_wizard::store::{ApiKeyRole, ConfigEntry, ConfigKind, ConfigStore};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -3156,6 +3186,34 @@ mod tests {
             edit_api_key_choice_labels(ConfigKind::VolcengineCloud, true),
             ["Keep existing API key", "Replace API key"]
         );
+    }
+
+    #[test]
+    fn replaced_root_key_requires_identity_confirmation() {
+        assert!(should_prompt_root_identity(
+            Some(ApiKeyRole::Root),
+            true,
+            Some("old-account"),
+            Some("old-user"),
+        ));
+        assert!(should_prompt_root_identity(
+            Some(ApiKeyRole::Root),
+            false,
+            Some("old-account"),
+            None,
+        ));
+        assert!(!should_prompt_root_identity(
+            Some(ApiKeyRole::Root),
+            false,
+            Some("old-account"),
+            Some("old-user"),
+        ));
+        assert!(!should_prompt_root_identity(
+            Some(ApiKeyRole::Regular),
+            true,
+            Some("old-account"),
+            Some("old-user"),
+        ));
     }
 
     #[test]
