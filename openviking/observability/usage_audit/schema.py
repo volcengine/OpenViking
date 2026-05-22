@@ -9,10 +9,10 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 daily, filtered by `last_seen_at` at read time.
 """
 
-# Bump when the table layout changes incompatibly. Stored on the
-# `_schema_meta` row so `SQLiteUsageAuditStore.initialize` can DROP/CREATE
-# the rollups when an older snapshot is detected.
-SCHEMA_VERSION = 2
+# Bump when the table layout changes incompatibly. Stored on the `_schema_meta`
+# row so `SQLiteUsageAuditStore.initialize` can reset the local SQLite store
+# when an older snapshot is detected.
+SCHEMA_VERSION = 3
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS _schema_meta (
@@ -109,9 +109,16 @@ CREATE INDEX IF NOT EXISTS idx_request_audit_account_status
     ON request_audit(account_id, status_code);
 """
 
-# Tables that may exist from the pre-v2 schema and must be dropped on upgrade
-# because their PK no longer matches the projection layout.
-LEGACY_TABLES = (
+# The SQLite backend is a local pre-GA store with short retention. When the
+# schema changes incompatibly, reset all local usage/audit tables instead of
+# carrying partial migrations that can leave date/date_utc or daily/hourly
+# shapes mixed in one database.
+RESET_ON_SCHEMA_UPGRADE_TABLES = (
     "usage_token_daily",
     "usage_retrieval_daily",
+    "usage_token_hourly",
+    "usage_retrieval_hourly",
+    "usage_context_write_bucket",
+    "usage_agent_activity_daily",
+    "request_audit",
 )

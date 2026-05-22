@@ -13,12 +13,12 @@ import asyncio
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Sequence
 
 from openviking.observability.events import ObservabilityEvent
 
 from .projection import UsageAuditProjection, project_events, safe_int
-from .schema import LEGACY_TABLES, SCHEMA_VERSION, SQLITE_SCHEMA
+from .schema import RESET_ON_SCHEMA_UPGRADE_TABLES, SCHEMA_VERSION, SQLITE_SCHEMA
 
 UTC = timezone.utc
 
@@ -37,20 +37,6 @@ def _user_day_window_utc(day: date, tz: tzinfo) -> tuple[datetime, datetime]:
     start_local = datetime.combine(day, time.min, tzinfo=tz)
     end_local = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
     return start_local.astimezone(UTC), end_local.astimezone(UTC)
-
-
-def _utc_hours_in_range(start_utc: datetime, end_utc: datetime) -> Iterator[tuple[str, int]]:
-    """Yield (date_utc, hour_utc) pairs that overlap the half-open UTC range.
-
-    The range is rounded outward to whole hours so any partial-hour overlap is
-    included; the caller filters with the precise instant boundary in Python.
-    """
-    start = start_utc.replace(minute=0, second=0, microsecond=0)
-    end = end_utc
-    cursor = start
-    while cursor < end:
-        yield cursor.date().isoformat(), cursor.hour
-        cursor = cursor + timedelta(hours=1)
 
 
 class SQLiteUsageAuditStore:
@@ -85,9 +71,10 @@ class SQLiteUsageAuditStore:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        # Drop pre-v2 tables before creating the new layout. The PK shape
-        # changed so re-using rows by name is unsafe; existing data is short
-        # retention (14 days) and trims itself within two weeks of upgrade.
+        # Reset incompatible pre-v3 local tables before creating the new
+        # UTC/hourly layout. The SQLite backend has short retention and may live
+        # inside one workspace, so dropping stale rollups is safer than mixing
+        # old daily/local columns with the new UTC columns.
         self._migrate_legacy_sync(conn)
         conn.executescript(SQLITE_SCHEMA)
         conn.execute(
@@ -105,7 +92,7 @@ class SQLiteUsageAuditStore:
         current = int(row["value"]) if row and row["value"] else 0
         if current >= SCHEMA_VERSION:
             return
-        for table in LEGACY_TABLES:
+        for table in RESET_ON_SCHEMA_UPGRADE_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 
     async def close(self) -> None:
