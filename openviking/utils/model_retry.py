@@ -45,7 +45,7 @@ PERMANENT_API_ERROR_PATTERNS = (
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
-    "quotaexceeded", # also 429
+    "quotaexceeded",  # also 429
     "quota limit",
     "quota exceed",
     "usage quota",
@@ -286,9 +286,7 @@ class PrimaryBackupSwitcher:
         if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
             with self._lock:
                 if not self._using_backup:
-                    logger.warning(
-                        f"Primary failed with {error_class}, switching to backup"
-                    )
+                    logger.warning(f"Primary failed with {error_class}, switching to backup")
                     self._using_backup = True
                 # Always reset timer and counter when we fail (whether initial fail or failback fail)
                 self._switch_to_backup_time = time.monotonic()
