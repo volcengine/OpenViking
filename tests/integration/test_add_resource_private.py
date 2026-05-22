@@ -79,7 +79,8 @@ class TestAddResourceTokenInjection:
         assert "gltoken" in path_sent
         parsed = urlparse(path_sent)
         assert parsed.hostname == "gitlab.com"
-        assert parsed.username == "gltoken"
+        assert parsed.username == "oauth2"
+        assert parsed.password == "gltoken"
 
     async def test_public_url_with_no_credentials_passes_unchanged(self):
         captured: list[httpx.Request] = []

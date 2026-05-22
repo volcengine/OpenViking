@@ -42,6 +42,9 @@ def inject_token(url: str, token: str) -> str:
     Transforms ``https://github.com/org/repo`` to
     ``https://token@github.com/org/repo``.
 
+    Transforms ``https://gitlab.com/group/repo`` to
+    ``https://oauth2:token@gitlab.com/group/repo``.
+
     SSH (``git@``, ``ssh://``) and ``git://`` URLs are returned unchanged —
     token injection is not applicable for those schemes.
 
@@ -55,10 +58,16 @@ def inject_token(url: str, token: str) -> str:
     if not url.startswith(("https://", "http://")):
         return url
     parsed = urlparse(url)
-    # Build netloc with token as userinfo, replacing any pre-existing credentials.
     hostname = parsed.hostname or ""
     host_with_port = f"{hostname}:{parsed.port}" if parsed.port else hostname
-    netloc_with_token = f"{token}@{host_with_port}"
+
+    # GitHub accepts bare token as username; GitLab and others expect
+    # oauth2:<token> userinfo per RFC 7617 / GitLab PAT convention.
+    if hostname and "github" in hostname.lower():
+        netloc_with_token = f"{token}@{host_with_port}"
+    else:
+        netloc_with_token = f"oauth2:{token}@{host_with_port}"
+
     return parsed._replace(netloc=netloc_with_token).geturl()
 
 
@@ -67,6 +76,9 @@ def mask_token_in_url(url: str) -> str:
 
     Transforms ``https://token@github.com/org/repo`` to
     ``https://***@github.com/org/repo``.
+
+    Transforms ``https://oauth2:token@gitlab.com/group/repo`` to
+    ``https://***@gitlab.com/group/repo``.
 
     Args:
         url: URL potentially containing an embedded token.

@@ -89,11 +89,19 @@ class TestInjectToken:
 
     def test_http(self):
         result = inject_token("http://self-hosted.example.com/repo", "secret")
-        assert result == "http://secret@self-hosted.example.com/repo"
+        assert result == "http://oauth2:secret@self-hosted.example.com/repo"
 
     def test_https_with_port(self):
         result = inject_token("https://gitlab.example.com:8443/group/repo", "tok")
-        assert result == "https://tok@gitlab.example.com:8443/group/repo"
+        assert result == "https://oauth2:tok@gitlab.example.com:8443/group/repo"
+
+    def test_gitlab_uses_oauth2_token_format(self):
+        result = inject_token("https://gitlab.com/group/repo", "gltoken")
+        assert result == "https://oauth2:gltoken@gitlab.com/group/repo"
+
+    def test_github_uses_bare_token_format(self):
+        result = inject_token("https://github.com/org/repo", "ghtoken")
+        assert result == "https://ghtoken@github.com/org/repo"
 
     def test_ssh_url_unchanged(self):
         url = "git@github.com:org/repo.git"
@@ -142,6 +150,18 @@ class TestMaskTokenInUrl:
         masked = mask_token_in_url(with_token)
         assert "supersecret" not in masked
         assert "***@github.com" in masked
+
+    def test_roundtrip_inject_then_mask_gitlab(self):
+        original = "https://gitlab.com/group/repo"
+        with_token = inject_token(original, "supersecret")
+        masked = mask_token_in_url(with_token)
+        assert "supersecret" not in masked
+        assert "***@gitlab.com" in masked
+
+    def test_masks_oauth2_token_url(self):
+        result = mask_token_in_url("https://oauth2:gltoken@gitlab.com/group/repo")
+        assert result == "https://***@gitlab.com/group/repo"
+        assert "gltoken" not in result
 
 
 class TestGetTokenForUrl:

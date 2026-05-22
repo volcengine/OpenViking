@@ -447,7 +447,8 @@ class GitAccessor(DataAccessor):
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
         # Extract token from embedded URL userinfo (injected client-side), fall back to env.
-        token_from_url = parsed.username
+        # Supports both "token@host" (GitHub) and "oauth2:token@host" (GitLab) formats.
+        token_from_url = parsed.password or parsed.username
         github_token = token_from_url or os.environ.get("GITHUB_TOKEN")
 
         if branch:
@@ -547,7 +548,8 @@ class GitAccessor(DataAccessor):
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
         # Extract token from embedded URL userinfo (injected client-side), fall back to env.
-        token_from_url = parsed.username
+        # Supports both "token@host" (GitHub) and "oauth2:token@host" (GitLab) formats.
+        token_from_url = parsed.password or parsed.username
         gitlab_token = token_from_url or os.environ.get("GITLAB_TOKEN")
 
         ref = branch or "HEAD"
