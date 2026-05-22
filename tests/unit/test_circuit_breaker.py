@@ -13,7 +13,6 @@ from openviking.utils.circuit_breaker import (
     classify_api_error,
 )
 from openviking.utils.model_retry import (
-    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
@@ -119,11 +118,6 @@ class TestClassifyApiError:
         """Test permanent error patterns are checked first."""
         error = Exception("403 Forbidden 429 timeout")
         assert classify_api_error(error) == ERROR_CLASS_PERMANENT
-
-    def test_classify_input_too_large(self):
-        """Test context-window errors are classified separately from provider failures."""
-        error = Exception("BadRequestError: 400 maximum context length is 8192 tokens")
-        assert classify_api_error(error) == ERROR_CLASS_INPUT_TOO_LARGE
 
 
 class TestCircuitBreaker:

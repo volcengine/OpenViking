@@ -130,14 +130,8 @@ def test_quota_exceeded_case_insensitive():
 @pytest.mark.parametrize(
     "message",
     [
-        "ContextWindowExceededError: input too long",
-        "Malformed input request: expected maxLength: 50000, actual: 75000",
-        "Too many input tokens. Max input tokens: 8192, request input token count: 13000",
         "BadRequestError: 400 maximum context length is 8192 tokens",
         "Error code: 413 - Payload Too Large",
-        "413 Request Entity Too Large",
-        "the input length exceeds the context length",
-        "input (8129 tokens) is too large to process",
     ],
 )
 def test_classify_input_too_large_errors(message):

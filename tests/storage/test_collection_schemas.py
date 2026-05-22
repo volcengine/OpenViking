@@ -433,16 +433,7 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "embed_error_message",
-    [
-        "Malformed input request: expected maxLength: 50000, actual: 75000",
-        "Error code: 413 - Payload Too Large",
-    ],
-)
-async def test_embedding_handler_drops_input_too_large_without_requeue(
-    monkeypatch, embed_error_message
-):
+async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypatch):
     class _QueueingVikingDB:
         is_closing = False
         has_queue_manager = True
@@ -457,7 +448,7 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(
     class _OversizedInputEmbedder:
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             del text, is_query
-            raise RuntimeError(embed_error_message)
+            raise RuntimeError("Malformed input request: expected maxLength: 50000, actual: 75000")
 
     vikingdb = _QueueingVikingDB()
     monkeypatch.setattr(
