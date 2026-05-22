@@ -10,12 +10,13 @@
 
 本文用于验证 Vikingbot feedback observability Phase 1 当前已经落地的能力，验证方式基于 `openviking-server --with-bot` 启动模式。
 
-本次 Phase 1 需要确认的核心点有四个：
+本次 Phase 1 需要确认的核心点有五个：
 
 1. OpenAPI 返回中存在稳定的 `response_id`
 2. session JSONL 中 assistant message 持久化了 `response_id`
 3. Langfuse 的 generation / tool span metadata 中带有 `response_id`
-4. `response_completed` 没有暴露到用户侧 channel 或 OpenAPI 对外返回中
+4. session JSONL metadata 首行中存在按 `response_id` 组织的 `response_facts`
+5. `response_completed` 没有暴露到用户侧 channel 或 OpenAPI 对外返回中
 
 ---
 
@@ -256,7 +257,48 @@ ls ~/.openviking/data/bot/sessions
 1. generation metadata 中存在 `response_id`
 2. Langfuse 中看到的 `response_id` 与 HTTP 返回一致
 
-### 5.6 验证 Langfuse tool span metadata 包含 `response_id`
+### 5.6 验证 session metadata 中已写入 `response_facts`
+
+除了 assistant message 上的 `response_id`，当前 Phase 1 还会把标准化后的 `response_completed` facts 持久化到 session JSONL 首行 metadata 中。
+
+找到第 5.4 步对应的 session 文件后，检查首行 metadata，预期结构类似：
+
+```json
+{
+  "session_key": {
+    "type": "bot_api",
+    "channel_id": "default",
+    "chat_id": "phase1-verify-session"
+  },
+  "metadata": {
+    "response_facts": {
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": {
+        "response_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "session_id": "bot_api__default__phase1-verify-session",
+        "user_id": "phase1-verify-user",
+        "channel": "bot_api__default",
+        "time_cost_ms": 123,
+        "prompt_tokens": 123,
+        "completion_tokens": 45,
+        "total_tokens": 168,
+        "iteration_count": 1,
+        "tool_count": 0,
+        "tools_used_names": [],
+        "response_length": 12,
+        "created_at": "2026-04-30T00:00:00"
+      }
+    }
+  }
+}
+```
+
+重点检查：
+
+1. 首行 metadata 下存在 `response_facts`
+2. `response_facts` 里存在以该次 HTTP 返回 `response_id` 为 key 的记录
+3. 该记录里的 `response_id`、`session_id`、`user_id` 与本次请求一致
+
+### 5.7 验证 Langfuse tool span metadata 包含 `response_id`
 
 再发一条更容易触发工具的问题，例如：
 
@@ -283,7 +325,7 @@ curl -sS -X POST "http://127.0.0.1:1933/bot/v1/chat" \
 1. tool span metadata 中存在 `response_id`
 2. generation 与 tool span 使用的是同一个 `response_id`
 
-### 5.7 验证 `response_completed` 没有对外暴露
+### 5.8 验证 `response_completed` 没有对外暴露
 
 `response_completed` 当前是内部分析事件，不应直接暴露给 OpenAPI 客户端，也不应出现在用户可见 channel 中。
 
@@ -319,9 +361,10 @@ curl -sS -X POST "http://127.0.0.1:1933/bot/v1/chat" \
 1. `/bot/v1/chat` 返回顶层 `response_id`
 2. 最终 `response` 事件的 `data.response_id` 存在
 3. session JSONL 的 assistant message 中写入了 `response_id`
-4. Langfuse generation metadata 中存在 `response_id`
-5. 如果触发工具，Langfuse tool span metadata 中也存在 `response_id`
-6. OpenAPI 或用户侧 channel 没有暴露 `response_completed`
+4. session JSONL metadata 首行中存在对应 `response_id` 的 `response_facts`
+5. Langfuse generation metadata 中存在 `response_id`
+6. 如果触发工具，Langfuse tool span metadata 中也存在 `response_id`
+7. OpenAPI 或用户侧 channel 没有暴露 `response_completed`
 
 ---
 

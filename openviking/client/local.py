@@ -226,20 +226,6 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def count(
-        self,
-        uri: str,
-        recursive: bool = False,
-        show_all_hidden: bool = False,
-    ) -> Dict[str, int]:
-        """Count files and sub-directories under a directory."""
-        return await self._service.fs.count(
-            uri,
-            ctx=self._ctx,
-            recursive=recursive,
-            show_all_hidden=show_all_hidden,
-        )
-
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
@@ -312,6 +298,7 @@ class LocalClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -325,6 +312,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
+                level=level,
             ),
         )
         return attach_telemetry_payload(
@@ -344,6 +332,7 @@ class LocalClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -361,6 +350,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
+                level=level,
             )
 
         execution = await run_with_telemetry(

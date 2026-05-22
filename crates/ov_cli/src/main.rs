@@ -8,7 +8,7 @@ mod output;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use config::Config;
 use error::Result;
 use output::OutputFormat;
@@ -140,24 +140,75 @@ struct Cli {
     #[arg(long = "agent-id", global = true)]
     agent_id: Option<String>,
 
-    /// Use root API key for admin privileges
-    #[arg(long, global = true)]
+    /// Use root API key for admin commands
+    #[arg(long)]
     sudo: bool,
 
-    /// Show upload progress (overrides config file)
-    #[arg(long, global = true)]
+    /// Show upload progress (legacy pre-command placement; prefer command-local --progress)
+    #[arg(long, hide = true)]
     progress: bool,
 
-    /// Disable upload progress (overrides config file)
-    #[arg(long = "no-progress", global = true, conflicts_with = "progress")]
+    /// Disable upload progress (legacy pre-command placement; prefer command-local --no-progress)
+    #[arg(long = "no-progress", hide = true, conflicts_with = "progress")]
     no_progress: bool,
 
-    /// Enable verbose output (overrides config file)
-    #[arg(short, long, global = true)]
+    /// Enable upload diagnostics (legacy pre-command placement; prefer command-local --verbose)
+    #[arg(short, long, hide = true)]
     verbose: bool,
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct UploadCliOptions {
+    /// Show local file upload progress (overrides config file)
+    #[arg(long, conflicts_with = "no_progress")]
+    progress: bool,
+
+    /// Disable local file upload progress (overrides config file)
+    #[arg(long = "no-progress", conflicts_with = "progress")]
+    no_progress: bool,
+
+    /// Print extra diagnostics during local file upload
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+impl UploadCliOptions {
+    fn is_set(self) -> bool {
+        self.progress || self.no_progress || self.verbose
+    }
+
+    fn merged_with_legacy(self, legacy: Self) -> Self {
+        Self {
+            progress: self.progress || (!self.no_progress && legacy.progress),
+            no_progress: self.no_progress || (!self.progress && legacy.no_progress),
+            verbose: self.verbose || legacy.verbose,
+        }
+    }
+
+    fn show_progress_override(self) -> Option<bool> {
+        if self.progress {
+            Some(true)
+        } else if self.no_progress {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    fn verbose_override(self) -> Option<bool> {
+        if self.verbose { Some(true) } else { None }
+    }
+}
+
+impl CliContext {
+    fn with_upload_options(mut self, options: UploadCliOptions) -> Self {
+        self.show_progress = options.show_progress_override();
+        self.verbose = options.verbose_override();
+        self
+    }
 }
 
 // Commands are organized with category tags in their doc comments.
@@ -218,6 +269,8 @@ enum Commands {
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
         #[arg(long, default_value = "0")]
         watch_interval: f64,
+        #[command(flatten)]
+        upload_options: UploadCliOptions,
     },
     /// [Data] Add a skill into OpenViking
     AddSkill {
@@ -229,6 +282,8 @@ enum Commands {
         /// Wait timeout in seconds
         #[arg(long)]
         timeout: Option<f64>,
+        #[command(flatten)]
+        upload_options: UploadCliOptions,
     },
     /// [Data] List directory contents
     #[command(alias = "list")]
@@ -309,17 +364,6 @@ enum Commands {
         /// Viking URI to get metadata for
         uri: String,
     },
-    /// [Data] Count files and sub-directories under a directory
-    Count {
-        /// Directory URI to count
-        uri: String,
-        /// Recurse into all sub-directories
-        #[arg(short, long)]
-        recursive: bool,
-        /// Include hidden files (names starting with ".")
-        #[arg(short, long)]
-        all: bool,
-    },
     /// [Data] Read file content (L2)
     Read {
         /// Viking URI
@@ -389,9 +433,9 @@ enum Commands {
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
         #[arg(long = "before")]
         before: Option<String>,
-        /// Only include results with specific level(s) (e.g. 0, 1, 2 or 0,1,2)
-        #[arg(short = 'L', long = "level")]
-        level: Option<String>,
+        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        level: Option<Vec<i32>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -420,9 +464,9 @@ enum Commands {
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
         #[arg(long = "before")]
         before: Option<String>,
-        /// Only include results with specific level(s) (e.g. 0, 1, 2 or 0,1,2)
-        #[arg(short = 'L', long = "level")]
-        level: Option<String>,
+        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        level: Option<Vec<i32>>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -636,6 +680,23 @@ impl Commands {
             _ => false,
         }
     }
+
+    fn supports_upload_options(&self) -> bool {
+        matches!(self, Self::AddResource { .. } | Self::AddSkill { .. })
+    }
+}
+
+fn legacy_upload_option_error(
+    options: UploadCliOptions,
+    command: &Commands,
+) -> Option<&'static str> {
+    if options.is_set() && !command.supports_upload_options() {
+        Some(
+            "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill",
+        )
+    } else {
+        None
+    }
 }
 
 #[derive(Subcommand)]
@@ -653,6 +714,11 @@ enum TaskCommands {
         /// Filter by status (pending, running, completed, failed)
         #[arg(long)]
         status: Option<String>,
+    },
+    /// Watch task management (auto-refresh subscriptions)
+    Watch {
+        #[command(subcommand)]
+        action: WatchCommands,
     },
 }
 
@@ -692,6 +758,8 @@ enum ObserverCommands {
     Transaction,
     /// Get retrieval quality metrics
     Retrieval,
+    /// Get filesystem operation metrics
+    Filesystem,
     /// Get overall system status
     System,
 }
@@ -742,6 +810,59 @@ enum SessionCommands {
     Commit {
         /// Session ID
         session_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WatchCommands {
+    /// List watch tasks (auto-refresh subscriptions)
+    Ls {
+        /// Only show active (non-paused) tasks
+        #[arg(long, default_value_t = false)]
+        active_only: bool,
+    },
+    /// Show details of a single watch task
+    Show {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Delete a watch task
+    Rm {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Pause a watch task (preserves cadence, stops scheduling)
+    Pause {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Resume a paused watch task
+    Resume {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Update one or more mutable fields of a watch task.
+    /// At least one flag is required.
+    Update {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+        /// New refresh interval in minutes (must be > 0)
+        #[arg(long)]
+        interval: Option<f64>,
+        /// Set active (true) / paused (false) — alternative to pause/resume shortcuts
+        #[arg(long)]
+        active: Option<bool>,
+        /// Human-readable reason for the watch task
+        #[arg(long)]
+        reason: Option<String>,
+        /// Processing instruction forwarded to the refresh handler
+        #[arg(long)]
+        instruction: Option<String>,
+    },
+    /// Trigger an immediate refresh, bypassing the schedule
+    Trigger {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
     },
 }
 
@@ -1014,17 +1135,15 @@ async fn main() {
 
     let output_format = cli.output;
     let compact = cli.compact;
-
-    // Determine show_progress override:
-    let show_progress = if cli.progress {
-        Some(true)
-    } else if cli.no_progress {
-        Some(false)
-    } else {
-        None
+    let legacy_upload_options = UploadCliOptions {
+        progress: cli.progress,
+        no_progress: cli.no_progress,
+        verbose: cli.verbose,
     };
-    // Determine verbose override:
-    let verbose = if cli.verbose { Some(true) } else { None };
+    if let Some(message) = legacy_upload_option_error(legacy_upload_options, &cli.command) {
+        eprintln!("Error: {}", message);
+        std::process::exit(2);
+    }
 
     let ctx = match CliContext::new(
         output_format,
@@ -1033,8 +1152,8 @@ async fn main() {
         cli.user.clone(),
         cli.agent_id.clone(),
         cli.sudo,
-        show_progress,
-        verbose,
+        None,
+        None,
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -1073,7 +1192,10 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            upload_options,
         } => {
+            let ctx =
+                ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
             handlers::handle_add_resource(
                 path,
                 to,
@@ -1097,7 +1219,12 @@ async fn main() {
             data,
             wait,
             timeout,
-        } => handlers::handle_add_skill(data, wait, timeout, ctx).await,
+            upload_options,
+        } => {
+            let ctx =
+                ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
+            handlers::handle_add_skill(data, wait, timeout, ctx).await
+        }
         Commands::Relations { uri } => handlers::handle_relations(uri, ctx).await,
         Commands::Link {
             from_uri,
@@ -1147,6 +1274,63 @@ async fn main() {
                 )
                 .await
             }
+            TaskCommands::Watch { action } => {
+                let client = ctx.get_client();
+                match action {
+                    WatchCommands::Ls { active_only } => {
+                        commands::watch::ls(
+                            &client,
+                            active_only,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                    WatchCommands::Show { key } => {
+                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Rm { key } => {
+                        commands::watch::rm(&client, &key, ctx.output_format, ctx.compact).await
+                    }
+                    WatchCommands::Pause { key } => {
+                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Resume { key } => {
+                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Update {
+                        key,
+                        interval,
+                        active,
+                        reason,
+                        instruction,
+                    } => {
+                        commands::watch::update(
+                            &client,
+                            &key,
+                            interval,
+                            active,
+                            reason,
+                            instruction,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                    WatchCommands::Trigger { key } => {
+                        commands::watch::trigger(
+                            &client,
+                            &key,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                }
+            }
         },
         Commands::Status => {
             let client = ctx.get_client();
@@ -1177,11 +1361,6 @@ async fn main() {
         Commands::Rm { uri, recursive } => handlers::handle_rm(uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::Count {
-            uri,
-            recursive,
-            all,
-        } => handlers::handle_count(uri, recursive, all, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -1320,11 +1499,14 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliContext, Commands, PrivacyCommands, preprocess_privacy_args};
+    use super::{
+        Cli, CliContext, Commands, PrivacyCommands, UploadCliOptions, legacy_upload_option_error,
+        preprocess_privacy_args,
+    };
     use crate::config::Config;
     use crate::handlers;
     use crate::output::OutputFormat;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
     #[test]
@@ -1344,6 +1526,115 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.agent_id.as_deref(), Some("assistant-1"));
+    }
+
+    #[test]
+    fn cli_tree_help_hides_upload_and_admin_only_flags() {
+        let err = Cli::command()
+            .try_get_matches_from(["ov", "tree", "--help"])
+            .expect_err("help should exit through clap error");
+        let help = err.to_string();
+
+        assert!(!help.contains("--progress"));
+        assert!(!help.contains("--no-progress"));
+        assert!(!help.contains("--verbose"));
+        assert!(!help.contains("--sudo"));
+    }
+
+    #[test]
+    fn cli_add_resource_help_shows_upload_flags() {
+        let err = Cli::command()
+            .try_get_matches_from(["ov", "add-resource", "--help"])
+            .expect_err("help should exit through clap error");
+        let help = err.to_string();
+
+        assert!(help.contains("--progress"));
+        assert!(help.contains("--no-progress"));
+        assert!(help.contains("--verbose"));
+    }
+
+    #[test]
+    fn cli_add_skill_help_shows_upload_flags() {
+        let err = Cli::command()
+            .try_get_matches_from(["ov", "add-skill", "--help"])
+            .expect_err("help should exit through clap error");
+        let help = err.to_string();
+
+        assert!(help.contains("--progress"));
+        assert!(help.contains("--no-progress"));
+        assert!(help.contains("--verbose"));
+    }
+
+    #[test]
+    fn cli_tree_rejects_upload_and_admin_only_flags_after_subcommand() {
+        assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--progress"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--no-progress"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--verbose"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--sudo"]).is_err());
+    }
+
+    #[test]
+    fn cli_parses_upload_flags_on_upload_commands() {
+        let add_resource =
+            Cli::try_parse_from(["ov", "add-resource", "./README.md", "--progress", "--verbose"])
+                .expect("add-resource upload flags should parse");
+        match add_resource.command {
+            Commands::AddResource { upload_options, .. } => {
+                assert!(upload_options.progress);
+                assert!(upload_options.verbose);
+            }
+            _ => panic!("expected add-resource command"),
+        }
+
+        let add_skill = Cli::try_parse_from(["ov", "add-skill", "./skill", "--no-progress"])
+            .expect("add-skill upload flags should parse");
+        match add_skill.command {
+            Commands::AddSkill { upload_options, .. } => {
+                assert!(upload_options.no_progress);
+            }
+            _ => panic!("expected add-skill command"),
+        }
+    }
+
+    #[test]
+    fn cli_keeps_legacy_pre_command_upload_flags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--progress",
+            "--verbose",
+            "add-resource",
+            "./README.md",
+        ])
+        .expect("legacy pre-command upload flags should still parse");
+
+        assert!(cli.progress);
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn legacy_pre_command_upload_flags_only_allow_upload_commands() {
+        let upload_options = UploadCliOptions {
+            progress: true,
+            no_progress: false,
+            verbose: false,
+        };
+
+        let tree = Cli::try_parse_from(["ov", "--progress", "tree", "viking://"])
+            .expect("hidden legacy flag still parses before runtime validation");
+        assert!(legacy_upload_option_error(upload_options, &tree.command).is_some());
+
+        let add_resource =
+            Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
+                .expect("legacy pre-command upload flags should parse for add-resource");
+        assert!(legacy_upload_option_error(upload_options, &add_resource.command).is_none());
+    }
+
+    #[test]
+    fn cli_parses_sudo_before_admin_command() {
+        let cli = Cli::try_parse_from(["ov", "--sudo", "admin", "list-accounts"])
+            .expect("pre-command sudo should parse");
+
+        assert!(cli.sudo);
     }
 
     #[test]

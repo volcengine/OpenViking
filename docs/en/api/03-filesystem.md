@@ -21,6 +21,7 @@ Behavior notes:
 
 - Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
 
 ## API Reference
@@ -179,7 +180,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Existing file URI |
+| uri | str | Yes | - | File URI to write. For `mode="create"`, the file must not already exist |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace`, `append`, or `create` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
@@ -277,8 +278,7 @@ List directory contents.
 | output | str | No | `agent` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
 
 **Entry Structure**
 
@@ -362,8 +362,7 @@ Get directory tree structure.
 | output | str | No | `agent` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
@@ -497,69 +496,9 @@ openviking stat viking://resources/my-project/docs
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock — either the path itself has a valid `.path.ovlock`, or any ancestor directory holds a SUBTREE lock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
 
-The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index). For an exact count based on the actual filesystem listing, use [`count()`](#count) instead.
-
----
-
-### count()
-
-Count files and sub-directories under a directory based on a real filesystem traversal (not a vector-index estimate).
-
-**Parameters**
-
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| uri | str | Yes | - | Target directory's Viking URI |
-| recursive | bool | No | False | Count all descendants when `True`; otherwise only direct children |
-| show_all_hidden | bool | No | False | Include hidden files (names starting with `.`) |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.count("viking://resources/my-project")
-print(f"files={result['files']}, dirs={result['dirs']}, total={result['total']}")
-
-# Recursive
-result = client.count("viking://resources/my-project", recursive=True)
-```
-
-**HTTP API**
-
-```
-GET /api/v1/fs/count?uri={uri}&recursive={bool}&show_all_hidden={bool}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-project&recursive=true" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking count viking://resources/my-project
-openviking count viking://resources/my-project -r        # recursive
-openviking count viking://resources/my-project -r -a     # recursive, include hidden files
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/my-project",
-    "files": 12,
-    "dirs": 3,
-    "total": 15
-  },
-  "time": 0.01
-}
-```
-
-If `uri` is not a directory, a `FailedPrecondition` error is returned; if `uri` does not exist, `NotFound` is returned.
+The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
 ---
 
@@ -764,7 +703,7 @@ Search content by pattern.
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of nodes to search |
+| node_limit | int | No | None | Maximum number of results |
 | level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
@@ -836,7 +775,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
+| node_limit | int | No | None | Maximum number of results |
 
 **Python SDK (Embedded / HTTP)**
 

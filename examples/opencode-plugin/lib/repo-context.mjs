@@ -65,4 +65,3 @@ function formatRepoLine(item) {
   const abstract = item.abstract || item.overview
   return abstract ? `- **${name}** (${item.uri})\n  ${abstract}` : `- **${name}** (${item.uri})`
 }
-

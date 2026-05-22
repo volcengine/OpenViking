@@ -39,9 +39,9 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 ## Two Core Components
 
-### Component 1: PathLock + LockManager + LockContext (Path Lock System)
+### Component 1: PathLockEngine + LockManager + LockContext (Path Lock System)
 
-**PathLock** implements file-based distributed locks with two lock types — POINT and SUBTREE — using fencing tokens to prevent TOCTOU races and automatic stale lock detection and cleanup.
+**PathLockEngine** implements file-based distributed locks with two lock types — EXACT and TREE — using fencing tokens to prevent TOCTOU races and automatic stale lock detection and cleanup.
 
 **LockHandle** is a lightweight lock holder token:
 
@@ -64,7 +64,7 @@ class LockHandle:
 ```python
 from openviking.storage.transaction import LockContext, get_lock_manager
 
-async with LockContext(get_lock_manager(), [path], lock_mode="point") as handle:
+async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
     # Perform operations under lock protection
     ...
 # Lock automatically released on exit (including exceptions)
@@ -89,8 +89,8 @@ Memory extraction is idempotent — re-extracting from the same archive produces
 | Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> both file and index intact |
 
 **Locking strategy** (depends on target type):
-- Deleting a **directory**: `lock_mode="subtree"`, locks the directory itself
-- Deleting a **file**: `lock_mode="point"`, locks the file's parent directory
+- Deleting a **directory**: `lock_mode="tree"`, locks the directory and its subtree
+- Deleting a **file**: `lock_mode="exact"`, locks the file path itself
 
 Operation flow:
 
@@ -111,14 +111,14 @@ VectorDB deletion fails -> exception thrown, lock auto-released, file and index 
 | File moved to new path but index points to old path -> search returns old path (doesn't exist) | Copy first then update index; clean up copy on failure |
 
 **Locking strategy** (handled automatically via `lock_mode="mv"`):
-- Moving a **directory**: SUBTREE lock on both source path and destination parent
-- Moving a **file**: POINT lock on both source's parent and destination parent
+- Moving a **directory**: TreeLock on the source path and ExactPathLock on the destination path
+- Moving a **file**: EXACT lock on both source path and destination path
 
 Operation flow:
 
 ```
 1. Check whether source is a directory or file, set src_is_dir
-2. Acquire mv lock (internally chooses SUBTREE or POINT based on src_is_dir)
+2. Acquire mv lock (internally chooses TreeLock or ExactPathLock based on src_is_dir)
 3. Copy to new location (source still intact, safe)
 4. If directory, remove the lock file carried over by cp into the copy
 5. Update VectorDB URIs
@@ -132,36 +132,73 @@ Operation flow:
 | Problem | Solution |
 |---------|----------|
 | File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
-| Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle SUBTREE lock held from finalization through processing completion |
+| Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle TreeLock held from finalization through processing completion |
 
 **First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
 
 ```
-1. Acquire POINT lock on parent of final_uri
-2. agfs.mv temp directory -> final location
-3. Acquire SUBTREE lock on final_uri (inside POINT lock, eliminating race window)
-4. Release POINT lock
-5. Clean up temp directory
-6. Enqueue SemanticMsg(lifecycle_lock_handle_id=...) -> DAG runs on final
-7. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
-8. DAG complete + all embeddings done -> release SUBTREE lock
+1. Acquire TreeLock on final_uri
+   - If final_uri does not exist, check ancestor/descendant/same-path conflicts first
+   - If there is no conflict, create final_uri and write final_uri/.path.ovlock as a T lock
+2. Keep temp as the source directory and enqueue SemanticMsg(uri=temp, target_uri=final_uri, lifecycle_lock_handle_id=...)
+3. DAG runs on temp and syncs temp content into final_uri after completion
+   - Do not use raw agfs.mv(temp -> final_uri), because final_uri already exists for the lock file
+4. Clean up temp directory
+5. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
+6. DAG complete + all embeddings done -> release TreeLock
 ```
 
-During this period, `rm` attempting to acquire a SUBTREE lock on the same path will fail with `ResourceBusyError`.
+If summarization and indexing are both disabled, no downstream DAG takes over.
+In that case `ResourceProcessor` copies temp directory content into `final_uri`
+under the same TreeLock, deletes temp, then releases the lock. It does not call
+`VikingFS.mv(temp, final_uri, lock_handle=handle)`, because move cleanup can
+remove the directory lock file.
+
+During this period, `rm` attempting to acquire a TreeLock on the same path will fail with `ResourceBusyError`.
 
 **Incremental update** (target already exists) — temp stays in place:
 
 ```
-1. Acquire SUBTREE lock on target_uri (protect existing resource)
+1. Acquire TreeLock on target_uri (protect existing resource)
 2. Enqueue SemanticMsg(uri=temp, target_uri=final, lifecycle_lock_handle_id=...)
 3. DAG runs on temp, lock refresh loop active
 4. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
-5. Callback completes -> release SUBTREE lock
+5. Callback completes -> release TreeLock
 ```
 
 Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
 
-**Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a SUBTREE lock.
+Both first-time add and incremental update hold only `TreeLock(resource_dir)`.
+There is no `ExactPathLock(resource_dir) -> TreeLock(resource_dir)` handoff, so
+the two modes cannot accidentally release the same `.path.ovlock` file in the
+wrong scope.
+
+Automatic naming is handled by the resource layer, not the lock service:
+`ResourceProcessor` checks `exists(candidate_uri)` first; occupied candidates
+try `_1`, `_2`, and so on. Only a non-existing candidate attempts `TreeLock`,
+without waiting. If that candidate is busy, the next suffix is tried.
+
+**Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a TreeLock.
+
+### Derived Semantic Files (.abstract.md / .overview.md)
+
+`.abstract.md` and `.overview.md` are generated sidecar files, not regular user source files. Their concurrency protection has two layers:
+
+| Problem | Solution |
+|---------|----------|
+| Multiple background tasks refresh the same directory summary and an old result overwrites a newer one | Messages for the same dirty key use `coalesce_version`; only the latest version may write back |
+| Two latest-stage writes interleave on the sidecar files | Acquire ExactPathLock on `.abstract.md` and `.overview.md` before writing |
+
+Example: concurrent writes to `docs/a.md`, `docs/b.md`, and `docs/c.md` hold separate ExactPathLocks and do not block each other. Background refresh may start multiple `docs/` summary tasks, but only the latest version writes `docs/.overview.md` and `docs/.abstract.md`; stale tasks drop their results before writeback.
+
+Memory directory summaries use the same rule. Concurrent writes to:
+
+```text
+viking://user/default/memories/preferences/theme.md
+viking://user/default/memories/preferences/editor.md
+```
+
+hold separate ExactPathLocks for the two source files. Refreshing `preferences/.overview.md` and `preferences/.abstract.md` no longer needs a long TreeLock; stale background tasks are filtered by `coalesce_version`, and final sidecar writes briefly acquire ExactPathLock.
 
 ### session.commit()
 
@@ -189,7 +226,7 @@ Phase 2 — Memory extraction + write (RedoLog):
 
 **Crash recovery analysis**:
 
-| Crash point | State | Recovery action |
+| Failure moment | State | Recovery action |
 |------------|-------|----------------|
 | During Phase 1 archive write | No marker | Incomplete archive; next commit scans history/ for index, unaffected |
 | Phase 1 archive complete but messages not cleared | No marker | Archive complete + messages still present = redundant but safe |
@@ -205,18 +242,18 @@ from openviking.storage.transaction import LockContext, get_lock_manager
 
 lock_manager = get_lock_manager()
 
-# Point lock (write operations, semantic processing)
-async with LockContext(lock_manager, [path], lock_mode="point"):
+# Exact lock (write operations, semantic processing)
+async with LockContext(lock_manager, [path], lock_mode="exact"):
     # Perform operations...
     pass
 
-# Subtree lock (delete operations)
-async with LockContext(lock_manager, [path], lock_mode="subtree"):
+# Tree lock (directory delete and lifecycle protection)
+async with LockContext(lock_manager, [path], lock_mode="tree"):
     # Perform operations...
     pass
 
 # MV lock (move operations)
-async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=dst):
+async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
     # Perform operations...
     pass
 ```
@@ -225,50 +262,56 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=d
 
 | lock_mode | Use case | Behavior |
 |-----------|----------|----------|
-| `point` | Write operations, semantic processing | Lock the specified path; conflicts with any lock on the same path and any SUBTREE lock on ancestors |
-| `subtree` | Delete operations | Lock the subtree root; conflicts with any lock on the same path, any lock on descendants, and any SUBTREE lock on ancestors |
-| `mv` | Move operations | Directory move: SUBTREE lock on both source and destination; File move: POINT lock on source parent and destination (controlled by `src_is_dir`) |
+| `exact` | File writes, single-file delete, sidecar writeback | Lock the specified path; conflicts with same-path locks and ancestor TreeLocks |
+| `tree` | Directory delete, resource lifecycle, directory-level protection | Lock the subtree root; conflicts with same-path locks, descendant locks, and ancestor TreeLocks |
+| `mv` | Move operations | Directory move: source TreeLock + destination ExactPathLock; File move: ExactPathLock on both source and destination (controlled by `src_is_dir`) |
 
 **Exception handling**: `__aexit__` always releases locks and does not swallow exceptions. Lock acquisition failure raises `LockAcquisitionError`.
 
-## Lock Types (POINT vs SUBTREE)
+## Lock Types (EXACT vs TREE)
 
 The lock mechanism uses two lock types to handle different conflict patterns:
 
-| | POINT on same path | SUBTREE on same path | POINT on descendant | SUBTREE on ancestor |
+| | EXACT on same path | TREE on same path | EXACT on descendant | TREE on ancestor |
 |---|---|---|---|---|
-| **POINT** | Conflict | Conflict | — | Conflict |
-| **SUBTREE** | Conflict | Conflict | Conflict | Conflict |
+| **EXACT** | Conflict | Conflict | — | Conflict |
+| **TREE** | Conflict | Conflict | Conflict | Conflict |
 
-- **POINT (P)**: Used for write and semantic-processing operations. Only locks a single directory. Blocks if any ancestor holds a SUBTREE lock.
-- **SUBTREE (S)**: Used for rm and mv operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks.
+- **EXACT (E)**: Locks one concrete path. It can protect files, directory names, and not-yet-created target paths. Blocks if any ancestor holds a TreeLock.
+- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks. If the target directory is missing, conflicts are checked first; only then is the directory created and locked. If a later double-check finds a new conflict, the acquire fails or retries without rolling back the empty directory.
 
 ## Lock Mechanism
 
 ### Lock Protocol
 
-Lock file path: `{path}/.path.ovlock`
+Lock file paths:
+
+```text
+TreeLock(path)                  -> {path}/.path.ovlock
+ExactPathLock(existing dir path) -> {path}/.path.ovlock
+ExactPathLock(file or missing path) -> {parent}/.exact.ovlock.<name>.<hash>
+```
 
 Lock file content (Fencing Token):
 ```
 {handle_id}:{time_ns}:{lock_type}
 ```
 
-Where `lock_type` is `P` (POINT) or `S` (SUBTREE).
+Where `lock_type` is `E` (EXACT) or `T` (TREE).
 
-### Lock Acquisition (POINT mode)
+### Lock Acquisition (EXACT mode)
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check target directory exists
-    2. Check if target directory is locked by another operation
+    1. Check if target path is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    3. Check all ancestor directories for SUBTREE locks
+    2. Check all ancestor directories for TREE locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Write POINT (P) lock file
-    5. TOCTOU double-check: re-scan ancestors for SUBTREE locks
+    3. Ensure the lock file's parent directory exists; create it if missing
+    4. Write EXACT (E) lock file
+    5. TOCTOU double-check: re-scan target path and ancestors for TREE locks
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
        - Wait and retry
@@ -278,21 +321,22 @@ loop until timeout (poll interval: 200ms):
 Timeout (default 0 = no-wait) raises LockAcquisitionError
 ```
 
-### Lock Acquisition (SUBTREE mode)
+### Lock Acquisition (TREE mode)
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check target directory exists
-    2. Check if target directory is locked by another operation
+    1. Check if target directory is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    3. Check all ancestor directories for SUBTREE locks
+    2. Check all ancestor directories for TREE locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Scan all descendant directories for any locks by other operations
+    3. Scan all descendant directories for any locks by other operations
+       - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    5. Write SUBTREE (S) lock file (only one file, at the root path)
+    4. Ensure the target directory exists; create it if missing
+    5. Write TREE (T) lock file (only one file, at the root path)
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -303,9 +347,21 @@ loop until timeout (poll interval: 200ms):
 Timeout (default 0 = no-wait) raises LockAcquisitionError
 ```
 
+### Missing Directory Creation
+
+The lock system may create directories so it can place lock files, but it checks
+for conflicts first:
+
+```
+1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create the directory
+2. No current conflict -> create the directory and write the lock
+3. A post-write double-check finds a new conflict -> remove our own lock and fail or retry
+4. Step 3 does not roll back the empty directory
+```
+
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLock checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
+**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
 
 **In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
 

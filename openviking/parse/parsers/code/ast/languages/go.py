@@ -50,7 +50,14 @@ def _extract_function(node, content_bytes: bytes, docstring: str = "") -> Functi
         elif child.type == "type_identifier":
             return_type = _node_text(child, content_bytes)
 
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_struct(node, content_bytes: bytes, docstring: str = "") -> ClassSkeleton:
@@ -59,7 +66,14 @@ def _extract_struct(node, content_bytes: bytes, docstring: str = "") -> ClassSke
         if child.type == "type_identifier":
             name = _node_text(child, content_bytes)
             break
-    return ClassSkeleton(name=name, bases=[], docstring=docstring, methods=[])
+    return ClassSkeleton(
+        name=name,
+        bases=[],
+        docstring=docstring,
+        methods=[],
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 class GoExtractor(LanguageExtractor):

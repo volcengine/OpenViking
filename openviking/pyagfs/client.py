@@ -292,6 +292,19 @@ class AGFSClient:
         except Exception as e:
             self._handle_request_error(e)
 
+    def ensure_parent_dirs(self, path: str, mode: str = "755") -> Dict[str, Any]:
+        """Ensure all parent directories exist for the given path"""
+        try:
+            response = self.session.post(
+                f"{self.api_base}/directories/ensure-parent",
+                params={"path": path, "mode": mode},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            self._handle_request_error(e)
+
     def rm(self, path: str, recursive: bool = False, force: bool = True) -> Dict[str, Any]:
         """Remove a file or directory.
 
@@ -823,6 +836,30 @@ class AGFSClient:
             )
             response.raise_for_status()
             return response.json()
+        except Exception as e:
+            self._handle_request_error(e)
+
+    def get_stats(self, path: Optional[str] = None) -> Dict[str, Any]:
+        """Get filesystem statistics
+
+        Args:
+            path: Optional mount path to get stats for. If None, get stats for all mounts.
+
+        Returns:
+            Statistics data
+        """
+        try:
+            params = {}
+            if path is not None:
+                params["path"] = path
+            response = self.session.get(
+                f"{self.api_base}/stats",
+                params=params,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("data", {})
         except Exception as e:
             self._handle_request_error(e)
 

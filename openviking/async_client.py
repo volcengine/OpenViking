@@ -251,7 +251,7 @@ class AsyncOpenViking:
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
-            to: Exact target URI (must not exist yet).
+            to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
@@ -342,6 +342,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """
         Complex search with session context.
@@ -370,6 +371,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            level=level,
         )
 
     async def find(
@@ -383,6 +385,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        level: Optional[List[int]] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -396,6 +399,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            level=level,
         )
 
     # ============= FS methods =============
@@ -516,20 +520,6 @@ class AsyncOpenViking:
         """Get resource status"""
         await self._ensure_initialized()
         return await self._client.stat(uri)
-
-    async def count(
-        self,
-        uri: str,
-        recursive: bool = False,
-        show_all_hidden: bool = False,
-    ) -> Dict[str, int]:
-        """Count files and sub-directories under a directory."""
-        await self._ensure_initialized()
-        return await self._client.count(
-            uri,
-            recursive=recursive,
-            show_all_hidden=show_all_hidden,
-        )
 
     # ============= Relation methods =============
 

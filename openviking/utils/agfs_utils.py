@@ -4,6 +4,7 @@
 RAGFS Client utilities for creating and configuring RAGFS clients.
 """
 
+import multiprocessing
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -13,15 +14,70 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def resolve_queuefs_mount_point(config: Any = None) -> str:
+    """Resolve QueueFS mount point for the current process.
+
+    `shared` keeps the historical global queue root (`/queue`).
+    `worker` isolates each worker under `/queue/worker-<index|pid>`.
+    """
+    mode = None
+    if config is not None:
+        storage = getattr(config, "storage", None)
+        if storage is None and hasattr(config, "agfs"):
+            storage = config
+        agfs = getattr(storage, "agfs", None) if storage is not None else None
+        queuefs = getattr(agfs, "queuefs", None) if agfs is not None else None
+        mode = getattr(queuefs, "mode", None)
+
+    if not mode:
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            mode = get_openviking_config().storage.agfs.queuefs.mode
+        except Exception:
+            mode = "shared"
+
+    if mode == "worker":
+        identity = getattr(multiprocessing.current_process(), "_identity", ())
+        if identity:
+            worker_id = str(identity[0] - 1)
+        else:
+            worker_id = str(os.getpid())
+        return f"/queue/worker-{worker_id}"
+    return "/queue"
+
+
+def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
+    """Build QueueFS plugin configuration from AGFS config with legacy compatibility."""
+    default_queue_db_path = data_path / "_system" / "queue" / "queue.db"
+    queuefs_config = getattr(agfs_config, "queuefs", None)
+
+    backend = getattr(queuefs_config, "backend", "sqlite") if queuefs_config else "sqlite"
+    plugin_config: Dict[str, Any] = {
+        "backend": backend,
+        "recover_stale_sec": getattr(queuefs_config, "recover_stale_sec", 0),
+        "busy_timeout_ms": getattr(queuefs_config, "busy_timeout_ms", 5000),
+    }
+
+    if backend in {"sqlite", "sqlite3"}:
+        configured_queue_db_path = None
+        if queuefs_config is not None:
+            configured_queue_db_path = getattr(queuefs_config, "db_path", None)
+        if not configured_queue_db_path:
+            configured_queue_db_path = getattr(agfs_config, "queue_db_path", None)
+
+        if configured_queue_db_path:
+            queue_db_path = str(Path(configured_queue_db_path).expanduser().resolve())
+        else:
+            queue_db_path = str(default_queue_db_path)
+
+        plugin_config["db_path"] = queue_db_path
+
+    return plugin_config
+
+
 def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
     """Dynamically generate RAGFS plugin configuration based on backend type."""
-    default_queue_db_path = data_path / "_system" / "queue" / "queue.db"
-    configured_queue_db_path = getattr(agfs_config, "queue_db_path", None)
-    if configured_queue_db_path:
-        queue_db_path = str(Path(configured_queue_db_path).expanduser().resolve())
-    else:
-        queue_db_path = str(default_queue_db_path)
-
     config = {
         "serverinfofs": {
             "enabled": True,
@@ -33,10 +89,7 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
         "queuefs": {
             "enabled": True,
             "path": "/queue",
-            "config": {
-                "backend": "sqlite",
-                "db_path": queue_db_path,
-            },
+            "config": _build_queuefs_plugin_config(agfs_config, data_path),
         },
     }
 
@@ -136,7 +189,6 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
     vikingfs_path = data_path / "viking"
 
     vikingfs_path.mkdir(parents=True, exist_ok=True)
-    (data_path / "_system" / "queue").mkdir(parents=True, exist_ok=True)
 
     # 1. Mount standard plugins
     config = _generate_plugin_config(agfs_config, data_path)

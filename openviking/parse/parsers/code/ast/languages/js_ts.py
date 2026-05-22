@@ -90,7 +90,14 @@ def _extract_function(
 
     if not docstring:
         docstring = _first_string_in_body(body_node, content_bytes)
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_class(
@@ -138,7 +145,14 @@ def _extract_class(
                         methods.append(fn)
                         break
 
-    return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
+    return ClassSkeleton(
+        name=name,
+        bases=bases,
+        docstring=docstring,
+        methods=methods,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 class JsTsExtractor(LanguageExtractor):

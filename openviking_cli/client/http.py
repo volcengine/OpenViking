@@ -539,24 +539,6 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def count(
-        self,
-        uri: str,
-        recursive: bool = False,
-        show_all_hidden: bool = False,
-    ) -> Dict[str, Any]:
-        """Count files and sub-directories under a directory."""
-        uri = VikingURI.normalize(uri)
-        response = await self._http.get(
-            "/api/v1/fs/count",
-            params={
-                "uri": uri,
-                "recursive": recursive,
-                "show_all_hidden": show_all_hidden,
-            },
-        )
-        return self._handle_response(response)
-
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         uri = VikingURI.normalize(uri)

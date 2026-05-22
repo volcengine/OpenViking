@@ -319,7 +319,7 @@ overview = await client.overview("viking://resources/docs/")
 
 ```python
 # 资源只添加到 resources 作用域
-await client.add_resource(url, target="viking://resources/project/")
+await client.add_resource(url, to="viking://resources/project/")
 
 # 技能添加到 agent 作用域
 await client.add_skill(skill)  # 自动到 viking://agent/skills/

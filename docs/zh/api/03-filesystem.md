@@ -21,6 +21,7 @@ Phase 1 有意把范围控制得比较小：
 
 - 通过 WebDAV 新建文件时，会对该文件路径触发 OpenViking 的语义生成。
 - 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
+- `PUT` 不会自动创建父目录。缺失的目录需要先用 `MKCOL` 创建。
 - 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
 
 ## API 参考
@@ -179,7 +180,7 @@ openviking read viking://resources/docs/api.md
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | 已存在文件的 URI |
+| uri | str | 是 | - | 要写入的文件 URI。`mode="create"` 时目标文件必须不存在 |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
@@ -363,7 +364,6 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
-| limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**
@@ -497,69 +497,9 @@ openviking stat viking://resources/my-project/docs
 }
 ```
 
-`isLocked` 字段反映路径当前是否被 path lock 持有：路径自身存在有效的 `.path.ovlock`，或者任一祖先目录持有 SUBTREE 锁。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
+`isLocked` 字段反映路径当前是否被路径锁持有：路径自身存在有效锁（包括目标路径对应的 exact-path lock），或者任一祖先目录持有 TreeLock。当 LockManager 不可用或查询失败时返回 `false`，调用方可据此避免先写入再观察到 `ResourceBusyError`。
 
-`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。如需对实际文件系统目录项进行精确计数，请改用 [`count()`](#count)。
-
----
-
-### count()
-
-统计目录下的文件和子目录数量（基于实际文件系统遍历，非向量索引估算）。
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| uri | str | 是 | - | 目标目录的 Viking URI |
-| recursive | bool | 否 | False | 是否递归统计所有后代；`False` 时只统计直接子项 |
-| show_all_hidden | bool | 否 | False | 是否包含隐藏文件（文件名以 `.` 开头） |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.count("viking://resources/my-project")
-print(f"files={result['files']}, dirs={result['dirs']}, total={result['total']}")
-
-# 递归统计
-result = client.count("viking://resources/my-project", recursive=True)
-```
-
-**HTTP API**
-
-```
-GET /api/v1/fs/count?uri={uri}&recursive={bool}&show_all_hidden={bool}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/fs/count?uri=viking://resources/my-project&recursive=true" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking count viking://resources/my-project
-openviking count viking://resources/my-project -r        # 递归
-openviking count viking://resources/my-project -r -a     # 递归并包含隐藏文件
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/my-project",
-    "files": 12,
-    "dirs": 3,
-    "total": 15
-  },
-  "time": 0.01
-}
-```
-
-若 `uri` 不是目录，会返回 `FailedPrecondition` 错误；若 `uri` 不存在，则返回 `NotFound`。
+`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。
 
 ---
 
@@ -764,7 +704,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
-| node_limit | int | 否 | None | 最大搜索节点数 |
+| node_limit | int | 否 | None | 最大返回节点数 |
 | level_limit | int | 否 | 5 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**

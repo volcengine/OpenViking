@@ -119,7 +119,6 @@ class TestSessionHistoryProviderSpecificFields:
 
 
 class TestChatChannel:
-
     def test_chat_channel_initialization(self, message_bus, temp_workspace):
         """Test that ChatChannel can be initialized correctly."""
         config = ChatChannelConfig()

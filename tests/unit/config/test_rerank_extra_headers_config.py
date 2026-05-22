@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 """Tests for rerank extra_headers configuration."""
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,17 +15,14 @@ def test_rerank_config_with_extra_headers():
         "model": "gpt-4",
         "api_key": "test-key",
         "api_base": "https://api.example.com/v1",
-        "extra_headers": {
-            "x-gw-apikey": "Bearer real-key",
-            "X-Custom-Header": "custom-value"
-        }
+        "extra_headers": {"x-gw-apikey": "Bearer real-key", "X-Custom-Header": "custom-value"},
     }
 
     config = RerankConfig(**config_data)
 
     assert config.extra_headers == {
         "x-gw-apikey": "Bearer real-key",
-        "X-Custom-Header": "custom-value"
+        "X-Custom-Header": "custom-value",
     }
 
 
@@ -35,7 +33,7 @@ def test_rerank_config_without_extra_headers():
     config_data = {
         "model": "gpt-4",
         "api_key": "test-key",
-        "api_base": "https://api.example.com/v1"
+        "api_base": "https://api.example.com/v1",
     }
 
     config = RerankConfig(**config_data)
@@ -49,16 +47,8 @@ def test_rerank_config_extra_headers_type_validation():
 
     # Invalid: not a dict
     with pytest.raises(ValidationError):
-        RerankConfig(
-            model="gpt-4",
-            api_key="test-key",
-            extra_headers="invalid"
-        )
+        RerankConfig(model="gpt-4", api_key="test-key", extra_headers="invalid")
 
     # Invalid: dict with non-string value
     with pytest.raises(ValidationError):
-        RerankConfig(
-            model="gpt-4",
-            api_key="test-key",
-            extra_headers={"header": 123}
-        )
+        RerankConfig(model="gpt-4", api_key="test-key", extra_headers={"header": 123})

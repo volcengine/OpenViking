@@ -21,7 +21,7 @@ content_template: |
   Static Description:
   "{{ static_desc|default('N/A') }}"
 
-  - Success rate: {{ ((success_time|default(0) / (call_count|default(1) if call_count|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0) }}/{{ call_count|default(0) }})
+  - Success rate: {{ (((success_time|default(0, true)) / ((call_count|default(0, true)) if (call_count|default(0, true)) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0, true) }}/{{ call_count|default(0, true) }})
   - When to use: {{ when_to_use|default('N/A') }}
   - Optimal params: {{ optimal_params|default('N/A') }}
   - Common failures: {{ common_failures|default('N/A') }}

@@ -194,6 +194,12 @@ class ShardedInflightCounter:
                 result.update(self._shards[i])
         return result
 
+    def clear(self) -> None:
+        """Clear all inflight counters. Intended for tests and shutdown hygiene."""
+        for i in range(self._num_shards):
+            with self._locks[i]:
+                self._shards[i].clear()
+
 
 # Global sharded inflight counter instance
 # Using 16 shards provides good balance between memory and contention reduction
@@ -677,6 +683,10 @@ def apply_http_metrics_finalize(
             status=str(root_attrs.http_status_code or 500),
             duration_seconds=elapsed,
             account_id=final_account_id,
+            request_id=root_attrs.request_id,
+            user_id=root_attrs.user_id,
+            agent_id=root_attrs.agent_id,
+            url_path=root_attrs.url_path,
         )
 
     except (TypeError, ValueError, AttributeError) as e:
@@ -816,6 +826,7 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
 
         # Extract request information
         raw_path = str(request.url.path)
+        raw_query = request.url.query or None
         route_template = _get_route_template(request)
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
 
@@ -825,6 +836,7 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
             http_route=route_template,
             request_id=request_id,
             url_path=raw_path,
+            url_query=raw_query,
             url_scheme=request.url.scheme,
             http_host=request.url.netloc,
             source_type=request.headers.get("x-source-type"),

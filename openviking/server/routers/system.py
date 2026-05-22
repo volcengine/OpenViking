@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -19,6 +20,19 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+async def _embedding_probe(embedder) -> str:
+    """Quick embedding probe: embed a single token and check for errors."""
+    from openviking.models.embedder.base import embed_compat
+
+    try:
+        await embed_compat(embedder, "ok", is_query=True)
+        return "ok"
+    except Exception as e:
+        provider = getattr(embedder, "provider", "unknown")
+        model = getattr(embedder, "model_name", "unknown")
+        return f"error: provider={provider} model={model}: {e}"
 
 
 @router.get("/health", tags=["system"])
@@ -120,7 +134,25 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["api_key_manager"] = f"error: {e}"
 
-    # 4. Ollama: connectivity check if configured
+    # 4. Embedding: quick probe to verify the provider is reachable
+    try:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        embedder = ov_config.embedding.get_embedder()
+        if embedder is not None:
+            probe_result = await asyncio.wait_for(
+                _embedding_probe(embedder), timeout=10.0
+            )
+            checks["embedding"] = probe_result
+        else:
+            checks["embedding"] = "not_configured"
+    except asyncio.TimeoutError:
+        checks["embedding"] = "error: probe timed out (provider unreachable)"
+    except Exception as e:
+        checks["embedding"] = f"error: {e}"
+
+    # 5. Ollama: connectivity check if configured
     try:
         from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
         from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config

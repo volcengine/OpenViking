@@ -166,7 +166,7 @@ The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other 
 await client.add_resource(
     "./document.pdf",
     reason="Project technical documentation",  # Describe resource purpose to improve retrieval quality
-    target="viking://resources/docs/"  # Specify storage location
+    to="viking://resources/docs/"  # Specify storage location
 )
 
 # Add web page

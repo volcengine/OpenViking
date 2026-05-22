@@ -10,13 +10,11 @@ Memory Isolation Handler - 处理记忆的隔离机制
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.namespace import to_user_space, to_agent_space
-from openviking.message import Message
-from openviking.server.identity import AccountNamespacePolicy, RequestContext
-from openviking.session.memory.utils.uri import generate_uri
-from openviking.session.memory.memory_updater import ExtractContext
-from openviking_cli.session.user_id import UserIdentifier
+from openviking.core.namespace import to_agent_space, to_user_space
+from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.utils.uri import generate_uri
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -48,7 +46,7 @@ class MemoryIsolationHandler:
             return
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:
-            msg.role_id = None
+            msg.role_id = self.ctx.resolve_role_id(msg.role, msg.role_id) if self.ctx else None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -81,7 +79,6 @@ class MemoryIsolationHandler:
         )
 
     def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
-
         user_ids = set()
         agent_ids = set()
 

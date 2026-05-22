@@ -46,8 +46,7 @@ def test_dynamic_reminders_flag_large_key_facts_and_bulk_urls():
         for i in range(1, 42)
     )
     files_context = "\n".join(
-        f"- https://example.com/images/{i}.png - raw parser image URL."
-        for i in range(1, 23)
+        f"- https://example.com/images/{i}.png - raw parser image URL." for i in range(1, 23)
     )
 
     reminders = Session._build_wm_section_reminders(

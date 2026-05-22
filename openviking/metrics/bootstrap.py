@@ -26,10 +26,13 @@ Notes:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from openviking.metrics.collectors import (
     AsyncSystemProbeCollector,
     CollectorManager,
     EncryptionProbeCollector,
+    FeedbackCollector,
     LockCollector,
     ModelProviderProbeCollector,
     ModelUsageCollector,
@@ -61,7 +64,7 @@ from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 
-def create_default_collector_manager(*, app=None, service=None) -> CollectorManager:
+def create_default_collector_manager(*, app=None, service=None, config=None) -> CollectorManager:
     """
     Build the default `CollectorManager` used by the server's Prometheus endpoint.
 
@@ -80,6 +83,9 @@ def create_default_collector_manager(*, app=None, service=None) -> CollectorMana
     manager = CollectorManager()
     manager.register(QueueCollector(data_source=QueuePipelineStateDataSource()))
     manager.register(TaskTrackerCollector(data_source=TaskStateDataSource()))
+    feedback_bot_data_path = _resolve_feedback_bot_data_path(config)
+    if feedback_bot_data_path is not None:
+        manager.register(FeedbackCollector(bot_data_path=feedback_bot_data_path))
     manager.register(ObserverHealthCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(ObserverStateCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(LockCollector(data_source=LockStateDataSource()))
@@ -108,3 +114,13 @@ def create_default_collector_manager(*, app=None, service=None) -> CollectorMana
         )
     )
     return manager
+
+
+def _resolve_feedback_bot_data_path(config) -> Path | None:
+    if config is None:
+        return None
+    metrics_config = getattr(getattr(config, "observability", None), "metrics", None)
+    bot_data_path = getattr(metrics_config, "bot_data_path", None)
+    if not bot_data_path:
+        return None
+    return Path(bot_data_path)

@@ -106,23 +106,45 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        self.base.patch(path, body, params).await
+    }
+
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        params: &[(String, String)],
+    ) -> Result<T> {
+        self.base.post_with_query(path, body, params).await
+    }
+
     // ============ File Helper Methods ============
 
     fn create_uploader(&self) -> FileUploader {
         FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
     }
 
-    fn zip_directory(&self, dir_path: &Path) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory(dir_path)
+    fn zip_directory(
+        &self,
+        dir_path: &Path,
+        ignore_dirs: Option<&str>,
+    ) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader().zip_directory(dir_path, ignore_dirs)
     }
 
     fn zip_directory_with_progress(
         &self,
         dir_path: &Path,
         verbose: bool,
+        ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader()
-            .zip_directory_with_progress(dir_path, verbose)
+        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -325,20 +347,6 @@ impl HttpClient {
         self.get("/api/v1/fs/stat", &params).await
     }
 
-    pub async fn count(
-        &self,
-        uri: &str,
-        recursive: bool,
-        show_all_hidden: bool,
-    ) -> Result<serde_json::Value> {
-        let params = vec![
-            ("uri".to_string(), uri.to_string()),
-            ("recursive".to_string(), recursive.to_string()),
-            ("show_all_hidden".to_string(), show_all_hidden.to_string()),
-        ];
-        self.get("/api/v1/fs/count", &params).await
-    }
-
     // ============ Search Methods ============
 
     pub async fn find(
@@ -350,7 +358,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
-        level: Option<String>,
+        level: Option<Vec<i32>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -375,7 +383,7 @@ impl HttpClient {
         since: Option<String>,
         until: Option<String>,
         time_field: Option<String>,
-        level: Option<String>,
+        level: Option<Vec<i32>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -476,9 +484,9 @@ impl HttpClient {
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
                 let zip_file = if show_progress {
-                    self.zip_directory_with_progress(path_obj, verbose)?
+                    self.zip_directory_with_progress(path_obj, verbose, ignore_dirs.as_deref())?
                 } else {
-                    self.zip_directory(path_obj)?
+                    self.zip_directory(path_obj, ignore_dirs.as_deref())?
                 };
                 let temp_file_id = if show_progress {
                     self.upload_temp_file_with_progress(zip_file.path(), verbose)
@@ -588,13 +596,24 @@ impl HttpClient {
         data: &str,
         wait: bool,
         timeout: Option<f64>,
+        show_progress: bool,
+        verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
         if path_obj.exists() {
             if path_obj.is_dir() {
-                let zip_file = self.zip_directory(path_obj)?;
-                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
+                let zip_file = if show_progress {
+                    self.zip_directory_with_progress(path_obj, verbose, None)?
+                } else {
+                    self.zip_directory(path_obj, None)?
+                };
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(zip_file.path()).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
@@ -607,7 +626,12 @@ impl HttpClient {
                     .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
                     .await
             } else if path_obj.is_file() {
-                let temp_file_id = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(path_obj, verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(path_obj).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
@@ -1052,6 +1076,66 @@ impl HttpClient {
         );
         let body = serde_json::json!({ "version": version });
         self.post(&path, &body).await
+    }
+
+    // ============ Watch Management (RFC #2104) ============
+
+    pub async fn list_watches(&self, active_only: bool) -> Result<serde_json::Value> {
+        let mut params = vec![];
+        if active_only {
+            params.push(("active_only".to_string(), "true".to_string()));
+        }
+        self.get("/api/v1/watches", &params).await
+    }
+
+    pub async fn get_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn get_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.get("/api/v1/watches", &params).await
+    }
+
+    pub async fn patch_watch_by_id(
+        &self,
+        task_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.patch(&path, body, &[]).await
+    }
+
+    pub async fn patch_watch_by_uri(
+        &self,
+        to_uri: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.patch("/api/v1/watches", body, &params).await
+    }
+
+    pub async fn delete_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}", task_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn delete_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        self.delete("/api/v1/watches", &params).await
+    }
+
+    pub async fn trigger_watch_by_id(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/watches/{}/trigger", task_id);
+        let empty = serde_json::json!({});
+        self.post(&path, &empty).await
+    }
+
+    pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("to_uri".to_string(), to_uri.to_string())];
+        let empty = serde_json::json!({});
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
     }
 }
 

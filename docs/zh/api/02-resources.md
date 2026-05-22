@@ -107,7 +107,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 1. API 实现介绍
 
-此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。
+此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
 
 **处理流程**：
 1. 识别资源来源（URL 或上传的临时文件）
@@ -131,8 +131,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 |------|------|------|--------|------|
 | path | string | 否 | - | 远程资源 URL（HTTP/HTTPS/Git）。与 `temp_file_id` 二选一 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID。与 `path` 二选一 |
-| to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 和 `parent_auto_create` 互斥 |
-| parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 和 `parent_auto_create` 互斥 |
+| to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
+| parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
 | reason | string | 否 | "" | 添加资源的原因（用于文档化和相关性提升，实验特性） |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
@@ -148,10 +148,11 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
-- `to`、`parent` 和 `parent_auto_create` 都可用于指定目标路径，但不能同时使用；指定 `to` 且目标已存在时，触发增量更新。
+- `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `watch_interval` 仅在指定 `to` 时生效
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
 
@@ -323,6 +324,99 @@ temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
+
+---
+
+### Watch Management（监控任务管理）
+
+列出、查看、更新和触发通过 [`add_resource`](#add_resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
+
+#### 1. API 实现介绍
+
+此控制面封装了 `WatchManager` 原语，未改动任何服务端行为。每个端点和 CLI 命令都支持通过 `task_id`（路径）或 `to_uri`（查询参数）定位目标任务，两种键可以互换；如果同时提供，二者必须指向同一任务，否则返回 400。
+
+**操作**：
+- **列出**（`GET /api/v1/watches`）— 返回 `{tasks, total}`；可传 `?active_only=true` 过滤；传 `?to_uri=...` 时降级为单任务查找
+- **查看**（`GET /api/v1/watches/{task_id}`）— 查看单个任务；可选 `?to_uri=` 做跨键一致性校验
+- **更新**（`PATCH /api/v1/watches/{task_id}` 或 `PATCH /api/v1/watches?to_uri=...`）— 部分更新 `watch_interval`、`is_active`、`reason`、`instruction`。`is_active` 与 `watch_interval` 正交：翻转 `is_active` 可在不丢失配置周期的前提下暂停/恢复任务。
+- **删除**（`DELETE /api/v1/watches/{task_id}` 或 `DELETE /api/v1/watches?to_uri=...`）
+- **触发**（`POST /api/v1/watches/{task_id}/trigger` 或 `POST /api/v1/watches/trigger?to_uri=...`）— 触发即返回（fire-and-forget），重新摄取在后台异步执行
+
+**代码入口**：
+- `openviking/server/routers/watches.py` — `/api/v1/watches` REST 路由
+- `crates/ov_cli/src/commands/watch.rs` — `ov task watch` CLI 子命令组
+- `openviking/server/mcp_endpoint.py` — MCP `list_watches` / `cancel_watch` 工具，以及 `add_resource` 上的 `watch_interval` / `to` 参数
+- `openviking/resource/watch_manager.py:WatchManager` — 任务持久化与调度原语
+
+#### 2. 接口和参数说明
+
+对每个单任务端点，路径中的 `{task_id}` 都可用查询参数 `?to_uri=` 替代。CLI 的 `<key>` 参数会自动分类：任何以 `viking://` 开头的值走 by-URI 路径，其他值视为 task_id（其它 scheme 如 `http://` 会在本地直接报错，避免静默 404）。
+
+**`PATCH /watches` 请求体**（字段均可选，至少需提供一个）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| watch_interval | float | 新的检查周期（分钟），必须 `> 0`；如需暂停而保留周期请改用 `is_active=false`。 |
+| is_active | bool | 切换激活状态而保留配置周期（暂停 / 恢复）。 |
+| reason | string | 更新该监控任务的记录原因。 |
+| instruction | string | 更新语义处理指令。 |
+
+未识别字段会被 422 拒绝（`extra="forbid"`）。未传字段保留原值。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```bash
+# 列出活跃监控任务（去掉 ?active_only 可同时包含已暂停的任务）
+curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
+  -H "X-API-Key: your-key"
+
+# 暂停一个监控任务而保留其检查周期
+curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d '{"is_active": false}'
+
+# 触发一次立即刷新（fire-and-forget，立即返回，再次摄取在后台执行）
+curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
+  -H "X-API-Key: your-key"
+
+# 按 URI 而非 task_id 定位任务
+curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**（`ov task watch` 子命令）
+
+```bash
+# 列出活跃监控任务（去掉 --active-only 可同时包含已暂停的任务）
+ov task watch ls --active-only
+
+# 查看单个监控任务（key 可以是 viking:// URI 或 task_id）
+ov task watch show viking://resources/guide.md
+
+# 暂停 / 恢复，不丢失配置周期
+ov task watch pause viking://resources/guide.md
+ov task watch resume viking://resources/guide.md
+
+# 更新周期（或 --active / --reason / --instruction 的任意组合）
+ov task watch update viking://resources/guide.md --interval 30
+
+# 触发一次立即刷新（fire-and-forget）
+ov task watch trigger viking://resources/guide.md
+
+# 删除监控任务
+ov task watch rm viking://resources/guide.md
+```
+
+**MCP**（Agent 控制面——仅最小闭包）
+
+```text
+list_watches()                                            # 每个任务一行；只暴露 URI，不暴露 task_id
+cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
+```
+
+暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](#add_resource) 配合 `watch_interval` 和 `to`。
 
 ---
 
