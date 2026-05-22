@@ -8,7 +8,7 @@ Uses MemoryExtractor for 8-category extraction and MemoryDeduplicator for LLM-ba
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
@@ -585,75 +585,6 @@ class SessionCompressor:
             except Exception:
                 self._pending_semantic_changes.clear()
                 raise
-
-    async def extract_session_skills(
-        self,
-        messages: List[Message],
-        *,
-        ctx: Optional[RequestContext] = None,
-        latest_archive_overview: str = "",
-        archive_uri: str = "",
-    ) -> List[Dict[str, Any]]:
-        """Extract reusable skills from archived session messages via the ReAct skill pipeline."""
-        if not messages or not ctx or not self.skill_processor:
-            return []
-
-        from openviking.session.compressor_v2 import ExtractLoop
-        from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-        from openviking.session.memory.memory_updater import ExtractContext
-        from openviking.session.skill import (
-            SessionSkillContextProvider,
-            SkillOperationUpdater,
-            dedup_session_skill_operations,
-        )
-        from openviking_cli.utils.config import get_openviking_config
-
-        config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
-        viking_fs = get_viking_fs()
-        if not viking_fs:
-            return []
-
-        extract_context = ExtractContext(messages)
-        isolation_handler = MemoryIsolationHandler(ctx, extract_context)
-        isolation_handler.prepare_messages()
-
-        provider = SessionSkillContextProvider(
-            messages=messages,
-            latest_archive_overview=latest_archive_overview,
-            isolation_handler=isolation_handler,
-            ctx=ctx,
-            viking_fs=viking_fs,
-        )
-        orchestrator = ExtractLoop(
-            vlm=vlm,
-            viking_fs=viking_fs,
-            ctx=ctx,
-            context_provider=provider,
-            isolation_handler=isolation_handler,
-        )
-        operations, _ = await orchestrator.run()
-        if operations is None:
-            return []
-        operations = dedup_session_skill_operations(operations)
-
-        updater = SkillOperationUpdater(
-            registry=provider._get_registry(),
-            skill_processor=self.skill_processor,
-            viking_fs=viking_fs,
-        )
-        result = await updater.apply_operations(operations, ctx)
-
-        if result.errors:
-            logger.warning("Session skill extraction completed with %d errors", len(result.errors))
-
-        persisted_results: List[Dict[str, Any]] = []
-        for item in result.operation_results:
-            payload = dict(item)
-            if archive_uri:
-                payload["archive_uri"] = archive_uri
-            persisted_results.append(payload)
-        return persisted_results
 
     def _extract_tool_parts(self, messages: List[Message]) -> List:
         """Extract all ToolPart from messages."""

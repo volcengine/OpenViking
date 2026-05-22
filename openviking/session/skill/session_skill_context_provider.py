@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from openviking.core.namespace import canonical_agent_root
 from openviking.core.skill_loader import SkillLoader
@@ -15,12 +14,14 @@ from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
+from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
-from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+SESSION_SKILL_MEMORY_TYPE = "session_skills"
 
 
 def resolve_skill_extract_templates_dir() -> Path:
@@ -28,67 +29,68 @@ def resolve_skill_extract_templates_dir() -> Path:
     return PromptManager._resolve_templates_dir(None) / "skill_extract"
 
 
+def load_skill_extract_registry() -> MemoryTypeRegistry:
+    registry = MemoryTypeRegistry(load_schemas=False)
+    loaded = registry.load_from_directory(str(resolve_skill_extract_templates_dir()))
+    if loaded == 0:
+        raise RuntimeError("No session skill schemas loaded from skill_extract templates")
+    return registry
+
+
+def parse_skill_extract_file(raw_content: str) -> Dict[str, Any]:
+    try:
+        parsed = SkillLoader.parse(raw_content)
+        return {
+            "name": parsed.get("name", ""),
+            "description": parsed.get("description", ""),
+            "content": parsed.get("content", ""),
+            "allowed_tools": parsed.get("allowed_tools", []),
+            "tags": parsed.get("tags", []),
+        }
+    except Exception:
+        return parse_memory_file_with_fields(raw_content)
+
+
+def build_skill_read_result(
+    raw_content: str,
+    *,
+    uri: str,
+    offset: int = 0,
+    limit: int = -1,
+) -> Tuple[Dict[str, Any], MemoryFile]:
+    parsed = parse_skill_extract_file(raw_content)
+    stored = MemoryFile.from_parsed(uri=uri, parsed=dict(parsed))
+
+    llm_result = {
+        "name": parsed.get("name", ""),
+        "description": parsed.get("description", ""),
+        "allowed_tools": parsed.get("allowed_tools", []),
+        "tags": parsed.get("tags", []),
+    }
+    plain_content = parsed.get("content", "") or ""
+    visible_content = slice_content_lines(plain_content, offset=offset, limit=limit)
+    if visible_content:
+        llm_result["content"] = add_line_numbers(visible_content, start_line=offset + 1)
+    elif line_count(plain_content) == 0:
+        llm_result["content"] = (
+            "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+        )
+    else:
+        llm_result["content"] = (
+            "<system-reminder>Warning: the file exists but is shorter than the provided "
+            f"offset ({offset + 1}). The file has {line_count(plain_content)} lines.</system-reminder>"
+        )
+    return llm_result, stored
+
+
 class SessionSkillContextProvider(SessionExtractContextProvider):
     """Provider that reuses session ReAct extraction for real skill assets."""
 
     def instruction(self) -> str:
-        return f"""You are a skill extraction agent. Your task is to analyze the archived conversation and update executable SKILL assets.
-
-## Workflow
-1. Analyze the conversation and the pre-fetched skill catalog.
-2. If you need the full content of an existing skill, use the read tool on its SKILL.md.
-3. When you have enough information, output ONLY a JSON object (no extra text before or after).
-
-## Critical
-- Extract executable skills under viking://agent/.../skills/<skill_name>/SKILL.md, not agent/.../memories/skills.
-- Before updating an existing skill, you MUST read its full SKILL.md first.
-- The content field must contain only the SKILL.md body, without YAML frontmatter.
-- When updating an existing skill, keep the exact existing skill_name.
-- Prefer updating an existing overlapping skill instead of creating a new one, and never output duplicate operations for the same workflow.
-- If the conversation does not provide enough evidence for a reusable skill create/update, return an empty result.
-
-## Target Output Language
-All descriptions and skill content MUST be written in {self._output_language}.
-"""
-
-    def _build_conversation_message(self) -> Dict[str, Any]:
-        if self.messages:
-            first_msg_time = getattr(self.messages[0], "created_at", None)
-            last_msg_time = getattr(self.messages[-1], "created_at", None)
-        else:
-            first_msg_time = None
-            last_msg_time = None
-
-        if first_msg_time:
-            session_time = parse_iso_datetime(first_msg_time)
-        else:
-            session_time = datetime.now()
-
-        session_time_str = session_time.strftime("%Y-%m-%d %H:%M")
-        day_of_week = session_time.strftime("%A")
-        if last_msg_time and last_msg_time != first_msg_time:
-            last_time = parse_iso_datetime(last_msg_time)
-            time_display = f"{session_time_str} - {last_time.strftime('%Y-%m-%d %H:%M')}"
-        else:
-            time_display = session_time_str
-
-        conversation = self._assemble_conversation(self.messages)
-        latest_overview = ""
-        if self.latest_archive_overview:
-            latest_overview = (
-                f"## Latest Completed Archive Overview\n{self.latest_archive_overview}\n\n"
-            )
-
-        return {
-            "role": "user",
-            "content": (
-                f"## Conversation History\n"
-                f"**Session Time:** {time_display} ({day_of_week})\n"
-                "Relative times (e.g., 'last week', 'next month') are based on Session Time, not today.\n\n"
-                f"{latest_overview}"
-                f"{conversation}"
-            ),
-        }
+        return (
+            "You are an extraction agent. Analyze the archived conversation, use read when "
+            "needed, and output only JSON that matches the schema descriptions."
+        )
 
     async def prefetch(self) -> List[Dict[str, Any]]:
         pre_fetch_messages = [self._build_conversation_message()]
@@ -144,6 +146,12 @@ All descriptions and skill content MUST be written in {self._output_language}.
             return {"error": f"Unknown tool: {tool_call.name}"}
         arguments = tool_call.arguments or {}
         uri = arguments.get("uri", "")
+        offset = arguments.get("offset", 0)
+        limit = arguments.get("limit", -1)
+
+        if not uri.endswith("/SKILL.md"):
+            return await super().execute_tool(tool_call)
+
         try:
             raw_content = await self._viking_fs.read_file(uri, ctx=self._ctx)
         except NotFoundError as exc:
@@ -153,15 +161,14 @@ All descriptions and skill content MUST be written in {self._output_language}.
             logger.warning("Session skill read failed for %s: %s", uri, exc)
             return {"error": str(exc)}
 
-        if uri.endswith("/SKILL.md"):
-            parsed = self._parse_skill_file(raw_content)
-        else:
-            parsed = parse_memory_file_with_fields(raw_content)
-        self._read_file_contents[uri] = MemoryFile.from_parsed(
+        result, stored = build_skill_read_result(
+            raw_content,
             uri=uri,
-            parsed=dict(parsed),
+            offset=offset,
+            limit=limit,
         )
-        return parsed
+        self._read_file_contents[uri] = stored
+        return result
 
     def get_tools(self) -> List[str]:
         return ["read"]
@@ -171,23 +178,5 @@ All descriptions and skill content MUST be written in {self._output_language}.
 
     def _get_registry(self) -> MemoryTypeRegistry:
         if self._registry is None:
-            registry = MemoryTypeRegistry(load_schemas=False)
-            loaded = registry.load_from_directory(str(resolve_skill_extract_templates_dir()))
-            if loaded == 0:
-                raise RuntimeError("No session skill schemas loaded from skill_extract templates")
-            self._registry = registry
+            self._registry = load_skill_extract_registry()
         return self._registry
-
-    @staticmethod
-    def _parse_skill_file(raw_content: str) -> Dict[str, Any]:
-        try:
-            parsed = SkillLoader.parse(raw_content)
-            return {
-                "name": parsed.get("name", ""),
-                "description": parsed.get("description", ""),
-                "content": parsed.get("content", ""),
-                "allowed_tools": parsed.get("allowed_tools", []),
-                "tags": parsed.get("tags", []),
-            }
-        except Exception:
-            return parse_memory_file_with_fields(raw_content)

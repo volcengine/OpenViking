@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -6,10 +7,13 @@ import pytest
 from openviking.core.skill_loader import SkillLoader
 from openviking.message import Message, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
-from openviking.session.compressor import SessionCompressor
 from openviking.session.compressor_v2 import SessionCompressorV2
+from openviking.session.memory.agent_trajectory_context_provider import (
+    AgentTrajectoryContextProvider,
+)
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.schema_model_generator import SchemaPromptGenerator
 from openviking.session.memory_extractor import MemoryCategory, MemoryExtractor
 from openviking.session.skill.session_skill_context_provider import (
     SessionSkillContextProvider,
@@ -89,21 +93,16 @@ def _build_duplicate_session_skill_operations() -> ResolvedOperations:
 
 
 @pytest.mark.asyncio
-async def test_session_skill_instruction_includes_dedup_guidance():
-    provider = SessionSkillContextProvider(
-        messages=[
-            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable workflow")])
-        ],
-        latest_archive_overview="",
-        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
-        viking_fs=MagicMock(),
-    )
+async def test_session_skill_schema_description_is_loaded_from_yaml():
+    registry = _build_skill_registry()
+    schema = registry.get("session_skills")
+    assert schema is not None
 
-    instruction = provider.instruction()
-    assert "not agent/.../memories/skills" in instruction
-    assert "you MUST read its full SKILL.md first" in instruction
-    assert "keep the exact existing skill_name" in instruction
-    assert "never output duplicate operations for the same workflow" in instruction
+    descriptions = SchemaPromptGenerator([schema]).generate_type_descriptions()
+
+    assert "### session_skills" in descriptions
+    assert "一、提取内容的识别规则" in descriptions
+    assert "以后" in descriptions
 
 
 @pytest.mark.asyncio
@@ -149,63 +148,76 @@ async def test_extract_does_not_inject_skill_memory_candidate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_session_compressor_extract_session_skills_uses_react_results(monkeypatch):
+async def test_session_compressor_v2_extract_agent_memories_returns_session_skills(monkeypatch):
     config = MagicMock()
-    config.vlm.get_vlm_instance.return_value = MagicMock(model="dummy-model")
-    viking_fs = MagicMock()
+    config.memory.agent_memory_enabled = False
+    config.memory.session_skill_extraction_enabled = True
 
-    async def _fake_run(self):
-        return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+    async def _fake_run_extract_phase(
+        self,
+        provider,
+        messages,
+        ctx,
+        strict_extract_errors,
+        phase_label,
+        post_apply=None,
+    ):
+        del self, messages, ctx, strict_extract_errors, post_apply
+        assert phase_label == "trajectory"
+        assert provider._include_trajectories is False
+        assert provider._include_session_skills is True
+        return (
+            [],
+            [],
+            [],
+            {},
+            [
+                {
+                    "status": "success",
+                    "action": "create",
+                    "uri": "viking://agent/default/skills/code-review",
+                    "root_uri": "viking://agent/default/skills/code-review",
+                    "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
+                }
+            ],
+        )
 
-    async def _fake_apply(self, operations, ctx):
-        del operations, ctx
-        result = SkillOperationUpdateResult()
-        result.add_result(
+    monkeypatch.setattr("openviking.session.compressor_v2.get_openviking_config", lambda: config)
+    monkeypatch.setattr(SessionCompressorV2, "_run_extract_phase", _fake_run_extract_phase)
+
+    compressor = SessionCompressorV2(vikingdb=MagicMock(), skill_processor=MagicMock())
+    result = await compressor.extract_agent_memories(
+        messages=[Message(id="m1", role="assistant", parts=[TextPart("Summarize a review flow")])],
+        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        latest_archive_overview="",
+        archive_uri="viking://sessions/s1/history/archive_001",
+    )
+
+    assert result == {
+        "contexts": [],
+        "session_skills": [
             {
                 "status": "success",
                 "action": "create",
                 "uri": "viking://agent/default/skills/code-review",
                 "root_uri": "viking://agent/default/skills/code-review",
                 "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
+                "archive_uri": "viking://sessions/s1/history/archive_001",
             }
-        )
-        return result
-
-    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: config)
-    monkeypatch.setattr("openviking.session.compressor.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.session.compressor_v2.ExtractLoop.run", _fake_run)
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.SkillOperationUpdater.apply_operations",
-        _fake_apply,
-    )
-
-    compressor = SessionCompressor(vikingdb=MagicMock(), skill_processor=MagicMock())
-    result = await compressor.extract_session_skills(
-        messages=[
-            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable review flow")])
         ],
-        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
-        latest_archive_overview="",
-        archive_uri="viking://sessions/s1/history/archive_001",
-    )
-
-    assert result == [
-        {
-            "status": "success",
-            "action": "create",
-            "uri": "viking://agent/default/skills/code-review",
-            "root_uri": "viking://agent/default/skills/code-review",
-            "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
-            "archive_uri": "viking://sessions/s1/history/archive_001",
-        }
-    ]
+    }
 
 
 @pytest.mark.asyncio
-async def test_session_compressor_extract_session_skills_dedups_duplicate_creates(monkeypatch):
+async def test_session_compressor_v2_run_extract_phase_dedups_duplicate_session_skill_creates(
+    monkeypatch,
+):
     config = MagicMock()
     config.vlm.get_vlm_instance.return_value = MagicMock(model="dummy-model")
+    config.memory.v2_lock_retry_interval_seconds = 0
+    config.memory.v2_lock_max_retries = 0
     viking_fs = MagicMock()
+    viking_fs.agfs = None
 
     async def _fake_run(self):
         return _build_duplicate_session_skill_operations(), []
@@ -227,25 +239,32 @@ async def test_session_compressor_extract_session_skills_dedups_duplicate_create
         )
         return result
 
-    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: config)
-    monkeypatch.setattr("openviking.session.compressor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.session.compressor_v2.get_openviking_config", lambda: config)
+    monkeypatch.setattr("openviking.session.compressor_v2.get_viking_fs", lambda: viking_fs)
     monkeypatch.setattr("openviking.session.compressor_v2.ExtractLoop.run", _fake_run)
     monkeypatch.setattr(
         "openviking.session.skill.skill_operation_updater.SkillOperationUpdater.apply_operations",
         _fake_apply,
     )
 
-    compressor = SessionCompressor(vikingdb=MagicMock(), skill_processor=MagicMock())
-    result = await compressor.extract_session_skills(
-        messages=[
-            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable workflow")])
-        ],
-        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+    compressor = SessionCompressorV2(vikingdb=MagicMock(), skill_processor=MagicMock())
+    messages = [Message(id="m1", role="assistant", parts=[TextPart("Summarize a workflow")])]
+    provider = AgentTrajectoryContextProvider(
+        messages=messages,
         latest_archive_overview="",
-        archive_uri="",
+        include_trajectories=False,
+        include_session_skills=True,
+    )
+    result = await compressor._run_extract_phase(
+        provider=provider,
+        messages=messages,
+        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        strict_extract_errors=True,
+        phase_label="trajectory",
     )
 
-    assert result[0]["uri"] == "viking://agent/default/skills/general-knowledge-flow"
+    assert result is not None
+    assert result[4][0]["uri"] == "viking://agent/default/skills/general-knowledge-flow"
 
 
 @pytest.mark.asyncio
@@ -277,6 +296,84 @@ async def test_session_skill_context_provider_prefetch_lists_existing_skills():
     assert "Conversation History" in prefetched[0]["content"]
     assert "code-review" in prefetched[1]["content"]
     assert "SKILL.md" in prefetched[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_trajectory_context_provider_without_session_skills_prefetches_history_only():
+    provider = AgentTrajectoryContextProvider(
+        messages=[
+            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable review flow")])
+        ],
+        latest_archive_overview="",
+        include_trajectories=True,
+        include_session_skills=False,
+    )
+
+    prefetched = await provider.prefetch()
+
+    assert not isinstance(provider, SessionSkillContextProvider)
+    assert len(prefetched) == 1
+    assert "Conversation History" in prefetched[0]["content"]
+    assert provider.get_tools() == []
+
+
+@pytest.mark.asyncio
+async def test_agent_trajectory_context_provider_delegates_skill_prefetch_and_read():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    viking_fs = MagicMock()
+    viking_fs.ls = AsyncMock(
+        return_value=[
+            {
+                "name": "code-review",
+                "uri": "viking://agent/default/skills/code-review",
+                "isDir": True,
+                "abstract": "name: code-review\ndescription: Review code carefully",
+            }
+        ]
+    )
+    viking_fs.read_file = AsyncMock(
+        return_value="""---
+name: code-review
+description: Review code carefully
+allowed-tools:
+- Read
+tags:
+- session-derived
+---
+
+## 核心规范
+- 先读文件
+"""
+    )
+    provider = AgentTrajectoryContextProvider(
+        messages=[
+            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable review flow")])
+        ],
+        latest_archive_overview="",
+        include_trajectories=False,
+        include_session_skills=True,
+    )
+    provider._ctx = ctx
+    provider._viking_fs = viking_fs
+
+    prefetched = await provider.prefetch()
+    read_result = await provider.execute_tool(
+        SimpleNamespace(
+            name="read",
+            arguments={"uri": "viking://agent/default/skills/code-review/SKILL.md"},
+        )
+    )
+
+    assert len(prefetched) == 2
+    assert "code-review" in prefetched[1]["content"]
+    assert provider.get_tools() == ["read"]
+    assert read_result["name"] == "code-review"
+    assert "先读文件" in read_result["content"]
+    assert "viking://agent/default/skills/code-review/SKILL.md" in provider.read_file_contents
+    assert provider._skill_provider.read_file_contents is provider.read_file_contents
+    assert provider._skill_provider._ctx is ctx
+    assert provider._skill_provider._viking_fs is viking_fs
+    assert provider._skill_provider._extract_context is provider.get_extract_context()
 
 
 @pytest.mark.asyncio
@@ -435,103 +532,3 @@ def test_skill_loader_to_skill_md_round_trip_with_lists():
         "allowed_tools": ["Read"],
         "tags": ["session-derived"],
     }
-
-
-@pytest.mark.asyncio
-async def test_session_compressor_v2_extract_session_skills_uses_react_results(monkeypatch):
-    config = MagicMock()
-    config.vlm.get_vlm_instance.return_value = MagicMock(model="dummy-model")
-    viking_fs = MagicMock()
-
-    async def _fake_run(self):
-        return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
-
-    async def _fake_apply(self, operations, ctx):
-        del operations, ctx
-        result = SkillOperationUpdateResult()
-        result.add_result(
-            {
-                "status": "success",
-                "action": "create",
-                "uri": "viking://agent/default/skills/code-review",
-                "root_uri": "viking://agent/default/skills/code-review",
-                "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
-            }
-        )
-        return result
-
-    monkeypatch.setattr("openviking.session.compressor_v2.get_openviking_config", lambda: config)
-    monkeypatch.setattr("openviking.session.compressor_v2.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.session.compressor_v2.ExtractLoop.run", _fake_run)
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.SkillOperationUpdater.apply_operations",
-        _fake_apply,
-    )
-
-    compressor = SessionCompressorV2(vikingdb=MagicMock(), skill_processor=MagicMock())
-    result = await compressor.extract_session_skills(
-        messages=[
-            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable review flow")])
-        ],
-        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
-        latest_archive_overview="",
-        archive_uri="viking://sessions/s1/history/archive_001",
-    )
-
-    assert result == [
-        {
-            "status": "success",
-            "action": "create",
-            "uri": "viking://agent/default/skills/code-review",
-            "root_uri": "viking://agent/default/skills/code-review",
-            "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
-            "archive_uri": "viking://sessions/s1/history/archive_001",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_session_compressor_v2_extract_session_skills_dedups_duplicate_creates(monkeypatch):
-    config = MagicMock()
-    config.vlm.get_vlm_instance.return_value = MagicMock(model="dummy-model")
-    viking_fs = MagicMock()
-
-    async def _fake_run(self):
-        return _build_duplicate_session_skill_operations(), []
-
-    async def _fake_apply(self, operations, ctx):
-        del ctx
-        assert len(operations.upsert_operations) == 1
-        kept = operations.upsert_operations[0]
-        assert kept.memory_fields["skill_name"] == "常识题分析流程"
-        result = SkillOperationUpdateResult()
-        result.add_result(
-            {
-                "status": "success",
-                "action": "create",
-                "uri": kept.uris[0].rsplit("/SKILL.md", 1)[0],
-                "root_uri": kept.uris[0].rsplit("/SKILL.md", 1)[0],
-                "skill_md_uri": kept.uris[0],
-            }
-        )
-        return result
-
-    monkeypatch.setattr("openviking.session.compressor_v2.get_openviking_config", lambda: config)
-    monkeypatch.setattr("openviking.session.compressor_v2.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.session.compressor_v2.ExtractLoop.run", _fake_run)
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.SkillOperationUpdater.apply_operations",
-        _fake_apply,
-    )
-
-    compressor = SessionCompressorV2(vikingdb=MagicMock(), skill_processor=MagicMock())
-    result = await compressor.extract_session_skills(
-        messages=[
-            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable workflow")])
-        ],
-        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
-        latest_archive_overview="",
-        archive_uri="",
-    )
-
-    assert result[0]["uri"] == "viking://agent/default/skills/general-knowledge-flow"

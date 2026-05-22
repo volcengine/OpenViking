@@ -1225,6 +1225,9 @@ class Session:
                         async def _noop_list():
                             return []
 
+                        async def _noop_agent_result():
+                            return {"contexts": [], "session_skills": []}
+
                         async def _run_long_term_memories():
                             if not memory_extraction_enabled:
                                 return []
@@ -1238,18 +1241,12 @@ class Session:
                             )
 
                         async def _run_agent_memories():
-                            if not (memory_extraction_enabled and has_agent_memory):
-                                return []
+                            if not has_agent_memory:
+                                return {"contexts": [], "session_skills": []}
+                            if not (memory_extraction_enabled or session_skill_extraction_enabled):
+                                return {"contexts": [], "session_skills": []}
                             return await self._session_compressor.extract_agent_memories(
                                 messages=extraction_messages,
-                                ctx=self.ctx,
-                            )
-
-                        async def _run_session_skills():
-                            if not session_skill_extraction_enabled:
-                                return []
-                            return await self._session_compressor.extract_session_skills(
-                                messages=messages,
                                 ctx=self.ctx,
                                 latest_archive_overview=latest_archive_overview,
                                 archive_uri=archive_uri,
@@ -1258,13 +1255,10 @@ class Session:
                         _results = await asyncio.gather(
                             _run_archive_summary(),
                             _run_long_term_memories(),
-                            _run_agent_memories() if has_agent_memory else _noop_list(),
-                            _run_session_skills(),
+                            _run_agent_memories() if has_agent_memory else _noop_agent_result(),
                             return_exceptions=True,
                         )
-                        summary_result, extracted_result, agent_result, session_skill_result = (
-                            _results
-                        )
+                        summary_result, extracted_result, agent_result = _results
 
                         if isinstance(summary_result, Exception):
                             logger.error(
@@ -1286,17 +1280,10 @@ class Session:
                                 exc_info=agent_result,
                             )
                             agent_extracted = []
-                        else:
-                            agent_extracted = agent_result
-
-                        if isinstance(session_skill_result, Exception):
-                            logger.error(
-                                f"Session skill extraction failed: {session_skill_result}",
-                                exc_info=session_skill_result,
-                            )
                             session_skills = []
                         else:
-                            session_skills = session_skill_result
+                            agent_extracted = list(agent_result.get("contexts", []))
+                            session_skills = list(agent_result.get("session_skills", []))
 
                         if memory_extraction_enabled:
                             logger.info(f"Extracted {len(extracted)} memories")

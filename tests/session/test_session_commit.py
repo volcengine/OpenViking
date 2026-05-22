@@ -69,12 +69,12 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )
-        session_with_messages._session_compressor.extract_session_skills = AsyncMock(
-            return_value=[{"uri": "viking://account/test/agent/skills/code-review"}]
-        )
         if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
             session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
-                return_value=[]
+                return_value={
+                    "contexts": [],
+                    "session_skills": [{"uri": "viking://account/test/agent/skills/code-review"}],
+                }
             )
 
         result = await session_with_messages.commit_async()
@@ -87,7 +87,7 @@ class TestCommit:
             "viking://account/test/agent/skills/code-review"
         ]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
-        session_with_messages._session_compressor.extract_session_skills.assert_awaited_once()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
     async def test_commit_skips_session_skill_extraction_when_disabled(
         self, session_with_messages: Session, monkeypatch
@@ -100,12 +100,9 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )
-        session_with_messages._session_compressor.extract_session_skills = AsyncMock(
-            return_value=[{"uri": "viking://account/test/agent/skills/code-review"}]
-        )
         if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
             session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
-                return_value=[]
+                return_value={"contexts": [], "session_skills": []}
             )
 
         result = await session_with_messages.commit_async()
@@ -115,7 +112,7 @@ class TestCommit:
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_session_skills.assert_not_awaited()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

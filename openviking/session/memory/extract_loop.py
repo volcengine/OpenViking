@@ -166,6 +166,7 @@ class ExtractLoop:
         import json
 
         schema_str = json.dumps(json_schema, ensure_ascii=False)
+        type_descriptions = self.schema_prompt_generator.generate_type_descriptions()
 
         messages = []
         page_id_rules = """
@@ -187,6 +188,7 @@ class ExtractLoop:
                 "role": "system",
                 "content": f"""
 {self.context_provider.instruction()}
+{type_descriptions}
 {page_id_rules}
 {link_rules}
 ## Read Format Rules
