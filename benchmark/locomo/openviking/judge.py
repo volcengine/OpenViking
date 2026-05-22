@@ -135,8 +135,8 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-pro-260215",
-        help="Judge model name, default: doubao-seed-2-0-pro-260215",
+        default="doubao-seed-2-0-code-preview-260215",
+        help="Judge model name, default: doubao-seed-2-0-code-preview-260215",
     )
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"

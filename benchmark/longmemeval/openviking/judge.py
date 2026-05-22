@@ -152,7 +152,7 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-pro-260215",
+        default="doubao-seed-2-0-code-preview-260215",
         help="Judge model name",
     )
     parser.add_argument(
