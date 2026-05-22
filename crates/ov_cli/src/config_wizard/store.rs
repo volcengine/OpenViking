@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -141,10 +142,20 @@ impl ConfigStore {
 
             configs.push(ConfigEntry {
                 name: name.to_string(),
-                is_active: self.is_config_active(&config)?,
+                is_active: false,
                 kind: ConfigKind::from_config(&config),
                 config,
             });
+        }
+
+        if !configs.is_empty() {
+            let active_config = self.load_active()?;
+            for entry in &mut configs {
+                entry.is_active = match active_config.as_ref() {
+                    Some(active) => configs_equivalent(active, &entry.config)?,
+                    None => false,
+                };
+            }
         }
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -162,12 +173,9 @@ impl ConfigStore {
         if !path.exists() {
             return Err(Error::Config(format!("Config '{name}' does not exist")));
         }
-        if let Some(parent) = self.active_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&path, &self.active_path)
-            .map(|_| ())
-            .map_err(|e| Error::Config(format!("Failed to activate config '{name}': {e}")))
+        let content = fs::read(&path)
+            .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))?;
+        write_file_atomically(&self.active_path, &content)
     }
 
     pub fn save_and_activate(&self, name: &str, config: &Config) -> Result<()> {
@@ -190,14 +198,16 @@ impl ConfigStore {
         }
 
         self.save_named_config(new_name, config)?;
+        if was_active {
+            // Keep the active config consistent before removing the old saved file. If cleanup
+            // fails, the user may see both names, but the active config still points at the edit.
+            write_config_file(&self.active_path, config)?;
+        }
+
         if old_name != new_name && old_path.exists() {
             fs::remove_file(old_path).map_err(|e| {
                 Error::Config(format!("Failed to remove old config '{old_name}': {e}"))
             })?;
-        }
-
-        if was_active {
-            write_config_file(&self.active_path, config)?;
         }
 
         Ok(())
@@ -227,12 +237,6 @@ impl ConfigStore {
             .map(|entry| entry.name))
     }
 
-    fn is_config_active(&self, config: &Config) -> Result<bool> {
-        let Some(active) = self.load_active()? else {
-            return Ok(false);
-        };
-        Ok(configs_equivalent(&active, config)?)
-    }
 }
 
 fn normalize_active_config(configs: &mut [ConfigEntry]) {
@@ -455,11 +459,35 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String 
 }
 
 fn write_config_file(path: &Path, config: &Config) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let content = serde_json::to_string_pretty(config)?;
-    fs::write(path, content)?;
+    write_file_atomically(path, content.as_bytes())
+}
+
+fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Config("Could not determine config file directory".to_string()))?;
+    fs::create_dir_all(parent)?;
+
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(".ovcli.conf.")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    temp_file.write_all(content)?;
+    temp_file.flush()?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = temp_file.as_file().metadata()?.permissions();
+        permissions.set_mode(0o600);
+        temp_file.as_file().set_permissions(permissions)?;
+    }
+
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(path).map_err(|error| {
+        Error::Config(format!("Failed to replace config file: {}", error.error))
+    })?;
 
     #[cfg(unix)]
     {

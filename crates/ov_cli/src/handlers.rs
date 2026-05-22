@@ -569,6 +569,8 @@ use crate::config_command_ui::{self, SwitchConfigRow};
 use crate::config_wizard::{self, ConfigStore};
 use crate::output;
 
+// Config commands intentionally edit the persisted ovcli.conf files. Runtime
+// overrides carried in CliContext should not change what gets shown or saved.
 pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Result<()> {
     match cmd {
         Some(ConfigCommands::Show) => {
