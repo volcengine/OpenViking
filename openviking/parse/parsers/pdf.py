@@ -622,13 +622,18 @@ class PDFParser(BaseParser):
                 resources = page.page_obj.resources
                 if resources and "XObject" in resources:
                     xobjects = resources["XObject"]
-                    for obj_name in xobjects:
-                        obj = xobjects[obj_name]
+                    target_name = img_info.get("name") if isinstance(img_info, dict) else None
+                    normalized_target = str(target_name).lstrip("/") if target_name else None
+                    for obj_name, obj in xobjects.items():
+                        if normalized_target and str(obj_name).lstrip("/") != normalized_target:
+                            continue
                         if hasattr(obj, "resolve"):
                             resolved = obj.resolve()
                             if resolved.get("Subtype") and resolved["Subtype"].name == "Image":
+                                if hasattr(resolved, "get_data"):
+                                    return resolved.get_data()
                                 data = resolved.get("stream")
-                                if data:
+                                if data and hasattr(data, "get_data"):
                                     return data.get_data()
 
             return None
