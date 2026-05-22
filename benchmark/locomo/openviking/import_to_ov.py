@@ -20,7 +20,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import openviking as ov
 
@@ -68,11 +68,17 @@ def load_locomo_data(
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    def normalize_sample(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["original_sample_id"] = item.get("sample_id", "")
+        normalized["sample_id"] = f"sample_{index}"
+        return normalized
+
     if sample_index is not None:
         if sample_index < 0 or sample_index >= len(data):
             raise ValueError(f"Sample index {sample_index} out of range (0-{len(data) - 1})")
-        return [data[sample_index]]
-    return data
+        return [normalize_sample(data[sample_index], sample_index)]
+    return [normalize_sample(item, idx) for idx, item in enumerate(data)]
 
 
 def build_session_messages(
@@ -116,7 +122,14 @@ def build_session_messages(
             else:
                 role = "user"
             messages.append(
-                {"role": role, "text": f"[{speaker}]: {text}", "speaker": speaker, "index": idx}
+                {
+                    "role": role,
+                    "text": f"[{speaker}]: {text}",
+                    "speaker": speaker,
+                    "index": idx,
+                    "img_url": msg.get("img_url", []),
+                    "blip_caption": msg.get("blip_caption", ""),
+                }
             )
 
         sessions.append(
@@ -139,6 +152,34 @@ def chunk_messages(messages: List[Dict[str, Any]], chunk_size: int = LOCOMO_SESS
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
     return [messages[i : i + chunk_size] for i in range(0, len(messages), chunk_size) if messages[i : i + chunk_size]]
+
+
+def _normalize_image_urls(value: Any) -> List[str]:
+    """Normalize LoCoMo img_url values into a list of non-empty URL strings."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [str(url) for url in value if url]
+    return [str(value)]
+
+
+def build_openviking_message_parts(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build OpenViking message parts from a LoCoMo message."""
+    parts: List[Dict[str, Any]] = [{"type": "text", "text": msg["text"]}]
+    caption = str(msg.get("blip_caption", "") or "")
+
+    for image_url in _normalize_image_urls(msg.get("img_url")):
+        image_part: Dict[str, Any] = {
+            "type": "image_url",
+            "image_url": {"url": image_url},
+        }
+        if caption:
+            image_part["caption"] = caption
+        parts.append(image_part)
+
+    return parts
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +344,8 @@ async def viking_ingest(
         messages: List of message dicts with role and text
         openviking_url: OpenViking service URL
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
-        user_id: User identifier for separate userspace (e.g., "conv-26")
-        agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
+        user_id: User identifier for separate userspace (e.g., "sample_26")
+        agent_id: Agent identifier for separate agentspace (e.g., "sample_26")
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -338,7 +379,7 @@ async def viking_ingest(
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
-                parts=[{"type": "text", "text": msg["text"]}],
+                parts=build_openviking_message_parts(msg),
                 created_at=msg_created_at,
             )
 

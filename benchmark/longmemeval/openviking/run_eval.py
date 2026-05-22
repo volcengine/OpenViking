@@ -315,6 +315,16 @@ def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
             "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         }
+    if usage:
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(
+                getattr(usage, "total_tokens", prompt_tokens + completion_tokens) or 0
+            ),
+        }
 
     if hasattr(vlm, "get_token_usage_summary"):
         summary = vlm.get_token_usage_summary()
@@ -322,6 +332,14 @@ def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
             "prompt_tokens": int(summary.get("total_prompt_tokens", 0) or 0),
             "completion_tokens": int(summary.get("total_completion_tokens", 0) or 0),
             "total_tokens": int(summary.get("total_tokens", 0) or 0),
+        }
+    if hasattr(vlm, "get_token_usage"):
+        usage_snapshot = vlm.get_token_usage()
+        total_usage = usage_snapshot.get("total_usage", {}) if usage_snapshot else {}
+        return {
+            "prompt_tokens": int(total_usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(total_usage.get("completion_tokens", 0) or 0),
+            "total_tokens": int(total_usage.get("total_tokens", 0) or 0),
         }
 
     return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -333,12 +351,15 @@ def run_single_search_context_answer(
     question_time: str | None = None,
     sender_id: str | None = None,
     session_id: str | None = None,
+    openviking_url: str | None = None,
     timeout: int = 300,
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+    single_search_rerank_limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
     debug_print_model_input: bool = False,
 ) -> tuple[str, dict, float, int, list, list, str]:
     start_time = time.time()
     client = SyncHTTPClient(
+        url=openviking_url,
         agent_id=session_id,
         user=sender_id,
         timeout=timeout,
@@ -375,7 +396,7 @@ def run_single_search_context_answer(
 
         reranker = build_single_search_reranker()
         rerank_enabled = reranker is not None
-        rerank_limit = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT
+        rerank_limit = single_search_rerank_limit
         contexts, rerank_scores = rerank_single_search_contexts(
             question=question,
             contexts=contexts,
@@ -511,6 +532,11 @@ def main():
         help="Per-question OpenViking client timeout in seconds, default: 300",
     )
     parser.add_argument(
+        "--openviking-url",
+        default=None,
+        help="OpenViking server URL, e.g. http://127.0.0.1:1934. Defaults to ovcli.conf.",
+    )
+    parser.add_argument(
         "--answer-mode",
         choices=["single-search-context"],
         default="single-search-context",
@@ -528,6 +554,15 @@ def main():
         help=(
             "Number of memory files to read into the single-search-context prompt, "
             f"default: {DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT}"
+        ),
+    )
+    parser.add_argument(
+        "--single-search-rerank-limit",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+        help=(
+            "Number of reranked memory files to keep in the single-search-context prompt, "
+            f"default: {DEFAULT_SINGLE_SEARCH_RERANK_LIMIT}"
         ),
     )
     args = parser.parse_args()
@@ -590,8 +625,10 @@ def main():
                 question_time,
                 sender_id=sender_id,
                 session_id=session_id,
+                openviking_url=args.openviking_url,
                 timeout=args.timeout,
                 single_search_context_limit=args.single_search_context_limit,
+                single_search_rerank_limit=args.single_search_rerank_limit,
                 debug_print_model_input=args.debug_print_model_input,
             )
             row = {
@@ -608,7 +645,9 @@ def main():
                 "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
                 "retrieved_uris_by_iteration": json.dumps(
                     retrieved_uris_by_iteration, ensure_ascii=False
-                ),
+                )
+                if args.debug_print_model_input
+                else "",
                 "result": "",
             }
 

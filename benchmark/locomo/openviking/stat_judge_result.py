@@ -2,6 +2,24 @@ import argparse
 import csv
 import json
 import os
+from collections import defaultdict
+
+
+CATEGORY_NAMES = {
+    "1": "multi-hop",
+    "2": "temporal",
+    "3": "open-domain",
+    "4": "single-hop",
+    "5": "adversarial",
+}
+
+
+def category_label(category: str) -> str:
+    category = str(category or "").strip()
+    name = CATEGORY_NAMES.get(category)
+    if name:
+        return f"{category}-{name}"
+    return category or "<missing>"
 
 
 def main():
@@ -27,6 +45,9 @@ def main():
     total_tokens = 0
     valid_rows = 0
     total_iteration = 0
+    by_category: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"CORRECT": 0, "WRONG": 0, "OTHER": 0}
+    )
 
     # 统计 is_valid=True 的题目 (排除 category=5)
     valid_only_correct = 0
@@ -55,14 +76,19 @@ def main():
 
             # 统计结果
             result = row.get("result", "").strip().upper()
+            category_key = category_label(category)
             if result == "CORRECT":
                 correct += 1
+                by_category[category_key]["CORRECT"] += 1
                 if is_valid:
                     valid_only_correct += 1
             elif result == "WRONG":
                 wrong += 1
+                by_category[category_key]["WRONG"] += 1
                 if is_valid:
                     valid_only_wrong += 1
+            else:
+                by_category[category_key]["OTHER"] += 1
 
             total_iteration += int(row.get("iteration", "0"))
             if is_valid:
@@ -151,24 +177,57 @@ def main():
         f"  Avg completion tokens: {avg_completion_tokens:.2f}",
         f"  Avg total tokens: {avg_total_tokens:.2f}",
         "",
-        "=== Valid Questions Only (is_valid=True, excluding category=5) ===",
-        f"Valid rows: {valid_only_rows}",
-        f"Valid graded rows: {valid_only_total_graded}",
-        f"Valid correct: {valid_only_correct}",
-        f"Valid wrong: {valid_only_wrong}",
-        f"Valid accuracy: {valid_only_accuracy:.2%}",
-        f"\nAverage time cost: {valid_only_avg_time:.2f}s",
-        f"\nAverage iteration: {valid_only_total_iteration / valid_only_rows if valid_only_rows > 0 else 0.0:.2f}",
-        f"\nToken usage:",
-        f"  Total prompt tokens: {valid_only_total_prompt_tokens}",
-        f"  Total memory prompt tokens: {valid_only_total_memory_prompt_tokens}",
-        f"  Total completion tokens: {valid_only_total_completion_tokens}",
-        f"  Total tokens: {valid_only_total_tokens}",
-        f"  Avg prompt tokens: {valid_only_avg_prompt_tokens:.2f}",
-        f"  Avg memory prompt tokens: {valid_only_avg_memory_prompt_tokens:.2f}",
-        f"  Avg completion tokens: {valid_only_avg_completion_tokens:.2f}",
-        f"  Avg total tokens: {valid_only_avg_total_tokens:.2f}",
+        "By category:",
+        f"{'category':<28} {'correct':>8} {'wrong':>8} {'other':>8} {'graded':>8} {'total':>8} {'accuracy':>10}",
     ]
+
+    for category in sorted(by_category):
+        category_correct = by_category[category]["CORRECT"]
+        category_wrong = by_category[category]["WRONG"]
+        category_other = by_category[category]["OTHER"]
+        category_graded = category_correct + category_wrong
+        category_total = category_graded + category_other
+        category_accuracy = category_correct / category_graded if category_graded > 0 else 0.0
+        output_lines.append(
+            f"{category:<28} {category_correct:>8} {category_wrong:>8} {category_other:>8} "
+            f"{category_graded:>8} {category_total:>8} {category_accuracy:>9.2%}"
+        )
+
+    valid_only_matches_overall = (
+        valid_only_rows == valid_rows
+        and valid_only_total_graded == total_graded
+        and valid_only_correct == correct
+        and valid_only_wrong == wrong
+        and valid_only_total_time == total_time
+        and valid_only_total_iteration == total_iteration
+        and valid_only_total_prompt_tokens == total_prompt_tokens
+        and valid_only_total_memory_prompt_tokens == total_memory_prompt_tokens
+        and valid_only_total_completion_tokens == total_completion_tokens
+        and valid_only_total_tokens == total_tokens
+    )
+    if not valid_only_matches_overall:
+        output_lines.extend(
+            [
+                "",
+                "=== Valid Questions Only (is_valid=True, excluding category=5) ===",
+                f"Valid rows: {valid_only_rows}",
+                f"Valid graded rows: {valid_only_total_graded}",
+                f"Valid correct: {valid_only_correct}",
+                f"Valid wrong: {valid_only_wrong}",
+                f"Valid accuracy: {valid_only_accuracy:.2%}",
+                f"\nAverage time cost: {valid_only_avg_time:.2f}s",
+                f"\nAverage iteration: {valid_only_total_iteration / valid_only_rows if valid_only_rows > 0 else 0.0:.2f}",
+                f"\nToken usage:",
+                f"  Total prompt tokens: {valid_only_total_prompt_tokens}",
+                f"  Total memory prompt tokens: {valid_only_total_memory_prompt_tokens}",
+                f"  Total completion tokens: {valid_only_total_completion_tokens}",
+                f"  Total tokens: {valid_only_total_tokens}",
+                f"  Avg prompt tokens: {valid_only_avg_prompt_tokens:.2f}",
+                f"  Avg memory prompt tokens: {valid_only_avg_memory_prompt_tokens:.2f}",
+                f"  Avg completion tokens: {valid_only_avg_completion_tokens:.2f}",
+                f"  Avg total tokens: {valid_only_avg_total_tokens:.2f}",
+            ]
+        )
 
     # 打印到控制台
     for line in output_lines:

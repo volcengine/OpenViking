@@ -131,6 +131,7 @@ def load_locomo_qa(
     default_time: str | None = None,
     question_index: int | None = None,
     invalid_questions: set | None = None,
+    sample_indices: list[int] | None = None,
 ) -> list[dict]:
     """加载LoCoMo数据集的QA部分，支持JSON和CSV格式
 
@@ -144,23 +145,36 @@ def load_locomo_qa(
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    qa_list = []
-    # 支持数字索引或 sample_id (如 "conv-26")
-    if sample_index is not None:
-        # 尝试解析为数字索引
+    def normalize_sample(item: dict, index: int) -> dict:
+        normalized = dict(item)
+        normalized["original_sample_id"] = item.get("sample_id", "")
+        normalized["sample_id"] = f"sample_{index}"
+        return normalized
+
+    def parse_sample_index(raw_sample_index: str | int) -> int:
         try:
-            idx = int(sample_index)
-            if idx < 0 or idx >= len(data):
-                raise ValueError(f"sample index {idx} out of range (0-{len(data) - 1})")
-            samples = [data[idx]]
-        except ValueError:
-            # 尝试匹配 sample_id
-            matched = [s for s in data if s.get("sample_id") == sample_index]
-            if not matched:
-                raise ValueError(f"sample_id '{sample_index}' not found")
-            samples = matched
+            sample_index_text = str(raw_sample_index)
+            if sample_index_text.startswith("sample_"):
+                sample_index_text = sample_index_text.removeprefix("sample_")
+            idx = int(sample_index_text)
+        except ValueError as exc:
+            raise ValueError(
+                f"sample '{raw_sample_index}' is invalid; use a numeric index or sample_{{idx}}"
+            ) from exc
+        if idx < 0 or idx >= len(data):
+            raise ValueError(f"sample index {idx} out of range (0-{len(data) - 1})")
+        return idx
+
+    qa_list = []
+    # 支持数字索引或 sample_id (如 "sample_26")
+    if sample_indices is not None:
+        validated_indices = [parse_sample_index(idx) for idx in sample_indices]
+        samples = [normalize_sample(data[idx], idx) for idx in validated_indices]
+    elif sample_index is not None:
+        idx = parse_sample_index(sample_index)
+        samples = [normalize_sample(data[idx], idx)]
     else:
-        samples = data
+        samples = [normalize_sample(sample, idx) for idx, sample in enumerate(data)]
 
     for sample in samples:
         sample_id = sample.get("sample_id", "")
@@ -379,24 +393,26 @@ def rerank_single_search_contexts(
     contexts: list[dict[str, Any]],
     reranker: Any | None,
     limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     if not reranker or len(contexts) <= 1:
-        return contexts, []
+        return contexts, [], ""
 
     documents = [_single_search_rerank_document(context) for context in contexts]
     try:
         scores = reranker.rerank_batch(question, documents)
-    except Exception:
-        return contexts, []
+    except Exception as exc:
+        return contexts, [], f"{type(exc).__name__}: {exc}"
 
     if not scores or len(scores) != len(contexts):
-        return contexts, []
+        return contexts, [], (
+            f"invalid_score_count: expected {len(contexts)}, got {len(scores) if scores else 0}"
+        )
 
     ranked_contexts = []
     rerank_scores = []
     for context, score in zip(contexts, scores, strict=True):
         if not isinstance(score, (int, float)):
-            return contexts, []
+            return contexts, [], f"invalid_score_type: {type(score).__name__}"
         next_context = dict(context)
         next_context["rerank_score"] = float(score)
         ranked_contexts.append(next_context)
@@ -416,7 +432,7 @@ def rerank_single_search_contexts(
         reverse=True,
     )
     selected_contexts = ranked_contexts[: max(1, limit)]
-    return selected_contexts, rerank_scores
+    return selected_contexts, rerank_scores, ""
 
 
 def _response_text(response: Any) -> str:
@@ -433,6 +449,16 @@ def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
             "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         }
+    if usage:
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(
+                getattr(usage, "total_tokens", prompt_tokens + completion_tokens) or 0
+            ),
+        }
 
     if hasattr(vlm, "get_token_usage_summary"):
         summary = vlm.get_token_usage_summary()
@@ -440,6 +466,14 @@ def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
             "prompt_tokens": int(summary.get("total_prompt_tokens", 0) or 0),
             "completion_tokens": int(summary.get("total_completion_tokens", 0) or 0),
             "total_tokens": int(summary.get("total_tokens", 0) or 0),
+        }
+    if hasattr(vlm, "get_token_usage"):
+        usage_snapshot = vlm.get_token_usage()
+        total_usage = usage_snapshot.get("total_usage", {}) if usage_snapshot else {}
+        return {
+            "prompt_tokens": int(total_usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(total_usage.get("completion_tokens", 0) or 0),
+            "total_tokens": int(total_usage.get("total_tokens", 0) or 0),
         }
 
     return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -450,11 +484,19 @@ def run_vikingbot_chat(
     question_time: str | None = None,
     sample_id: str | None = None,
     question_id: str | None = None,
+    openviking_url: str | None = None,
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
-) -> tuple[str, dict, float, int, list, list]:
+    single_search_rerank_limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+    timeout: int = 300,
+) -> tuple[str, dict, float, int, list, list, str]:
     """执行单轮 search + rerank + answer，返回回答、token、耗时、迭代次数、工具和检索轨迹"""
     start_time = time.time()
-    client = SyncHTTPClient(agent_id=question_id, user=sample_id, timeout=300)
+    client = SyncHTTPClient(
+        url=openviking_url,
+        agent_id=question_id,
+        user=sample_id,
+        timeout=timeout,
+    )
     try:
         client.initialize()
         target_uri = f"viking://user/{sample_id or 'default'}/memories"
@@ -478,8 +520,8 @@ def run_vikingbot_chat(
 
         reranker = build_single_search_reranker()
         rerank_enabled = reranker is not None
-        rerank_limit = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT
-        contexts, rerank_scores = rerank_single_search_contexts(
+        rerank_limit = single_search_rerank_limit
+        contexts, rerank_scores, rerank_error = rerank_single_search_contexts(
             question=question,
             contexts=contexts,
             reranker=reranker,
@@ -516,8 +558,10 @@ def run_vikingbot_chat(
                     "rerank_enabled": rerank_enabled,
                     "rerank_limit": rerank_limit if rerank_enabled else 0,
                     "rerank_scores": rerank_scores,
+                    "rerank_error": rerank_error,
                 }
             ],
+            prompt,
         )
     except Exception as e:
         return (
@@ -543,6 +587,7 @@ def run_vikingbot_chat(
                     "rerank_scores": [],
                 }
             ],
+            "",
         )
     finally:
         try:
@@ -555,6 +600,50 @@ def load_processed_questions(output_path: str) -> set:
     """加载已处理的问题集合（已禁用，每次重新运行）"""
     # 注意：去重逻辑已禁用，每次运行都会重新执行所有问题
     return set()
+
+
+def result_row_key(row: dict[str, Any]) -> str:
+    question_id = str(row.get("question_id", "") or "").strip()
+    if question_id:
+        return f"question_id:{question_id}"
+
+    sample_id = str(row.get("sample_id", "") or "").strip()
+    question_index = str(row.get("question_index", "") or "").strip()
+    if sample_id or question_index:
+        return f"sample_question_index:{sample_id}:{question_index}"
+
+    return f"question:{str(row.get('question', '') or '').strip()}"
+
+
+def parse_sample_indices(raw_samples: str | None, dataset_size: int | None = None) -> list[int] | None:
+    if raw_samples is None:
+        return None
+
+    indices: list[int] = []
+    seen: set[int] = set()
+    for raw_part in raw_samples.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if part.startswith("sample_"):
+            part = part.removeprefix("sample_")
+        try:
+            idx = int(part)
+        except ValueError as exc:
+            raise ValueError(
+                f"sample '{raw_part}' is invalid; use numeric indices or sample_{{idx}}"
+            ) from exc
+        if idx < 0:
+            raise ValueError(f"sample index {idx} must be >= 0")
+        if dataset_size is not None and idx >= dataset_size:
+            raise ValueError(f"sample index {idx} out of range (0-{dataset_size - 1})")
+        if idx not in seen:
+            indices.append(idx)
+            seen.add(idx)
+
+    if not indices:
+        raise ValueError("--samples must include at least one sample index")
+    return indices
 
 
 def main():
@@ -584,7 +673,13 @@ def main():
         "--sample",
         type=str,
         default=None,
-        help="LoCoMo sample index (0-based) or sample_id (e.g., conv-26)",
+        help="LoCoMo sample index (0-based) or sample_id (e.g., sample_26)",
+    )
+    parser.add_argument(
+        "--samples",
+        type=str,
+        default=None,
+        help="Comma-separated LoCoMo sample indices, e.g. 0,1 or sample_0,sample_1",
     )
     parser.add_argument(
         "--question-index",
@@ -599,6 +694,11 @@ def main():
         "--threads", type=int, default=40, help="Number of concurrent threads, default: 40"
     )
     parser.add_argument(
+        "--openviking-url",
+        default=None,
+        help="OpenViking server URL, e.g. http://127.0.0.1:1934. Defaults to ovcli.conf.",
+    )
+    parser.add_argument(
         "--single-search-context-limit",
         type=int,
         default=DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
@@ -608,15 +708,31 @@ def main():
         ),
     )
     parser.add_argument(
+        "--single-search-rerank-limit",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+        help=(
+            "Number of reranked memory files to keep in the single-search prompt, "
+            f"default: {DEFAULT_SINGLE_SEARCH_RERANK_LIMIT}"
+        ),
+    )
+    parser.add_argument(
+        "--debug-print-model-input",
+        action="store_true",
+        help="Write full model input prompt and retrieved URI trace into the CSV.",
+    )
+    parser.add_argument(
         "--update-mode",
         action="store_true",
-        help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
+        help="Update mode: if output file exists, update matching question_id rows instead of overwriting",
     )
     args = parser.parse_args()
 
-    # 如果指定了 question-index，自动设置 count=1
-    if args.question_index is not None and args.count is None:
+    # 如果指定了 question-index，单 sample/全量调试保持旧行为；多 samples 模式保留每个 sample 的这道题。
+    if args.question_index is not None and args.count is None and args.samples is None:
         args.count = 1
+    if args.sample is not None and args.samples is not None:
+        raise ValueError("Use either --sample or --samples, not both")
 
     # 确保输出目录存在
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -643,6 +759,7 @@ def main():
         args.count,
         question_index=args.question_index,
         invalid_questions=invalid_questions,
+        sample_indices=parse_sample_indices(args.samples),
     )
     total = len(qa_list)
 
@@ -670,7 +787,11 @@ def main():
         "evidence",
         "evidence_text",
         "response",
+        "model_input_prompt",
         "token_usage",
+        "memory_prompt_tokens",
+        "memory_chars",
+        "memory_tokenizer",
         "time_cost",
         "iteration",
         "tools_used_names",
@@ -684,6 +805,9 @@ def main():
             reader = csv.DictReader(f)
             existing_rows = list(reader)
             existing_fieldnames = reader.fieldnames or fieldnames
+        for fieldname in fieldnames:
+            if fieldname not in existing_fieldnames:
+                existing_fieldnames.append(fieldname)
     elif os.path.exists(args.output):
         os.remove(args.output)
 
@@ -703,7 +827,7 @@ def main():
         os.replace(temp_file, args.output)
 
     # 过滤掉已经处理过的问题
-    remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
+    remaining_qa = [qa for qa in qa_list if result_row_key(qa) not in processed_questions]
     remaining_count = len(remaining_qa)
     print(
         f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
@@ -728,12 +852,15 @@ def main():
             iteration,
             tools_used_names,
             retrieved_uris_by_iteration,
+            model_input_prompt,
         ) = run_vikingbot_chat(
             question,
             question_time,
             sample_id,
             question_id,
+            args.openviking_url,
             args.single_search_context_limit,
+            args.single_search_rerank_limit,
         )
 
         row = {
@@ -748,13 +875,19 @@ def main():
             "evidence": json.dumps(qa_item.get("evidence", [])),
             "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
             "response": response,
+            "model_input_prompt": model_input_prompt if args.debug_print_model_input else "",
             "token_usage": json.dumps(token_usage, ensure_ascii=False),
+            "memory_prompt_tokens": token_usage.get("memory_prompt_tokens", 0),
+            "memory_chars": token_usage.get("memory_chars", 0),
+            "memory_tokenizer": token_usage.get("memory_tokenizer", ""),
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
             "retrieved_uris_by_iteration": json.dumps(
                 retrieved_uris_by_iteration, ensure_ascii=False
-            ),
+            )
+            if args.debug_print_model_input
+            else "",
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -762,16 +895,16 @@ def main():
         with write_lock:
             nonlocal processed_count
             new_rows.append(row)
-            q_idx = str(row.get("question_index", ""))
+            row_key = result_row_key(row)
             found = False
             for existing_row in existing_rows:
-                if str(existing_row.get("question_index", "")) == q_idx:
+                if result_row_key(existing_row) == row_key:
                     existing_row.update(row)
                     found = True
                     break
             if not found:
                 existing_rows.append(row)
-            processed_questions.add(question)
+            processed_questions.add(row_key)
             processed_count += 1
             save_results_locked()
             print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
