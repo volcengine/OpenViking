@@ -751,6 +751,7 @@ class Session:
         request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
+        extracted_skill_results: list[dict] = []
         active_count_updated = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
@@ -845,6 +846,14 @@ class Session:
                         async def _noop_agent():
                             return []
 
+                        async def _run_session_skills():
+                            return await self._session_compressor.extract_session_skills(
+                                messages=messages,
+                                ctx=self.ctx,
+                                latest_archive_overview=latest_archive_overview,
+                                archive_uri=archive_uri,
+                            )
+
                         _results = await asyncio.gather(
                             _run_archive_summary(),
                             self._session_compressor.extract_long_term_memories(
@@ -852,6 +861,7 @@ class Session:
                                 user=self.user,
                                 session_id=self.session_id,
                                 ctx=self.ctx,
+                                strict_extract_errors=True,
                                 latest_archive_overview=latest_archive_overview,
                                 archive_uri=archive_uri,
                             ),
@@ -861,9 +871,12 @@ class Session:
                             )
                             if has_agent_memory
                             else _noop_agent(),
+                            _run_session_skills(),
                             return_exceptions=True,
                         )
-                        summary_result, extracted_result, agent_result = _results
+                        summary_result, extracted_result, agent_result, session_skill_result = (
+                            _results
+                        )
 
                         if isinstance(summary_result, Exception):
                             logger.error(
@@ -875,7 +888,7 @@ class Session:
                                 f"User memory extraction failed: {extracted_result}",
                                 exc_info=extracted_result,
                             )
-                            extracted = []
+                            raise extracted_result
                         else:
                             extracted = extracted_result
 
@@ -887,6 +900,15 @@ class Session:
                             agent_extracted = []
                         else:
                             agent_extracted = agent_result
+
+                        if isinstance(session_skill_result, Exception):
+                            logger.error(
+                                f"Session skill extraction failed: {session_skill_result}",
+                                exc_info=session_skill_result,
+                            )
+                            session_skills = []
+                        else:
+                            session_skills = session_skill_result
 
                         logger.info(f"Extracted {len(extracted)} memories")
                         for ctx_item in extracted:
@@ -901,6 +923,9 @@ class Session:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
                                 memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
                             self._stats.memories_extracted += len(agent_extracted)
+                        if session_skills:
+                            logger.info(f"Extracted {len(session_skills)} session skills")
+                            extracted_skill_results = session_skills
                     else:
                         if self._session_compressor:
                             logger.info(
@@ -973,6 +998,12 @@ class Session:
                     "session_id": self.session_id,
                     "archive_uri": archive_uri,
                     "memories_extracted": memories_extracted,
+                    "session_skills_extracted": len(extracted_skill_results),
+                    "session_skill_uris": [
+                        item.get("uri") or item.get("root_uri")
+                        for item in extracted_skill_results
+                        if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
+                    ],
                     "active_count_updated": active_count_updated,
                     "token_usage": {
                         "llm": dict(self._meta.llm_token_usage),

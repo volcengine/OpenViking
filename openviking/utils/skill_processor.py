@@ -214,8 +214,36 @@ class SkillProcessor:
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
+        skill_dict = self._normalize_skill_dict(skill_dict)
         self._validate_skill_dict(skill_dict)
         return skill_dict, auxiliary_files, base_path
+
+    @staticmethod
+    def _normalize_list_field(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return value
+        if isinstance(value, (tuple, set)):
+            return list(value)
+        return [value]
+
+    @staticmethod
+    def _normalize_skill_dict(skill_dict: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(skill_dict)
+
+        allowed_tools = normalized.get("allowed_tools")
+        if not allowed_tools:
+            allowed_tools = normalized.get("allowed-tools")
+        if allowed_tools is not None:
+            normalized["allowed_tools"] = SkillProcessor._normalize_list_field(allowed_tools)
+        normalized.pop("allowed-tools", None)
+
+        tags = normalized.get("tags")
+        if tags is not None:
+            normalized["tags"] = SkillProcessor._normalize_list_field(tags)
+
+        return normalized
 
     @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
@@ -300,7 +328,7 @@ class SkillProcessor:
         """Write main skill content to VikingFS."""
         await viking_fs.write_context(
             uri=skill_dir_uri,
-            content=skill_dict.get("content", ""),
+            content=SkillLoader.to_skill_md(skill_dict),
             abstract=abstract,
             overview=overview,
             content_filename="SKILL.md",
