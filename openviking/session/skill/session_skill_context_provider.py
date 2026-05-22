@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from openviking.core.namespace import canonical_agent_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.prompts.manager import PromptManager
-from openviking.session.memory.dataclass import MemoryFileContent
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
@@ -157,10 +157,9 @@ All descriptions and skill content MUST be written in {self._output_language}.
             parsed = self._parse_skill_file(raw_content)
         else:
             parsed = parse_memory_file_with_fields(raw_content)
-        self._read_file_contents[uri] = MemoryFileContent(
+        self._read_file_contents[uri] = MemoryFile.from_parsed(
             uri=uri,
-            plain_content=raw_content,
-            memory_fields=parsed,
+            parsed=dict(parsed),
         )
         return parsed
 
