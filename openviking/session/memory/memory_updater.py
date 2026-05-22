@@ -710,6 +710,13 @@ class MemoryUpdater:
                                     f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
                                 )
 
+                logger.info(
+                    "Embedding text for vectorization: uri=%s memory_type=%s text=%s",
+                    uri,
+                    memory_type or mf.memory_type,
+                    embedding_text,
+                )
+
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI
 

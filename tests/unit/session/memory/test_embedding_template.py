@@ -62,6 +62,65 @@ class TestContentTemplateRendering:
 
 class TestEmbeddingTextConstruction:
     @pytest.mark.asyncio
+    async def test_logs_final_embedding_text_before_vectorization(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry._types["entities"] = registry._parse_memory_type(
+            {
+                "memory_type": "entities",
+                "directory": "viking://user/{{ user_space }}/memories/entities",
+                "filename_template": "{{ name }}.md",
+                "embedding_template": "{{ category }} -> {{ name }} -> {{ content }}",
+                "fields": [
+                    {"name": "category", "type": "string"},
+                    {"name": "name", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            }
+        )
+
+        updater = MemoryUpdater(registry=registry, vikingdb=Mock())
+        updater._viking_fs = Mock()
+        updater._viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(
+                MemoryFile(
+                    uri="viking://user/alice/memories/entities/person/alice.md",
+                    memory_type="entities",
+                    content="Plain body",
+                    extra_fields={"category": "person", "name": "alice"},
+                )
+            )
+        )
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+
+        result = MemoryUpdateResult()
+        result.add_written("viking://user/alice/memories/entities/person/alice.md")
+        ctx = SimpleNamespace(user=None, account_id="default")
+
+        with (
+            patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context,
+            patch("openviking.session.memory.memory_updater.logger.info") as mock_logger_info,
+        ):
+            mock_from_context.side_effect = lambda context: SimpleNamespace(
+                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+            )
+            await updater._vectorize_memories(
+                result,
+                ctx,
+                extract_context=None,
+                uri_memory_type_map={
+                    "viking://user/alice/memories/entities/person/alice.md": "entities"
+                },
+            )
+
+        assert any(
+            "Embedding text for vectorization" in call.args[0]
+            and call.args[1] == "viking://user/alice/memories/entities/person/alice.md"
+            and call.args[2] == "entities"
+            and call.args[3] == "person -> alice -> Plain body"
+            for call in mock_logger_info.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_embedding_template_overrides_plain_content(self):
         registry = MemoryTypeRegistry(load_schemas=False)
         registry._types["entities"] = registry._parse_memory_type(
