@@ -3,6 +3,47 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.3.19 (2026-05-22)
+
+### 重点更新
+
+- **Console BFF 时区语义 breaking change**：`/api/v1/console/dashboard/summary`、`/tokens`、`/context-commits` 现在支持 IANA `timezone` 查询参数，并由服务端按 viewer timezone 返回分桶；调用方应把返回的 `date` / `hour` 视为已本地化，不再在客户端二次 shift。
+- **Usage/Audit 统一按 UTC 写入**：Token、检索、上下文提交、Agent 活跃和请求审计 rollup 现在写入 UTC `date_utc`、`hour_utc`、`created_at`，查询时再通过 `zoneinfo` 按用户时区重分桶，覆盖 DST 和半小时时区场景。
+- **本地 Usage/Audit schema reset**：SQLite store 新增 schema version v3，升级时会重置不兼容的本地 Usage/Audit 表，避免短保留、pre-GA 数据里混入 local/UTC 字段或半迁移的日/小时表。
+- **Web Studio heatmap 对齐新语义**：Web Studio 会把浏览器时区传给 Console BFF，heatmap 直接使用服务端返回的 bucket date，修复 UTC+ 用户下“今天”被二次平移到“明天”的问题。
+- **相邻更新**：新增通过 `memory.session_skill_extraction_enabled` 控制的 session skill 提取链路，补充 Hermes OpenViking LoCoMo benchmark scripts，修正 Studio OAuth setup 入口文档，并刷新 LiteLLM 依赖范围。
+
+### 升级说明
+
+- 本版本包含 BFF breaking change：自定义 Console 客户端、生成 SDK 或仪表盘如果调用 `/api/v1/console/*`，应按需传入 `timezone=<IANA name>`，并移除客户端侧 UTC 到本地时区的二次分桶逻辑。
+- `tokens` 和 `context-commits` 返回的 `date` / `hour` 已是 viewer timezone 下的 bucket；`audit.created_at` 仍为 UTC ISO，仅在展示层格式化。
+- 首次使用新的 Usage/Audit SQLite schema 启动时，不兼容的本地 usage/audit 表会被删除并重建；已有短保留 usage rollup 和 request audit 记录可能被丢弃。
+- 如果自动化侧固定了 OpenAPI client 或 Console API 类型，需要重新生成，以包含新的 `timezone` 参数。
+- 未传 `timezone` 时，Console BFF 会回退到 `server.observability.usage_audit.timezone`（默认 `local`）；服务端集成若需要稳定的用户日边界，应显式配置或传参。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.18...v0.3.19)
+
+## v0.3.18 (2026-05-22)
+
+### 重点更新
+
+- **Web Studio 成为默认 Console**：新增 `web-studio` 前端 console workspace，随 Docker 与 pip 分发并通过 `/studio` 提供服务；OAuth authorize UI 迁入 Web Studio，legacy console 下线，同时保留 favicon 兼容路由。
+- **MCP / API / CLI 自动化能力**：Watch Management 覆盖 REST、`ov` CLI 与 MCP；新增本地文件 progressive single-entrypoint upload；增加 `code_outline`、`code_search`、`code_expand` 代码导航工具，并修正 upload-only 与 zip `--ignore-dirs` 的作用域处理。
+- **Agent 与 OpenClaw 生态**：OpenClaw setup helper 支持 npm 插件安装，插件文档对齐 ClawHub package metadata，新增 `ov_dream` OpenClaw skill，并支持将过大的 OpenClaw tool result externalize 到 OpenViking。
+- **Memory 与检索**：升级 trajectory extraction，新增 memory link 能力，支持通过开关启用 Vaka memory templates，修复缺失 tool-call 计数和缺失 `role_id` 的检索问题，并行化 hierarchical child search。
+- **Storage、VectorDB 与模型链路稳定性**：存储锁与 IO 异步化，异步客户端按 event loop 隔离；修复 semantic lock ownership、`mv not found` 误报、URI remapping、S3 grep 性能、VectorDB Unicode recovery、超大 bytes row、embedding 错误透出和 VLM LiteLLM native routes 等问题。
+- **可观测性、文档与部署打磨**：新增 VikingBot feedback observability，集中化 metric registry，usage audit SQLite 迁入 system data，刷新 Helm chart 默认配置，更新品牌资产与二维码，并补齐 public base URL、signed upload TTL、Watch API、MCP code tools、ready 探针和 `/studio` 迁移文档。
+
+### 升级说明
+
+- 旧 console 与 `8020` 引用应迁移到 `/studio` 的 Web Studio；自定义反代、书签和部署文档需要同步更新。
+- Docker 与 pip 包现在包含 Web Studio 静态资产；使用自定义 Dockerfile、Caddy 或 Helm overlay 的部署应先复核新的默认配置。
+- Usage audit SQLite 现在存放在 system data 目录；手动管理本地 audit 文件的部署需要确认新路径和保留策略。
+- Embedding 上游失败不再被静默超时掩盖；调用方和健康探针应按显式 provider 错误处理。
+- Watch Management、MCP upload 与代码导航工具扩展了公共集成面；如自动化侧固化了 API/MCP schema，需要同步重新生成。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.17...v0.3.18)
+
 ## v0.3.17 (2026-05-15)
 
 ### 重点更新
