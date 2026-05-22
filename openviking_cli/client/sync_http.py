@@ -149,6 +149,31 @@ class SyncHTTPClient:
             )
         )
 
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
+                telemetry,
+            )
+        )
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))

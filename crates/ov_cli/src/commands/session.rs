@@ -167,16 +167,18 @@ pub async fn add_memory(
         crate::error::Error::Api("Failed to get session_id from new session response".to_string())
     })?;
 
-    // 2. Add messages
-    for (role, content) in &messages {
-        let path = format!("/api/v1/sessions/{}/messages", url_encode(session_id));
-        let body = json!({
-            "role": role,
-            "content": content
-        });
-        let response: serde_json::Value = client.post(&path, &body).await?;
-        profile_lines.extend(extract_profile_lines(&response));
-    }
+    // 2. Add messages (batch)
+    let path = format!(
+        "/api/v1/sessions/{}/messages/batch",
+        url_encode(session_id)
+    );
+    let messages_json: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|(role, content)| json!({"role": role, "content": content}))
+        .collect();
+    let body = json!({"messages": messages_json});
+    let response: serde_json::Value = client.post(&path, &body).await?;
+    profile_lines.extend(extract_profile_lines(&response));
 
     // 3. Commit (async — don't read response)
     let commit_path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));

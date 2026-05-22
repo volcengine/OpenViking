@@ -439,6 +439,35 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
 
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        telemetry = self._validate_telemetry(telemetry)
+        payload: Dict[str, Any] = {"messages": messages}
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
+
+        response = await self._http.post(
+            f"/api/v1/sessions/{session_id}/messages/batch",
+            json=payload,
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
     async def add_skill(
         self,
         data: Any,

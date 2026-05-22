@@ -758,34 +758,74 @@ class Session:
             role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
         )
 
-    def _append_message(self, msg: Message) -> None:
-        self._messages.append(msg)
-        self._record_participant(msg)
+    def _append_messages(self, messages: List[Message]) -> None:
+        """Append multiple messages: update lists, stats, JSONL, meta."""
+        for msg in messages:
+            self._messages.append(msg)
+            self._record_participant(msg)
 
-        # Update statistics
-        if msg.role == "user":
-            self._stats.total_turns += 1
-        msg_tokens = int(msg.estimated_tokens or 0)
-        self._stats.total_tokens += msg_tokens
+            if msg.role == "user":
+                self._stats.total_turns += 1
+            msg_tokens = int(msg.estimated_tokens or 0)
+            self._stats.total_tokens += msg_tokens
 
-        # WM v2: maintain pending_tokens via sliding window.
-        # keep_recent_count == 0 (never-committed or compact path that chose 0):
-        #   every new message contributes to pending.
-        # keep_recent_count > 0:
-        #   only the message pushed OUT of the tail-keep window contributes.
-        keep = int(self._meta.keep_recent_count or 0)
-        if keep <= 0:
-            self._meta.pending_tokens += msg_tokens
-        elif len(self._messages) > keep:
-            pushed_out = self._messages[-(keep + 1)]
-            self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+            keep = int(self._meta.keep_recent_count or 0)
+            if keep <= 0:
+                self._meta.pending_tokens += msg_tokens
+            elif len(self._messages) > keep:
+                pushed_out = self._messages[-(keep + 1)]
+                self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_to_jsonl(msg)
+        self._append_messages_to_jsonl_batch(messages)
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
-            self._meta.total_message_count += 1
+            self._meta.total_message_count += len(messages)
         self._save_meta_sync()
+
+    def add_messages(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Add multiple messages in a single batch.
+
+        Args:
+            messages_spec: List of dicts, each with keys:
+                role, parts, role_id (optional), created_at (optional)
+        """
+        all_messages = []
+        for spec in messages_spec:
+            role = spec["role"]
+            parts = spec["parts"]
+            role_id = spec.get("role_id")
+            created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+            if self._is_tool_result_aggregate(role, parts):
+                msgs = [
+                    Message(
+                        id=f"msg_{uuid4().hex}",
+                        role=role,
+                        parts=[part],
+                        role_id=role_id,
+                        created_at=created_at,
+                    )
+                    for part in parts
+                ]
+                self._externalize_large_tool_output_group(msgs)
+                all_messages.extend(msgs)
+            else:
+                msg = Message(
+                    id=f"msg_{uuid4().hex}",
+                    role=role,
+                    parts=parts,
+                    role_id=role_id,
+                    created_at=created_at,
+                )
+                self._externalize_large_tool_outputs(msg)
+                all_messages.append(msg)
+
+        self._append_messages(all_messages)
+        return all_messages
 
     def add_message(
         self,
@@ -799,33 +839,13 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        created = created_at or datetime.now(timezone.utc).isoformat()
-        if self._is_tool_result_aggregate(role, parts):
-            messages = [
-                Message(
-                    id=f"msg_{uuid4().hex}",
-                    role=role,
-                    parts=[part],
-                    role_id=role_id,
-                    created_at=created,
-                )
-                for part in parts
-            ]
-            self._externalize_large_tool_output_group(messages)
-            for msg in messages:
-                self._append_message(msg)
-            return messages[0]
-
-        msg = Message(
-            id=f"msg_{uuid4().hex}",
-            role=role,
-            parts=parts,
-            role_id=role_id,
-            created_at=created,
-        )
-        self._externalize_large_tool_outputs(msg)
-        self._append_message(msg)
-        return msg
+        msgs = self.add_messages([{
+            "role": role,
+            "parts": parts,
+            "role_id": role_id,
+            "created_at": created_at,
+        }])
+        return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:
         if msg.role == "user" and msg.role_id:
@@ -3058,14 +3078,15 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_to_jsonl(self, msg: Message) -> None:
-        """Append to messages.jsonl."""
+    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+        """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
+        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
         run_async(
             self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
-                msg.to_jsonl() + "\n",
+                batch_content,
                 ctx=self.ctx,
             )
         )
