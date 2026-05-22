@@ -11,9 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-import jinja2
-from jinja2 import meta
-
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
@@ -29,6 +26,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -692,11 +690,9 @@ class MemoryUpdater:
                     if schema and schema.embedding_template:
                         template_vars = dict(mf.extra_fields)
                         template_vars["content"] = abstract
-                        parsed_template = jinja2.Environment().parse(schema.embedding_template)
-                        missing_vars = (
-                            meta.find_undeclared_variables(parsed_template)
-                            - set(template_vars)
-                            - {"extract_context"}
+                        missing_vars = TemplateUtils.find_missing_variables(
+                            schema.embedding_template,
+                            template_vars,
                         )
                         if missing_vars:
                             logger.warning(

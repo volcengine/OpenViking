@@ -10,7 +10,6 @@ definitions, with discriminator support for polymorphic fields.
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-import jinja2
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
@@ -18,6 +17,7 @@ from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTy
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -47,7 +47,6 @@ class SchemaModelGenerator:
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
@@ -58,7 +57,11 @@ class SchemaModelGenerator:
             return description
         if "{{" not in description and "{%" not in description and "{#" not in description:
             return description
-        return self._template_env.from_string(description).render(**self._template_context)
+        return TemplateUtils.render(
+            description,
+            self._template_context,
+            strip=False,
+        )
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -365,14 +368,17 @@ class SchemaPromptGenerator:
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
 
     def _render_description(self, description: str) -> str:
         if not description:
             return description
         if "{{" not in description and "{%" not in description and "{#" not in description:
             return description
-        return self._template_env.from_string(description).render(**self._template_context)
+        return TemplateUtils.render(
+            description,
+            self._template_context,
+            strip=False,
+        )
 
     def generate_type_descriptions(self) -> str:
         """
