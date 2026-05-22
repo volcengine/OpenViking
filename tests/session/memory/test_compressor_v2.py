@@ -691,9 +691,7 @@ class TestCompressorV2:
                 return object()
 
             def resolve_source_attribution(self, operations, _ctx=None):
-                raw = operations.upsert_operations[0].memory_fields.pop(
-                    SOURCE_TRAJECTORY_IDS_FIELD
-                )
+                raw = operations.upsert_operations[0].memory_fields.pop(SOURCE_TRAJECTORY_IDS_FIELD)
                 return {exp_uri: [raw]}
 
         class DummyExtractLoop:
@@ -721,7 +719,9 @@ class TestCompressorV2:
 
         class DummyUpdater:
             async def apply_operations(self, operations, ctx, **kwargs):
-                assert SOURCE_TRAJECTORY_IDS_FIELD not in operations.upsert_operations[0].memory_fields
+                assert (
+                    SOURCE_TRAJECTORY_IDS_FIELD not in operations.upsert_operations[0].memory_fields
+                )
                 result = MemoryUpdateResult()
                 result.written_uris = [exp_uri]
                 return result
@@ -935,7 +935,9 @@ class TestCompressorV2:
                 return traj_uris, [], [], {}, []
 
             assert isinstance(kwargs["provider"], AgentExperienceContextProvider)
-            assert phase_label.startswith("experience(viking://agent/default/memories/trajectories/")
+            assert phase_label.startswith(
+                "experience(viking://agent/default/memories/trajectories/"
+            )
             return [f"exp-for-{len(calls)}"], [], [], {}, []
 
         config = SimpleNamespace(

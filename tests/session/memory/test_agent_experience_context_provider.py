@@ -83,7 +83,9 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider._transaction_handle = None
 
     provider.search_files = AsyncMock(
-        return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]
+        return_value=[
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+        ]
     )
 
     read_result = {
@@ -107,7 +109,10 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
 
     assert any(msg.get("role") == "user" for msg in messages)
     assert add_tool_call_pair.call_count == 2
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert (
+        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
+        == "candidate_experience"
+    )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
 
 
@@ -169,9 +174,7 @@ def test_batch_agent_experience_schema_adds_temporary_source_ids_field():
         )
     )
 
-    assert any(
-        field.name == SOURCE_TRAJECTORY_IDS_FIELD for field in schemas[0].fields
-    )
+    assert any(field.name == SOURCE_TRAJECTORY_IDS_FIELD for field in schemas[0].fields)
 
 
 def test_batch_agent_experience_resolves_and_removes_source_attribution():
