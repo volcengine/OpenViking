@@ -1,0 +1,37 @@
+# VikingBot：当 Agent 记忆开始影响策略
+
+这篇文章基于字节跳动 Viking 团队发布在 OSCHINA 的实验文章重新整理，原文地址：
+https://my.oschina.net/u/6210722/blog/19667020
+
+核心观点：多 Agent 协作不只是让多个模型同时发言，更重要的是让它们在多轮任务中保留可追溯、可检索、可更新的记忆。VikingBot 的狼人杀实验提供了一个具体观察场景。
+
+实验设计：
+- 6 个 VikingBot 参与狼人杀对局。
+- 1、2、3 号 Bot 接入 OpenViking，能够跨局保留长期记忆。
+- 4、5、6 号 Bot 只使用当前对局的短期上下文。
+- 上帝 Bot 负责身份分配、流程推进和 GAME.md 私有信息传递。
+
+观察结果：
+- 有长期记忆的 Bot 不只保存原话，还会沉淀玩家画像、历史事件和策略经验。
+- 它们能在新一局中引用过去事件，例如某玩家曾经悍跳、某玩家习惯强势上警、某策略曾经失败。
+- 随着多局积累，记忆开始影响推理、伪装、站队和反制策略。
+
+OpenViking 的作用：
+- 用 viking:// 目录协议组织记忆、资源和技能。
+- 用 L0 / L1 / L2 分层结构做渐进式检索，先提供摘要和 URI，再按需读取完整内容。
+- 用增量更新减少重复写入，让 Agent 修改记忆片段而不是重写整份画像。
+- 用语义化文件名提升可解释性和可导航性。
+
+评测结果（来自参考文章）：
+- 原生 OpenClaw：准确率约 24%，Token 成本约 3.9 亿。
+- OpenClaw + OpenViking Plugin 2.0：准确率约 80%，Token 成本约 3500 万。
+- VikingBot 深度集成：准确率约 80%，Token 成本约 2100 万。
+
+生产意义：
+- 在客服、研发助手、审批 Bot、法务助手等场景中，Agent 需要记住用户偏好、项目背景、工具使用经验和历史决策。
+- OpenViking 的 account / user / agent 多租户边界能同时支持记忆共享和数据隔离。
+- VikingBot 可以通过 Bot Server Gateway 接入多个渠道，并支持 shared、per-channel、per-session 等空间隔离模式。
+
+上手路径：
+- VikingBot README: https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md
+- Werewolf demo: https://github.com/volcengine/OpenViking/blob/main/bot/demo/werewolf/README.md
