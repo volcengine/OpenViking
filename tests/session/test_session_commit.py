@@ -58,7 +58,14 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
 
-    async def test_commit_reports_session_skills_separately(self, session_with_messages: Session):
+    async def test_commit_reports_session_skills_separately(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = False
+        config.memory.session_skill_extraction_enabled = True
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )
@@ -79,6 +86,36 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == [
             "viking://account/test/agent/skills/code-review"
         ]
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_session_skills.assert_awaited_once()
+
+    async def test_commit_skips_session_skill_extraction_when_disabled(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        session_with_messages._session_compressor.extract_session_skills = AsyncMock(
+            return_value=[{"uri": "viking://account/test/agent/skills/code-review"}]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value=[]
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["session_skills_extracted"] == 0
+        assert task_result["result"]["session_skill_uris"] == []
+        session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_session_skills.assert_not_awaited()
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

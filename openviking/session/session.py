@@ -834,19 +834,49 @@ class Session:
 
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
-                    if self._session_compressor and ov_config.memory.extraction_enabled:
+                    memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    session_skill_extraction_enabled = (
+                        ov_config.memory.session_skill_extraction_enabled
+                    )
+                    if self._session_compressor and (
+                        memory_extraction_enabled or session_skill_extraction_enabled
+                    ):
                         logger.info(
-                            f"Starting memory extraction from {len(messages)} archived messages"
+                            "Starting post-commit extraction from %s archived messages",
+                            len(messages),
                         )
 
                         has_agent_memory = hasattr(
                             self._session_compressor, "extract_agent_memories"
                         )
 
-                        async def _noop_agent():
+                        async def _noop_list():
                             return []
 
+                        async def _run_long_term_memories():
+                            if not memory_extraction_enabled:
+                                return []
+                            return await self._session_compressor.extract_long_term_memories(
+                                messages=messages,
+                                user=self.user,
+                                session_id=self.session_id,
+                                ctx=self.ctx,
+                                strict_extract_errors=True,
+                                latest_archive_overview=latest_archive_overview,
+                                archive_uri=archive_uri,
+                            )
+
+                        async def _run_agent_memories():
+                            if not (memory_extraction_enabled and has_agent_memory):
+                                return []
+                            return await self._session_compressor.extract_agent_memories(
+                                messages=messages,
+                                ctx=self.ctx,
+                            )
+
                         async def _run_session_skills():
+                            if not session_skill_extraction_enabled:
+                                return []
                             return await self._session_compressor.extract_session_skills(
                                 messages=messages,
                                 ctx=self.ctx,
@@ -856,21 +886,8 @@ class Session:
 
                         _results = await asyncio.gather(
                             _run_archive_summary(),
-                            self._session_compressor.extract_long_term_memories(
-                                messages=messages,
-                                user=self.user,
-                                session_id=self.session_id,
-                                ctx=self.ctx,
-                                strict_extract_errors=True,
-                                latest_archive_overview=latest_archive_overview,
-                                archive_uri=archive_uri,
-                            ),
-                            self._session_compressor.extract_agent_memories(
-                                messages=messages,
-                                ctx=self.ctx,
-                            )
-                            if has_agent_memory
-                            else _noop_agent(),
+                            _run_long_term_memories(),
+                            _run_agent_memories() if has_agent_memory else _noop_list(),
                             _run_session_skills(),
                             return_exceptions=True,
                         )
@@ -910,12 +927,13 @@ class Session:
                         else:
                             session_skills = session_skill_result
 
-                        logger.info(f"Extracted {len(extracted)} memories")
-                        for ctx_item in extracted:
-                            cat = getattr(ctx_item, "category", "") or "unknown"
-                            memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                        self._stats.memories_extracted += len(extracted)
-                        get_current_telemetry().set("memory.extracted", len(extracted))
+                        if memory_extraction_enabled:
+                            logger.info(f"Extracted {len(extracted)} memories")
+                            for ctx_item in extracted:
+                                cat = getattr(ctx_item, "category", "") or "unknown"
+                                memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
+                            self._stats.memories_extracted += len(extracted)
+                            get_current_telemetry().set("memory.extracted", len(extracted))
 
                         if agent_extracted:
                             logger.info(f"Extracted {len(agent_extracted)} agent memories")
@@ -929,7 +947,9 @@ class Session:
                     else:
                         if self._session_compressor:
                             logger.info(
-                                "Memory extraction is disabled by config (memory.extraction_enabled=false)"
+                                "Memory and session skill extraction are disabled by config "
+                                "(memory.extraction_enabled=false, "
+                                "memory.session_skill_extraction_enabled=false)"
                             )
                         await _run_archive_summary()
 

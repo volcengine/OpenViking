@@ -75,6 +75,14 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    session_skill_extraction_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the agent skill directory. Disabled by "
+            "default."
+        ),
+    )
     enable_role_id_memory_isolate: bool = Field(
         default=False,
         description=(
