@@ -232,6 +232,11 @@ function agentIsLive(agent) {
   return agent.activity === 'working' || agent.activity === 'thinking' || agent.activity === 'error';
 }
 
+function agentIsThinking(agent) {
+  if (!agent || agent.status !== 'active') return false;
+  return agent.activity === 'working' || agent.activity === 'thinking';
+}
+
 function isSystemMessage(message) {
   return message?.senderType === 'system' || message?.senderName === 'system';
 }
@@ -526,6 +531,29 @@ function LiveAgents({ agents }) {
   );
 }
 
+function ThinkingMessage({ agent }) {
+  const label = agent?.displayName || agent?.name || 'agent';
+  const dotStatus = agentDotStatus(agent);
+  return (
+    <article className="zouk-reader-message is-thinking-placeholder" aria-live="polite">
+      <div className="zouk-reader-message-profile">
+        <Avatar name={label} src={agent?.avatarUrl} status={dotStatus} kind="agent" />
+        <div className="zouk-reader-bubble-column">
+          <div className="zouk-reader-sender">{label}</div>
+          <div className="zouk-reader-bubble zouk-reader-thinking-bubble">
+            <span className="zouk-reader-thinking-text" aria-label="thinking...">
+              <span>thinking</span>
+              <span className="zouk-reader-thinking-dots" aria-hidden="true">
+                <span>.</span><span>.</span><span>.</span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export function ZoukInteractiveBlog({ route }) {
   const [browserId] = useState(getBrowserId);
   const [open, setOpen] = useState(false);
@@ -546,12 +574,14 @@ export function ZoukInteractiveBlog({ route }) {
   const [lastContextUrl, setLastContextUrl] = useState('');
   const [selectionAction, setSelectionAction] = useState(null);
   const [headerSlot, setHeaderSlot] = useState(null);
+  const [dismissedThinkingKey, setDismissedThinkingKey] = useState('');
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const wsRef = useRef(null);
   const closeTimerRef = useRef(null);
   const dragRef = useRef(null);
   const sheetHeightRef = useRef(0);
+  const thinkingMessageKeyRef = useRef('');
   const target = `#${CONFIG.channel}`;
   const panelVisible = open || closing;
   const referencedText = compactText(selectedText);
@@ -583,6 +613,12 @@ export function ZoukInteractiveBlog({ route }) {
     () => agents.filter(agentIsLive),
     [agents],
   );
+  const thinkingAgent = useMemo(
+    () => liveAgents.find(agentIsThinking) || null,
+    [liveAgents],
+  );
+  const thinkingMessageKey = thinkingAgent ? thinkingAgent.id : '';
+  const showThinkingMessage = Boolean(thinkingAgent && thinkingMessageKey !== dismissedThinkingKey);
   const launcherStatus = useMemo(() => {
     const statuses = liveAgents.map(agentDotStatus);
     if (statuses.includes('error')) return 'error';
@@ -596,6 +632,11 @@ export function ZoukInteractiveBlog({ route }) {
     const next = currentSourceUrl();
     setSourceUrl(next);
     return next;
+  }, []);
+
+  const dismissThinkingMessage = useCallback(() => {
+    const key = thinkingMessageKeyRef.current;
+    if (key) setDismissedThinkingKey(key);
   }, []);
 
   const openChat = useCallback((nextSelectedText = '') => {
@@ -707,11 +748,15 @@ export function ZoukInteractiveBlog({ route }) {
         if ((packet.type === 'message' || packet.type === 'new_message') && packet.message) {
           const next = normalizeMessage(packet.message);
           if (next?.channelType === 'thread' && next.parentChannelName === CONFIG.channel) {
+            dismissThinkingMessage();
             setMessages((prev) => mergeThreadReply(prev, next));
             setThreadStates((prev) => mergeThreadStateReply(prev, next));
             return;
           }
-          if (next?.channelName === CONFIG.channel) setMessages((prev) => mergeMessage(prev, next));
+          if (next?.channelName === CONFIG.channel) {
+            dismissThinkingMessage();
+            setMessages((prev) => mergeMessage(prev, next));
+          }
         }
       } catch {
         // Ignore non-JSON websocket frames.
@@ -721,7 +766,15 @@ export function ZoukInteractiveBlog({ route }) {
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [token]);
+  }, [dismissThinkingMessage, token]);
+
+  useEffect(() => {
+    thinkingMessageKeyRef.current = thinkingMessageKey;
+  }, [thinkingMessageKey]);
+
+  useEffect(() => {
+    if (!thinkingAgent && dismissedThinkingKey) setDismissedThinkingKey('');
+  }, [dismissedThinkingKey, thinkingAgent]);
 
   useEffect(() => {
     if (!browserAvailable()) return undefined;
@@ -748,7 +801,7 @@ export function ZoukInteractiveBlog({ route }) {
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [visibleMessages.length, panelVisible]);
+  }, [panelVisible, showThinkingMessage, visibleMessages.length]);
 
   useEffect(() => {
     const node = textareaRef.current;
@@ -901,6 +954,7 @@ export function ZoukInteractiveBlog({ route }) {
         body: JSON.stringify({ target, content }),
       });
       const body = await parseJsonResponse(res);
+      dismissThinkingMessage();
       setMessages((prev) => mergeMessage(prev, normalizeMessage(body.message)));
       if (nextIncludeUrl) setLastContextUrl(nextSourceUrl);
       setSelectedText('');
@@ -910,7 +964,7 @@ export function ZoukInteractiveBlog({ route }) {
       setStatus('error');
       setError(err instanceof Error ? err.message : 'Send failed');
     }
-  }, [authHeaders, composer, lastContextUrl, rememberSource, selectedText, status, target, token]);
+  }, [authHeaders, composer, dismissThinkingMessage, lastContextUrl, rememberSource, selectedText, status, target, token]);
 
   const loadThreadMessages = useCallback(async (parentMessage) => {
     const parentId = parentMessage?.id;
@@ -1083,6 +1137,7 @@ export function ZoukInteractiveBlog({ route }) {
                 </article>
               );
             })}
+            {showThinkingMessage ? <ThinkingMessage agent={thinkingAgent} /> : null}
           </div>
 
           <form className="zouk-reader-composer" onSubmit={onSubmit}>
