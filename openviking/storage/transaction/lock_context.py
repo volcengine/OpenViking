@@ -6,6 +6,7 @@ from typing import Optional
 
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction.lock_handle import LockHandle
+from openviking.storage.transaction.lock_lease import OwnedLockLease
 from openviking.storage.transaction.lock_manager import LockManager
 
 
@@ -20,20 +21,21 @@ class LockContext:
         self,
         lock_manager: LockManager,
         paths: list[str],
-        lock_mode: str = "point",
-        mv_dst_parent_path: Optional[str] = None,
+        lock_mode: str = "exact",
+        mv_dst_path: Optional[str] = None,
         src_is_dir: bool = True,
         handle: Optional[LockHandle] = None,
     ):
         self._manager = lock_manager
         self._paths = paths
         self._lock_mode = lock_mode
-        self._mv_dst_parent_path = mv_dst_parent_path
+        self._mv_dst_path = mv_dst_path
         self._src_is_dir = src_is_dir
         self._handle: Optional[LockHandle] = handle
         self._owns_handle = handle is None
         self._locks_before: list[str] = []
         self._acquired_lock_paths: list[str] = []
+        self._owned_lease: Optional[OwnedLockLease] = None
 
     async def __aenter__(self) -> LockHandle:
         if self._handle is None:
@@ -41,25 +43,24 @@ class LockContext:
         self._locks_before = list(self._handle.locks)
         success = False
 
-        if self._lock_mode == "subtree":
+        if self._lock_mode == "tree":
             for path in self._paths:
-                success = await self._manager.acquire_subtree(self._handle, path)
+                success = await self._manager.acquire_tree(self._handle, path)
                 if not success:
                     break
+        elif self._lock_mode == "exact":
+            success = await self._manager.acquire_exact_path_batch(self._handle, self._paths)
         elif self._lock_mode == "mv":
-            if self._mv_dst_parent_path is None:
-                raise LockAcquisitionError("mv lock mode requires mv_dst_parent_path")
+            if self._mv_dst_path is None:
+                raise LockAcquisitionError("mv lock mode requires mv_dst_path")
             success = await self._manager.acquire_mv(
                 self._handle,
                 self._paths[0],
-                self._mv_dst_parent_path,
+                self._mv_dst_path,
                 src_is_dir=self._src_is_dir,
             )
-        else:  # "point"
-            for path in self._paths:
-                success = await self._manager.acquire_point(self._handle, path)
-                if not success:
-                    break
+        else:
+            raise LockAcquisitionError(f"Unsupported lock mode: {self._lock_mode}")
 
         self._acquired_lock_paths = [
             lock_path for lock_path in self._handle.locks if lock_path not in self._locks_before
@@ -73,12 +74,17 @@ class LockContext:
             raise LockAcquisitionError(
                 f"Failed to acquire {self._lock_mode} lock for {self._paths}"
             )
+        if self._owns_handle and self._handle.locks:
+            self._owned_lease = OwnedLockLease.from_handle(self._manager, self._handle)
         return self._handle
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._handle:
             if self._owns_handle:
-                await self._manager.release(self._handle)
+                if self._owned_lease:
+                    await self._owned_lease.close()
+                else:
+                    await self._manager.release(self._handle)
             else:
                 await self._manager.release_selected(self._handle, self._acquired_lock_paths)
         return False

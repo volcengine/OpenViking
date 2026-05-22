@@ -298,12 +298,12 @@ class BaseClient(ABC):
     # ============= Pack =============
 
     @abstractmethod
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(self, uri: str, to: str, include_vectors: bool = False) -> str:
         """Export as .ovpack file."""
         ...
 
     @abstractmethod
-    async def backup_ovpack(self, to: str) -> str:
+    async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
         """Back up public scopes as a restore-only .ovpack file."""
         ...
 
@@ -313,6 +313,7 @@ class BaseClient(ABC):
         file_path: str,
         parent: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         ...
@@ -322,11 +323,17 @@ class BaseClient(ABC):
         self,
         file_path: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Restore backup .ovpack file."""
         ...
 
     # ============= Debug =============
+
+    @abstractmethod
+    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        ...
 
     @abstractmethod
     async def health(self) -> bool:

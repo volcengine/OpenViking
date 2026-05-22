@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,15 @@ class _FakeProvider(LLMProvider):
 class _FakeSubagentManager:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+
+
+class _FakeLangfuseClient:
+    def __init__(self):
+        self.calls = []
+
+    def update_generation_metadata(self, response_id, metadata):
+        self.calls.append((response_id, metadata))
+        return metadata
 
 
 @pytest.mark.asyncio
@@ -120,3 +130,75 @@ async def test_agent_loop_ignores_heartbeat_when_evaluating_previous_response_ou
 
     persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
     assert "response_outcomes" not in persisted_session.metadata
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    fake_langfuse = _FakeLangfuseClient()
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: fake_langfuse),
+    )
+
+    async def fake_run_agent_loop(self, **kwargs):
+        return (
+            "final answer",
+            None,
+            [{"tool_name": "search_docs"}, {"tool_name": "fetch_page"}],
+            {"prompt_tokens": 12, "completion_tokens": 8},
+            3,
+        )
+
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    response = await loop._process_message(
+        InboundMessage(
+            session_key=session_key,
+            sender_id="user-1",
+            content="please help",
+            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+        )
+    )
+
+    assert response is not None
+    assert response.content == "final answer"
+    assert response.response_id is not None
+    assert bus.outbound_size == 1
+
+    completed_event = await bus.consume_outbound()
+    assert completed_event.event_type == OutboundEventType.RESPONSE_COMPLETED
+    payload = completed_event.metadata["response_completed"]
+    assert payload["response_id"] == response.response_id
+    assert payload["session_id"] == "cli__default__session-1"
+    assert payload["channel"] == "cli__default"
+    assert payload["session_type"] == "cli"
+    assert payload["user_id"] == "user-1"
+    assert payload["prompt_tokens"] == 12
+    assert payload["completion_tokens"] == 8
+    assert payload["total_tokens"] == 20
+    assert payload["iteration_count"] == 3
+    assert payload["tool_count"] == 2
+    assert payload["tools_used_names"] == ["search_docs", "fetch_page"]
+    assert payload["response_length"] == len("final answer")
+    assert payload["has_reasoning"] is False
+    assert payload["time_cost_ms"] >= 0
+    assert payload["created_at"]
+    assert fake_langfuse.calls == [(response.response_id, payload)]
+
+    session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
+    metadata = json.loads(session_path.read_text().splitlines()[0])
+    assert metadata["metadata"]["response_facts"][response.response_id] == payload

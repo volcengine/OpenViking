@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import merge_time_filter, merge_level_filter
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -119,3 +119,70 @@ def test_merge_time_filter_date_only_uses_now_timezone():
 
     assert result["gte"].endswith("Z")
     assert result["lte"].endswith("Z")
+
+
+def test_merge_level_filter_with_single_level():
+    result = merge_level_filter(None, level=0)
+    assert result == {"op": "must", "field": "level", "conds": [0]}
+
+
+def test_merge_level_filter_with_multiple_levels():
+    result = merge_level_filter(None, level=[0, 1])
+    assert result == {"op": "must", "field": "level", "conds": [0, 1]}
+
+
+def test_merge_level_filter_with_comma_separated_string():
+    result = merge_level_filter(None, level="0,1,2")
+    assert result == {"op": "must", "field": "level", "conds": [0, 1, 2]}
+
+
+def test_merge_level_filter_with_single_string():
+    result = merge_level_filter(None, level="0")
+    assert result == {"op": "must", "field": "level", "conds": [0]}
+
+
+def test_merge_level_filter_merges_with_existing_filter():
+    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
+
+    result = merge_level_filter(existing_filter, level=2)
+
+    assert result == {
+        "op": "and",
+        "conds": [
+            existing_filter,
+            {"op": "must", "field": "level", "conds": [2]},
+        ],
+    }
+
+
+def test_merge_level_filter_with_none_returns_existing():
+    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
+    result = merge_level_filter(existing_filter, level=None)
+    assert result == existing_filter
+
+
+def test_merge_level_filter_with_empty_string_returns_existing():
+    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
+    result = merge_level_filter(existing_filter, level="")
+    assert result == existing_filter
+
+
+def test_merge_level_filter_with_empty_list_returns_existing():
+    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
+    result = merge_level_filter(existing_filter, level=[])
+    assert result == existing_filter
+
+
+def test_merge_level_filter_with_mixed_types_list():
+    result = merge_level_filter(None, level=[0, "1", 2])
+    assert result == {"op": "must", "field": "level", "conds": [0, 1, 2]}
+
+
+def test_merge_level_filter_with_spaces_in_comma_string():
+    result = merge_level_filter(None, level="0, 1, 2")
+    assert result == {"op": "must", "field": "level", "conds": [0, 1, 2]}
+
+
+def test_merge_level_filter_skips_invalid_values():
+    result = merge_level_filter(None, level="0,invalid,2")
+    assert result == {"op": "must", "field": "level", "conds": [0, 2]}

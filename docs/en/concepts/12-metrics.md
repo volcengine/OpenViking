@@ -261,6 +261,81 @@ These help answer:
 | `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used total |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive count |
 
+### Feedback
+
+These metrics summarize persisted VikingBot feedback and outcome data at scrape time. They are exported as gauges because the collector recomputes the current aggregate snapshot from bot session files instead of incrementing counters online.
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_feedback_sessions_scanned_total` | Gauge | `valid` | number of bot sessions scanned for the current snapshot |
+| `openviking_feedback_responses_total` | Gauge | `valid` | total persisted assistant responses included in the snapshot, including legacy responses outside the new observability contract |
+| `openviking_feedback_tracked_responses_total` | Gauge | `valid` | responses covered by the current feedback observability contract (`metadata.feedback_events` or `metadata.response_outcomes`) |
+| `openviking_feedback_responses_with_feedback_total` | Gauge | `valid` | responses that have at least one explicit feedback event |
+| `openviking_feedback_events_total` | Gauge | `valid` | explicit feedback event count |
+| `openviking_feedback_thumb_up_total` | Gauge | `valid` | thumb-up event count |
+| `openviking_feedback_thumb_down_total` | Gauge | `valid` | thumb-down event count |
+| `openviking_feedback_positive_outcomes_total` | Gauge | `valid` | responses classified as positive feedback outcomes |
+| `openviking_feedback_negative_outcomes_total` | Gauge | `valid` | responses classified as negative feedback outcomes |
+| `openviking_feedback_reasked_outcomes_total` | Gauge | `valid` | responses classified as reasked outcomes |
+| `openviking_feedback_resolved_outcomes_total` | Gauge | `valid` | responses classified as resolved outcomes |
+| `openviking_feedback_follow_up_without_feedback_outcomes_total` | Gauge | `valid` | responses followed up without explicit feedback |
+| `openviking_feedback_coverage` | Gauge | `valid` | fraction of tracked responses with explicit feedback |
+| `openviking_feedback_thumbs_up_rate` | Gauge | `valid` | fraction of feedback events that are thumbs up |
+| `openviking_feedback_thumbs_down_rate` | Gauge | `valid` | fraction of feedback events that are thumbs down |
+| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | fraction of tracked responses with positive feedback outcomes |
+| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | fraction of tracked responses with negative feedback outcomes |
+| `openviking_feedback_reask_rate` | Gauge | `valid` | fraction of tracked responses that led to reasking |
+| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | fraction of tracked responses resolved in one turn |
+| `openviking_feedback_channel_*` | Gauge | `channel, valid` | per-channel variants of response volume, feedback volume, negative outcomes, reasks, coverage, thumb rates, and one-turn resolution |
+
+For mixed historical data, use `openviking_feedback_tracked_responses_total` as the denominator reference for rate panels. `openviking_feedback_responses_total` is kept to show overall persisted assistant-response volume, including legacy responses that predate the current feedback metadata contract.
+
+Typical usage:
+
+- build Grafana panels for feedback coverage, thumbs-down rate, and one-turn resolution rate over time
+- compare feedback quality across channels such as `cli__default` and `bot_api__demo`
+- alert when `valid="0"` appears persistently, which indicates the collector is serving the last successful snapshot after a refresh failure
+
+PromQL / Grafana examples:
+
+- overall feedback coverage:
+
+```promql
+openviking_feedback_coverage{valid="1"}
+```
+
+- overall thumbs-down rate:
+
+```promql
+openviking_feedback_thumbs_down_rate{valid="1"}
+```
+
+- one-turn resolution rate:
+
+```promql
+openviking_feedback_one_turn_resolution_rate{valid="1"}
+```
+
+- per-channel coverage and resolution comparison:
+
+```promql
+openviking_feedback_channel_coverage{valid="1"}
+```
+
+```promql
+openviking_feedback_channel_one_turn_resolution_rate{valid="1"}
+```
+
+- detect fallback snapshots:
+
+```promql
+max by (job) (openviking_feedback_events_total{valid="0"})
+```
+
+Because these are scrape-time snapshot gauges, they work well in Grafana time-series panels and side-by-side channel comparison panels.
+
+For `/metrics` endpoint behavior and scrape usage, see [Metrics API](../api/09-metrics.md).
+
 ### Probes and Health State
 
 | Metric Family | Type | Common Labels | Meaning |
@@ -313,6 +388,7 @@ Typical `component` values include:
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB and Model Usage Statistics
 
@@ -426,4 +502,5 @@ Example:
 - [Multi-Tenant](./11-multi-tenant.md) - `account/user/agent` isolation model
 - [Data Encryption](./10-encryption.md) - storage-layer encryption and isolation
 - [Metrics API](../api/09-metrics.md) - `/metrics` endpoint usage
+- [VikingBot Feedback Observability Design](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
 - [Metrics Design](../../design/metric-design.md) - metrics system design details

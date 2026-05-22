@@ -9,7 +9,7 @@ import pytest
 
 from openviking.storage.transaction.lock_context import LockContext
 from openviking.storage.transaction.lock_manager import LockManager
-from openviking.storage.transaction.path_lock import LOCK_FILE_NAME, PathLock
+from openviking.storage.transaction.path_lock import LOCK_FILE_NAME, PathLockEngine
 
 
 class _FakeAGFS:
@@ -87,50 +87,50 @@ class _FakeAGFS:
 
 
 @pytest.mark.asyncio
-async def test_path_lock_reuses_same_owner_subtree_without_overwriting_token():
+async def test_path_lock_reuses_same_owner_tree_without_overwriting_token():
     agfs = _FakeAGFS()
     agfs.mkdir("/root")
-    lock = PathLock(agfs)
+    lock = PathLockEngine(agfs)
     handle = LockManager(agfs).create_handle()
 
-    assert await lock.acquire_subtree("/root", handle, timeout=0.1) is True
+    assert await lock.acquire_tree("/root", handle, timeout=0.1) is True
     lock_path = f"/root/{LOCK_FILE_NAME}"
     before = agfs.read(lock_path).decode("utf-8")
-    assert before.endswith(":S")
+    assert before.endswith(":T")
 
-    assert await lock.acquire_point("/root", handle, timeout=0.1) is True
+    assert await lock.acquire_exact_path("/root", handle, timeout=0.1) is True
     after = agfs.read(lock_path).decode("utf-8")
     assert after == before
-    assert after.endswith(":S")
+    assert after.endswith(":T")
 
 
 @pytest.mark.asyncio
-async def test_path_lock_reuses_ancestor_subtree_without_creating_child_lock():
+async def test_path_lock_reuses_ancestor_tree_without_creating_child_lock():
     agfs = _FakeAGFS()
     agfs.mkdir("/root")
     agfs.mkdir("/root/child")
-    lock = PathLock(agfs)
+    lock = PathLockEngine(agfs)
     handle = LockManager(agfs).create_handle()
 
-    assert await lock.acquire_subtree("/root", handle, timeout=0.1) is True
-    assert await lock.acquire_point("/root/child", handle, timeout=0.1) is True
+    assert await lock.acquire_tree("/root", handle, timeout=0.1) is True
+    assert await lock.acquire_exact_path("/root/child", handle, timeout=0.1) is True
 
     with pytest.raises(FileNotFoundError):
         agfs.read(f"/root/child/{LOCK_FILE_NAME}")
 
 
 @pytest.mark.asyncio
-async def test_lock_context_with_external_handle_keeps_outer_subtree_lock():
+async def test_lock_context_with_external_handle_keeps_outer_tree_lock():
     agfs = _FakeAGFS()
     agfs.mkdir("/root")
     lm = LockManager(agfs=agfs, lock_timeout=0.1, lock_expire=60.0)
     lock_path = f"/root/{LOCK_FILE_NAME}"
 
-    async with LockContext(lm, ["/root"], lock_mode="subtree") as handle:
+    async with LockContext(lm, ["/root"], lock_mode="tree") as handle:
         before = agfs.read(lock_path).decode("utf-8")
-        assert before.endswith(":S")
+        assert before.endswith(":T")
 
-        async with LockContext(lm, ["/root"], lock_mode="point", handle=handle):
+        async with LockContext(lm, ["/root"], lock_mode="exact", handle=handle):
             current = agfs.read(lock_path).decode("utf-8")
             assert current == before
 

@@ -1,0 +1,498 @@
+import {
+  fileNameFromUri,
+  joinUri,
+  normalizeDirUri,
+  normalizeFileUri,
+} from '#/lib/viking-uri'
+import type { VikingFileType, VikingFsEntry } from '../-types/viking-fm'
+
+export {
+  fileNameFromUri,
+  joinUri,
+  normalizeDirUri,
+  normalizeFileUri,
+  parentUri,
+} from '#/lib/viking-uri'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const SIZE_REGEX = /^([\d.]+)\s*([kmgtp]?i?b?)$/
+
+const SIZE_MULTIPLIERS: Record<string, number> = {
+  b: 1,
+  kb: 1024,
+  kib: 1024,
+  mb: 1024 ** 2,
+  mib: 1024 ** 2,
+  gb: 1024 ** 3,
+  gib: 1024 ** 3,
+  tb: 1024 ** 4,
+  tib: 1024 ** 4,
+  pb: 1024 ** 5,
+  pib: 1024 ** 5,
+}
+
+const IMAGE_EXTS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'svg',
+  'ico',
+  'bmp',
+  'avif',
+]
+const MARKDOWN_EXTS = ['md', 'markdown', 'mdx']
+const JSONL_EXTS = ['jsonl', 'ndjson']
+const CODE_EXTS = [
+  'js',
+  'ts',
+  'jsx',
+  'tsx',
+  'mjs',
+  'cjs',
+  'py',
+  'go',
+  'rs',
+  'java',
+  'kt',
+  'c',
+  'h',
+  'hpp',
+  'cpp',
+  'json',
+  'yaml',
+  'yml',
+  'toml',
+  'xml',
+  'html',
+  'css',
+  'scss',
+  'less',
+  'sh',
+  'bash',
+  'zsh',
+  'fish',
+  'sql',
+  'graphql',
+  'proto',
+]
+const BINARY_EXTS = [
+  'pdf',
+  'zip',
+  'gz',
+  'tgz',
+  'tar',
+  '7z',
+  'rar',
+  'mp3',
+  'wav',
+  'mp4',
+  'mov',
+  'avi',
+  'mkv',
+  'woff',
+  'woff2',
+  'ttf',
+  'otf',
+  'exe',
+  'dll',
+  'so',
+  'dylib',
+  'bin',
+]
+const TEXT_FILES = ['readme', 'license', 'dockerfile', 'makefile']
+const HIDDEN_SUMMARY_FILENAMES = new Set([
+  '.abstract',
+  '.abstract.md',
+  '.overview',
+  '.overview.md',
+])
+
+function pickFirstNonEmpty(values: Array<unknown>): unknown {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value
+    }
+  }
+  return ''
+}
+
+export function sameUri(left: string, right: string): boolean {
+  const leftNormalized =
+    left.endsWith('/') || left === 'viking://'
+      ? normalizeDirUri(left)
+      : normalizeFileUri(left)
+  const rightNormalized =
+    right.endsWith('/') || right === 'viking://'
+      ? normalizeDirUri(right)
+      : normalizeFileUri(right)
+
+  return leftNormalized === rightNormalized
+}
+
+export function parseSizeToBytes(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+
+  const text = String(value ?? '').trim()
+  if (!text) {
+    return null
+  }
+
+  if (/^\d+$/.test(text)) {
+    const direct = Number(text)
+    return Number.isFinite(direct) ? direct : null
+  }
+
+  const normalized = text.replace(/,/g, '').toLowerCase()
+  const match = normalized.match(SIZE_REGEX)
+  if (!match) {
+    return null
+  }
+
+  const amount = Number(match[1])
+  const unit = match[2]
+  if (!Number.isFinite(amount)) {
+    return null
+  }
+
+  const multiplier = SIZE_MULTIPLIERS[unit || 'b']
+  if (!multiplier) {
+    return null
+  }
+
+  return Math.round(amount * multiplier)
+}
+
+const TIME_ONLY_RE = /^\d{1,2}:\d{2}(:\d{2})?(\s*[apAP][mM])?$/
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function todayUtcDateKey(): string {
+  // Backend simplifies modTime against UTC's "today", not the user's
+  // local today. We need to match that reference so time-only values
+  // bind to the right UTC moment regardless of the viewer's tz.
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+}
+
+export function parseModTimeToTs(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+
+  const text = String(value ?? '').trim()
+  if (!text) {
+    return null
+  }
+
+  // Time-only ("HH:MM:SS", "12:34am" etc) — backend's format_simplified
+  // returns this only when the entry's UTC date matches UTC's today.
+  // Combine with UTC today + explicit Z so the moment is anchored in UTC,
+  // and downstream Date methods naturally render it in the viewer's local
+  // tz (no double-shift, no day mis-attribution).
+  if (TIME_ONLY_RE.test(text)) {
+    const normalized = text.replace(/\s+/g, '').toUpperCase()
+    const ts = Date.parse(`${todayUtcDateKey()}T${normalized}Z`)
+    if (Number.isFinite(ts)) {
+      return ts
+    }
+  }
+
+  // Date-only ("YYYY-MM-DD") — backend's format_simplified returns this
+  // when the entry is older than UTC's today. Treat as local midnight on
+  // that date for sort purposes (we have no sub-day precision anyway).
+  if (DATE_ONLY_RE.test(text)) {
+    const [year, month, day] = text.split('-').map(Number)
+    if (year && month && day) {
+      return new Date(year, month - 1, day).getTime()
+    }
+  }
+
+  const direct = Date.parse(text)
+  if (Number.isFinite(direct)) {
+    return direct
+  }
+
+  const fallback = Date.parse(text.replace(' ', 'T'))
+  if (Number.isFinite(fallback)) {
+    return fallback
+  }
+
+  return null
+}
+
+export function formatModTime(value: unknown): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  // Date-only inputs (older entries) — the backend has already dropped
+  // sub-day precision, so we render the date as-is without faking an
+  // 00:00 time component.
+  if (DATE_ONLY_RE.test(text)) {
+    return text
+  }
+  const ts = parseModTimeToTs(text)
+  if (ts === null) return text
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+export function detectFileType(uri: string): VikingFileType {
+  const name = fileNameFromUri(uri).toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() || '' : ''
+
+  if (uri.endsWith('/')) {
+    return 'directory'
+  }
+
+  if (IMAGE_EXTS.includes(ext)) {
+    return 'image'
+  }
+  if (MARKDOWN_EXTS.includes(ext)) {
+    return 'markdown'
+  }
+  if (JSONL_EXTS.includes(ext)) {
+    return 'jsonl'
+  }
+  if (CODE_EXTS.includes(ext)) {
+    return 'code'
+  }
+
+  if (!ext && TEXT_FILES.includes(name)) {
+    return 'text'
+  }
+
+  if (isLikelyBinary(uri)) {
+    return 'binary'
+  }
+
+  return 'text'
+}
+
+export function isLikelyBinary(uri: string): boolean {
+  const name = fileNameFromUri(uri).toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() || '' : ''
+
+  return BINARY_EXTS.includes(ext)
+}
+
+export function shouldAutoRead(
+  entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'sizeBytes'>,
+  maxAutoReadBytes = 2 * 1024 * 1024,
+): {
+  shouldRead: boolean
+  reason?: 'binary' | 'too-large'
+} {
+  if (entry.isDir) {
+    return { shouldRead: false }
+  }
+
+  const fileType = detectFileType(entry.uri)
+  if (fileType === 'image' || isLikelyBinary(entry.uri)) {
+    return { shouldRead: false, reason: 'binary' }
+  }
+
+  if (entry.sizeBytes !== null && entry.sizeBytes > maxAutoReadBytes) {
+    return { shouldRead: false, reason: 'too-large' }
+  }
+
+  return { shouldRead: true }
+}
+
+export function normalizeFsEntry(
+  item: unknown,
+  currentUri: string,
+): VikingFsEntry {
+  if (typeof item === 'string') {
+    const isDir = item.endsWith('/')
+    const uri = joinUri(currentUri, item)
+    const normalizedUri = isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
+
+    return {
+      uri: normalizedUri,
+      name: fileNameFromUri(normalizedUri),
+      isDir,
+      size: '',
+      sizeBytes: null,
+      modTime: '',
+      modTimestamp: null,
+      abstract: '',
+      overview: '',
+    }
+  }
+
+  if (isRecord(item)) {
+    const label = String(
+      pickFirstNonEmpty([
+        item.name,
+        item.path,
+        item.relative_path,
+        item.uri,
+        item.id,
+        'unknown',
+      ]),
+    )
+
+    const isDir =
+      Boolean(item.is_dir) ||
+      Boolean(item.isDir) ||
+      item.type === 'dir' ||
+      item.type === 'directory' ||
+      label.endsWith('/')
+
+    const rawUri = String(
+      pickFirstNonEmpty([item.uri, item.path, item.relative_path, label]),
+    )
+    const joinedUri = joinUri(currentUri, rawUri)
+    const normalizedUri = isDir
+      ? normalizeDirUri(joinedUri)
+      : normalizeFileUri(joinedUri)
+
+    const sizeRaw = pickFirstNonEmpty([
+      item.size,
+      item.size_bytes,
+      item.content_length,
+      item.contentLength,
+    ])
+    const modRaw = pickFirstNonEmpty([
+      item.modTime,
+      item.mod_time,
+      item.modified_at,
+      item.modifiedAt,
+      item.updated_at,
+      item.updatedAt,
+    ])
+
+    return {
+      uri: normalizedUri,
+      name: String(
+        pickFirstNonEmpty([item.name, fileNameFromUri(normalizedUri)]),
+      ),
+      isDir,
+      size: String(sizeRaw ?? ''),
+      sizeBytes: parseSizeToBytes(sizeRaw),
+      modTime: formatModTime(modRaw),
+      modTimestamp: parseModTimeToTs(modRaw),
+      abstract: String(
+        pickFirstNonEmpty([item.abstract, item.summary, item.description]),
+      ),
+      overview: String(pickFirstNonEmpty([item.overview, item.l1, item.L1])),
+    }
+  }
+
+  const fallbackUri = normalizeFileUri(joinUri(currentUri, String(item ?? '')))
+  return {
+    uri: fallbackUri,
+    name: fileNameFromUri(fallbackUri),
+    isDir: false,
+    size: '',
+    sizeBytes: null,
+    modTime: '',
+    modTimestamp: null,
+    abstract: '',
+    overview: '',
+  }
+}
+
+function isHiddenSummaryEntry(entry: VikingFsEntry): boolean {
+  return !entry.isDir && HIDDEN_SUMMARY_FILENAMES.has(entry.name)
+}
+
+export function normalizeFsEntries(
+  result: unknown,
+  currentUri: string,
+): Array<VikingFsEntry> {
+  const normalizedCurrentUri = normalizeDirUri(currentUri)
+
+  if (Array.isArray(result)) {
+    return result
+      .map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+      .filter((entry) => !isHiddenSummaryEntry(entry))
+  }
+
+  if (isRecord(result)) {
+    const buckets = [
+      result.entries,
+      result.items,
+      result.children,
+      result.results,
+      result.nodes,
+    ]
+    for (const bucket of buckets) {
+      if (Array.isArray(bucket)) {
+        return bucket
+          .map((item) => normalizeFsEntry(item, normalizedCurrentUri))
+          .filter((entry) => !isHiddenSummaryEntry(entry))
+      }
+    }
+  }
+
+  return []
+}
+
+export function formatSize(
+  value: unknown,
+  options?: { maximumFractionDigits?: number; fallback?: string },
+): string {
+  const maximumFractionDigits = options?.maximumFractionDigits ?? 1
+  const fallback = options?.fallback ?? '-'
+  const bytes = parseSizeToBytes(value)
+
+  if (bytes === null || bytes < 0) {
+    return fallback
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
+  let scaled = bytes
+  let unitIndex = -1
+
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024
+    unitIndex += 1
+  }
+
+  return `${scaled.toFixed(maximumFractionDigits)} ${units[unitIndex]}`
+}
+
+export function normalizeUriForDisplay(uri: string, isDir: boolean): string {
+  return isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
+}
+
+export function normalizeReadContent(result: unknown): string {
+  if (typeof result === 'string') {
+    return result
+  }
+
+  if (Array.isArray(result)) {
+    return result.map((item) => String(item)).join('\n')
+  }
+
+  if (isRecord(result)) {
+    const content = pickFirstNonEmpty([
+      result.content,
+      result.text,
+      result.body,
+      result.value,
+      result.data,
+    ])
+    if (typeof content === 'string') {
+      return content
+    }
+  }
+
+  if (result === undefined) {
+    return ''
+  }
+
+  return JSON.stringify(result, null, 2)
+}

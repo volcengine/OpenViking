@@ -8,12 +8,11 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.session.memory.dataclass import MemoryFileContent
-from openviking.session.memory.utils import parse_memory_file_with_fields
-from openviking.session.memory.utils.content import truncate_content
-from openviking.storage.viking_fs import VikingFS
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -50,7 +49,7 @@ def optimize_tool_result(tool_name: str, result: Any) -> Any:
     # 对 read 工具返回的 dict，如果包含 content 字段，则截断 content
     if tool_name == "read" and isinstance(result, dict) and "content" in result:
         result = result.copy()
-        result["content"] = truncate_content(result["content"])
+        result["content"] = MemoryFileUtils.truncate_content(result["content"])
     return result
 
 
@@ -80,7 +79,6 @@ def add_tool_call_pair_to_messages(
             ),
         }
     )
-
 
 
 class MemoryTool(ABC):
@@ -159,6 +157,18 @@ class MemoryReadTool(MemoryTool):
                     "type": "string",
                     "description": "Memory URI to read, e.g., 'viking://user/user123/memories/profile.md'",
                 },
+                "offset": {
+                    "type": "integer",
+                    "description": "Starting line number to read from (0-indexed)",
+                    "default": 0,
+                    "minimum": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of lines to read. -1 means read to end",
+                    "default": -1,
+                    "minimum": -1,
+                },
             },
             "required": ["uri"],
         }
@@ -169,19 +179,39 @@ class MemoryReadTool(MemoryTool):
         **kwargs: Any,
     ) -> Any:
         uri = kwargs.get("uri", "")
+        offset = kwargs.get("offset", 0)
+        limit = kwargs.get("limit", -1)
         try:
             content = await ctx.viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
-            parsed = parse_memory_file_with_fields(content)
-            ctx.read_file_contents[uri] = MemoryFileContent(
-                uri=uri,
-                plain_content=parsed.get("content", ""),
-                memory_fields=parsed,
-            )
-            return parsed
+            mf = MemoryFileUtils.read(content, uri=uri)
+            ctx.read_file_contents[uri] = mf
+            # Remove links/backlinks from LLM-visible output (not needed for extraction)
+            llm_result = mf.to_metadata()
+            llm_result.pop("links", None)
+            llm_result.pop("backlinks", None)
+            # Annotate with page_id for link extraction
+            if ctx and ctx.page_id_map:
+                page_id = ctx.page_id_map.get_page_id(uri)
+                if page_id is not None:
+                    llm_result["page_id"] = page_id
+            plain_content = mf.plain_content() or ""
+            visible_content = slice_content_lines(plain_content, offset=offset, limit=limit)
+            if visible_content:
+                llm_result["content"] = add_line_numbers(visible_content, start_line=offset + 1)
+            elif line_count(plain_content) == 0:
+                llm_result["content"] = (
+                    "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+                )
+            else:
+                llm_result["content"] = (
+                    "<system-reminder>Warning: the file exists but is shorter than the provided "
+                    f"offset ({offset + 1}). The file has {line_count(plain_content)} lines.</system-reminder>"
+                )
+            return llm_result
         except NotFoundError as e:
             tracer.info(f"read not found: {uri}")
             return {"error": str(e)}
@@ -327,7 +357,6 @@ def get_tool(name: str) -> Optional[MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.get(name)
 
 
-
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
@@ -335,7 +364,6 @@ LLM_TOOLS = ["read"]
 def get_tool_schemas() -> List[Dict[str, Any]]:
     """Get tools exposed to LLM in OpenAI function schema format."""
     return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
-
 
 
 # Register default tools

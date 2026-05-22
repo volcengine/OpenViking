@@ -7,6 +7,10 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 - OpenViking installed (`pip install openviking --upgrade --force-reinstall`)
 - Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
+> Python 3.14 note for Volcengine Ark users:
+> if your `ov.conf` uses `provider = "volcengine"` / Ark runtime, prefer Python 3.13 or lower for `openviking-server` right now.
+> `volcengine-python-sdk[ark]` still emits a Pydantic V1 compatibility warning on Python 3.14, so the server works but startup/version commands may print noisy warnings until the upstream SDK removes that compatibility layer.
+
 ## Start the Server
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
@@ -159,7 +163,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## Connect with curl
 
-Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly want distributed shared temporary uploads. In Python HTTP client / CLI flows, the same mode can be selected through `ovcli.conf` with `upload.mode = "shared"`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
+Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
 
 ```bash
 # Add a resource

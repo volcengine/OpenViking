@@ -10,27 +10,28 @@ Maintains the same interface as compressor.py for backward compatibility.
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from openviking.core.context import Context
 from openviking.core.namespace import (
-    agent_space_fragment,
-    user_space_fragment,
-    to_user_space,
     to_agent_space,
+    to_user_space,
 )
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
-from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
+from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.session.memory.dataclass import ResolvedOperations
-from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -38,7 +39,82 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
+_MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
+ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
+
+
+def _filename_has_variables(schema: Any) -> bool:
+    checker = getattr(schema, "filename_has_variables", None)
+    if callable(checker):
+        return bool(checker())
+    filename_template = getattr(schema, "filename_template", "") or ""
+    return "{{" in filename_template and "}}" in filename_template
+
+
+def _append_unique(paths: list[str], path: str) -> None:
+    if path and path not in paths:
+        paths.append(path)
+
+
+def _log_memory_lock_retry(
+    *,
+    retry_count: int,
+    max_retries: int,
+    last_warning_at: float,
+    phase_label: str = "",
+) -> float:
+    now = asyncio.get_running_loop().time()
+    max_label = max_retries or "unlimited"
+    prefix = f"[{phase_label}] " if phase_label else ""
+    message = (
+        f"{prefix}Failed to acquire memory locks, retrying "
+        f"(attempt={retry_count}, max={max_label})..."
+    )
+
+    if retry_count == 1 or now - last_warning_at >= _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS:
+        logger.warning(message)
+        return now
+
+    return last_warning_at
+
+
+def _render_memory_schema_locks(
+    *,
+    schemas: list[Any],
+    ctx: RequestContext,
+    viking_fs: VikingFS,
+    user_ids: list[str],
+    agent_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    exact_paths: list[str] = []
+    tree_paths: list[str] = []
+    policy = ctx.namespace_policy
+    user_ids = user_ids or ["default"]
+    agent_ids = agent_ids or ["default"]
+
+    for schema in schemas:
+        directory_template = getattr(schema, "directory", "") or ""
+        if not directory_template:
+            continue
+
+        filename_template = getattr(schema, "filename_template", "") or ""
+        for user_id in user_ids:
+            for agent_id in agent_ids:
+                template_vars = {
+                    "user_space": to_user_space(policy, user_id, agent_id),
+                    "agent_space": to_agent_space(policy, user_id, agent_id),
+                }
+                directory_uri = render_template(directory_template, template_vars)
+                if _filename_has_variables(schema) or not filename_template:
+                    _append_unique(tree_paths, viking_fs._uri_to_path(directory_uri, ctx))
+                    continue
+
+                filename = render_template(filename_template, template_vars)
+                file_uri = f"{directory_uri.rstrip('/')}/{filename.lstrip('/')}"
+                _append_unique(exact_paths, viking_fs._uri_to_path(file_uri, ctx))
+
+    return exact_paths, tree_paths
 
 
 class SessionCompressorV2:
@@ -47,10 +123,11 @@ class SessionCompressorV2:
     def __init__(
         self,
         vikingdb: VikingDBManager,
+        skill_processor: Optional[SkillProcessor] = None,
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        pass
+        self.skill_processor = skill_processor
 
     def _get_or_create_react(
         self,
@@ -100,6 +177,43 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    def _split_operations_by_memory_type(
+        self,
+        operations: ResolvedOperations,
+    ) -> tuple[ResolvedOperations, ResolvedOperations, list[str]]:
+        memory_upserts = []
+        skill_upserts = []
+        for operation in operations.upsert_operations:
+            if operation.memory_type == SESSION_SKILL_MEMORY_TYPE:
+                skill_upserts.append(operation)
+            else:
+                memory_upserts.append(operation)
+
+        memory_deletes = []
+        unsupported_skill_deletes = []
+        for delete_file in operations.delete_file_contents:
+            if delete_file.uri.endswith("/SKILL.md") and "/skills/" in delete_file.uri:
+                unsupported_skill_deletes.append(delete_file.uri)
+            else:
+                memory_deletes.append(delete_file)
+
+        operation_errors = list(getattr(operations, "errors", []))
+        return (
+            ResolvedOperations(
+                upsert_operations=memory_upserts,
+                delete_file_contents=memory_deletes,
+                errors=list(operation_errors),
+                resolved_links=list(getattr(operations, "resolved_links", [])),
+            ),
+            ResolvedOperations(
+                upsert_operations=skill_upserts,
+                delete_file_contents=[],
+                errors=list(operation_errors),
+                resolved_links=[],
+            ),
+            unsupported_skill_deletes,
+        )
+
     @tracer()
     async def extract_long_term_memories(
         self,
@@ -134,7 +248,7 @@ class SessionCompressorV2:
             return []
 
         tracer.info("Starting v2 memory extraction from conversation")
-        tracer.info(f"messages={JsonUtils.dumps(messages)}")
+        tracer.info(f"origin_messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
 
         # Initialize default memory files (soul.md, identity.md) if not exist
@@ -165,7 +279,7 @@ class SessionCompressorV2:
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
-            logger.warning("VikingFS or AGFS not available, running without lock mechanism")
+            logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
             # Create extract context from messages
@@ -186,49 +300,29 @@ class SessionCompressorV2:
             )
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
-                # 基于 provider 的 schemas 生成目录列表
-                # 固定文件名 schema（如 soul.md、identity.md）只需 POINT 锁，
-                # 避免因 SUBTREE 锁阻塞子目录（trajectories/experiences）的并发加锁。
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-                point_lock_dirs: list = []   # 固定文件名 schema → POINT 锁
-                subtree_lock_dirs: list = [] # 变量文件名 schema → SUBTREE 锁
-                for schema in schemas:
-                    if not schema.directory:
-                        continue
-                    for user_id in read_scope.user_ids:
-                        for agent_id in read_scope.agent_ids:
-                            dir_path = render_template(
-                                schema.directory,
-                                {
-                                    "user_space": to_user_space(
-                                        ctx.namespace_policy, user_id, agent_id
-                                    ),
-                                    "agent_space": to_agent_space(
-                                        ctx.namespace_policy, user_id, agent_id
-                                    ),
-                                },
-                            )
-                            dir_path = viking_fs._uri_to_path(dir_path, ctx)
-                            if schema.filename_has_variables():
-                                if dir_path not in subtree_lock_dirs:
-                                    subtree_lock_dirs.append(dir_path)
-                            else:
-                                if dir_path not in point_lock_dirs:
-                                    point_lock_dirs.append(dir_path)
+                exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
+                    schemas=schemas,
+                    ctx=ctx,
+                    viking_fs=viking_fs,
+                    user_ids=read_scope.user_ids,
+                    agent_ids=read_scope.agent_ids,
+                )
                 logger.debug(
-                    f"Memory schema lock dirs: point={point_lock_dirs}, subtree={subtree_lock_dirs}"
+                    f"Memory schema locks: exact={exact_lock_paths}, tree={tree_lock_dirs}"
                 )
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
 
                 # 循环重试获取锁（机制确保不会死锁）
                 while True:
-                    lock_acquired = await lock_manager.acquire_mixed_batch(
+                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
                         transaction_handle,
-                        point_paths=point_lock_dirs,
-                        subtree_paths=subtree_lock_dirs,
+                        exact_paths=exact_lock_paths,
+                        tree_paths=tree_lock_dirs,
                         timeout=None,
                     )
                     if lock_acquired:
@@ -240,9 +334,10 @@ class SessionCompressorV2:
                             f"{retry_count} retries (max={max_retries})"
                         )
 
-                    logger.warning(
-                        "Failed to acquire memory locks, retrying "
-                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
@@ -353,20 +448,20 @@ class SessionCompressorV2:
         messages: List[Message],
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
-    ) -> List[Context]:
-        """Two-phase agent-scope memory extraction (trajectory + experience).
-
-        Phase 1: extract execution trajectories from the conversation and persist them.
-        Phase 2: for each newly written trajectory, decide whether to update an existing
-        experience, create a new one, or do nothing.
-
-        Gated by `config.memory.agent_memory_enabled`. Returns [] when disabled.
-        """
+        latest_archive_overview: str = "",
+        archive_uri: str = "",
+    ) -> Dict[str, List[Any]]:
+        """Two-phase agent-scope extraction for trajectories, experiences, and session skills."""
         config = get_openviking_config()
-        if not getattr(config.memory, "agent_memory_enabled", False):
-            return []
+        include_trajectories = bool(getattr(config.memory, "agent_memory_enabled", False))
+        include_session_skills = bool(
+            getattr(config.memory, "session_skill_extraction_enabled", False)
+        )
+        empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
+        if not (include_trajectories or include_session_skills):
+            return empty_result
         if not messages or not ctx:
-            return []
+            return empty_result
 
         from openviking.session.memory.agent_experience_context_provider import (
             AgentExperienceContextProvider,
@@ -376,9 +471,15 @@ class SessionCompressorV2:
         )
 
         contexts: List[Context] = []
+        session_skill_results: List[Dict[str, Any]] = []
 
-        # Phase 1: trajectory extraction
-        traj_provider = AgentTrajectoryContextProvider(messages=messages)
+        # Phase 1: trajectory extraction, optionally co-extracting session skills.
+        traj_provider = AgentTrajectoryContextProvider(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            include_trajectories=include_trajectories,
+            include_session_skills=include_session_skills,
+        )
         traj_result = await self._run_extract_phase(
             provider=traj_provider,
             messages=messages,
@@ -387,26 +488,34 @@ class SessionCompressorV2:
             phase_label="trajectory",
         )
         if traj_result is None:
-            return []
+            return empty_result
 
-        written_trajectory_uris, _, traj_contexts, _ = traj_result
+        written_trajectory_uris, _, traj_contexts, _, traj_skill_results = traj_result
         contexts.extend(traj_contexts)
+        if archive_uri:
+            for item in traj_skill_results:
+                item["archive_uri"] = archive_uri
+        session_skill_results.extend(traj_skill_results)
 
         # Deduplicate: LLM may output the same trajectory_name twice in one call,
         # producing identical URIs. Without this, experience extraction would run
         # once per duplicate and generate near-identical experiences.
         written_trajectory_uris = list(dict.fromkeys(written_trajectory_uris))
 
-        if not written_trajectory_uris:
-            tracer.info("No trajectories extracted; skipping experience phase")
-            return contexts
+        if not include_trajectories or not written_trajectory_uris:
+            if not written_trajectory_uris:
+                tracer.info("No trajectories extracted; skipping experience phase")
+            return {
+                "contexts": contexts,
+                "session_skills": session_skill_results,
+            }
 
         # Phase 2: for each new trajectory, consolidate into experiences.
         viking_fs = get_viking_fs()
         for traj_uri in written_trajectory_uris:
             try:
-                from openviking.session.memory.utils.content import deserialize_content as _deser_content
-                traj_content = _deser_content(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                traj_content = mf.content
             except Exception as e:
                 logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
                 continue
@@ -416,39 +525,48 @@ class SessionCompressorV2:
                 trajectory_summary=traj_content,
                 trajectory_uri=traj_uri,
             )
+            exp_dir = exp_provider._render_experience_dir(ctx)
+
+            async def _append_sources_before_unlock(
+                result: MemoryUpdateResult,
+                inheritance_map: Dict[str, List[str]],
+                lock_handle: Any,
+                exp_provider=exp_provider,
+                exp_dir=exp_dir,
+                traj_uri=traj_uri,
+            ) -> None:
+                all_exp_uris = await self._resolve_source_target_experience_uris(
+                    result=result,
+                    provider=exp_provider,
+                    exp_dir=exp_dir,
+                    ctx=ctx,
+                    viking_fs=viking_fs,
+                )
+                for exp_uri in all_exp_uris:
+                    inherited = inheritance_map.get(exp_uri, [])
+                    source_uris = list(dict.fromkeys([traj_uri] + inherited))
+                    await self._append_trajectories_to_experiences(
+                        [exp_uri],
+                        source_uris,
+                        ctx,
+                        viking_fs,
+                        lock_handle=lock_handle,
+                    )
+
             exp_result = await self._run_extract_phase(
                 provider=exp_provider,
                 messages=messages,
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
+                post_apply=_append_sources_before_unlock,
             )
-
-            exp_dir = exp_provider._render_experience_dir(ctx)
-
-            async def _single_existing_experience_uri() -> List[str]:
-                if not exp_dir:
-                    return []
-                try:
-                    entries = await viking_fs.ls(exp_dir, output="original", ctx=ctx)
-                except Exception:
-                    return []
-                uris = []
-                for e in entries or []:
-                    uri = str(e.get("uri", "")) if isinstance(e, dict) else ""
-                    name = str(e.get("name", "")) if isinstance(e, dict) else ""
-                    if not uri.endswith(".md"):
-                        continue
-                    if name in {".overview.md", ".abstract.md"}:
-                        continue
-                    if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
-                        continue
-                    uris.append(uri)
-                uris = list(dict.fromkeys(uris))
-                return uris if len(uris) == 1 else []
-
             if exp_result is None:
-                fallback_uris = await _single_existing_experience_uri()
+                fallback_uris = await self._single_existing_experience_uris(
+                    exp_dir=exp_dir,
+                    ctx=ctx,
+                    viking_fs=viking_fs,
+                )
                 if fallback_uris:
                     tracer.info(
                         f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
@@ -458,39 +576,77 @@ class SessionCompressorV2:
                     )
                 continue
 
-            exp_written_uris, exp_edited_uris, exp_contexts, inheritance_map = exp_result
+            _, _, exp_contexts, _, _ = exp_result
             contexts.extend(exp_contexts)
+        return {
+            "contexts": contexts,
+            "session_skills": session_skill_results,
+        }
 
-            all_exp_uris = exp_written_uris + exp_edited_uris
-            if not all_exp_uris:
-                candidate_uris = list(dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or []))
-                candidate_exp_uris = [
-                    uri
-                    for uri in candidate_uris
-                    if uri.endswith(".md")
-                    and not uri.endswith("/.overview.md")
-                    and not uri.endswith("/.abstract.md")
-                    and "/memories/experiences/" in uri
-                ]
-                if len(candidate_exp_uris) == 1:
-                    all_exp_uris = candidate_exp_uris
-                    tracer.info(
-                        f"[source_traj] fallback append to sole candidate experience: {candidate_exp_uris[0]}"
-                    )
-                else:
-                    all_exp_uris = await _single_existing_experience_uri()
-                    if all_exp_uris:
-                        tracer.info(
-                            f"[source_traj] fallback append by directory scan: {all_exp_uris[0]}"
-                        )
+    async def _resolve_source_target_experience_uris(
+        self,
+        *,
+        result: MemoryUpdateResult,
+        provider: Any,
+        exp_dir: str,
+        ctx: RequestContext,
+        viking_fs,
+    ) -> List[str]:
+        all_exp_uris = list(result.written_uris) + list(result.edited_uris)
+        if all_exp_uris:
+            return all_exp_uris
 
-            for exp_uri in all_exp_uris:
-                # Only the superseding experience inherits source_trajectories from the old file.
-                uri_inherited = inheritance_map.get(exp_uri, [])
-                traj_uris = list(dict.fromkeys([traj_uri] + uri_inherited))
-                await self._append_trajectories_to_experiences([exp_uri], traj_uris, ctx, viking_fs)
+        candidate_uris = list(dict.fromkeys(getattr(provider, "prefetched_uris", []) or []))
+        candidate_exp_uris = [
+            uri
+            for uri in candidate_uris
+            if uri.endswith(".md")
+            and not uri.endswith("/.overview.md")
+            and not uri.endswith("/.abstract.md")
+            and "/memories/experiences/" in uri
+        ]
+        if len(candidate_exp_uris) == 1:
+            tracer.info(
+                f"[source_traj] fallback append to sole candidate experience: {candidate_exp_uris[0]}"
+            )
+            return candidate_exp_uris
 
-        return contexts
+        existing = await self._single_existing_experience_uris(
+            exp_dir=exp_dir,
+            ctx=ctx,
+            viking_fs=viking_fs,
+        )
+        if existing:
+            tracer.info(f"[source_traj] fallback append by directory scan: {existing[0]}")
+        return existing
+
+    async def _single_existing_experience_uris(
+        self,
+        *,
+        exp_dir: str,
+        ctx: RequestContext,
+        viking_fs,
+    ) -> List[str]:
+        if not exp_dir:
+            return []
+        try:
+            entries = await viking_fs.ls(exp_dir, output="original", ctx=ctx)
+        except Exception:
+            return []
+
+        uris: List[str] = []
+        for entry in entries or []:
+            uri = str(entry.get("uri", "")) if isinstance(entry, dict) else ""
+            name = str(entry.get("name", "")) if isinstance(entry, dict) else ""
+            if not uri.endswith(".md"):
+                continue
+            if name in {".overview.md", ".abstract.md"}:
+                continue
+            if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+                continue
+            uris.append(uri)
+        uris = list(dict.fromkeys(uris))
+        return uris if len(uris) == 1 else []
 
     async def _run_extract_phase(
         self,
@@ -499,16 +655,17 @@ class SessionCompressorV2:
         ctx: RequestContext,
         strict_extract_errors: bool,
         phase_label: str,
+        post_apply: Optional[ExtractPostApply] = None,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
-        Returns (written_uris, edited_uris, contexts, inheritance_map) on success,
-        where inheritance_map maps new experience URI → inherited source_trajectory URIs
-        (only populated for experiences that supersede an existing one).
+        Returns (written_uris, edited_uris, contexts, inheritance_map, session_skill_results)
+        on success, where inheritance_map maps new experience URI → inherited
+        source_trajectory URIs (only populated for experiences that supersede an
+        existing one).
         Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
-        from openviking.session.memory.memory_updater import ExtractContext
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
         config = get_openviking_config()
@@ -543,38 +700,30 @@ class SessionCompressorV2:
 
         try:
             if lock_manager:
-                schemas = provider.get_memory_schemas(ctx)
-                memory_schema_dirs = []
-                for schema in schemas:
-                    if not schema.directory:
-                        continue
-
-                    if ctx and ctx.user:
-                        user_space = to_user_space(
-                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
-                        )
-                        agent_space = to_agent_space(
-                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
-                        )
-                    else:
-                        user_space = "default"
-                        agent_space = "default"
-                    import jinja2
-
-                    env = jinja2.Environment(autoescape=False)
-                    template = env.from_string(schema.directory)
-                    dir_path = template.render(user_space=user_space, agent_space=agent_space)
-                    dir_path = viking_fs._uri_to_path(dir_path, ctx)
-                    if dir_path not in memory_schema_dirs:
-                        memory_schema_dirs.append(dir_path)
+                schemas = [
+                    schema
+                    for schema in provider.get_memory_schemas(ctx)
+                    if getattr(schema, "memory_type", None) != SESSION_SKILL_MEMORY_TYPE
+                ]
+                user_ids = [ctx.user.user_id] if ctx and ctx.user else ["default"]
+                agent_ids = [ctx.user.agent_id] if ctx and ctx.user else ["default"]
+                exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
+                    schemas=schemas,
+                    ctx=ctx,
+                    viking_fs=viking_fs,
+                    user_ids=user_ids,
+                    agent_ids=agent_ids,
+                )
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
                 while True:
-                    lock_acquired = await lock_manager.acquire_subtree_batch(
+                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
                         transaction_handle,
-                        memory_schema_dirs,
+                        exact_paths=exact_lock_paths,
+                        tree_paths=tree_lock_dirs,
                         timeout=None,
                     )
                     if lock_acquired:
@@ -585,6 +734,12 @@ class SessionCompressorV2:
                             f"[{phase_label}] Failed to acquire memory locks after "
                             f"{retry_count} retries (max={max_retries})"
                         )
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                        phase_label=phase_label,
+                    )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
 
@@ -594,16 +749,14 @@ class SessionCompressorV2:
 
             if operations is None:
                 tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], [], {}
+                return [], [], [], {}, []
 
             # Log raw LLM operations before applying.
             _op_items = [
                 f"{op.memory_type}(uris={op.uris!r})"
                 for op in getattr(operations, "upsert_operations", [])
             ]
-            _delete_uris_raw = [
-                dc.uri for dc in getattr(operations, "delete_file_contents", [])
-            ]
+            _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
             tracer.info(
                 f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
             )
@@ -613,35 +766,78 @@ class SessionCompressorV2:
             # superseding experience inherits the old source_trajectories.
             inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
 
-
-
-            registry = provider._get_registry()
-            updater = self._get_or_create_updater(registry, transaction_handle)
-            result = await updater.apply_operations(
-                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
+            memory_operations, skill_operations, unsupported_skill_deletes = (
+                self._split_operations_by_memory_type(operations)
             )
+            if unsupported_skill_deletes:
+                logger.warning(
+                    "[%s] Ignoring unsupported session skill deletes: %s",
+                    phase_label,
+                    unsupported_skill_deletes,
+                )
+
+            memory_result = MemoryUpdateResult()
+            if (
+                memory_operations.upsert_operations
+                or memory_operations.delete_file_contents
+                or memory_operations.errors
+            ):
+                registry = provider._get_registry()
+                updater = self._get_or_create_updater(registry, transaction_handle)
+                memory_result = await updater.apply_operations(
+                    memory_operations,
+                    ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
 
             tracer.info(
-                f"[{phase_label}] Applied: written={len(result.written_uris)}, "
-                f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
-                f"errors={len(result.errors)}"
+                f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
+                f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
+                f"errors={len(memory_result.errors)}"
             )
 
-            contexts: List[Context] = []
-            for uri in result.written_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_write", context_type="memory")
-                )
-            for uri in result.edited_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_edit", context_type="memory")
-                )
-            for uri in result.deleted_uris:
-                contexts.append(
-                    Context(uri=uri, category="memory_delete", context_type="memory")
-                )
+            if post_apply:
+                await post_apply(memory_result, inheritance_map, transaction_handle)
 
-            return list(result.written_uris), list(result.edited_uris), contexts, inheritance_map
+            skill_results: List[Dict[str, Any]] = []
+            if skill_operations.upsert_operations:
+                if not self.skill_processor:
+                    raise RuntimeError("SkillProcessor is required for session skill extraction")
+                skill_operations = dedup_session_skill_operations(skill_operations)
+                skill_updater = SkillOperationUpdater(
+                    registry=provider._get_registry(),
+                    skill_processor=self.skill_processor,
+                    viking_fs=viking_fs,
+                )
+                skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+                tracer.info(
+                    f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
+                    f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
+                )
+                if skill_result.errors:
+                    logger.warning(
+                        "[%s] Session skill extraction completed with %d errors",
+                        phase_label,
+                        len(skill_result.errors),
+                    )
+                skill_results = list(skill_result.operation_results)
+
+            contexts: List[Context] = []
+            for uri in memory_result.written_uris:
+                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
+            for uri in memory_result.edited_uris:
+                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+            for uri in memory_result.deleted_uris:
+                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+
+            return (
+                list(memory_result.written_uris),
+                list(memory_result.edited_uris),
+                contexts,
+                inheritance_map,
+                skill_results,
+            )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
@@ -672,8 +868,7 @@ class SessionCompressorV2:
         so the caller can apply inherited trajectories only to the superseding experience,
         not to every experience written in the same batch.
         """
-        from openviking.session.memory.dataclass import MemoryFileContent
-        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         inheritance_map: Dict[str, List[str]] = {}
 
@@ -688,7 +883,9 @@ class SessionCompressorV2:
             if not supersedes_name:
                 continue
             if not exp_dir:
-                logger.warning(f"[supersedes] cannot resolve '{supersedes_name}': no experience dir")
+                logger.warning(
+                    f"[supersedes] cannot resolve '{supersedes_name}': no experience dir"
+                )
                 continue
 
             old_uri = f"{exp_dir.rstrip('/')}/{supersedes_name}.md"
@@ -704,19 +901,13 @@ class SessionCompressorV2:
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
-                parsed = parse_memory_file_with_fields(raw)
-                operations.delete_file_contents.append(
-                    MemoryFileContent(
-                        uri=old_uri,
-                        plain_content=parsed.get("content", ""),
-                        memory_fields=parsed,
-                    )
-                )
+                old_mf = MemoryFileUtils.read(raw, uri=old_uri)
+                operations.delete_file_contents.append(old_mf)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
                 # Map inherited source_trajectories to the new (superseding) URI only.
                 if new_uri:
-                    existing = parsed.get("source_trajectories", [])
+                    existing = old_mf.extra_fields.get("source_trajectories", [])
                     if isinstance(existing, list):
                         inherited = list(existing)
                     elif isinstance(existing, str) and existing.strip():
@@ -736,56 +927,83 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
+        lock_handle: Optional[Any] = None,
     ) -> None:
         """Append traj_uris to the source_trajectories list of each experience file.
 
         This is the system-side management of source_trajectories — the LLM never
         outputs this field; the pipeline appends the batch after a write or edit.
         """
-        from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
-
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:
             return
 
         for exp_uri in exp_uris:
             try:
-                raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
-                file_content = deserialize_full(raw)
-                plain_content = file_content.plain_content
-                metadata = file_content.memory_fields or {}
+                try:
+                    from openviking.storage.transaction import LockContext, get_lock_manager
 
-                existing = metadata.get("source_trajectories", [])
-                if isinstance(existing, list):
-                    uris = list(existing)
-                elif isinstance(existing, str) and existing.strip():
-                    uris = [line.strip() for line in existing.splitlines() if line.strip()]
-                else:
-                    uris = []
-
-                changed = False
-                for traj_uri in normalized_traj_uris:
-                    if traj_uri not in uris:
-                        uris.append(traj_uri)
-                        changed = True
-
-                # Trim to the most recent N entries so the list doesn't grow unboundedly.
-                if len(uris) > MAX_SOURCE_TRAJECTORIES:
-                    uris = uris[-MAX_SOURCE_TRAJECTORIES:]
-                    changed = True
-
-                if changed:
-                    metadata["source_trajectories"] = uris
-                    metadata["content"] = plain_content
-                    new_raw = serialize_with_metadata(metadata)
-                    await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
-                    tracer.info(
-                        f"[source_traj] appended {len(normalized_traj_uris)} trajectories -> {exp_uri}"
+                    lock_manager = get_lock_manager()
+                except Exception:
+                    await self._append_trajectory_metadata(
+                        exp_uri,
+                        normalized_traj_uris,
+                        ctx,
+                        viking_fs,
                     )
-                else:
-                    tracer.info(f"[source_traj] already present, skip: {exp_uri}")
+                    continue
+
+                lock_path = viking_fs._uri_to_path(exp_uri, ctx=ctx)
+                async with LockContext(
+                    lock_manager,
+                    [lock_path],
+                    lock_mode="exact",
+                    handle=lock_handle,
+                ):
+                    await self._append_trajectory_metadata(
+                        exp_uri,
+                        normalized_traj_uris,
+                        ctx,
+                        viking_fs,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
+
+    async def _append_trajectory_metadata(
+        self,
+        exp_uri: str,
+        traj_uris: List[str],
+        ctx,
+        viking_fs,
+    ) -> None:
+        raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
+        mf = MemoryFileUtils.read(raw, uri=exp_uri)
+
+        existing = mf.extra_fields.get("source_trajectories", [])
+        if isinstance(existing, list):
+            uris = list(existing)
+        elif isinstance(existing, str) and existing.strip():
+            uris = [line.strip() for line in existing.splitlines() if line.strip()]
+        else:
+            uris = []
+
+        changed = False
+        for traj_uri in traj_uris:
+            if traj_uri not in uris:
+                uris.append(traj_uri)
+                changed = True
+
+        if len(uris) > MAX_SOURCE_TRAJECTORIES:
+            uris = uris[-MAX_SOURCE_TRAJECTORIES:]
+            changed = True
+
+        if changed:
+            mf.extra_fields["source_trajectories"] = uris
+            new_raw = MemoryFileUtils.write(mf)
+            await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
+            tracer.info(f"[source_traj] appended {len(traj_uris)} trajectories -> {exp_uri}")
+        else:
+            tracer.info(f"[source_traj] already present, skip: {exp_uri}")
 
     async def _build_memory_diff(
         self,
@@ -829,13 +1047,12 @@ class SessionCompressorV2:
 
             if old_file:
                 # Old content existed, this is an update
-                raw_before = old_file.plain_content
-                parsed = parse_memory_file_with_fields(raw_before)
+                before_content = old_file.content
                 updates.append(
                     {
                         "uri": uri,
                         "memory_type": memory_type,
-                        "before": parsed.get("content", raw_before),
+                        "before": before_content,
                         "after": "",  # Will be filled after
                     }
                 )
@@ -853,16 +1070,13 @@ class SessionCompressorV2:
         for uri in result.edited_uris:
             op = upsert_by_uri.get(uri)
             memory_type = op.memory_type if op else self._get_memory_type_from_uri(uri)
-            old_content = None
-            if op and op.old_memory_file_content:
-                old_content = op.old_memory_file_content.plain_content
-            raw_before = old_content or ""
-            parsed = parse_memory_file_with_fields(raw_before)
+            old_mf = op.old_memory_file_content if op and op.old_memory_file_content else None
+            before_content = old_mf.content if old_mf else ""
             updates.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "before": parsed.get("content", raw_before) if raw_before else "",
+                    "before": before_content,
                     "after": "",  # Will be filled after
                 }
             )
@@ -871,16 +1085,17 @@ class SessionCompressorV2:
         for uri in result.deleted_uris:
             deleted_content = None
             dc = delete_by_uri.get(uri)
-            memory_type = dc.memory_fields.get("memory_type", "unknown") if dc else "unknown"
             if dc:
-                deleted_content = dc.plain_content
-            raw_deleted = deleted_content or ""
-            parsed = parse_memory_file_with_fields(raw_deleted)
+                memory_type = dc.memory_type or "unknown"
+                deleted_content = dc.content
+            else:
+                memory_type = "unknown"
+                deleted_content = ""
             deletes.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "deleted_content": parsed.get("content", raw_deleted),
+                    "deleted_content": deleted_content,
                 }
             )
 
@@ -888,9 +1103,8 @@ class SessionCompressorV2:
         for item in adds + updates:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
-                # Strip MEMORY_FIELDS comment from content
-                parsed = parse_memory_file_with_fields(content)
-                item["after"] = parsed.get("content", content)
+                mf = MemoryFileUtils.read(content)
+                item["after"] = mf.content
             except Exception:
                 pass
 

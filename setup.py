@@ -344,12 +344,9 @@ class OpenVikingBuildExt(build_ext):
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        is_ragfs_extension = (
-                            basename == "ragfs_python.pyd"
-                            or (
-                                basename.startswith("ragfs_python.abi3.")
-                                and basename.endswith((".so", ".pyd"))
-                            )
+                        is_ragfs_extension = basename == "ragfs_python.pyd" or (
+                            basename.startswith("ragfs_python.abi3.")
+                            and basename.endswith((".so", ".pyd"))
                         )
                         if is_ragfs_extension:
                             target_path = ragfs_lib_dir / basename
@@ -362,7 +359,9 @@ class OpenVikingBuildExt(build_ext):
                             break
 
                 if not extracted:
-                    message = "Could not find ragfs_python stable-ABI native extension in built wheel."
+                    message = (
+                        "Could not find ragfs_python stable-ABI native extension in built wheel."
+                    )
                     if require_ragfs_artifact:
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")
@@ -492,7 +491,8 @@ setup(
             "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
-            "console/static/**/*",
+            "server/static/**/*",
+            "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
         ],

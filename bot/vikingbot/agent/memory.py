@@ -3,7 +3,7 @@
 import asyncio
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -53,9 +53,7 @@ class MemoryStore:
         def get_abstract(m):
             return m.get("abstract", "") if isinstance(m, dict) else getattr(m, "abstract", "")
 
-        filtered_memories = [
-            memory for memory in result if get_score(memory) >= min_score
-        ]
+        filtered_memories = [memory for memory in result if get_score(memory) >= min_score]
         filtered_memories.sort(key=get_score, reverse=True)
 
         user_memories = []
@@ -133,14 +131,6 @@ class MemoryStore:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
-    async def _create_client(self, workspace_id: str) -> Optional[VikingClient]:
-        """Helper method to create a VikingClient with proper error handling."""
-        try:
-            return await VikingClient.create(agent_id=workspace_id)
-        except Exception as e:
-            logger.error(f"Failed to create VikingClient for workspace {workspace_id}: {e}")
-            return None
-
     async def get_viking_memory_context(
         self,
         current_message: str,
@@ -158,11 +148,12 @@ class MemoryStore:
             logger.info(f"user_ids={search_user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
-            client = await self._create_client(workspace_id)
-            if not client:
-                return ""
+            client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(
-                query=current_message, user_ids=search_user_ids, agent_user_id=admin_user_id, limit=30
+                query=current_message,
+                user_ids=search_user_ids,
+                agent_user_id=admin_user_id,
+                limit=30,
             )
             if not result:
                 return ""
@@ -199,16 +190,42 @@ class MemoryStore:
                 except Exception as e:
                     logger.warning(f"Error closing VikingClient: {e}")
 
+    async def get_viking_experience_context(self, query: str, workspace_id: str) -> str:
+        """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
+        client = None
+        try:
+            client = await VikingClient.create(agent_id=workspace_id)
+            experiences = await client.search_experiences(query, limit=5)
+            logger.info(
+                f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
+            )
+            for i, exp in enumerate(experiences):
+                uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
+                score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
+                logger.info(f"  {i},{uri},{score}")
+            if not experiences:
+                return ""
+            return await self._parse_viking_memory(
+                experiences, client, min_score=0.3, max_chars=2000
+            )
+        except Exception as e:
+            logger.error(f"[READ_EXPERIENCE_MEMORY]: error. {e}")
+            return ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
         client = None
         try:
-            client = await self._create_client(workspace_id)
-            if not client:
-                return ""
+            client = await VikingClient.create(agent_id=workspace_id)
             result = await client.read_user_profile(user_id)
             return result or ""
         except Exception as e:
-            logger.warning(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
+            logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
             return ""
         finally:
             if client:
@@ -232,9 +249,7 @@ class MemoryStore:
 
         client = None
         try:
-            client = await self._create_client(workspace_id)
-            if not client:
-                return ""
+            client = await VikingClient.create(agent_id=workspace_id)
 
             async def fetch_profile(user_id: str) -> tuple[str, str]:
                 """Fetch a single user profile."""

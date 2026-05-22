@@ -494,7 +494,12 @@ def judge_answer(
             temperature=0,
             timeout=60,
         )
-        content = resp.choices[0].message.content.strip()
+        if not resp.choices:
+            raise ValueError("LLM returned empty or filtered response")
+        message = resp.choices[0].message
+        if message is None or message.content is None:
+            raise ValueError("LLM returned empty or filtered response")
+        content = message.content.strip()
         start, end = content.find("{"), content.rfind("}")
         if start != -1 and end != -1:
             parsed = json.loads(content[start : end + 1])

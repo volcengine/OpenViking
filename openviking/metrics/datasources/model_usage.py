@@ -10,7 +10,8 @@ This file provides two categories of DataSource APIs:
    `ModelUsageCollector` which converts cumulative stats into Prometheus Counters via deltas.
 2) Event (push): `VLMEventDataSource`, `EmbeddingEventDataSource`, and
    `RerankEventDataSource` emit per-call events.
-   These events are routed to Event collectors via `try_dispatch_event`.
+   These events are published to the shared observability event bus and consumed by metrics
+   collectors and Usage/Audit subscribers.
 
 Note: DataSources are not allowed to write into MetricRegistry directly in this architecture.
 They only emit events or expose read APIs. Collectors are the only writers.

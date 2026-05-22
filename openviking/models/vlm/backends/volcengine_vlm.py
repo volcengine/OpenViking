@@ -5,16 +5,17 @@
 import asyncio
 import base64
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
+
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VolcEngineVLM(OpenAIVLM):
@@ -23,7 +24,6 @@ class VolcEngineVLM(OpenAIVLM):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._sync_client = None
-        self._async_client = None
         self.provider = "volcengine"
 
         if not self.api_base:
@@ -84,36 +84,35 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return self._sync_client
 
-    def get_async_client(self):
-        """Get async client"""
-        if self._async_client is None:
-            try:
-                import volcenginesdkarkruntime
-            except ImportError:
-                raise ImportError(
-                    "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
-                )
-            self._async_client = volcenginesdkarkruntime.AsyncArk(
-                api_key=self.api_key,
-                base_url=self.api_base,
+    def _build_async_client(self):
+        """Create an async client for the current event loop."""
+        try:
+            import volcenginesdkarkruntime
+        except ImportError:
+            raise ImportError(
+                "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        return self._async_client
+        return volcenginesdkarkruntime.AsyncArk(
+            api_key=self.api_key,
+            base_url=self.api_base,
+        )
 
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
@@ -135,18 +134,19 @@ class VolcEngineVLM(OpenAIVLM):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
@@ -157,7 +157,9 @@ class VolcEngineVLM(OpenAIVLM):
         # 用 tracer.info 打印请求
         tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
         if tools:
-            tracer.info(f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}")
+            tracer.info(
+                f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
+            )
 
         client = self.get_async_client()
 
@@ -303,11 +305,13 @@ class VolcEngineVLM(OpenAIVLM):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -322,13 +326,13 @@ class VolcEngineVLM(OpenAIVLM):
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_client()
         t0 = time.perf_counter()
@@ -344,11 +348,13 @@ class VolcEngineVLM(OpenAIVLM):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously via Chat Completions API."""
+        effective_thinking = self.thinking if thinking is None else thinking
         if messages:
             kwargs_messages = messages
         else:
@@ -363,13 +369,13 @@ class VolcEngineVLM(OpenAIVLM):
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
             "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
+            "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
         }
         max_tokens = self.max_tokens or 32768
         kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_async_client()
         t0 = time.perf_counter()

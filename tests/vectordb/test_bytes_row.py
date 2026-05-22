@@ -108,6 +108,23 @@ class TestBytesRow(unittest.TestCase):
         val = UnicodeData.bytes_row.deserialize_field(serialized, "text")
         self.assertEqual(val, text)
 
+    def test_oversized_string_serialization_raises(self):
+        @serializable
+        @dataclass
+        class LargeStringData:
+            text: str = ""
+
+        text = "x" * 65536
+        with self.assertRaisesRegex(
+            (RuntimeError, ValueError), "text.*exceeds 65535 bytes"
+        ):
+            LargeStringData(text=text).serialize()
+
+        py_schema = _PySchema([{"name": "text", "data_type": _PyFieldType.string, "id": 0}])
+        py_row = _PyBytesRow(py_schema)
+        with self.assertRaisesRegex(ValueError, "text.*exceeds 65535 bytes"):
+            py_row.serialize({"text": text})
+
     def test_binary_data(self):
         @serializable
         @dataclass

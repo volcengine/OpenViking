@@ -1,18 +1,25 @@
 memory_type: profile
 description: |
   # Task Objective
-  User profile memory - captures "who the user is" as a person.
-  Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
-  Include: profession, experience level, technical background, communication style, work habits, etc.
+  User profile memory - captures an identity summary of who the user is as a person.
+  Extract relatively stable personal attributes that define the user's identity at a high level.
+  Keep the result Complete but minimal.
+  Profile should stay as an identity summary, not a place for endlessly growing details.
   Do NOT include transient conversation content or temporary mood states.
 
   # Rules
+  - Rewrite the full profile into a Complete but minimal version each time
+  - Do not append to the old profile
+  - Keep the profile to 5-8 bullets total
   - Each item: self-contained, declarative sentence, < 30 words
   - Extract only facts stated/confirmed by user; no guesses
   - Focus on persistent information, not temporary situations
+  - Keep only high-level identity facts in profile
+  - If preference, habit, taste, workflow style, or other reusable behavioral detail would make profile grow, migrate it to preferences instead
+  - Do not keep concrete preference examples in profile
   - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
-  - Merge similar items; keep latest if conflicting 
-  
+  - Merge similar items; keep latest if conflicting
+
 
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
@@ -21,10 +28,14 @@ fields:
   - name: content
     type: string
     description: |
-      User profile content in Markdown format describing "who the user is".
-      Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
+      User profile content in Markdown format describing "who the user is" as an identity summary.
+      Rewrite the full profile as a Complete but minimal version, rather than extending the old text.
+      Keep only the most important high-level identity facts, with 5-8 bullets total.
       Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09) 
+      If reusable preference-oriented details overflow profile scope, migrate them to preferences instead.
+      Even though this field uses patch semantics, you may use patch to rewrite the whole profile into a shorter minimal version when needed.
+      Prefer large-scale replacement over local edits when compressing an oversized profile.
+      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
       Example:
       # Caroline
       - Date of birth

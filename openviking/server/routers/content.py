@@ -87,9 +87,10 @@ async def read(
         text = None
 
     if text:
-        from openviking.session.memory.utils.content import deserialize_content
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-        result = deserialize_content(text)
+        mf = MemoryFileUtils.read(text)
+        result = mf.content
 
     return Response(status="ok", result=result)
 

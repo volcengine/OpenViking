@@ -190,18 +190,18 @@ const result = await memcommit({})
 
 ## Memory Recall
 
-The plugin can automatically search OpenViking memories and inject relevant context into each user message before it reaches the LLM. This uses OpenCode's `experimental.chat.messages.transform` hook.
+The plugin can automatically search OpenViking memories and inject relevant context into each user message before it reaches the LLM. This uses OpenCode's `chat.message` hook to prepend a synthetic memory part to the outgoing message.
 
-> **Note**: This feature relies on an experimental OpenCode API. The hook signature or behavior may change in future OpenCode versions.
+> **Note**: This feature relies on OpenCode's `chat.message` hook contract. The hook signature or behavior may change in future OpenCode versions.
 
 ### How It Works
 
-1. On every user message, the plugin extracts the latest user text
+1. On every user message, the plugin extracts text from the message parts
 2. Searches OpenViking using semantic search (5-second timeout)
 3. Ranks results using multi-factor scoring (base score + leaf boost + temporal boost + preference boost + lexical overlap)
 4. Deduplicates results (abstract-based for regular memories, URI-based for events/cases)
 5. Formats matching memories as a `<relevant-memories>` XML block
-6. Appends the block to the user message's text part
+6. Prepends the block as a synthetic text part (`synthetic: true`) on the outgoing message so the memory persists across turns without polluting user input
 
 If OpenViking is unavailable or the search times out, the message is passed through unchanged.
 

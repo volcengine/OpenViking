@@ -4,9 +4,13 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/volcengine/openviking
-  pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  # Use Always for the default moving tag. Pin a version and set IfNotPresent if
+  # you want Kubernetes to reuse cached immutable images.
+  pullPolicy: Always
+  # Image tag to deploy. Defaults to the latest released OpenViking image.
+  # Set to "main" for the newest image from the main branch, a version such as
+  # "v0.3.17" for a pinned release, or "" to use latest.
+  tag: latest
 
 imagePullSecrets: []
 nameOverride: ""
@@ -67,14 +71,21 @@ persistence:
   size: 20Gi
   # Existing PVC name. If set, no new PVC is created.
   existingClaim: ""
-  # Mount path inside the container for data directory.
-  mountPath: /app/data
+  # Mount path inside the container for OpenViking persistent state. The official
+  # Docker image expects ov.conf, ovcli.conf, and workspace data under this path.
+  mountPath: /app/.openviking
+
+bot:
+  # The Docker image can start vikingbot with the API server. Keep it disabled
+  # for Kubernetes by default so the chart exposes only the OpenViking API port.
+  enabled: false
 
 # OpenViking server configuration (ov.conf).
-# This is rendered into a ConfigMap and mounted at /app/ov.conf.
+# This is rendered into a ConfigMap and mounted at
+# ${persistence.mountPath}/ov.conf.
 config:
   storage:
-    workspace: /app/data/openviking_workspace
+    workspace: /app/.openviking/openviking_workspace
     vectordb:
       name: context
       backend: local
@@ -89,7 +100,9 @@ config:
     host: "0.0.0.0"
     port: 1933
     workers: 1
-    root_api_key: ""
+    # Required when host is 0.0.0.0. Prefer setting this via an environment
+    # variable placeholder plus extraEnv/Secret, e.g. ${OPENVIKING_ROOT_API_KEY}.
+    root_api_key: null
     cors_origins:
       - "*"
   embedding:
@@ -114,13 +127,11 @@ config:
 # Extra environment variables to set on the container.
 # Use this for secrets or overrides that should not be in the ConfigMap.
 extraEnv: []
-  # - name: OPENVIKING_CONFIG_FILE
-  #   value: /app/ov.conf
-  # - name: SOME_SECRET
+  # - name: OPENVIKING_ROOT_API_KEY
   #   valueFrom:
   #     secretKeyRef:
   #       name: my-secret
-  #       key: api-key
+  #       key: root-api-key
 
 # Liveness and readiness probes.
 livenessProbe:

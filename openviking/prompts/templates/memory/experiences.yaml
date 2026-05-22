@@ -14,9 +14,8 @@ fields:
     type: string
     description: |
       Name the generalizable pattern, not the specific instance.
-      Choose ONE language and stick to it — do not create both a Chinese and an English version of the same concept.
-      If English: lowercase snake_case, max 5 words.
-      If Chinese: concise noun phrase, max 15 characters.
+      Must be written in {{ language }}.
+      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix", "重复预订处理".
     merge_op: immutable
 

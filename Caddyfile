@@ -1,20 +1,17 @@
-# OpenViking aggregated reverse proxy
+# OpenViking reverse proxy — legacy fallback
 #
-# Port 1934 merges the API server (1933) and Console (8020) under one origin.
-# This block always serves plain HTTP — suitable for local dev, internal
-# networks, and as an upstream behind your own TLS-terminating proxy.
+# Port 1934 is retained only as a legacy entrypoint for existing deployments
+# that already reference it. Its primary remaining purpose is as the upstream
+# target for a TLS-terminating proxy (e.g. HTTPS via Caddy domain block).
+#
+# For new deployments, connect directly to the OV server on port 1933.
+# Web Studio is served by OV itself at /studio — no separate proxy needed.
 #
 # To add public HTTPS, append a domain block below (Caddy auto-provisions
 # Let's Encrypt certs):
 #
 #   {$OPENVIKING_PUBLIC_BASE_URL} {
-#       @console path /console /console/*
-#       handle @console {
-#           reverse_proxy openviking:8020
-#       }
-#       handle {
-#           reverse_proxy openviking:1933
-#       }
+#       reverse_proxy openviking:1933
 #       # Optional: pin ACME email
 #       # tls {$OV_ACME_EMAIL}
 #   }
@@ -23,11 +20,5 @@
 # OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com in .env.
 
 :1934 {
-	@console path /console /console/*
-	handle @console {
-		reverse_proxy openviking:8020
-	}
-	handle {
-		reverse_proxy openviking:1933
-	}
+	reverse_proxy openviking:1933
 }

@@ -1,118 +1,264 @@
 # OVPack Import and Export
 
-OVPack is OpenViking's packaging format for exporting/importing context subtrees (e.g., resources and memories) for backup, migration, and sharing.
+OVPack is OpenViking's recoverable content package format for migrating or
+backing up public content trees under `viking://`. It stores file content,
+semantic sidecar files, portable index scalar fields, and optional dense vector
+snapshots.
+
+OVPack is not a raw ZIP copy and is not a trusted publishing format. Import
+validates the manifest, file list, directory list, and checksums so package
+content cannot drift from the manifest. If an attacker can rewrite both content
+and manifest, rely on external signatures, secure transport, and access control.
+
+## Supported Scope
+
+Regular `export/import` handles one package root:
+
+- `viking://resources/...`
+- `viking://user/...`
+- `viking://agent/...`
+- `viking://session/...`
+
+Full migration uses the separate `backup/restore` flow. It packages public
+scope roots together:
+
+- `viking://resources`
+- `viking://user`
+- `viking://agent`
+- `viking://session`
+
+Internal or runtime data such as `temp`, `queue`, `upload`, lock files, watch
+control files, and `.relations.json` are outside the OVPack migration scope.
 
 ## Quick Start
 
-### Export Resources
+### Export and Import a Resource Directory
 
-Export OpenViking resources to an `.ovpack` file.
-
-**CLI**
 ```bash
-openviking export viking://resources/my-project/ ./exports/my-project.ovpack
+ov export viking://resources/my-project ./exports/my-project.ovpack
+ov import ./exports/my-project.ovpack viking://resources/imported/
 ```
 
-**Python SDK**
+The import target is the parent directory, not the final root. If the package
+root is `my-project`, the imported URI is:
+
+```text
+viking://resources/imported/my-project
+```
+
+Overwrite an existing root:
+
+```bash
+ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
+```
+
+### Export Vector Snapshots
+
+By default, export does not store dense vectors. Import recomputes vectors in
+the target environment:
+
+```bash
+ov export viking://resources/my-project ./exports/my-project.ovpack
+ov import ./exports/my-project.ovpack viking://resources/imported/
+```
+
+If the export and import environments use the same embedding configuration, you
+can explicitly include a dense vector snapshot:
+
+```bash
+ov export viking://resources/my-project ./exports/my-project.ovpack --include-vectors
+ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode auto
+```
+
+`--vector-mode` controls how import handles package vectors:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` | Default. Restore a dense snapshot when present and embedding metadata is compatible; otherwise recompute vectors. |
+| `recompute` | Ignore package dense snapshots and always recompute vectors. |
+| `require` | Require a compatible dense snapshot. Missing, incomplete, model-mismatched, or dimension-mismatched snapshots fail import. |
+
+Compatibility checks compare the package embedding provider, model, input,
+query/document parameters, and dimensions with the current environment. OVPack
+vector snapshots currently support pure dense indexes only. If the underlying
+`VectorIndex.IndexType` is hybrid, `--include-vectors` fails the export. When
+importing into a hybrid-index environment, `auto` recomputes vectors and
+`require` fails.
+
+Before exporting a dense vector snapshot, OpenViking runs a data consistency
+check. It verifies that content expected to be in the vector index already has
+matching index records. Missing records fail the export so the package does not
+carry an incomplete index snapshot.
+
+You can call the consistency check directly when debugging data state:
+
+```bash
+ov system consistency viking://resources/my-project
+```
+
+The API returns only a summary and at most 20 missing records. It does not return
+the full expected-record list. When `--include-vectors` export fails, error
+details include only one missing key to keep logs small.
+
+Python SDK:
+
+```python
+report = await client.check_consistency("viking://resources/my-project")
+print(report["ok"], report["missing_records"])
+```
+
+HTTP API:
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
+
+### Full Backup and Restore
+
+Do not use `export viking://` for full migration. Use a backup package:
+
+```bash
+ov backup ./backups/openviking.ovpack
+ov restore ./backups/openviking.ovpack --on-conflict overwrite
+```
+
+Backup packages can only be restored with `restore`; regular `import` rejects
+them.
+
+## Python SDK
+
 ```python
 from openviking import AsyncOpenViking
 
-async def export_example():
+
+async def migrate_project():
     client = AsyncOpenViking()
     await client.initialize()
     try:
-        exported_path = await client.export_ovpack(
-            uri="viking://resources/my-project/",
-            to="./exports/my-project.ovpack"
+        await client.export_ovpack(
+            uri="viking://resources/my-project",
+            to="./exports/my-project.ovpack",
+            include_vectors=False,
         )
-        print(f"Export successful: {exported_path}")
-    finally:
-        await client.close()
-```
 
-### Import Resources
-
-Import an `.ovpack` file into OpenViking.
-
-**CLI**
-```bash
-# Basic import
-openviking import ./exports/my-project.ovpack viking://resources/imported/
-
-# Explicit conflict policy
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
-```
-
-**Python SDK**
-```python
-from openviking import AsyncOpenViking
-
-async def import_example():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite"
+            on_conflict="overwrite",
+            vector_mode="auto",
         )
-        print(f"Import successful: {imported_uri}")
+        print(imported_uri)
         await client.wait_processed()
     finally:
         await client.close()
 ```
 
-**HTTP API**
+Full backup:
+
+```python
+await client.backup_ovpack("./backups/openviking.ovpack", include_vectors=True)
+await client.restore_ovpack(
+    "./backups/openviking.ovpack",
+    on_conflict="overwrite",
+    vector_mode="auto",
+)
+```
+
+## HTTP API
+
+HTTP export returns a file stream directly. HTTP import and restore first upload
+the local `.ovpack`, then call the pack endpoint with `temp_file_id`.
+
+Export:
+
 ```bash
-# Step 1: Upload the local ovpack file
-# This uses local temporary storage by default.
-# Add: -F "upload_mode=shared" only when you explicitly need distributed shared temporary uploads.
-# Python HTTP client / CLI users can instead set ovcli.conf: upload.mode = "shared".
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources/my-project","include_vectors":false}' \
+  --output my-project.ovpack
+```
+
+Import:
+
+```bash
 TEMP_FILE_ID=$(
   curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/my-project.ovpack' \
-  | jq -r '.result.temp_file_id'
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./exports/my-project.ovpack" \
+  | jq -r ".result.temp_file_id"
 )
 
-# Step 2: Import using temp_file_id
 curl -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
+  -H "X-API-Key: your-admin-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\"
+    \"on_conflict\": \"overwrite\",
+    \"vector_mode\": \"auto\"
   }"
 ```
 
-## Format Notes
+Full backup:
 
-OVPack v2 files are standard ZIP archives. Each package contains an OpenViking
-manifest at `<root>/_._ovpack_manifest.json`; this is the ZIP-escaped form of the
-hidden filename `.ovpack_manifest.json`.
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/backup \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"include_vectors":true}' \
+  --output openviking-backup.ovpack
+```
 
-The manifest records `kind`, `format_version`, the exported root, content
-entries, and portable vector scalar metadata. In `entries`, `path` is relative to
-the exported root. An empty path (`""`) means the root directory itself, for
-example `my-project/`.
+## Conflict Policy
 
-Example manifest for a package exported from `viking://resources/demo/`:
+`on_conflict` only applies when the import root already exists.
+
+| Value | Behavior |
+| --- | --- |
+| `fail` | Default. Return `409 CONFLICT` when the target root exists. |
+| `overwrite` | Delete the existing root, then write package content and rebuild index state. |
+| `skip` | Return the existing root URI without writing package content. |
+
+`skip` is a root-level skip, not a file-level merge.
+
+## Package Layout
+
+OVPack v2 is a standard ZIP archive with one package root directory:
+
+```text
+my-project/
+my-project/files/
+my-project/files/notes.txt
+my-project/files/.abstract.md
+my-project/files/.overview.md
+my-project/_ovpack/
+my-project/_ovpack/index_records.jsonl
+my-project/_ovpack/dense.f32                # only with --include-vectors and exportable vectors
+my-project/_ovpack/manifest.json
+```
+
+`files/` stores user content with the same relative paths used by OpenViking.
+Dotfiles are no longer escaped with `_._`. `_ovpack/` stores OVPack internal
+metadata and is not imported as user content.
+
+The manifest stores package structure, file checksums, and checksums for
+internal index files. It does not inline per-file index records:
 
 ```json
 {
   "kind": "openviking.ovpack",
   "format_version": 2,
   "root": {
-    "name": "demo",
-    "uri": "viking://resources/demo",
+    "name": "my-project",
+    "uri": "viking://resources/my-project",
     "scope": "resources"
   },
   "entries": [
-    {
-      "path": "",
-      "kind": "directory"
-    },
+    {"path": "", "kind": "directory"},
     {
       "path": "notes.txt",
       "kind": "file",
@@ -121,215 +267,213 @@ Example manifest for a package exported from `viking://resources/demo/`:
     }
   ],
   "content_sha256": "b2a6e9582119c7510d68e3446de3e71a486934bf450d68f65596259ed1cf7997",
-  "vectors": {}
+  "index": {
+    "records": {
+      "path": "_ovpack/index_records.jsonl",
+      "count": 2,
+      "sha256": "..."
+    },
+    "dense": {
+      "path": "_ovpack/dense.f32",
+      "count": 1,
+      "dtype": "float32",
+      "byte_order": "little",
+      "dimensions": 1024,
+      "sha256": "...",
+      "embedding": {
+        "provider": "volcengine",
+        "model": "doubao-embedding-vision-251215",
+        "input": "multimodal",
+        "dimensions": 1024
+      }
+    }
+  }
 }
 ```
 
-For packages with manifest entries, import validates the ZIP file and directory
-set, per-file `size`, per-file `sha256`, and top-level `content_sha256` before
-writing any resources. Missing, extra, or modified content entries, and missing
-or mismatched v2 `content_sha256`, are rejected. This is an integrity check for the package
-contents, not a signature or authentication mechanism if both the manifest and
-content can be rewritten.
+`entries[].path == ""` means the package root directory itself. Nested paths are
+stored as relative paths:
 
-Raw embedding vectors are not exported. Runtime fields such as `created_at`,
-`updated_at`, and `active_count` are also not exported; imports rebuild vectors
-and runtime state in the target environment. Session packages restore session
-files and do not trigger vectorization. Packages without a manifest are rejected
-by default because OpenViking cannot verify their file set or content checksums.
-Packages with a manifest validate `kind` and `format_version`, and packages
-whose format version is not the current supported version are rejected.
-`.abstract.md` and `.overview.md` are restored as semantic sidecar files;
-`.relations.json` and OVPack internals are excluded.
+```json
+[
+  {"path": "", "kind": "directory"},
+  {"path": "docs", "kind": "directory"},
+  {"path": "docs/a.md", "kind": "file", "size": 12, "sha256": "..."}
+]
+```
 
-Manifest scalar `context_type`, when present, is treated as exported scalar
-metadata only. Import compatibility is based on the source and target URI scopes;
-the final `context_type` is derived again from the target URI during
-vectorization.
+`index_records.jsonl` contains one index record per line and can describe files,
+directories, and the root directory:
 
-Top-level scope packages such as `viking://resources/`, `viking://user/`,
-`viking://agent/`, and `viking://session/` must be imported to `viking://`.
-Regular import also requires the manifest root scope to match the final target
-root scope. Structured scopes (`user`, `agent`, and `session`) cannot be imported
-in a way that changes the root depth, such as importing a session package into a
-concrete session URI and creating `session/sess_123/sess_123`.
-Full backups use the separate `backup` / `restore` interface, not regular
-import parent semantics.
-OVPack itself does not add package-size, file-count, or directory-depth limits;
-the practical limit comes from ZIP, the storage backend, and the runtime
-environment.
+```jsonl
+{"record_id":"r000001","path":"","kind":"directory","level":0,"text":"root abstract","scalars":{"abstract":"root abstract","context_type":"resource","level":0}}
+{"record_id":"r000002","path":"notes.txt","kind":"file","level":2,"scalars":{"abstract":"note summary","tags":"demo"},"vector":{"dense":{"offset":0,"dimensions":1024}}}
+```
 
-## Memory Import and Export
+`dense.f32` is a contiguous little-endian float32 array. The
+`vector.dense.offset` in `index_records.jsonl` is a float offset, not a byte
+offset. In the example above, `offset=0, dimensions=1024` means reading 1024
+float values from float offset 0.
 
-OpenViking memories are stored under fixed directory structures:
+## Index Fields
 
-- User memories: `viking://user/{user_space}/memories/`
-- Agent memories: `viking://agent/{agent_id}/memories/` or `viking://agent/{agent_id}/user/{user_id}/memories/`
+By default, export stores portable index scalar fields:
 
-When migrating memories with OVPack, you must import the `.ovpack` into the parent of the corresponding space (not an arbitrary directory). Otherwise you may end up with paths like `.../memories/memories/...`, and OpenViking will not be able to access and use them as memories.
+```text
+type, context_type, level, name, description, tags, abstract
+```
 
-### Export/Import User Memories (CLI)
+These fields are regenerated in the target environment and are not restored
+from the package:
+
+```text
+id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
+created_at, updated_at, active_count
+```
+
+With `--include-vectors`, export also stores pure-dense vectors and embedding
+metadata. Even when import restores dense snapshots, runtime fields are rebuilt
+from the target URI, target account, and current time. Hybrid indexes do not
+currently support vector snapshot export.
+
+## Import Validation
+
+Import validates the entire package before writing package content. Core checks:
+
+1. ZIP members must be under one package root and cannot contain absolute paths, backslashes, drive letters, or `..`.
+2. `<root>/_ovpack/manifest.json` must exist.
+3. `kind` must be `openviking.ovpack`, and `format_version` must equal the currently supported version.
+4. `root.name` must match the ZIP root, and the leaf of `root.uri` must also match `root.name`.
+5. The file set and directory set declared by the manifest must exactly match ZIP content.
+6. Each file `size` and `sha256` must match actual content.
+7. `content_sha256` must match the sorted file inventory.
+8. `_ovpack/index_records.jsonl` and optional `_ovpack/dense.f32` must match manifest hashes, counts, and dimensions.
+9. Source scope and target scope must match; structured scopes such as `user`, `agent`, and `session` also keep root depth stable.
+10. No package content is written before validation passes; conflict handling also runs before writes.
+
+Typical rejection examples:
+
+```text
+INVALID_ARGUMENT: Missing ovpack manifest
+INVALID_ARGUMENT: ovpack file sha256 does not match manifest
+INVALID_ARGUMENT: ovpack entries do not match manifest
+INVALID_ARGUMENT: ovpack source scope does not match target scope
+INVALID_ARGUMENT: ovpack package does not contain a dense vector snapshot
+```
+
+## Import Path Rules
+
+Regular subtree packages import into a parent directory in the same scope and
+keep the package root:
 
 ```bash
-# Export the whole user memories subtree
-openviking export viking://user/default/memories/ ./exports/user-memories.ovpack
-
-# Import into the user space root (imports to viking://user/default/memories/)
-openviking import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
+ov export viking://resources/a ./exports/a.ovpack
+ov import ./exports/a.ovpack viking://resources/imported/
 ```
 
-### Export/Import Agent Memories (CLI)
+Result:
+
+```text
+viking://resources/imported/a
+```
+
+Top-level scope packages can only be imported to `viking://`:
 
 ```bash
-# isolate_agent_scope_by_user = false
-openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
-
-# isolate_agent_scope_by_user = true
-openviking export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
-openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --on-conflict overwrite
+ov export viking://resources ./exports/resources.ovpack
+ov import ./exports/resources.ovpack viking:// --on-conflict overwrite
 ```
 
-### Export/Import Memories (Python SDK)
-
-```python
-from openviking import AsyncOpenViking
-
-async def export_import_user_memories():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
-        await client.export_ovpack(
-            uri="viking://user/default/memories/",
-            to="./exports/user-memories.ovpack",
-        )
-
-        await client.import_ovpack(
-            file_path="./exports/user-memories.ovpack",
-            parent="viking://user/default/",
-            on_conflict="overwrite",
-        )
-    finally:
-        await client.close()
-
-async def export_import_agent_memories():
-    client = AsyncOpenViking()
-    await client.initialize()
-    try:
-        await client.export_ovpack(
-            uri="viking://agent/default/memories/",
-            to="./exports/agent-memories.ovpack",
-        )
-        await client.import_ovpack(
-            file_path="./exports/agent-memories.ovpack",
-            parent="viking://agent/default/",
-            on_conflict="overwrite",
-        )
-    finally:
-        await client.close()
-```
-
-### Export/Import Memories (HTTP API)
+These imports are rejected:
 
 ```bash
-# Export user memories
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://user/default/memories/",
-    "to": "./exports/user-memories.ovpack"
-  }'
+# A resources package cannot be imported into session.
+ov import ./exports/a.ovpack viking://session/
 
-# Import user memories (upload first, then import via temp_file_id)
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/user-memories.ovpack' \
-  | jq -r '.result.temp_file_id'
-)
-curl -X POST http://localhost:1933/api/v1/pack/import \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://user/default/\",
-    \"on_conflict\": \"overwrite\"
-  }"
+# A session subtree cannot be imported into resources.
+ov import ./exports/sess_123.ovpack viking://resources/
+
+# A session subtree cannot use itself as parent, which would create session/sess_123/sess_123.
+ov import ./exports/sess_123.ovpack viking://session/sess_123/
 ```
 
-### Vectorization on Import
+## Memories and Sessions
 
-Imports always rebuild vectors in the target environment for `find/search`.
-OVPack no longer exposes an import option to disable vectorization. Session
-imports are restored as files only and are not vectorized.
+Memory directories have fixed structures. Import the package into the matching
+parent directory to avoid duplicate path segments.
 
-### Session Import and Export
+User memories:
 
 ```bash
-openviking export viking://session/sess_123/ ./exports/sess_123.ovpack
-openviking import ./exports/sess_123.ovpack viking://session/ --on-conflict overwrite
+ov export viking://user/default/memories ./exports/user-memories.ovpack
+ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-The restored root is `viking://session/sess_123/`.
-
-### Scope Root Import
+Agent memories:
 
 ```bash
-openviking export viking://resources/ ./backups/resources.ovpack
-openviking import ./backups/resources.ovpack viking:// --on-conflict overwrite
+ov export viking://agent/default/memories ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
 ```
 
-Scope-root packages cannot be imported under another scope directory.
-
-## Use Cases
-
-### Full Backup and Migration
-
-Use a backup package for full migration instead of regular `export/import`
-parent-directory semantics:
+Sessions restore file state only and do not trigger vectorization:
 
 ```bash
-openviking backup ./backups/openviking.ovpack
-openviking restore ./backups/openviking.ovpack --on-conflict overwrite
+ov export viking://session/sess_123 ./exports/sess_123.ovpack
+ov import ./exports/sess_123.ovpack viking://session/ --on-conflict overwrite
 ```
 
-Backup packages restore to the original public scope roots: `resources`, `user`,
-`agent`, and `session`. They exclude internal/runtime data such as `temp`,
-`queue`, lock files, OVPack manifests, and `.relations.json`. Non-session
-content is re-vectorized; session files are only restored.
+Result:
 
-### Resource Backup
-```bash
-DATE=$(date +%Y%m%d)
-openviking export viking://resources/ ./backups/backup_${DATE}.ovpack
+```text
+viking://session/sess_123
 ```
 
-### Resource Migration
-```bash
-# Export on Machine A
-openviking export viking://resources/my-project/ ./migration.ovpack
+## Old Packages and Future Versions
 
-# Import on Machine B
-openviking import ./migration.ovpack viking://resources/ --on-conflict overwrite
-```
+The current implementation only accepts OVPack v2. Legacy packages without a
+manifest do not provide a file set, directory set, or checksums, so OpenViking
+cannot tell whether content was removed, modified, or mixed in. They are
+rejected by default. To migrate a legacy package, import it in a trusted old
+environment first, then re-export it with the current version.
 
-### Resource Sharing
-```bash
-# Export
-openviking export viking://resources/shared-docs/ ./shared-docs.ovpack
+Future package versions are not silently accepted either. Upgrade OpenViking or
+re-export from an environment that can read that version.
 
-# Recipient imports
-openviking import ./shared-docs.ovpack viking://resources/team-shared/
-```
+## Common Errors
+
+| Error | Common cause | Fix |
+| --- | --- | --- |
+| `Missing ovpack manifest` | Legacy package without a manifest | Re-export as v2 in a trusted environment. |
+| `Unsupported ovpack format_version` | Package format version is not currently supported | Upgrade OpenViking or re-export. |
+| `sha256 does not match manifest` | File or internal index content was changed | Discard the package or re-export from a trusted source. |
+| `ovpack entries do not match manifest` | ZIP content is missing files/directories or includes extra files/directories | Discard the package or re-export. |
+| `source scope does not match target scope` | Cross-scope import, such as session into resources | Import into a parent directory in the same scope. |
+| `source path is incompatible with target path` | Structured scope root depth would change | Import into the correct system parent directory. |
+| `Top-level scope ovpack packages must be imported to viking://` | A top-level scope package was imported to a non-root parent | Import to `viking://`. |
+| `Backup ovpack packages must be restored` | A backup package was imported with regular import | Use `ov restore`. |
+| `Resource already exists` | Target root already exists | Use `--on-conflict overwrite` or `--on-conflict skip`. |
+| `incomplete OpenViking vector index snapshot` | `--include-vectors` found missing index records in the export range | Run `ov system consistency <uri>` to locate the issue, then wait for processing or reindex. |
+| `dense vector snapshot is incompatible` | Package embedding metadata does not match current config | Use `--vector-mode recompute`, or switch to a compatible config. |
 
 ## FAQ
 
-**Q: Can I manually extract and view OVPack files?**
-A: Yes! OVPack is a standard ZIP format and can be opened with any compression tool.
+**Can I manually extract and inspect OVPack files?**
 
-**Q: What if large OVPack imports are slow?**
-A: Imports now always rebuild vectors. If import time is too high, split the content into smaller OVPack files and import them in batches.
+Yes. OVPack is a ZIP file and can be opened with ordinary ZIP tools. Do not edit
+it manually before import, because edits break manifest validation. If both
+manifest and content are changed, use external signatures and trusted sources to
+decide whether the package is safe.
 
-**Q: How to handle duplicate resources during import?**
-A: Use `--on-conflict overwrite` to replace existing resources, or `--on-conflict skip` to keep them.
+**Why are vectors not exported by default?**
+
+Vectors are reusable only when the embedding model, input mode, parameters, and
+dimensions are fully compatible. Recomputing by default is safer. Use
+`--include-vectors` with `--vector-mode auto/require` when you need faster cold
+migration and know the environments are compatible.
+
+**What if large package imports are slow?**
+
+Default import rebuilds target semantic and vector state. For large migrations,
+use `--include-vectors` to reduce recomputation, or split content into smaller
+OVPack files and import them in batches.

@@ -16,12 +16,10 @@ services:
   openviking:
     image: ghcr.io/volcengine/openviking:latest
     container_name: openviking
-    # Direct access to individual services (optional — caddy:1934 is the
-    # recommended single entry point). Comment these out once Caddy is your
-    # only ingress.
+    # Direct access (optional — caddy:1934 is the recommended single entry
+    # point). Comment this out once Caddy is your only ingress.
     ports:
       - "1933:1933"
-      - "8020:8020"
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
@@ -34,8 +32,8 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Aggregated reverse proxy — merges API (1933) + Console (8020) on port
-  # 1934 under one origin. Always enabled, plain HTTP by default.
+  # Legacy reverse proxy — port 1934 is retained for existing deployments.
+  # New setups can connect directly to openviking:1933.
   #
   # For public HTTPS: edit the Caddyfile to add a domain block, set
   # OPENVIKING_PUBLIC_BASE_URL in .env, uncomment the 80/443 port lines

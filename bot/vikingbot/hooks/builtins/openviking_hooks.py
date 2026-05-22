@@ -1,12 +1,11 @@
-import re
 import asyncio
-from typing import Any
+import re
 from collections import defaultdict
+from typing import Any
 
 from loguru import logger
 
 from vikingbot.config.loader import load_config
-from vikingbot.config.schema import SessionKey, AgentMemoryMode
 
 from ...session import Session
 from ..base import Hook, HookContext
@@ -21,25 +20,25 @@ except Exception:
     VikingClient = None
     ov = None
 
-# Global singleton client
-_global_client: VikingClient | None = None
+# Clients are cached per workspace so canonical agent_id routing stays aligned
+# with OpenViking account namespace policy.
+_global_clients: dict[str | None, VikingClient] = {}
 
 
-async def get_global_client() -> VikingClient:
-    """Get or create the global singleton VikingClient."""
-    global _global_client
-    if _global_client is None:
-        _global_client = await VikingClient.create(None)
-    return _global_client
+async def get_global_client(workspace_id: str | None) -> VikingClient:
+    """Get or create a workspace-scoped VikingClient."""
+    client = _global_clients.get(workspace_id)
+    if client is None:
+        client = await VikingClient.create(workspace_id)
+        _global_clients[workspace_id] = client
+    return client
 
 
 class OpenVikingCompactHook(Hook):
     name = "openviking_compact"
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use global singleton client
-        return await get_global_client()
-
+        return await get_global_client(workspace_id)
 
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
@@ -50,39 +49,47 @@ class OpenVikingCompactHook(Hook):
         try:
             client = await self._get_client(context.workspace_id)
 
-            # 1. 提交全部的 message 到 admin
-            admin_result = await client.commit(session_id, vikingbot_session.messages, admin_user_id)
+            if not client.should_sender_fanout():
+                single_result = await client.commit(session_id, vikingbot_session.messages, None)
+                return {
+                    "success": True,
+                    "admin_result": single_result,
+                    "user_results": [],
+                    "users_count": 0,
+                }
 
-            # 2. 根据 message 里的 sender_id 进行分组
+            admin_result = await client.commit(
+                session_id, vikingbot_session.messages, admin_user_id
+            )
+
             messages_by_sender = defaultdict(list)
             for msg in vikingbot_session.messages:
                 sender_id = msg.get("sender_id")
                 if sender_id and sender_id != admin_user_id:
                     messages_by_sender[sender_id].append(msg)
 
-            # 3. 带并发限制地提交到各个 user
             user_results = []
             if messages_by_sender:
-                # 限制最大并发数为 5
                 semaphore = asyncio.Semaphore(5)
 
                 async def commit_with_semaphore(user_id: str, user_messages: list):
                     async with semaphore:
-                        return await client.commit(f"{session_id}_{user_id}", user_messages, user_id)
+                        return await client.commit(
+                            f"{session_id}_{user_id}", user_messages, user_id
+                        )
 
                 user_tasks = []
                 for user_id, user_messages in messages_by_sender.items():
                     task = commit_with_semaphore(user_id, user_messages)
                     user_tasks.append(task)
 
-                # 等待所有用户任务完成
                 user_results = await asyncio.gather(*user_tasks, return_exceptions=True)
 
             return {
                 "success": True,
                 "admin_result": admin_result,
                 "user_results": user_results,
-                "users_count": len(messages_by_sender)
+                "users_count": len(messages_by_sender),
             }
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")
@@ -94,30 +101,30 @@ class OpenVikingPostCallHook(Hook):
     is_sync = True
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use global singleton client
-        return await get_global_client()
+        return await get_global_client(workspace_id)
 
-    async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
-        ov_client = await self._get_client(workspace_id)
-        config = load_config()
-        openviking_config = config.ov_server
-        # (f'openviking_config.mode={openviking_config.mode}')
-        if not skill_name:
+    async def _search_skill_experiences(self, workspace_id: str, query: str) -> str:
+        """用 skill 描述检索 experience 记忆，只检索 experiences 目录。"""
+        if not query:
             return ""
         try:
-            if openviking_config.mode == "local":
-                skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
-            else:
-                agent_space_name = ov_client.get_agent_space_name(openviking_config.admin_user_id)
-                skill_memory_uri = (
-                    f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
-                )
-            content = await ov_client.read_content(skill_memory_uri, level="read")
-            # print(f'content={content}')
-            # logger.warning(f"content={content}")
-            return f"\n\n---\n## Skill Memory\n{content}" if content else ""
+            ov_client = await self._get_client(workspace_id)
+            experiences = await ov_client.search_experiences(query, limit=3)
+            logger.info(f"[SKILL_EXP]: found {len(experiences)} experiences, query={query[:50]}")
+            if not experiences:
+                return ""
+            parts = []
+            for exp in experiences:
+                uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
+                score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
+                if score < 0.3:
+                    continue
+                content = await ov_client.read_content(uri, level="read")
+                if content:
+                    parts.append(content)
+            return "\n\n---\n".join(parts) if parts else ""
         except Exception as e:
-            logger.warning(f"Failed to read skill memory for {skill_name}: {e}")
+            logger.warning(f"Failed to search experiences for skill: {e}")
             return ""
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
@@ -126,15 +133,14 @@ class OpenVikingPostCallHook(Hook):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
-                    # logger.debug(f"skill_name={skill_name}")
+                    desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
+                    skill_query = desc_match.group(1).strip() if desc_match else skill_name
 
-                    agent_space_name = context.workspace_id
-                    # logger.debug(f"agent_space_name={agent_space_name}")
-
-                    skill_memory = await self._read_skill_memory(agent_space_name, skill_name)
-                    # logger.debug(f"skill_memory={skill_memory}")
-                    if skill_memory:
-                        result = f"{result}{skill_memory}"
+                    exp_memory = await self._search_skill_experiences(
+                        context.workspace_id, skill_query
+                    )
+                    if exp_memory:
+                        result = f"{result}\n\n---\n## Related Experiences\n{exp_memory}"
 
         return {"tool_name": tool_name, "params": params, "result": result}
 

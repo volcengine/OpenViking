@@ -4,6 +4,7 @@
 
 from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.bot import router as bot_router
+from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
 from openviking.server.routers.filesystem import router as filesystem_router
@@ -18,6 +19,7 @@ from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.stats import router as stats_router
 from openviking.server.routers.system import router as system_router
 from openviking.server.routers.tasks import router as tasks_router
+from openviking.server.routers.watches import router as watches_router
 from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
@@ -27,6 +29,7 @@ __all__ = [
     "resources_router",
     "filesystem_router",
     "content_router",
+    "console_router",
     "search_router",
     "relations_router",
     "sessions_router",
@@ -37,5 +40,6 @@ __all__ = [
     "metrics_router",
     "observer_router",
     "tasks_router",
+    "watches_router",
     "webdav_router",
 ]

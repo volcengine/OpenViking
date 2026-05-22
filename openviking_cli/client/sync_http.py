@@ -407,7 +407,12 @@ class SyncHTTPClient:
 
     # ============= Pack =============
 
-    def export_ovpack(self, uri: str, to: str) -> str:
+    def export_ovpack(
+        self,
+        uri: str,
+        to: str,
+        include_vectors: bool = False,
+    ) -> str:
         """Export context as .ovpack file and save to local path.
 
         Args:
@@ -417,17 +422,18 @@ class SyncHTTPClient:
         Returns:
             Local file path where the .ovpack was saved
         """
-        return run_async(self._async_client.export_ovpack(uri, to))
+        return run_async(self._async_client.export_ovpack(uri, to, include_vectors=include_vectors))
 
-    def backup_ovpack(self, to: str) -> str:
+    def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
         """Back up public scopes as a restore-only .ovpack file."""
-        return run_async(self._async_client.backup_ovpack(to))
+        return run_async(self._async_client.backup_ovpack(to, include_vectors=include_vectors))
 
     def import_ovpack(
         self,
         file_path: str,
         target: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Import .ovpack file."""
         return run_async(
@@ -435,6 +441,7 @@ class SyncHTTPClient:
                 file_path,
                 target,
                 on_conflict=on_conflict,
+                vector_mode=vector_mode,
             )
         )
 
@@ -442,14 +449,20 @@ class SyncHTTPClient:
         self,
         file_path: str,
         on_conflict: Optional[str] = None,
+        vector_mode: Optional[str] = None,
     ) -> str:
         """Restore backup .ovpack file."""
         return run_async(
             self._async_client.restore_ovpack(
                 file_path,
                 on_conflict=on_conflict,
+                vector_mode=vector_mode,
             )
         )
+
+    def check_consistency(self, uri: str) -> Dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        return run_async(self._async_client.check_consistency(uri))
 
     # ============= Admin =============
 

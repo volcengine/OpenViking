@@ -12,9 +12,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _token_tracker_instance = None

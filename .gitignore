@@ -153,6 +153,7 @@ logs/
 *.temp
 .tmp/
 ov.conf
+ovcli.conf
 result/
 
 # Jupyter Notebook
