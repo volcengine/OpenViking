@@ -268,6 +268,6 @@ export default {
     category: { en: 'Engineering', zh: '工程' },
     tags: ['oauth', 'mcp', 'system'],
     languages: ['en', 'zh'],
-    authors: [{ name: 'tosaki', github: 't0saki'}],
+    authors: [{ name: 'tosaki', github: 't0saki' }],
   },
 };

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Send a file to Gemini for polishing. Result written to <name>-polished.<ext>."""
+import sys, os, pathlib
+
+if len(sys.argv) < 2:
+    print("Usage: polish <file-path>", file=sys.stderr)
+    sys.exit(1)
+
+src = pathlib.Path(sys.argv[1]).resolve()
+if not src.is_file():
+    print(f"Error: file not found: {src}", file=sys.stderr)
+    sys.exit(1)
+
+env = {}
+with open(os.path.expanduser("~/.article-polish.env")) as f:
+    for line in f:
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip().strip('"').strip("'")
+
+from openai import OpenAI
+client = OpenAI(
+    api_key=env["POLISH_API_KEY"],
+    base_url=env["POLISH_API_URL"] + "/v1",
+)
+
+model = env.get("POLISH_MODEL", "gemini-pro-latest")
+content = src.read_text()
+out = src.with_stem(src.stem + "-polished")
+
+print(f"Calling {model} (streaming) ...", file=sys.stderr)
+
+stream = client.chat.completions.create(
+    model=model,
+    stream=True,
+    messages=[
+        {"role": "system", "content": "你是一位专业的技术博客编辑。润色文章，保持结构和代码不变，只改善自然语言表达。直接输出完整文章内容，不要用 markdown code fence（如 ```jsx 或 ```javascript）包裹输出。"},
+        {"role": "user", "content": f"请帮我润色一下这篇文章：\n\n{content}"},
+    ],
+    timeout=600,
+)
+
+chunks = []
+token_count = 0
+for chunk in stream:
+    delta = chunk.choices[0].delta if chunk.choices else None
+    if delta and delta.content:
+        chunks.append(delta.content)
+        token_count += 1
+        if token_count % 50 == 0:
+            print(f"\r  {token_count} tokens", end="", file=sys.stderr, flush=True)
+
+print(f"\r  {token_count} tokens — done", file=sys.stderr)
+
+result = "".join(chunks)
+out.write_text(result)
+print(out)

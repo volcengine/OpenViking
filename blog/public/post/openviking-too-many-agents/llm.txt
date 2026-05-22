@@ -1,0 +1,107 @@
+# OpenViking for the Too Many Agents Problem
+
+Published: 2026-05-22
+
+Canonical human page: https://blog.openviking.ai/post/openviking-too-many-agents/
+Agent-readable page: https://blog.openviking.ai/post/openviking-too-many-agents/llm.txt
+Repository: https://github.com/volcengine/OpenViking
+
+## Thesis
+
+The hard part now is keeping context, memory, and project knowledge consistent across all the agents a team uses.
+
+Teams now move work between Claude Code, Codex, Hermes Agent, Manus, Lovable, Cursor, and MCP clients. Each agent may have a useful interface, but each one starts from its own partial session context unless there is a shared context layer.
+
+OpenViking is useful because it gives those agents a common memory and resource plane. It can listen to dialogue, store distilled memory, index resources, expose filesystem-like paths, and make context reachable through plugins, hooks, or MCP.
+
+## Problem
+
+Without a shared context layer:
+
+- Humans become the copy-paste bus between tools.
+- Agents repeat discovery work that another agent already did.
+- Agent harnesses help steer one workspace, but they do not automatically create cross-agent memory.
+- Important preferences, decisions, handoffs, and resource references remain trapped in chat transcripts.
+
+## Layer Boundaries
+
+Agent harnesses:
+
+- Carry project rules, command preferences, local tools, and agent-specific guidance.
+- Steer behavior in one workspace.
+- Leave durable cross-agent recall to the shared context layer.
+
+OpenViking memory:
+
+- Stores user preferences, decisions, handoffs, resources, summaries, and reusable lessons.
+- Survives sessions and restarts.
+- Can be retrieved by multiple agents under governed identity.
+
+MCP and plugins:
+
+- Connect clients such as Claude Code, Codex, Manus, Lovable, Bolt, and other MCP-capable tools.
+- Let agents read and write context without hand-built copy-paste workflows.
+
+## Deployment Path
+
+A simple hosted deployment uses:
+
+1. The official OpenViking container image: https://github.com/volcengine/OpenViking/pkgs/container/openviking
+2. A persistent volume for durable memory and resource storage.
+3. A one-time initialization step.
+4. Agent integrations through documented plugin, hook, or MCP paths.
+
+Command reference:
+
+```bash
+# Use the official OpenViking image:
+ghcr.io/volcengine/openviking:latest
+
+# Initialize the service once after storage is attached:
+openviking-server init
+```
+
+Public references:
+
+- Official image: https://github.com/volcengine/OpenViking/pkgs/container/openviking
+- Agent integrations: https://docs.openviking.ai/en/agent-integrations/01-overview
+- MCP integration: https://docs.openviking.ai/en/guides/06-mcp-integration
+
+## Web Studio
+
+A shared context layer should be inspectable. OpenViking Web Studio is bundled with the Docker image so users can inspect the context filesystem, upload resources, review processing tasks, and verify captured memory.
+
+The article uses three local image assets:
+
+- `/assets/covers/openviking-too-many-agents.png`
+- `/post/openviking-too-many-agents/images/figure-01-railway-deployment.jpg`
+- `/post/openviking-too-many-agents/images/figure-02-web-studio-desktop.jpg`
+- `/post/openviking-too-many-agents/images/figure-03-web-studio-pwa.jpg`
+
+These images show:
+
+1. A generated cover image for the shared context layer idea.
+2. A hosted OpenViking deployment using the official image and persistent storage.
+3. Desktop Web Studio browsing the `viking://` resource tree with L0 abstract and L1 overview surfaces.
+4. Mobile PWA Web Studio inspecting a session history and `messages.jsonl` reader.
+
+## Production Lessons
+
+Persist the context plane.
+
+- Attach durable storage before trusting memory.
+- A stateless context service is a demo, not a memory system.
+
+Give agents scoped identities.
+
+- Shared users are convenient for early setup.
+- Distinct users are better when recall, ownership, and audit boundaries matter.
+
+Expose evidence, not only summaries.
+
+- L0 and L1 summaries help routing.
+- Original resources and session files can still be used when precision matters.
+
+## Rule of Thumb
+
+When an agent produces context that another agent will need later, write it to OpenViking instead of leaving it trapped in a chat transcript.

@@ -395,7 +395,6 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-author { display: flex; align-items: center; gap: 12px; }
 .b-author__avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--th-bg-2); }
 .b-author__name { font-weight: 500; font-size: 14px; }
-.b-author__role { font-family: var(--th-font-mono); font-size: 11px; color: var(--th-mute); letter-spacing: 0.06em; }
 .b-author__name a { color: inherit; text-decoration: none; }
 .b-author__name a:hover { color: var(--th-accent); }
 .b-post__times { font-family: var(--th-font-mono); font-size: 12px; color: var(--th-mute); letter-spacing: 0.06em; display: flex; gap: 16px; flex-wrap: wrap; }
@@ -940,6 +939,41 @@ html {
   background: color-mix(in oklab, var(--th-accent) 16%, var(--th-bg-2));
 }
 
+.zouk-reader-message.is-thinking-placeholder .zouk-reader-message-profile {
+  max-width: 92%;
+}
+
+.zouk-reader-thinking-bubble {
+  border-color: color-mix(in oklab, var(--zouk-status-thinking) 36%, var(--th-line));
+  background: color-mix(in oklab, var(--zouk-status-thinking) 10%, var(--th-bg-2));
+  color: color-mix(in oklab, var(--th-ink) 82%, var(--zouk-status-thinking));
+  font-family: var(--th-font-mono);
+}
+
+.zouk-reader-thinking-text {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.zouk-reader-thinking-dots {
+  display: inline-flex;
+  width: 1.2em;
+}
+
+.zouk-reader-thinking-dots span {
+  animation: zoukThinkingDot 1.2s ease-in-out infinite;
+  opacity: 0.25;
+}
+
+.zouk-reader-thinking-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.zouk-reader-thinking-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
 .zouk-reader-thread {
   align-self: flex-start;
   max-width: 100%;
@@ -1368,5 +1402,15 @@ html {
   }
   to {
     transform: translate3d(0, calc(var(--zouk-blog-sheet-top) + var(--zouk-blog-drag, 0px)), 0);
+  }
+}
+
+@keyframes zoukThinkingDot {
+  0%, 80%, 100% {
+    opacity: 0.25;
+  }
+
+  40% {
+    opacity: 1;
   }
 }

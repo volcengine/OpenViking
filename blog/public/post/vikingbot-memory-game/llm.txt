@@ -1,0 +1,92 @@
+# VikingBot: When Agent Memory Starts Changing Strategy
+
+Source boundary: this is a public OpenViking Blog rewrite based on the ByteDance Viking Team reference article:
+https://my.oschina.net/u/6210722/blog/19667020
+
+Public follow-up references:
+- VikingBot README: https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md
+- Werewolf demo README: https://github.com/volcengine/OpenViking/blob/main/bot/demo/werewolf/README.md
+- Claude Code memory plugin: https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md
+- OpenViking MCP guide: https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md
+
+## Thesis
+
+The VikingBot werewolf demo is a practical way to observe long-term agent memory. Once agents can carry context across games, they do not merely remember chat logs. They start using history as evidence: player style, previous role claims, successful deception, failed endgames, and strategy outcomes change how future rounds are played.
+
+## Experiment Setup
+
+Six VikingBot players join one werewolf game table.
+
+| Group | Players | Memory condition |
+|---|---|---|
+| Experiment | VikingBot players 1, 2, and 3 | OpenViking-backed long-term memory across games |
+| Control | VikingBot players 4, 5, and 6 | Only current-game short-term context |
+
+The god bot manages game flow. It writes hidden role and night-action information into each player's private `GAME.md`, while public speech and voting happen in the group chat. After each game, OpenViking captures valuable context such as speech style, votes, incidents, and strategy outcomes.
+
+## What Changed Across Rounds
+
+Round 1 establishes raw game behavior. The god bot walks players through private night actions and public sheriff-campaign speech. Players bluff, role-claim, and vote mostly from current-round information. The first game gives OpenViking material to capture.
+
+Round 2 shows cross-game memory becoming evidence. A player hides a real prophet identity because an earlier early-reveal tactic was punished. Another player recognizes a forceful player style from memory. A werewolf uses a previous civilian event to make a fake prophet claim look more plausible.
+
+Round 3 shows memory becoming strategy. Player profiles and event memories influence risk, trust, role-claim timing, vote targets, and endgame behavior. The reference article reports that after memory accumulation, OpenViking-backed bots show a visible win-rate lift.
+
+## OpenViking Memory Architecture
+
+OpenViking is not a raw transcript store. It exposes context through a filesystem-like `viking://` interface and staged retrieval:
+
+- `L0`: summary and URI hints.
+- `L1`: richer summary or extracted structure.
+- `L2`: full content only when needed.
+
+The agent starts with summaries and URIs, then reads full evidence when the task requires it. This keeps long-term memory useful without adding an entire conversation archive to every prompt.
+
+Common memory categories include:
+
+| Memory type | Path | Meaning |
+|---|---|---|
+| `soul` | `agent/memories/soul.md` | Core truths, boundaries, style, and continuity for the agent |
+| `identity` | `agent/memories/identity.md` | Name, persona, role, and stable presentation details |
+| `cases` | `agent/memories/cases/` | Problem-to-solution case memories |
+| `patterns` | `agent/memories/patterns/` | Workflow and methodology memories |
+| `tools` / `skills` | `agent/memories/tools/`, `agent/memories/skills/` | Tool and skill usage lessons |
+| `profile` / `preferences` / `entities` / `events` | `user/memories/...` | User profile, preferences, entity knowledge, and event history |
+
+In the werewolf demo, `GAME.md` carries current private state and `SOUL.md` carries behavior rules. In coding-agent products, the analogous local layer is a `CLAUDE.md`, `AGENTS.md`, or `MEMORY.md` file. OpenViking adds cross-project, cross-session, semantic memory and an MCP-accessible context plane.
+
+## Claude Code And Case Memories
+
+The Claude Code memory plugin shows the same pattern outside the game:
+
+- Local instruction files remain useful for workspace-specific rules.
+- OpenViking handles semantic recall, automatic capture after turns, compaction-safe handoff, and cross-project memory.
+- MCP tools expose explicit operations such as `search`, `read`, `store`, `list`, `grep`, `forget`, and `health`.
+
+Case memories matter because they store reusable problem-solving experience, not just user facts. In the werewolf demo, a case can be a successful bluff or failed endgame. In engineering work, a case can be a production incident, API integration pattern, reviewer preference, or known fix path.
+
+## Evaluation
+
+The reference article reports LoCoMo long-context dialogue evaluation numbers:
+
+| System | Accuracy | Token cost |
+|---|---:|---:|
+| Native OpenClaw | about 24% (+/- 3%) | about 390M |
+| OpenClaw + OpenViking Plugin 2.0 | about 80% (+/- 3%) | about 35M |
+| VikingBot deep integration | about 80% (+/- 3%) | about 21M |
+
+The important point is selective, layered retrieval. A good memory system should make the next prompt smaller and more grounded, not larger and harder to inspect.
+
+## Production Cases
+
+The same structure applies to real deployments.
+
+Case 1: one server, multiple business lines. An account boundary can isolate HR and Legal platforms. Resources are shared inside a business line, while user memories stay separated by user and agent.
+
+Case 2: one personal-assistant platform, many users and agents. A design agent, coding agent, and review agent can reuse a user's global preference memory while keeping each agent workspace scoped.
+
+VikingBot also adds channel routing. One Bot Server Gateway can receive messages from channels such as Feishu, Slack, Discord, Telegram, email, or OpenAPI, then map them into shared, per-channel, or per-session sandboxes.
+
+## Takeaway
+
+VikingBot shows OpenViking's core value as an agent memory substrate: it turns temporary context into inspectable, retrievable, governable, reusable memory. The result is not only better recall. It changes evidence, strategy, privacy boundaries, and platform governance.
