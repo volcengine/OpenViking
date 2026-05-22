@@ -66,10 +66,13 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 def project_events(
     events: Sequence[ObservabilityEvent],
-    *,
-    tz,
 ) -> UsageAuditProjection:
-    """Project generic events into product usage/audit rows."""
+    """Project generic events into product usage/audit rows.
+
+    All time-keyed columns (`date`, `hour_*`) are written in UTC. The
+    user-facing timezone is applied at read time so the same store can serve
+    viewers from any region.
+    """
     token_rows: defaultdict[tuple, int] = defaultdict(int)
     retrieval_rows: defaultdict[tuple, tuple[int, int]] = defaultdict(lambda: (0, 0))
     context_rows: defaultdict[tuple, int] = defaultdict(int)
@@ -81,9 +84,10 @@ def project_events(
         account_id = normalize_identity(event.account_id, unknown=True)
         user_id = normalize_identity(event.user_id)
         agent_id = normalize_identity(event.agent_id)
-        local_dt = _local_dt(event, tz)
-        event_date = local_dt.date().isoformat()
-        created_at = local_dt.isoformat()
+        utc_dt = _utc_dt(event)
+        event_date = utc_dt.date().isoformat()
+        event_hour = int(utc_dt.hour)
+        created_at = utc_dt.isoformat()
         payload = event.payload
 
         if event.event_name == "vlm.call":
@@ -93,6 +97,7 @@ def project_events(
                 user_id=user_id,
                 agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="vlm",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -108,6 +113,7 @@ def project_events(
                 user_id=user_id,
                 agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="embedding",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -123,6 +129,7 @@ def project_events(
                 user_id=user_id,
                 agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="rerank",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -135,7 +142,7 @@ def project_events(
             _project_http_request(
                 event,
                 event_date=event_date,
-                hour=int(local_dt.hour),
+                hour=event_hour,
                 created_at=created_at,
                 retrieval_rows=retrieval_rows,
                 context_rows=context_rows,
@@ -154,11 +161,11 @@ def project_events(
     )
 
 
-def _local_dt(event: ObservabilityEvent, tz) -> datetime:
+def _utc_dt(event: ObservabilityEvent) -> datetime:
     ts = event.timestamp
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(tz)
+    return ts.astimezone(timezone.utc)
 
 
 def _add_token_rows(
@@ -168,6 +175,7 @@ def _add_token_rows(
     user_id: str,
     agent_id: str,
     event_date: str,
+    event_hour: int,
     source: str,
     provider: Any,
     model_name: Any,
@@ -184,6 +192,7 @@ def _add_token_rows(
             user_id,
             agent_id,
             event_date,
+            event_hour,
             source,
             "input",
             provider_key,
@@ -196,6 +205,7 @@ def _add_token_rows(
             user_id,
             agent_id,
             event_date,
+            event_hour,
             source,
             "output",
             provider_key,
@@ -237,7 +247,15 @@ def _project_http_request(
 
     retrieval_operation = retrieval_operation_for_http(method, route)
     if retrieval_operation:
-        key = (audit_account, row_user, row_agent, event_date, retrieval_operation, status)
+        key = (
+            audit_account,
+            row_user,
+            row_agent,
+            event_date,
+            hour,
+            retrieval_operation,
+            status,
+        )
         prev_count, prev_results = retrieval_rows[key]
         retrieval_rows[key] = (prev_count + 1, prev_results)
 

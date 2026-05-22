@@ -69,7 +69,6 @@ async def init_usage_audit_from_server_config(
         usage_retention_days=usage_config.usage_retention_days,
         audit_retention_days=usage_config.audit_retention_days,
         audit_retention_per_account=usage_config.audit_retention_per_account,
-        timezone_name=usage_config.timezone,
     )
     await store.initialize()
 

@@ -47,6 +47,11 @@ export type ConsoleSeriesQuery = {
   bucket?: ConsoleSeriesBucket
   end_date: string
   start_date: string
+  timezone?: string | null
+}
+
+export type ConsoleDashboardSummaryQuery = {
+  timezone?: string | null
 }
 
 export type ConsoleSeriesResult<TItem> = OvMaybeDisabled & {

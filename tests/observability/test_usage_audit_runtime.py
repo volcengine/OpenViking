@@ -46,9 +46,12 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
         )
         await runtime.worker.close(timeout_seconds=1.0)
 
+        from zoneinfo import ZoneInfo
+
         retrievals = await runtime.store.get_today_retrievals(
             account_id="acct-runtime",
-            date=runtime.api_service.today(),
+            user_date=runtime.api_service.today(),
+            tz=ZoneInfo("UTC"),
         )
         audit = await runtime.store.query_audit_logs(account_id="acct-runtime")
     finally:

@@ -2292,7 +2292,14 @@ export type GetConsoleDashboardSummaryData = {
         'X-OpenViking-Agent'?: string | null;
     };
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Timezone
+         *
+         * IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.
+         */
+        timezone?: string | null;
+    };
     url: '/api/v1/console/dashboard/summary';
 };
 
@@ -2341,19 +2348,25 @@ export type GetConsoleTokensData = {
         /**
          * Start Date
          *
-         * Start date in YYYY-MM-DD format
+         * Start date (viewer-local) in YYYY-MM-DD
          */
         start_date: string;
         /**
          * End Date
          *
-         * End date in YYYY-MM-DD format
+         * End date (viewer-local) in YYYY-MM-DD
          */
         end_date: string;
         /**
          * Bucket
          */
         bucket?: string;
+        /**
+         * Timezone
+         *
+         * IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.
+         */
+        timezone?: string | null;
     };
     url: '/api/v1/console/tokens';
 };
@@ -2403,19 +2416,25 @@ export type GetConsoleContextCommitsData = {
         /**
          * Start Date
          *
-         * Start date in YYYY-MM-DD format
+         * Start date (viewer-local) in YYYY-MM-DD
          */
         start_date: string;
         /**
          * End Date
          *
-         * End date in YYYY-MM-DD format
+         * End date (viewer-local) in YYYY-MM-DD
          */
         end_date: string;
         /**
          * Bucket
          */
         bucket?: string;
+        /**
+         * Timezone
+         *
+         * IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.
+         */
+        timezone?: string | null;
     };
     url: '/api/v1/console/context-commits';
 };
