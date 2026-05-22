@@ -245,7 +245,6 @@ export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
                   <div className="b-author__name">
                     {a.github ? <a href={`https://github.com/${a.github}`} target="_blank" rel="noreferrer">{a.name}<ExternalArrowIcon /></a> : a.name}
                   </div>
-                  {a.role ? <div className="b-author__role">{pickLocale(a.role, effectiveLang)}</div> : null}
                 </div>
               </div>
             ))}

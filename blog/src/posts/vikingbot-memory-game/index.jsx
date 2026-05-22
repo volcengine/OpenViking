@@ -11,7 +11,7 @@ const CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking/blob/main/ex
 const MCP_DOC = 'https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md';
 const LLM_PATH = '/post/vikingbot-memory-game/llm.txt';
 const IMAGE_DIR = '/post/vikingbot-memory-game/images';
-const COVER = `${IMAGE_DIR}/figure-01.jpg`;
+const COVER = '/assets/covers/vikingbot-memory-game.png';
 
 const image = (index) => `${IMAGE_DIR}/figure-${String(index).padStart(2, '0')}.jpg`;
 
@@ -64,10 +64,6 @@ const ReferenceFigure = ({
     src={image(index)}
     alt={T(alt)}
     caption={T(caption)}
-    credit={T({
-      en: 'Source image adapted from the ByteDance Viking Team reference article.',
-      zh: '图片来自字节跳动 Viking 团队参考文章，已转为本地静态图。',
-    })}
     size={size}
     frame={frame}
   />
@@ -435,6 +431,6 @@ export default {
     sourceUrl: SOURCE_URL,
     sourceTitle: '局中局！给 Agent 装上 OpenViking，它们竟然学会了“记仇”和“伪装”？',
     sourceUpdatedAt: '2026-05-13',
-    authors: [{ name: 'ByteDance Viking Team', role: { en: 'OpenViking Team', zh: 'OpenViking 团队' } }],
+    authors: [{ name: 'ByteDance Viking Team' }],
   },
 };

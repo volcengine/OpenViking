@@ -703,6 +703,6 @@ export default {
     tags: ['agent', 'daemon', 'mcp', 'claude-code'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    authors: [{ name: 'zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
+    authors: [{ name: 'zayn', github: 'ZaynJarvis' }],
   },
 };

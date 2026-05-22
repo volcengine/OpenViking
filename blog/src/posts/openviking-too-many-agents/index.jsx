@@ -6,11 +6,11 @@ import {
 
 const LLM_PATH = '/post/openviking-too-many-agents/llm.txt';
 const IMAGE_BASE = '/post/openviking-too-many-agents/images';
+const COVER = '/assets/covers/openviking-too-many-agents.png';
 const OPENVIKING_REPO = 'https://github.com/volcengine/OpenViking';
 const OPENVIKING_IMAGE = 'https://github.com/volcengine/OpenViking/pkgs/container/openviking';
 const AGENT_INTEGRATIONS = 'https://docs.openviking.ai/en/agent-integrations/01-overview';
 const MCP_INTEGRATION = 'https://docs.openviking.ai/en/guides/06-mcp-integration';
-const SOURCE_POST = 'https://x.com/ZaynJarvis/status/2057680967075324365';
 
 function TooManyAgentsStyles() {
   return (
@@ -45,7 +45,7 @@ function TooManyAgentsStyles() {
       }
       .ovta-agents {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
         margin: 20px 0 26px;
       }
@@ -68,6 +68,12 @@ function TooManyAgentsStyles() {
         font-family: var(--th-font-mono);
         font-size: 12px;
         line-height: 1.45;
+      }
+      .ovta-layer-table {
+        width: 100%;
+      }
+      .ovta-layer-cards {
+        display: none;
       }
       .ovta-spine {
         display: grid;
@@ -160,12 +166,51 @@ function TooManyAgentsStyles() {
         margin-right: min(-7vw, -64px);
       }
       @media (max-width: 820px) {
+        .ovta-agents { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .ovta-layer-table {
+          display: none;
+        }
+        .ovta-layer-cards {
+          display: grid;
+          gap: 12px;
+          margin: 20px 0 28px;
+        }
+        .ovta-layer-card {
+          border: 1px solid var(--th-line);
+          border-radius: var(--ovta-radius);
+          background: var(--ovta-soft);
+          padding: 15px;
+        }
+        .ovta-layer-card__title {
+          color: var(--th-ink);
+          font-family: var(--th-font-display);
+          font-size: 18px;
+          font-weight: 700;
+          line-height: 1.25;
+        }
+        .ovta-layer-card__label {
+          margin-top: 14px;
+          color: var(--th-mute);
+          font-family: var(--th-font-mono);
+          font-size: 11px;
+          letter-spacing: 0.1em;
+          line-height: 1.35;
+          text-transform: uppercase;
+        }
+        .ovta-layer-card__body {
+          margin-top: 5px;
+          font-size: 15px;
+          line-height: 1.55;
+        }
         .ovta-spine,
         .ovta-proof { grid-template-columns: 1fr; }
         .ovta .b-figure--wide {
           margin-left: 0;
           margin-right: 0;
         }
+      }
+      @media (max-width: 520px) {
+        .ovta-agents { grid-template-columns: 1fr; }
       }
     `}</style>
   );
@@ -206,11 +251,60 @@ function SharedSpine({ t }) {
   );
 }
 
+function LayerComparison({ t }) {
+  const rows = [
+    {
+      layer: t({ en: 'Agent harnesses', zh: 'Agent harness' }),
+      belongs: t({ en: 'Runtime guidance such as project conventions, command preferences, local tools, and agent-specific rules.', zh: '项目约定、命令偏好、本地工具和 agent 专属规则等运行约束。' }),
+      matters: t({ en: 'They steer behavior in one workspace. OpenViking handles durable recall across agents.', zh: '它们约束单个工作区里的行为。跨 agent 的长期召回交给 OpenViking。' }),
+    },
+    {
+      layer: t({ en: 'OpenViking memory', zh: 'OpenViking 记忆' }),
+      belongs: t({ en: 'User preferences, decisions, handoffs, resources, summaries, and reusable lessons.', zh: '用户偏好、决策、交接、资源、摘要和可复用经验。' }),
+      matters: t({ en: 'They survive sessions and can be retrieved by multiple agents under governed identity.', zh: '它们跨 session 存活，并能在受治理身份下被多个 agent 检索。' }),
+    },
+    {
+      layer: t({ en: 'MCP and plugins', zh: 'MCP 与插件' }),
+      belongs: t({ en: 'The connection surface for Claude Code, Codex, Manus, Lovable, Bolt, and other clients.', zh: 'Claude Code、Codex、Manus、Lovable、Bolt 等客户端的连接面。' }),
+      matters: t({ en: 'They let agents read and write context without hand-built copy-paste workflows.', zh: '它们让 agent 不靠手写复制粘贴流程也能读写上下文。' }),
+    },
+  ];
+
+  return (
+    <>
+      <div className="ovta-layer-table">
+        <Table
+          headers={[
+            t({ en: 'Layer', zh: '层' }),
+            t({ en: 'What belongs there', zh: '放什么' }),
+            t({ en: 'Why it matters', zh: '为什么重要' }),
+          ]}
+          rows={rows.map(row => [row.layer, row.belongs, row.matters])}
+        />
+      </div>
+      <div className="ovta-layer-cards">
+        {rows.map(row => (
+          <div className="ovta-layer-card" key={row.layer}>
+            <div className="ovta-layer-card__title">{row.layer}</div>
+            <div className="ovta-layer-card__label">{t({ en: 'What belongs there', zh: '放什么' })}</div>
+            <div className="ovta-layer-card__body">{row.belongs}</div>
+            <div className="ovta-layer-card__label">{t({ en: 'Why it matters', zh: '为什么重要' })}</div>
+            <div className="ovta-layer-card__body">{row.matters}</div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function SetupSteps({ t }) {
   const rows = [
     {
-      title: t({ en: 'Run the official container image', zh: '运行官方容器镜像' }),
-      body: t({ en: 'Start from the published OpenViking image instead of building a custom service wrapper first.', zh: '先从已发布的 OpenViking 镜像开始，不必先写一层自定义服务包装。' }),
+      title: t({ en: 'Use the official OpenViking image', zh: '使用 OpenViking 官方镜像' }),
+      body: t({
+        en: <>Use the <A href={OPENVIKING_IMAGE}>official OpenViking image</A> first; add a custom service layer only if needed.</>,
+        zh: <>先用 <A href={OPENVIKING_IMAGE}>OpenViking 官方镜像</A>跑起来，需要时再加自己的服务层。</>,
+      }),
     },
     {
       title: t({ en: 'Attach a persistent volume', zh: '挂载持久化 Volume' }),
@@ -270,16 +364,9 @@ const OpenVikingTooManyAgents = ({ t }) => {
       <TooManyAgentsStyles />
 
       <Lead>{T({
-        en: 'The agent problem has shifted. It is no longer hard to find an agent. It is hard to keep context, memory, and project knowledge consistent when work moves between Claude Code, Codex, Hermes Agent, Manus, Lovable, Cursor, and whatever comes next.',
-        zh: 'Agent 问题已经变了。难点不再是找到一个 agent，而是在工作跨 Claude Code、Codex、Hermes Agent、Manus、Lovable、Cursor 以及下一个工具流转时，保持上下文、记忆和项目知识一致。',
+        en: 'The hard part now is keeping context, memory, and project knowledge consistent while work moves between Claude Code, Codex, Hermes Agent, Manus, Lovable, Cursor, and whatever comes next.',
+        zh: '现在的难点是在工作跨 Claude Code、Codex、Hermes Agent、Manus、Lovable、Cursor 以及下一个工具流转时，保持上下文、记忆和项目知识一致。',
       })}</Lead>
-
-      <Callout type="info" title={T({ en: 'Source boundary', zh: '来源边界' })}>
-        <P>{T({
-          en: 'This article is based on a public post by Zayn Jarvis, public OpenViking documentation, and the public repository. Local authoring notes shaped the structure only; private URLs, localhost links, keys, and internal review traces are not part of the published artifact.',
-          zh: '本文基于 Zayn Jarvis 的公开动态、OpenViking 公开文档和公开仓库。本地写作笔记只影响结构；私有 URL、localhost 链接、密钥和内部 review 痕迹都不进入发布内容。',
-        })}</P>
-      </Callout>
 
       <H2>{T({ en: 'The real cost of too many agents', zh: 'Agent 太多的真实成本' })}</H2>
 
@@ -304,36 +391,13 @@ const OpenVikingTooManyAgents = ({ t }) => {
         zh: 'OpenViking 的价值在于，它不要求每个 agent loop 变成同一个产品。它可以安静地监听、写入提炼后的记忆、索引资源，再通过 agent 已经能理解的接口把结果暴露出来。',
       })}</P>
 
-      <Table
-        headers={[
-          T({ en: 'Layer', zh: '层' }),
-          T({ en: 'What belongs there', zh: '放什么' }),
-          T({ en: 'Why it matters', zh: '为什么重要' }),
-        ]}
-        rows={[
-          [
-            T({ en: 'Workspace-local instructions', zh: '工作区本地指令' }),
-            T({ en: 'Rules such as project conventions, command preferences, or local agent guidance.', zh: '项目约定、命令偏好、本地 agent 指令等规则。' }),
-            T({ en: 'They shape behavior in one workspace, but do not automatically solve cross-agent recall.', zh: '它们塑造单个工作区里的行为，但不会自动解决跨 agent 召回。' }),
-          ],
-          [
-            T({ en: 'OpenViking memory', zh: 'OpenViking 记忆' }),
-            T({ en: 'User preferences, decisions, handoffs, resources, summaries, and reusable lessons.', zh: '用户偏好、决策、交接、资源、摘要和可复用经验。' }),
-            T({ en: 'They survive sessions and can be retrieved by multiple agents under governed identity.', zh: '它们跨 session 存活，并能在受治理身份下被多个 agent 检索。' }),
-          ],
-          [
-            T({ en: 'MCP and plugins', zh: 'MCP 与插件' }),
-            T({ en: 'The connection surface for Claude Code, Codex, Manus, Lovable, Bolt, and other clients.', zh: 'Claude Code、Codex、Manus、Lovable、Bolt 等客户端的连接面。' }),
-            T({ en: 'They let agents read and write context without hand-built copy-paste workflows.', zh: '它们让 agent 不靠手写复制粘贴流程也能读写上下文。' }),
-          ],
-        ]}
-      />
+      <LayerComparison t={T} />
 
-      <H2>{T({ en: 'A simple deployment path', zh: '一个简单部署路径' })}</H2>
+      <H2>{T({ en: 'A simple deployment path', zh: '部署很简单' })}</H2>
 
       <P>{T({
         en: 'The reference deployment is intentionally simple: run the official container image, attach durable storage, initialize once, then point agents at the service.',
-        zh: '参考部署故意保持简单：运行官方容器镜像，挂持久化存储，初始化一次，然后把 agent 指向这个服务。',
+        zh: '部署非常简单：运行官方容器镜像，挂上持久化存储，初始化一次，然后把 agent 指向这个服务。',
       })}</P>
 
       <Figure
@@ -342,20 +406,19 @@ const OpenVikingTooManyAgents = ({ t }) => {
         frame="plain"
         alt={T({ en: 'Railway deployment screen showing OpenViking running from the official container image with a connected volume.', zh: 'Railway 部署界面，展示 OpenViking 通过官方容器镜像运行并挂载 Volume。' })}
         caption={T({ en: 'A minimal hosted setup: official image, persistent volume, and a public endpoint for clients.', zh: '最小托管形态：官方镜像、持久化 Volume，以及给客户端使用的公开 endpoint。' })}
-        credit={T({ en: 'Source image adapted from Zayn Jarvis public post.', zh: '源图改编自 Zayn Jarvis 公开动态。' })}
       />
 
       <SetupSteps t={T} />
 
-      <Pre lang="bash" filename="deployment-shell" lineNumbers={false}>{`# Start from the official image:
-ghcr.io/volcengine/openviking:main
+      <Pre lang="bash" filename="deployment-shell" lineNumbers={false}>{`# Use the official OpenViking image:
+ghcr.io/volcengine/openviking:latest
 
 # Initialize the service once after storage is attached:
 openviking-server init`}</Pre>
 
       <P>{T({
-        en: 'After that, agents can follow the integration docs instead of reverse-engineering the service. Use the plugin or hook path for coding agents, and use MCP when the client speaks MCP directly.',
-        zh: '之后，agent 按集成文档接入即可，不需要反向摸索服务。代码 agent 走插件或 hook 路径；原生支持 MCP 的客户端直接走 MCP。',
+        en: 'After that, use the plugin or hook path for coding agents, and use MCP when the client speaks MCP directly.',
+        zh: '之后，代码 agent 走插件或 hook 路径；原生支持 MCP 的客户端直接走 MCP。',
       })}</P>
 
       <Ul>
@@ -377,7 +440,6 @@ openviking-server init`}</Pre>
         frame="plain"
         alt={T({ en: 'OpenViking Studio desktop view showing the viking resource tree and an L0/L1 overview panel.', zh: 'OpenViking Studio 桌面视图，展示 viking 资源树和 L0/L1 概览面板。' })}
         caption={T({ en: 'Desktop Web Studio turns the context database into a browsable filesystem: resource trees, abstracts, overviews, and evidence stay inspectable.', zh: '桌面 Web Studio 把上下文数据库变成可浏览文件系统：资源树、abstract、overview 和证据都能被检查。' })}
-        credit={T({ en: 'Source image adapted from Zayn Jarvis public post.', zh: '源图改编自 Zayn Jarvis 公开动态。' })}
       />
 
       <Figure
@@ -386,7 +448,6 @@ openviking-server init`}</Pre>
         frame="plain"
         alt={T({ en: 'OpenViking Studio PWA on a phone showing a session history tree and a messages.jsonl reader.', zh: '手机上的 OpenViking Studio PWA，展示 session history 树和 messages.jsonl 阅读器。' })}
         caption={T({ en: 'The same inspection path works as a PWA, which matters when memory debugging happens away from the desktop.', zh: '同一套检查路径也能以 PWA 运行；当记忆排查不在桌面前发生时，这一点很重要。' })}
-        credit={T({ en: 'Source image adapted from Zayn Jarvis public post.', zh: '源图改编自 Zayn Jarvis 公开动态。' })}
       />
 
       <ProofStrip t={T} />
@@ -394,8 +455,8 @@ openviking-server init`}</Pre>
       <H2>{T({ en: 'The production lesson', zh: '生产环境里的经验' })}</H2>
 
       <P>{T({
-        en: 'The useful mental model is simple: local instruction files steer behavior; OpenViking stores durable context; MCP and plugins make that context reachable. Keep those responsibilities separate and the system stays explainable.',
-        zh: '有用的心智模型很简单：本地指令文件负责约束行为；OpenViking 负责保存长期上下文；MCP 和插件负责让上下文可达。把这些职责分清，系统才容易解释。',
+        en: 'The useful mental model is simple: agent harnesses steer behavior; OpenViking stores durable context; MCP and plugins make that context reachable. Keep those responsibilities separate and the system stays explainable.',
+        zh: '有用的心智模型很简单：agent harness 负责约束行为；OpenViking 负责保存长期上下文；MCP 和插件负责让上下文可达。把这些职责分清，系统才容易解释。',
       })}</P>
 
       <Table
@@ -414,11 +475,7 @@ openviking-server init`}</Pre>
           ],
           [
             T({ en: 'Expose evidence, not only summaries', zh: '暴露证据，不只暴露摘要' }),
-            T({ en: 'L0/L1 summaries help routing, but the original resource and session files must remain readable when precision matters.', zh: 'L0/L1 摘要适合路由，但需要精确判断时，原始资源和 session 文件必须仍可读取。' }),
-          ],
-          [
-            T({ en: 'Keep agent-readable pages clean', zh: '保持 agent 可读页面干净' }),
-            T({ en: 'The human article can be visual; the agent version should be concise, public, and free of private authoring traces.', zh: '人读文章可以有视觉表达；agent 版本要简洁、公开，并且没有私有写作痕迹。' }),
+            T({ en: 'L0/L1 summaries help routing, and original resources or session files can still be used when precision matters.', zh: 'L0/L1 摘要适合路由；需要精确判断时，也能继续使用原始资源和 session 文件。' }),
           ],
         ]}
       />
@@ -436,7 +493,6 @@ openviking-server init`}</Pre>
         <Li><Strong>{T({ en: 'Repository:', zh: '仓库：' })}</Strong> <A href={OPENVIKING_REPO}>github.com/volcengine/OpenViking</A></Li>
         <Li><Strong>{T({ en: 'Agent docs:', zh: 'Agent 文档：' })}</Strong> <A href={AGENT_INTEGRATIONS}>docs.openviking.ai/en/agent-integrations/01-overview</A></Li>
         <Li><Strong>{T({ en: 'MCP docs:', zh: 'MCP 文档：' })}</Strong> <A href={MCP_INTEGRATION}>docs.openviking.ai/en/guides/06-mcp-integration</A></Li>
-        <Li><Strong>{T({ en: 'Source post:', zh: '来源动态：' })}</Strong> <A href={SOURCE_POST}>x.com/ZaynJarvis/status/2057680967075324365</A></Li>
       </Ul>
 
       <Callout type="tip" title={T({ en: 'Rule of thumb', zh: '经验法则' })}>
@@ -461,14 +517,14 @@ export default {
       en: 'A practical OpenViking deployment and Web Studio walkthrough for sharing context across Claude Code, Codex, Hermes Agent, Manus, Lovable, Cursor, and MCP clients.',
       zh: '一次 OpenViking 部署与 Web Studio 实践：把上下文共享给 Claude Code、Codex、Hermes Agent、Manus、Lovable、Cursor 和 MCP 客户端。',
     },
-    cover: `${IMAGE_BASE}/figure-02-web-studio-desktop.jpg`,
-    cardCover: `${IMAGE_BASE}/figure-01-railway-deployment.jpg`,
+    cover: COVER,
+    cardCover: COVER,
     publishedAt: '2026-05-22',
     readingTime: { en: 7, zh: 8 },
     category: { en: 'Use Case', zh: '实践' },
     tags: ['openviking', 'memory', 'mcp', 'web-studio'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    authors: [{ name: 'zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
+    authors: [{ name: 'zayn', github: 'ZaynJarvis' }],
   },
 };
