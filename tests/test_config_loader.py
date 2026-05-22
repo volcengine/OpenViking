@@ -188,6 +188,21 @@ def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_accepts_role_id_memory_isolation_enabled(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict({"memory": {"role_id_memory_isolation_enabled": True}})
+
+    assert config.memory.role_id_memory_isolation_enabled is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

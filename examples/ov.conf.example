@@ -155,7 +155,7 @@
     "default_search_limit": 3,
     "enable_memory_decay": true,
     "memory_decay_check_interval": 3600,
-    "memory": {"version": "v2", "extraction_enabled": true, "enable_role_id_memory_isolate": false},
+    "memory": {"version": "v2", "extraction_enabled": true, "role_id_memory_isolation_enabled": false},
     "log": {
         "level": "INFO",
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
