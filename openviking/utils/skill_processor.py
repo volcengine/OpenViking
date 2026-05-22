@@ -94,7 +94,7 @@ class SkillProcessor:
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
 
-        skill_dict = await self._sanitize_skill_privacy(skill_dict, ctx)
+        skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
         skill_abstract = self._build_skill_abstract(skill_dict)
 
         context = Context(
@@ -274,6 +274,11 @@ class SkillProcessor:
             abstract_meta["allowed_tools"] = allowed_tools
 
         return yaml.safe_dump(abstract_meta, allow_unicode=True, sort_keys=False).strip()
+
+    async def sanitize_skill_privacy(
+        self, skill_dict: Dict[str, Any], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._sanitize_skill_privacy(skill_dict, ctx)
 
     async def _sanitize_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext

@@ -117,6 +117,7 @@ class SkillOperationUpdater:
                 "name": merged_skill["name"],
             }
 
+        merged_skill = await self._skill_processor.sanitize_skill_privacy(merged_skill, ctx)
         serialized = SkillLoader.to_skill_md(merged_skill)
         write_result = await ContentWriteCoordinator(self._viking_fs).write(
             uri=skill_md_uri,

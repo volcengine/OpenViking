@@ -23,6 +23,7 @@ from openviking.session.skill.skill_operation_updater import (
     SkillOperationUpdater,
     SkillOperationUpdateResult,
 )
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -386,6 +387,7 @@ async def test_skill_operation_updater_creates_skill_with_session_defaults():
             "root_uri": "viking://agent/default/skills/code-review",
         }
     )
+    processor.sanitize_skill_privacy = AsyncMock(side_effect=lambda skill_dict, _ctx: skill_dict)
     viking_fs = MagicMock()
     viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError())
     updater = SkillOperationUpdater(
@@ -465,9 +467,11 @@ tags:
         _FakeContentWriter,
     )
 
+    processor = MagicMock()
+    processor.sanitize_skill_privacy = AsyncMock(side_effect=lambda skill_dict, _ctx: skill_dict)
     updater = SkillOperationUpdater(
         registry=_build_skill_registry(),
-        skill_processor=MagicMock(),
+        skill_processor=processor,
         viking_fs=viking_fs,
     )
     uri = "viking://agent/default/skills/code-review/SKILL.md"
@@ -509,6 +513,111 @@ tags:
     assert "tags:" in write_calls["content"]
     assert "Review code from evidence" in write_calls["content"]
     assert "- 基于证据总结问题" in write_calls["content"]
+
+
+@pytest.mark.asyncio
+async def test_skill_operation_updater_sanitizes_existing_skill_updates(monkeypatch):
+    existing_skill_md = """---
+name: code-review
+description: Review code carefully
+allowed-tools:
+- Read
+tags:
+- session-derived
+---
+
+## 核心规范
+- 先读文件
+"""
+    viking_fs = MagicMock()
+    viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
+    write_calls = {}
+
+    class _FakeContentWriter:
+        def __init__(self, _viking_fs):
+            self._viking_fs = _viking_fs
+
+        async def write(self, **kwargs):
+            write_calls.update(kwargs)
+            return {
+                "uri": kwargs["uri"],
+                "root_uri": kwargs["uri"].rsplit("/SKILL.md", 1)[0],
+            }
+
+    monkeypatch.setattr(
+        "openviking.session.skill.skill_operation_updater.ContentWriteCoordinator",
+        _FakeContentWriter,
+    )
+
+    async def _fake_extract_skill_privacy_values(*, skill_name, skill_description, content):
+        assert skill_name == "code-review"
+        assert skill_description == "Review code from evidence"
+        assert "api_key=secret-xyz" in content
+        return SimpleNamespace(
+            values={"api_key": "secret-xyz"},
+            sanitized_content=content.replace(
+                "api_key=secret-xyz",
+                "api_key={{ov_privacy:skill:code-review:api_key}}",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "openviking.utils.skill_processor.extract_skill_privacy_values",
+        _fake_extract_skill_privacy_values,
+    )
+
+    privacy_config_service = MagicMock()
+    privacy_config_service.upsert = AsyncMock()
+    processor = SkillProcessor(
+        vikingdb=MagicMock(),
+        privacy_config_service=privacy_config_service,
+    )
+    updater = SkillOperationUpdater(
+        registry=_build_skill_registry(),
+        skill_processor=processor,
+        viking_fs=viking_fs,
+    )
+    uri = "viking://agent/default/skills/code-review/SKILL.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields={
+                    "skill_name": "code-review",
+                    "description": "Review code from evidence",
+                    "content": {
+                        "blocks": [
+                            {
+                                "search": "- 先读文件",
+                                "replace": "- 先读文件\napi_key=secret-xyz",
+                            }
+                        ]
+                    },
+                },
+                memory_type="session_skills",
+                uris=[uri],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    result = await updater.apply_operations(operations, ctx)
+
+    assert result.written_uris == []
+    assert result.edited_uris == [uri]
+    assert result.operation_results[0]["action"] == "update"
+    assert "secret-xyz" not in write_calls["content"]
+    assert "{{ov_privacy:skill:code-review:api_key}}" in write_calls["content"]
+    privacy_config_service.upsert.assert_awaited_once_with(
+        ctx=ctx,
+        category="skill",
+        target_key="code-review",
+        values={"api_key": "secret-xyz"},
+        updated_by=ctx.user.user_id,
+        change_reason="auto-extracted from add_skill",
+    )
 
 
 def test_skill_loader_to_skill_md_round_trip_with_lists():
