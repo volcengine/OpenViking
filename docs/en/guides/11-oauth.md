@@ -98,8 +98,9 @@ server-rendered HTML page at `/oauth/authorize/page`: it displays a 6-char
 that's already signed in to Studio.
 
 The "push" OTP endpoint `POST /api/v1/auth/otp` is still available for
-CLI / scripted scenarios — and the **OAuth client OTP** block at the bottom
-of the Studio "Connection & Identity" dialog gives you a one-click way to
+CLI / scripted scenarios — and the **OAuth client OTP** block in the
+Studio sidebar footer's **OAuth setup** entry (opens a dialog on desktop,
+routes to `/studio/oauth/setup` on phone) gives you a one-click way to
 mint a short-lived OTP to hand to an MCP client.
 
 ---
@@ -141,7 +142,8 @@ endpoints, so this mode is only useful for local testing with tools like
    `http://127.0.0.1:1933/mcp`. The client will hit the OAuth flow above and
    the browser will land on `/studio/oauth/consent?pending=...`; click
    Authorize and the client will receive a token. For push-style scenarios,
-   use the **OAuth client OTP** block in the Connection & Identity dialog.
+   use the **OAuth client OTP** block in the sidebar footer's **OAuth
+   setup** entry (`/studio/oauth/setup` on phone).
 
 For Claude.ai / Claude Desktop on the public internet, see the
 [Public Access Guide](12-public-access.md).
