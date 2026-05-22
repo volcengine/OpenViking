@@ -44,12 +44,15 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          image: {{ include "openviking.image" . }}
+          image: {{ include "openviking.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["openviking-server"]
           env:
             - name: OPENVIKING_CONFIG_FILE
-              value: /app/ov.conf
+              value: {{ printf "%s/ov.conf" .Values.persistence.mountPath | quote }}
+            - name: OPENVIKING_CLI_CONFIG_FILE
+              value: {{ printf "%s/ovcli.conf" .Values.persistence.mountPath | quote }}
+            - name: OPENVIKING_WITH_BOT
+              value: {{ ternary "1" "0" .Values.bot.enabled | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -70,12 +73,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            - name: config
-              mountPath: /app/ov.conf
-              subPath: ov.conf
-              readOnly: true
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            - name: config
+              mountPath: {{ printf "%s/ov.conf" .Values.persistence.mountPath | quote }}
+              subPath: ov.conf
+              readOnly: true
       volumes:
         - name: config
           configMap:
