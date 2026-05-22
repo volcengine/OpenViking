@@ -98,7 +98,7 @@ class TestEmbeddingTextConstruction:
 
         with (
             patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context,
-            patch("openviking.session.memory.memory_updater.logger.info") as mock_logger_info,
+            patch("openviking.session.memory.memory_updater.logger.error") as mock_logger_error,
         ):
             mock_from_context.side_effect = lambda context: SimpleNamespace(
                 telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
@@ -117,7 +117,7 @@ class TestEmbeddingTextConstruction:
             and call.args[1] == "viking://user/alice/memories/entities/person/alice.md"
             and call.args[2] == "entities"
             and call.args[3] == "person -> alice -> Plain body"
-            for call in mock_logger_info.call_args_list
+            for call in mock_logger_error.call_args_list
         )
 
     @pytest.mark.asyncio
