@@ -117,6 +117,9 @@ class _FakeVikingFS:
     async def delete_temp(self, temp_dir_path, ctx=None):
         return None
 
+    async def persist_temp_tree(self, temp_uri, target_uri, ctx=None):
+        self.agfs.write(self._uri_to_path(target_uri, ctx=ctx), b"content")
+
     def _uri_to_path(self, uri, ctx=None):
         return f"/mock/{uri.replace('viking://', '')}"
 
@@ -214,6 +217,7 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
+    assert summarize_calls[0]["target_preexisting"] is True
     fake_fs.agfs.mv.assert_not_called()
     fake_fs.agfs.write.assert_not_called()
     fake_fs.mv.assert_not_awaited()
@@ -280,3 +284,4 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     assert fake_lock_manager.acquired_exact_paths == []
     assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root_2"]
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
+    assert summarize_calls[0]["target_preexisting"] is False

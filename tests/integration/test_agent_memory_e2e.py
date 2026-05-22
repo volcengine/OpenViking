@@ -17,6 +17,8 @@ Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
     "memory": { "version": "v2", "agent_memory_enabled": true }
+  or:
+    "memory": { "version": "v2", "experimental_memory_switch": true }
 
 Run
 ---
@@ -39,7 +41,7 @@ from openviking.client.local import LocalClient
 from openviking.core.namespace import to_agent_space
 from openviking.server.identity import AccountNamespacePolicy
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
-from openviking.session.memory.utils.content import deserialize_metadata
+from openviking.session.memory.utils import MemoryFileUtils
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import init_tracer_from_config
 from openviking_cli.session.user_id import UserIdentifier
@@ -205,7 +207,8 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
         if not exp_uri:
             continue
         raw = run_async(client.read(exp_uri)) or ""
-        metadata = deserialize_metadata(raw) or {}
+        mf = MemoryFileUtils.read(raw) if raw else None
+        metadata = mf.extra_fields if mf else {}
         source = metadata.get("source_trajectories", [])
         if isinstance(source, list):
             all_uris.extend(str(u).strip() for u in source if str(u).strip())
@@ -302,8 +305,12 @@ class TestAgentMemoryE2E:
                 logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
                 _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
 
-                _list_non_overview_entries(client, trajectories_dir)
-                _list_non_overview_entries(client, experiences_dir)
+                traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
+                exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
+                assert traj_after_r1, "should have trajectory memories after round 1"
+                assert len(exp_after_r1) == 1, (
+                    "should have exactly 1 experience after round 1 (CREATE path)"
+                )
 
                 logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
                 _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)

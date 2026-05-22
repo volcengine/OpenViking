@@ -221,7 +221,6 @@ openviking-server
 ```bash
 docker run --rm \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   ghcr.io/volcengine/openviking:latest
 ```
@@ -230,12 +229,13 @@ docker run --rm \
 - 容器内默认配置路径是 `/app/.openviking/ov.conf`
 - 容器内 `HOME=/app`
 - 建议把宿主机 `~/.openviking` 挂载到容器 `/app/.openviking` 持久化配置、CLI 配置和 workspace 数据
+- Web Studio 由 OV server 自身在 `http://127.0.0.1:1933/studio` 提供，不需要额外端口
 
 ##### 方案 2：使用 `docker-compose.yml`
 
 如果用户希望使用 compose，仓库里已有示例：
 - 镜像：`ghcr.io/volcengine/openviking:latest`
-- 端口：`1933:1933`、`8020:8020`
+- 端口：`1933:1933`
 - volume：`~/.openviking:/app/.openviking`
 
 此时直接让用户基于仓库根目录执行：

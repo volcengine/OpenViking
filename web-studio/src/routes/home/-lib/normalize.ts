@@ -113,26 +113,48 @@ export function computeCommitHeatmapStats(
   )
 }
 
+// Re-bucket a UTC (date, hour) 4h commit row into the viewer's local
+// (date, hour). Backend's projection writes buckets by container tz
+// (effectively UTC in Railway), so a row at e.g. UTC 2026-05-21 hour=16
+// belongs to a UTC+8 viewer's 2026-05-22 hour=0. We can do this entirely
+// client-side because each bucket carries its full count — we only need
+// to relabel which local day it sums under.
+function shiftBucketToLocal(
+  utcDate: string,
+  utcHour: number,
+): { date: string; hour: number } {
+  const [y, m, d] = utcDate.split('-').map(Number)
+  const utcMs = Date.UTC(y, m - 1, d, utcHour, 0, 0)
+  const local = new Date(utcMs)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return {
+    date: `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}`,
+    hour: local.getHours(),
+  }
+}
+
 export function normalizeCommitHeatmapData(items: unknown): HeatMapDayValue[] {
   const rowsByDate = new Map<string, Required<ConsoleContextCommitItem>>()
 
   for (const item of normalizeCommitItems(items)) {
     if (!item.date) continue
 
-    const existing = rowsByDate.get(item.date) ?? {
+    const local = shiftBucketToLocal(item.date, item.hour)
+
+    const existing = rowsByDate.get(local.date) ?? {
       add_resource: 0,
       add_skill: 0,
-      date: item.date,
+      date: local.date,
       hour: 0,
       session_add_message: 0,
       session_commit: 0,
       total: 0,
     }
 
-    rowsByDate.set(item.date, {
+    rowsByDate.set(local.date, {
       add_resource: existing.add_resource + item.add_resource,
       add_skill: existing.add_skill + item.add_skill,
-      date: item.date,
+      date: local.date,
       hour: 0,
       session_add_message:
         existing.session_add_message + item.session_add_message,

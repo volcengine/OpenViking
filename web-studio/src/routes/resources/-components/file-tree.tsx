@@ -13,7 +13,7 @@ interface FileTreeProps {
   selectedFileUri?: string | null
   expandedKeys: Set<string>
   onExpandedKeysChange: (next: Set<string>) => void
-  onSelectDirectory: (uri: string) => void
+  onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile?: (entry: VikingFsEntry) => void
 }
 
@@ -24,14 +24,14 @@ interface TreeNodeProps {
   selectedFileUri?: string | null
   expandedKeys: Set<string>
   onExpandedKeysChange: (next: Set<string>) => void
-  onSelectDirectory: (uri: string) => void
+  onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile?: (entry: VikingFsEntry) => void
   prefetch?: (uri: string) => void
 }
 
 const FolderIcon = ({ isOpen }: { isOpen: boolean }) => (
   <svg
-    className="size-5 shrink-0 text-foreground/70"
+    className="size-4 shrink-0 text-foreground/70"
     viewBox="0 0 24 24"
     fill="currentColor"
     stroke="none"
@@ -67,9 +67,24 @@ const LIST_OPTS = {
   nodeLimit: 200,
 }
 
-function sortEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
+function isSessionSubtree(parentUri: string): boolean {
+  // Children of viking://session and anything nested inside it sort by
+  // modTime DESC (most recent first) instead of name.
+  return parentUri.startsWith('viking://session/')
+}
+
+function sortEntries(
+  entries: VikingFsEntry[],
+  parentUri: string,
+): VikingFsEntry[] {
+  const byModTime = isSessionSubtree(parentUri)
   return [...entries].sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    if (byModTime) {
+      const at = a.modTimestamp ?? 0
+      const bt = b.modTimestamp ?? 0
+      if (at !== bt) return bt - at
+    }
     return a.name.localeCompare(b.name)
   })
 }
@@ -87,7 +102,8 @@ function TreeNode({
 }: TreeNodeProps) {
   const { t } = useTranslation('resources')
   const isOpen = expandedKeys.has(entry.uri)
-  const isDirSelected = entry.isDir && currentUri === entry.uri
+  const isDirSelected =
+    entry.isDir && currentUri === entry.uri && !selectedFileUri
   const isFileSelected = !entry.isDir && selectedFileUri === entry.uri
 
   const entryRef = useRef(entry)
@@ -95,7 +111,7 @@ function TreeNode({
 
   const { data } = useVikingFsList(entry.uri, LIST_OPTS, entry.isDir)
   const children: VikingFsEntry[] = entry.isDir
-    ? sortEntries(data?.entries ?? [])
+    ? sortEntries(data?.entries ?? [], entry.uri)
     : []
 
   const handleToggle = useCallback(() => {
@@ -106,11 +122,12 @@ function TreeNode({
 
   const handleSelect = useCallback(() => {
     if (entryRef.current.isDir) {
-      onSelectDirectory(entryRef.current.uri)
+      onSelectDirectory(entryRef.current)
+      handleToggle()
     } else {
       onSelectFile?.(entryRef.current)
     }
-  }, [onSelectDirectory, onSelectFile])
+  }, [onSelectDirectory, onSelectFile, handleToggle])
 
   const handleMouseEnter = useCallback(() => {
     if (entry.isDir && !isOpen && prefetch) prefetch(entry.uri)
@@ -127,14 +144,14 @@ function TreeNode({
         )}
         <div
           className={cn(
-            'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
+            'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors md:py-1.5',
             isFileSelected ? 'bg-muted text-foreground' : 'hover:bg-muted/50',
           )}
           onClick={handleSelect}
         >
           <span aria-hidden className="inline-flex size-4 shrink-0" />
           <File className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate text-sm">{entry.name}</span>
+          <span className="min-w-0 truncate text-xs md:text-sm">{entry.name}</span>
         </div>
       </div>
     )
@@ -148,7 +165,7 @@ function TreeNode({
         )}
         <div
           className={cn(
-            'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
+            'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors md:py-1.5',
             isDirSelected ? 'bg-muted text-foreground' : 'hover:bg-muted/50',
           )}
           onClick={handleSelect}
@@ -172,7 +189,7 @@ function TreeNode({
             <span aria-hidden className="inline-flex size-4 shrink-0" />
           )}
           <FolderIcon isOpen={isOpen} />
-          <span className="min-w-0 truncate text-sm">{entry.name}</span>
+          <span className="min-w-0 truncate text-xs md:text-sm">{entry.name}</span>
         </div>
       </div>
       <div
@@ -215,13 +232,14 @@ const TreeNodeMemo = memo(TreeNode)
 
 const ROOT_ENTRY: VikingFsEntry = {
   uri: 'viking://',
-  name: fileNameFromUri('viking://'),
+  name: 'viking://',
   isDir: true,
   size: '',
   sizeBytes: null,
   modTime: '',
   modTimestamp: null,
   abstract: '',
+  overview: '',
 }
 
 export function FileTree({

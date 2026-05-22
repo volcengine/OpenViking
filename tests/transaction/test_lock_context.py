@@ -83,7 +83,7 @@ class TestLockContextFailure:
             async with LockContext(lm, ["/local/nonexistent-xyz"], lock_mode="unknown"):
                 pass
 
-        assert len(lm.get_active_handles()) == 0
+        assert len(await lm.get_active_handles_async()) == 0
 
 
 class TestLockContextExternalHandle:

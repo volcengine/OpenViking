@@ -7,6 +7,7 @@ Implements directory-based hierarchical retrieval with recursive search
 and rerank-based relevance scoring.
 """
 
+import asyncio
 import heapq
 import logging
 import math
@@ -49,6 +50,7 @@ class HierarchicalRetriever:
     MAX_RELATIONS = 5  # Maximum relations per resource
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
+    MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -427,70 +429,83 @@ class HierarchicalRetriever:
         for uri, score in starting_points:
             heapq.heappush(dir_queue, (-score, uri))
 
-        while dir_queue:
-            temp_score, current_uri = heapq.heappop(dir_queue)
-            current_score = -temp_score
-            if current_uri in visited:
-                continue
-            visited.add(current_uri)
-            logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
-
-            pre_filter_limit = max(limit * 2, 20)
-
-            results = await vector_proxy.search_children_in_tenant(
+        async def search_children(current_uri: str) -> List[Dict[str, Any]]:
+            return await vector_proxy.search_children_in_tenant(
                 parent_uri=current_uri,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
                 context_type=context_type,
                 target_directories=target_dirs,
                 extra_filter=scope_dsl,
-                limit=pre_filter_limit,
+                limit=max(limit * 2, 20),
             )
-            telemetry = get_current_telemetry()
-            telemetry.count("vector.searches", 1)
-            telemetry.count("vector.scored", len(results))
-            telemetry.count("vector.scanned", len(results))
 
-            if not results:
+        parallelism = max(1, self.MAX_PARALLEL_CHILD_SEARCHES)
+
+        while dir_queue:
+            batch: List[Tuple[str, float]] = []
+            while dir_queue and len(batch) < parallelism:
+                temp_score, current_uri = heapq.heappop(dir_queue)
+                current_score = -temp_score
+                if current_uri in visited:
+                    continue
+                visited.add(current_uri)
+                logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
+                batch.append((current_uri, current_score))
+
+            if not batch:
                 continue
 
-            query_scores = [
-                s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
-            ]
-            if self._rerank_client and mode == RetrieverMode.THINKING:
-                documents = [str(r.get("abstract", "")) for r in results]
-                query_scores = self._rerank_scores(query, documents, query_scores)
+            batch_results = await asyncio.gather(
+                *(search_children(current_uri) for current_uri, _ in batch)
+            )
 
-            for r, score in zip(results, query_scores, strict=True):
-                uri = r.get("uri", "")
-                final_score = (
-                    alpha * score + (1 - alpha) * current_score if current_score else score
-                )
+            telemetry = get_current_telemetry()
+            for (_, current_score), results in zip(batch, batch_results, strict=True):
+                telemetry.count("vector.searches", 1)
+                telemetry.count("vector.scored", len(results))
+                telemetry.count("vector.scanned", len(results))
 
-                if not passes_threshold(final_score):
-                    logger.debug(
-                        f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
-                    )
+                if not results:
                     continue
 
-                telemetry.count("vector.passed", 1)
-                if level is None or r.get("level", 2) in level:
-                    # Deduplicate by URI and keep the highest-scored candidate.
-                    previous = collected_by_uri.get(uri)
-                    if previous is None or final_score > previous.get("_final_score", 0):
-                        r["_final_score"] = final_score
-                        collected_by_uri[uri] = r
+                query_scores = [
+                    s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
+                ]
+                if self._rerank_client and mode == RetrieverMode.THINKING:
+                    documents = [str(r.get("abstract", "")) for r in results]
+                    query_scores = self._rerank_scores(query, documents, query_scores)
+
+                for r, score in zip(results, query_scores, strict=True):
+                    uri = r.get("uri", "")
+                    final_score = (
+                        alpha * score + (1 - alpha) * current_score if current_score else score
+                    )
+
+                    if not passes_threshold(final_score):
                         logger.debug(
-                            "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
-                            uri,
-                            final_score,
+                            f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                         )
+                        continue
 
-                # Only recurse into directories (L0/L1). L2 files are terminal hits.
-                if uri not in visited and r.get("level", 2) != 2:
-                    heapq.heappush(dir_queue, (-final_score, uri))
+                    telemetry.count("vector.passed", 1)
+                    if level is None or r.get("level", 2) in level:
+                        # Deduplicate by URI and keep the highest-scored candidate.
+                        previous = collected_by_uri.get(uri)
+                        if previous is None or final_score > previous.get("_final_score", 0):
+                            r["_final_score"] = final_score
+                            collected_by_uri[uri] = r
+                            logger.debug(
+                                "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
+                                uri,
+                                final_score,
+                            )
 
-            # Convergence check
+                    # Only recurse into directories (L0/L1). L2 files are terminal hits.
+                    if uri not in visited and r.get("level", 2) != 2:
+                        heapq.heappush(dir_queue, (-final_score, uri))
+
+            # Convergence check after each parallel expansion round.
             current_topk = sorted(
                 collected_by_uri.values(),
                 key=lambda x: x.get("_final_score", 0),

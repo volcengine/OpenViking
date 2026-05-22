@@ -17,6 +17,7 @@ from openviking.storage.transaction.lock_lease import (
 )
 from openviking.storage.transaction.lock_manager import (
     LockManager,
+    get_lock_handle_async,
     get_lock_manager,
     init_lock_manager,
     release_all_locks,
@@ -37,6 +38,7 @@ __all__ = [
     "OwnedLockLease",
     "PathLockEngine",
     "RedoLog",
+    "get_lock_handle_async",
     "get_lock_manager",
     "init_lock_manager",
     "release_all_locks",

@@ -323,14 +323,15 @@ class VLMConfig(BaseModel):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return self.get_vlm_instance().get_completion(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -338,15 +339,16 @@ class VLMConfig(BaseModel):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return await self.get_vlm_instance().get_completion_async(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
@@ -366,15 +368,16 @@ class VLMConfig(BaseModel):
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return self.get_vlm_instance().get_vision_completion(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -383,15 +386,16 @@ class VLMConfig(BaseModel):
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return await self.get_vlm_instance().get_vision_completion_async(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )

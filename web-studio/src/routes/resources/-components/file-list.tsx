@@ -13,7 +13,7 @@ type SortDirection = 'asc' | 'desc'
 interface FileListProps {
   entries: Array<VikingFsEntry>
   selectedFileUri: string | null
-  onOpenDirectory: (uri: string) => void
+  onOpenDirectory: (entry: VikingFsEntry) => void
   onOpenFile: (file: VikingFsEntry) => void
 }
 
@@ -72,13 +72,13 @@ export function FileList({
           <button
             key={entry.uri}
             className={cn(
-              'flex w-full items-center gap-2 border-b px-4 py-2 text-left text-sm transition-colors hover:bg-muted/50',
+              'flex w-full items-center gap-2 border-b px-4 py-1.5 text-left text-xs transition-colors hover:bg-muted/50 md:py-2 md:text-sm',
               isSelected && 'bg-muted',
             )}
             type="button"
             onClick={() => {
               if (entry.isDir) {
-                onOpenDirectory(entry.uri)
+                onOpenDirectory(entry)
                 return
               }
               onOpenFile(entry)

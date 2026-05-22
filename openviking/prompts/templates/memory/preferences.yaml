@@ -2,9 +2,12 @@ memory_type: preferences
 description: |
   User preference memory - captures "what the user likes/dislikes or is accustomed to".
   Extract specific preferences the user has expressed across conversations.
+  Keep each preference memory Complete but minimal.
   Each preference should be about a specific topic (not generic).
   Topics can be: code style, communication style, tools, workflow, food, commute, etc.
   Store different topics as separate memory files, do NOT mix unrelated preferences.
+  Each topic should stay small and should not become a second profile.
+  Keep each topic to roughly 3-8 bullets; if it grows beyond that or past 800 characters, split it into semantic subtopics.
 directory: "viking://user/{{ user_space }}/memories/preferences"
 filename_template: "{{ user }}/{{ topic }}.md"
 enabled: true
@@ -23,19 +26,27 @@ fields:
     description: |
       Username for the preference owner
     merge_op: immutable
+    searchable: true
 
   - name: topic
     type: string
     description: |
-      Preference topic in Chinese or English. If English, use lowercase with underscores, max 3 words.
+      Preference topic written in {{ language }}.
+      {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep the topic concise and natural in {{ language }}.{% endif %}
       Preference topic used to uniquely identify this preference memory.
       Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
       Different preference topics should be stored as separate memories, do not mix unrelated preferences.
+      If a topic becomes too broad, split it into smaller semantic subtopics.
     merge_op: immutable
+    searchable: true
 
   - name: content
     type: string
     description: |
       Preference content in Markdown format describing "what the user prefers/is accustomed to".
+      Rewrite each topic into a Complete but minimal version rather than letting it grow indefinitely.
+      Keep each topic concise, usually 3-8 bullets; if it exceeds 8 bullets or 800 characters, split it into semantic subtopics.
+      Use compact statements, and when useful include light evidence such as "evidenced by ... (as of YYYY-MM-DD)".
+      Slight identity context is allowed only when it helps explain the preference, but this memory should not become a second profile.
       Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
     merge_op: patch

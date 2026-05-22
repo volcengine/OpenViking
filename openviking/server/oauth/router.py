@@ -6,13 +6,21 @@ The OAuth 2.1 protocol surface (DCR, /authorize parsing, /token, well-known
 metadata) is delegated to the official ``mcp.server.auth`` SDK (mounted from
 ``app.py``). This module only owns:
 
-- ``/oauth/authorize/page`` — HTML form where the user submits an OTP. The
-  SDK's AuthorizationHandler returns this URL from ``provider.authorize()``;
-  on successful OTP submission we mint an authorization code and 302 back
-  to the client's redirect_uri.
+- ``GET /api/v1/auth/oauth/pending/{{pending_id}}`` — public metadata
+  endpoint consumed by the Studio consent UI. Returns the minimum info
+  needed to render the consent card (client_name, redirect_host, scopes);
+  never the display_code or full redirect_uri.
+- ``POST /api/v1/auth/oauth-verify`` — binds the caller's identity to a
+  pending OAuth authorization. Accepts either ``pending_id`` (Studio
+  consent path) or ``code`` (the 6-character display_code typed on a
+  cross-device fallback page).
 - ``POST /api/v1/auth/otp`` — short-code issuance, authenticated with the
   caller's existing API key. The OTP is bound to that API key's identity
   (account / user / role) so it can be redeemed on the authorize page.
+- ``GET /oauth/authorize/page`` — server-rendered cross-device fallback.
+  Default ``provider.authorize()`` redirects to ``/studio/oauth/consent``
+  instead; this HTML page is reached only when the user clicks "Use
+  another device" or has no Studio access on the current device.
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ from __future__ import annotations
 import html
 import os
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -76,22 +84,13 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
                 margin: 1.5rem 0 1rem; text-align: center; }}
     .code {{ font-family: ui-monospace, monospace; font-size: 2.4rem;
              letter-spacing: 0.4rem; font-weight: 600; color: #1d1d1f; }}
-    .console-link {{ display: inline-block; margin-top: 0.5rem; padding: 0.4rem 0.85rem;
-                     border-radius: 6px; background: #0071e3; color: white;
-                     text-decoration: none; font-size: 0.9rem; }}
-    .console-link:hover {{ background: #0077ed; }}
+    .studio-link {{ display: inline-block; margin-top: 0.75rem; padding: 0.4rem 0.85rem;
+                    border-radius: 6px; background: #0071e3; color: white;
+                    text-decoration: none; font-size: 0.9rem; word-break: break-all; }}
+    .studio-link:hover {{ background: #0077ed; }}
     .hint {{ font-size: 0.85rem; color: #86868b; margin-top: 1rem; }}
     code {{ background: #f5f5f7; padding: 1px 6px; border-radius: 4px;
             font-family: ui-monospace, monospace; font-size: 0.85rem; }}
-    .same-origin-panel {{ display: none; background: #f1f8e9; border: 1px solid #c5e1a5;
-                          border-radius: 8px; padding: 1rem; margin: 1rem 0; }}
-    .same-origin-panel.visible {{ display: block; }}
-    .same-origin-panel h2 {{ margin: 0 0 0.5rem; font-size: 1rem; color: #33691e; }}
-    .same-origin-panel button {{ margin-top: 0.75rem; padding: 0.6rem 1.25rem; border: 0;
-                                 border-radius: 6px; background: #33691e; color: white;
-                                 font-size: 0.95rem; cursor: pointer; }}
-    .same-origin-panel button:hover {{ background: #3d7a22; }}
-    .same-origin-panel button:disabled {{ background: #aab; cursor: not-allowed; }}
     .status {{ margin-top: 1rem; padding: 0.6rem 0.75rem; border-radius: 6px;
                font-size: 0.9rem; display: none; }}
     .status.visible {{ display: block; }}
@@ -102,22 +101,20 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
 <body>
   <div class="card">
     <h1>Authorize <span class="client">{client_name}</span></h1>
-    <p>This client is requesting access to your OpenViking workspace. To continue,
-       go to the OpenViking console and enter the verification code below.</p>
+    <p>This is the cross-device authorization page. On another device that is
+       signed in to OpenViking Studio, open the link below and enter the
+       verification code.</p>
 
     <div class="codebox">
       <div class="code" id="displayCode">{display_code}</div>
-      <a class="console-link" href="{public_base_url}/console" target="_blank" rel="noopener">
-        Open OpenViking console →
+      <a class="studio-link" href="{public_base_url}/studio/oauth/verify" target="_blank" rel="noopener">
+        Open {public_base_url}/studio/oauth/verify
       </a>
     </div>
 
-    <div class="same-origin-panel" id="sameOriginPanel">
-      <h2>Quick authorize</h2>
-      <p style="margin: 0;">You're signed in to the console in this browser.
-        Click below to authorize <strong>{client_name}</strong> with that identity.</p>
-      <button id="quickAuthBtn" type="button">Authorize</button>
-    </div>
+    <p class="hint">If you can open OpenViking Studio on <em>this</em> device,
+      go back to the link your MCP client gave you — Studio will let you
+      authorize without typing this code.</p>
 
     <div class="status" id="statusBox"></div>
 
@@ -127,65 +124,14 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
   <script>
   (function() {{
     const PENDING = "{pending_id}";
-    const DISPLAY_CODE = "{display_code}";
     const STATUS_URL = "/oauth/authorize/page/status?pending=" + encodeURIComponent(PENDING);
-    // Same-origin verify endpoint exposed by the 8020 console proxy. When the
-    // console isn't reverse-proxied to the same origin as this page, the
-    // detection below will simply not find a key and the panel stays hidden.
-    const VERIFY_URL = "/console/api/v1/ov/auth/oauth-verify";
-    const SESSION_KEY = "ov_console_api_key";
     const statusEl = document.getElementById("statusBox");
-    const panelEl = document.getElementById("sameOriginPanel");
-    const buttonEl = document.getElementById("quickAuthBtn");
 
     function showStatus(msg, kind) {{
       statusEl.textContent = msg;
       statusEl.className = "status visible " + (kind || "info");
     }}
-    function clearStatus() {{
-      statusEl.className = "status";
-    }}
 
-    // Show the quick-authorize panel only if we can find an API key in this
-    // browser's localStorage (i.e. the console is on the same origin and
-    // the user is signed in). The console persists the API key here for
-    // cross-tab use; sessionStorage holds a per-tab copy that this page
-    // (a different tab) can't see, so we deliberately read localStorage.
-    // Click still requires explicit confirmation.
-    let sameOriginKey = null;
-    try {{
-      sameOriginKey = window.localStorage.getItem(SESSION_KEY)
-                   || window.sessionStorage.getItem(SESSION_KEY);
-    }} catch (e) {{ /* storage may be unavailable; ignore */ }}
-    if (sameOriginKey) {{
-      panelEl.classList.add("visible");
-      buttonEl.addEventListener("click", async function() {{
-        buttonEl.disabled = true;
-        clearStatus();
-        try {{
-          const resp = await fetch(VERIFY_URL, {{
-            method: "POST",
-            headers: {{
-              "Content-Type": "application/json",
-              "X-Api-Key": sameOriginKey,
-            }},
-            body: JSON.stringify({{code: DISPLAY_CODE, decision: "approve"}}),
-          }});
-          if (!resp.ok) {{
-            const text = await resp.text();
-            showStatus("Authorize failed: " + text.slice(0, 200), "error");
-            buttonEl.disabled = false;
-            return;
-          }}
-          showStatus("Authorized — redirecting…", "info");
-        }} catch (err) {{
-          showStatus("Network error: " + err.message, "error");
-          buttonEl.disabled = false;
-        }}
-      }});
-    }}
-
-    // Poll the status endpoint until verified, then redirect.
     async function pollOnce() {{
       try {{
         const resp = await fetch(STATUS_URL, {{cache: "no-store"}});
@@ -386,12 +332,74 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/auth/oauth/pending/{pending_id}
+#
+# Public metadata endpoint consumed by the Studio consent UI. Given a
+# pending_id from the authorize URL, returns the minimum info the SPA needs
+# to render the consent card (client_name, redirect_host, scopes).
+#
+# Intentionally does NOT return:
+#   - display_code: would defeat the cross-device input-code brute-force
+#     protection (a leaked pending_id could otherwise be converted into a
+#     valid OTP).
+#   - full redirect_uri: only the host portion is shown to the user. The
+#     full URI lives server-side in the pending row and is only revealed
+#     when the verify step turns into a 302 to the client.
+# ---------------------------------------------------------------------------
+
+
+class OAuthPendingInfo(BaseModel):
+    client_id: str
+    client_name: Optional[str] = None
+    redirect_host: Optional[str] = None
+    scopes: list[str] = Field(default_factory=list)
+
+
+@router.get(
+    "/api/v1/auth/oauth/pending/{pending_id}",
+    response_model=OAuthPendingInfo,
+)
+async def oauth_pending_info(request: Request, pending_id: str) -> JSONResponse:
+    """Return public-safe metadata about a pending OAuth authorization."""
+    store, provider = _get_store_and_provider(request)
+    record = await store.load_pending_authorization(pending_id)
+    if record is None:
+        return JSONResponse({"error": "expired"}, status_code=404)
+
+    client = await provider.get_client(record["client_id"])
+    redirect_uri = record.get("redirect_uri") or ""
+    redirect_host = urlparse(redirect_uri).netloc or None
+
+    return JSONResponse(
+        OAuthPendingInfo(
+            client_id=record["client_id"],
+            client_name=client.client_name if client else None,
+            redirect_host=redirect_host,
+            scopes=list(record.get("scopes") or []),
+        ).model_dump(mode="json"),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/auth/oauth-verify (authenticated; binds caller identity)
 # ---------------------------------------------------------------------------
 
 
 class OAuthVerifyRequest(BaseModel):
-    code: str = Field(..., description="The 6-character display code from the authorize page")
+    # Exactly one of (code, pending_id) must be set. ``code`` is the
+    # 6-character display_code used by the cross-device fallback page
+    # (/oauth/authorize/page). ``pending_id`` is the opaque pending_id used
+    # by the same-device Studio consent UI, which already has the id on
+    # hand from the authorize URL and doesn't need a re-typed OTP.
+    code: Optional[str] = Field(
+        default=None,
+        description="6-character display code (cross-device fallback path)",
+    )
+    pending_id: Optional[str] = Field(
+        default=None,
+        description="Opaque pending_id from the authorize URL (Studio consent path)",
+    )
     decision: str = Field(
         default="approve",
         description="'approve' to authorize the client, 'deny' to reject",
@@ -412,11 +420,17 @@ async def oauth_verify(
 ) -> JSONResponse:
     """Bind the caller's identity to a pending OAuth authorization.
 
-    The user reads a 6-character verification code off the MCP client's
-    authorize page, then submits it here from a session that's already
-    authenticated (typically via the OpenViking console). On approve we
-    write the caller's (account, user, role) into the pending row; the
-    authorize page's polling then catches that and redirects the client
+    Two entry points converge here:
+
+    - Same-device Studio consent: ``/studio/oauth/consent`` posts ``pending_id``
+      using the user's already-loaded Studio session as Bearer.
+    - Cross-device fallback: the user reads a 6-character display_code off the
+      MCP client's authorize page (``/oauth/authorize/page``) and re-types it
+      on another already-signed-in device at ``/studio/oauth/verify``, which
+      posts ``code``.
+
+    On approve we write the caller's (account, user, role) into the pending
+    row; the authorize page's polling catches that and redirects the client
     back to ``redirect_uri`` with a fresh authorization code.
     """
     store, provider = _get_store_and_provider(request)
@@ -430,16 +444,27 @@ async def oauth_verify(
     if ctx.from_oauth:
         raise PermissionDeniedError(
             "OAuth-issued tokens cannot authorize new OAuth clients. "
-            "Use your API key or sign in to the console to verify."
+            "Use your API key or sign in to OpenViking Studio to verify."
         )
 
     decision = body.decision.lower().strip()
     if decision not in {"approve", "deny"}:
         raise InvalidArgumentError("decision must be 'approve' or 'deny'")
 
-    record = await store.find_pending_by_display_code(body.code)
-    if record is None:
-        raise InvalidArgumentError("Invalid or expired verification code")
+    # Two callers, two lookup paths: Studio's consent SPA has the pending_id
+    # straight off the authorize URL; the cross-device fallback page asks
+    # the user to type the 6-char display_code on a different device. Both
+    # converge to the same pending row.
+    if body.pending_id:
+        record = await store.load_pending_authorization(body.pending_id)
+        if record is None or record.get("verified"):
+            raise InvalidArgumentError("Invalid or expired pending authorization")
+    elif body.code:
+        record = await store.find_pending_by_display_code(body.code)
+        if record is None:
+            raise InvalidArgumentError("Invalid or expired verification code")
+    else:
+        raise InvalidArgumentError("Must provide either 'pending_id' or 'code'")
 
     if decision == "deny":
         await store.delete_pending_authorization(record["pending_id"])
@@ -520,7 +545,8 @@ async def issue_otp(
     # /api/v1/auth/oauth-verify.
     if ctx.from_oauth:
         raise PermissionDeniedError(
-            "OAuth-issued tokens cannot issue OTPs. Use your API key or sign in to the console."
+            "OAuth-issued tokens cannot issue OTPs. "
+            "Use your API key or sign in to OpenViking Studio."
         )
 
     cfg = getattr(request.app.state, "oauth_config", None)

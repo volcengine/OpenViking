@@ -24,7 +24,7 @@ from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
-from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
@@ -36,6 +36,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
+_MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
 
@@ -51,6 +52,28 @@ def _filename_has_variables(schema: Any) -> bool:
 def _append_unique(paths: list[str], path: str) -> None:
     if path and path not in paths:
         paths.append(path)
+
+
+def _log_memory_lock_retry(
+    *,
+    retry_count: int,
+    max_retries: int,
+    last_warning_at: float,
+    phase_label: str = "",
+) -> float:
+    now = asyncio.get_running_loop().time()
+    max_label = max_retries or "unlimited"
+    prefix = f"[{phase_label}] " if phase_label else ""
+    message = (
+        f"{prefix}Failed to acquire memory locks, retrying "
+        f"(attempt={retry_count}, max={max_label})..."
+    )
+
+    if retry_count == 1 or now - last_warning_at >= _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS:
+        logger.warning(message)
+        return now
+
+    return last_warning_at
 
 
 def _render_memory_schema_locks(
@@ -183,7 +206,7 @@ class SessionCompressorV2:
             return []
 
         tracer.info("Starting v2 memory extraction from conversation")
-        tracer.info(f"messages={JsonUtils.dumps(messages)}")
+        tracer.info(f"origin_messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
 
         # Initialize default memory files (soul.md, identity.md) if not exist
@@ -214,7 +237,7 @@ class SessionCompressorV2:
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
-            logger.warning("VikingFS or AGFS not available, running without lock mechanism")
+            logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
             # Create extract context from messages
@@ -250,6 +273,7 @@ class SessionCompressorV2:
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
 
                 # 循环重试获取锁（机制确保不会死锁）
                 while True:
@@ -268,9 +292,10 @@ class SessionCompressorV2:
                             f"{retry_count} retries (max={max_retries})"
                         )
 
-                    logger.warning(
-                        "Failed to acquire memory locks, retrying "
-                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
@@ -433,11 +458,10 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
         for traj_uri in written_trajectory_uris:
             try:
-                from openviking.session.memory.utils.content import (
-                    deserialize_content as _deser_content,
-                )
+                from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-                traj_content = _deser_content(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                traj_content = mf.content
             except Exception as e:
                 logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
                 continue
@@ -635,6 +659,7 @@ class SessionCompressorV2:
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 retry_count = 0
+                last_lock_retry_warning_at = 0.0
                 while True:
                     lock_acquired = await lock_manager.acquire_exact_tree_batch(
                         transaction_handle,
@@ -650,6 +675,12 @@ class SessionCompressorV2:
                             f"[{phase_label}] Failed to acquire memory locks after "
                             f"{retry_count} retries (max={max_retries})"
                         )
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                        phase_label=phase_label,
+                    )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
 
@@ -733,8 +764,7 @@ class SessionCompressorV2:
         so the caller can apply inherited trajectories only to the superseding experience,
         not to every experience written in the same batch.
         """
-        from openviking.session.memory.dataclass import MemoryFileContent
-        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         inheritance_map: Dict[str, List[str]] = {}
 
@@ -767,19 +797,13 @@ class SessionCompressorV2:
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
-                parsed = parse_memory_file_with_fields(raw)
-                operations.delete_file_contents.append(
-                    MemoryFileContent(
-                        uri=old_uri,
-                        plain_content=parsed.get("content", ""),
-                        memory_fields=parsed,
-                    )
-                )
+                old_mf = MemoryFileUtils.read(raw, uri=old_uri)
+                operations.delete_file_contents.append(old_mf)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
                 # Map inherited source_trajectories to the new (superseding) URI only.
                 if new_uri:
-                    existing = parsed.get("source_trajectories", [])
+                    existing = old_mf.extra_fields.get("source_trajectories", [])
                     if isinstance(existing, list):
                         inherited = list(existing)
                     elif isinstance(existing, str) and existing.strip():
@@ -848,17 +872,10 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
     ) -> None:
-        from openviking.session.memory.utils.content import (
-            deserialize_full,
-            serialize_with_metadata,
-        )
-
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
-        file_content = deserialize_full(raw)
-        plain_content = file_content.plain_content
-        metadata = file_content.memory_fields or {}
+        mf = MemoryFileUtils.read(raw, uri=exp_uri)
 
-        existing = metadata.get("source_trajectories", [])
+        existing = mf.extra_fields.get("source_trajectories", [])
         if isinstance(existing, list):
             uris = list(existing)
         elif isinstance(existing, str) and existing.strip():
@@ -877,9 +894,8 @@ class SessionCompressorV2:
             changed = True
 
         if changed:
-            metadata["source_trajectories"] = uris
-            metadata["content"] = plain_content
-            new_raw = serialize_with_metadata(metadata)
+            mf.extra_fields["source_trajectories"] = uris
+            new_raw = MemoryFileUtils.write(mf)
             await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
             tracer.info(f"[source_traj] appended {len(traj_uris)} trajectories -> {exp_uri}")
         else:
@@ -927,13 +943,12 @@ class SessionCompressorV2:
 
             if old_file:
                 # Old content existed, this is an update
-                raw_before = old_file.plain_content
-                parsed = parse_memory_file_with_fields(raw_before)
+                before_content = old_file.content
                 updates.append(
                     {
                         "uri": uri,
                         "memory_type": memory_type,
-                        "before": parsed.get("content", raw_before),
+                        "before": before_content,
                         "after": "",  # Will be filled after
                     }
                 )
@@ -951,16 +966,13 @@ class SessionCompressorV2:
         for uri in result.edited_uris:
             op = upsert_by_uri.get(uri)
             memory_type = op.memory_type if op else self._get_memory_type_from_uri(uri)
-            old_content = None
-            if op and op.old_memory_file_content:
-                old_content = op.old_memory_file_content.plain_content
-            raw_before = old_content or ""
-            parsed = parse_memory_file_with_fields(raw_before)
+            old_mf = op.old_memory_file_content if op and op.old_memory_file_content else None
+            before_content = old_mf.content if old_mf else ""
             updates.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "before": parsed.get("content", raw_before) if raw_before else "",
+                    "before": before_content,
                     "after": "",  # Will be filled after
                 }
             )
@@ -969,16 +981,17 @@ class SessionCompressorV2:
         for uri in result.deleted_uris:
             deleted_content = None
             dc = delete_by_uri.get(uri)
-            memory_type = dc.memory_fields.get("memory_type", "unknown") if dc else "unknown"
             if dc:
-                deleted_content = dc.plain_content
-            raw_deleted = deleted_content or ""
-            parsed = parse_memory_file_with_fields(raw_deleted)
+                memory_type = dc.memory_type or "unknown"
+                deleted_content = dc.content
+            else:
+                memory_type = "unknown"
+                deleted_content = ""
             deletes.append(
                 {
                     "uri": uri,
                     "memory_type": memory_type,
-                    "deleted_content": parsed.get("content", raw_deleted),
+                    "deleted_content": deleted_content,
                 }
             )
 
@@ -986,9 +999,8 @@ class SessionCompressorV2:
         for item in adds + updates:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
-                # Strip MEMORY_FIELDS comment from content
-                parsed = parse_memory_file_with_fields(content)
-                item["after"] = parsed.get("content", content)
+                mf = MemoryFileUtils.read(content)
+                item["after"] = mf.content
             except Exception:
                 pass
 

@@ -122,3 +122,21 @@ class TestSkillToolCallExposure:
         provider = SessionExtractContextProvider(messages=messages)
 
         assert provider._detect_language() == "en"
+
+    def test_detect_language_prefers_user_text_over_assistant_text(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[TextPart("请把记忆保持为中文，继续优化。")],
+            ),
+            Message(
+                id="m2",
+                role="assistant",
+                parts=[TextPart("한국어 응답이 섞였습니다")],
+            ),
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "zh-CN"

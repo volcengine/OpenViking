@@ -95,7 +95,7 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 11 个工具：
+连接后，OpenViking MCP 端点暴露 14 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
@@ -109,6 +109,9 @@ claude mcp add --transport http openviking \
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
+| `code_outline` | 显示文件的符号结构（类、函数、方法及其行号范围），不读取实现体。在决定 `read` 之前用于快速浏览文件。 | `uri`（必须是 `viking://` **文件** URI） |
+| `code_search` | 在 `viking://` 目录下按子串搜索符号名（类 / 函数 / 方法），返回符号类型、所属类、文件 URI、行号范围。最多扫描 200 个源文件。 | `query`, `uri`（必须是 `viking://` 目录；缩小到子目录可获得更深覆盖） |
+| `code_expand` | 返回单个命名符号的完整源码，避免读取整个文件。 | `uri`（文件）, `symbol`（`bar` 表示顶层，`Foo.bar` 表示方法） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。

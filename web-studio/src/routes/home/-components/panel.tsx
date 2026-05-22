@@ -47,9 +47,9 @@ export function SectionHeading({
 
 export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-h-8 items-center justify-between gap-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]">
-      <span className="min-w-0 truncate text-muted-foreground">{label}</span>
-      <span className="font-medium tabular-nums text-[oklch(0.46_0.13_242)] dark:text-[oklch(0.74_0.12_232)]">
+    <div className="flex min-h-8 flex-wrap items-center gap-x-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]">
+      <span className="min-w-0 grow text-muted-foreground">{label}</span>
+      <span className="ml-auto font-medium tabular-nums text-[oklch(0.46_0.13_242)] dark:text-[oklch(0.74_0.12_232)]">
         {value}
       </span>
     </div>

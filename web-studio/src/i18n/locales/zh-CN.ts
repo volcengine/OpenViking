@@ -12,6 +12,9 @@ const zhCN = {
       home: {
         title: '首页',
       },
+      oauthSetup: {
+        title: 'OAuth 设置',
+      },
       operations: {
         title: '运维',
       },
@@ -31,7 +34,7 @@ const zhCN = {
     sidebar: {
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
-      workspaceGroupLabel: 'OpenViking',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -56,7 +59,7 @@ const zhCN = {
     },
     serverMode: {
       checking: '检测中',
-      devImplicit: '开发模式',
+      devImplicit: '服务端身份',
       explicitAuth: '显式鉴权',
       offline: '未连接',
     },
@@ -64,8 +67,8 @@ const zhCN = {
   connection: {
     devMode: {
       description:
-        '当前服务使用隐式身份，通常不需要填写 account、user 和 API key。',
-      title: '已检测到开发模式',
+        '当前服务会自动提供身份，通常不需要填写 account、user 和 API key。',
+      title: '服务端托管身份',
     },
     dialog: {
       title: '连接与身份',
@@ -95,6 +98,27 @@ const zhCN = {
         label: 'User',
         placeholder: 'default',
       },
+    },
+    oauthOtp: {
+      title: 'OAuth 客户端 OTP',
+      description:
+        '生成一个短期一次性码，让 MCP 客户端凭此以所选身份完成 OAuth 授权。',
+      generate: '生成 OTP',
+      regenerate: '重新生成',
+      copy: '复制',
+      copied: '已复制',
+      codeLabel: '一次性码',
+      expiresIn: '{{seconds}} 秒后失效',
+      expired: '已过期 —— 请重新生成。',
+      generateError: '生成 OTP 失败：{{message}}',
+    },
+  },
+  oauthSetup: {
+    page: {
+      title: 'OAuth 设置',
+      intro:
+        '当你需要让 MCP 客户端（例如 Claude.ai / Claude Desktop / ChatGPT / Cursor）通过 OAuth 完成鉴权时使用本页。在这里生成一个短期 OTP，粘到 MCP 客户端，它就会用所选身份完成 OAuth 授权。',
+      docsLink: '阅读 OAuth 接入指南',
     },
   },
   home: {
@@ -130,8 +154,8 @@ const zhCN = {
         recentDay: '最近提交',
       },
       title: '上下文提交统计',
-      yearlyEmpty: '过去一年没有上下文提交',
-      yearlyTotal: '过去一年 {{count}} 次上下文提交',
+      yearlyEmpty: '暂无上下文提交',
+      yearlyTotal: '{{count}} 次上下文提交',
       tooltip: {
         total: '总提交',
       },
@@ -190,8 +214,8 @@ const zhCN = {
     todayRetrievals: {
       description:
         '展示用户或 Agent 今日使用语义检索 find() 和 search() 的成功调用次数，每天零点刷新。',
-      find: 'find()',
-      search: 'search()',
+      find: 'find',
+      search: 'search',
       title: '今日检索次数',
     },
     todayTokens: {
@@ -387,7 +411,7 @@ const zhCN = {
     searchPalette: {
       ariaLabel: '搜索',
       openContainingDirectory: '打开所在目录',
-      placeholder: '搜索文件和目录...',
+      placeholder: '搜索',
       scope: {
         global: '搜索范围: 全局',
         current: '搜索范围: {{name}}',
@@ -479,13 +503,13 @@ const zhCN = {
   },
   retrieval: {
     title: '检索',
-    searchPlaceholder: '输入检索内容，例如：how to authenticate users',
+    searchPlaceholder: '输入检索内容',
     send: '检索',
     controls: {
       function: '检索函数',
       modes: {
-        find: 'find()',
-        search: 'search()',
+        find: 'find',
+        search: 'search',
       },
       resultCount: '返回数量',
       path: '路径',
@@ -572,6 +596,51 @@ const zhCN = {
     empty: {
       description: '从侧边栏选择一个会话，或创建新会话。',
       title: '未选择会话',
+    },
+  },
+  oauth: {
+    identityPicker: {
+      useCurrent: '以当前身份授权',
+      noCurrent:
+        '尚未配置身份。请先在“连接与身份”中登录，或在下方临时粘贴一个 API key。',
+      useCustom: '使用其他 API key',
+      customKeyLabel: 'API key',
+      customKeyPlaceholder: '粘贴一个 API key（不会持久化）',
+    },
+    consent: {
+      title: '授权 {{clientName}}',
+      loading: '正在加载授权请求…',
+      expired: '此次授权已过期或不再有效，请从 MCP 客户端重新发起。',
+      missingPending: '缺少授权 ID，请打开 MCP 客户端给出的链接。',
+      requestSummary: '{{clientName}} 请求访问你的 OpenViking 工作区。',
+      redirectLabel: '回跳地址',
+      scopesLabel: '权限范围',
+      scopesNone: '（无）',
+      signInRequired:
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+      openConnectionDialog: '打开连接与身份',
+      authorize: '授权',
+      deny: '拒绝',
+      useAnotherDevice: '在另一台设备上授权 →',
+      waitingRedirect: '已授权——正在回跳到客户端…',
+      verifying: '正在验证…',
+      denying: '正在拒绝…',
+      denied: '已拒绝，可以关闭此页。',
+      verifyError: '授权失败：{{message}}',
+      noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
+    },
+    verify: {
+      title: '跨设备验证',
+      description: '请输入发起 MCP 客户端登录的那台设备上显示的 6 位验证码。',
+      codeLabel: '验证码',
+      codePlaceholder: '6 位验证码',
+      submit: '授权',
+      success: '已为 {{clientName}} 授权，可以关闭此页并回到原设备。',
+      successUnknownClient: '已授权，可以关闭此页并回到原设备。',
+      verifyError: '授权失败：{{message}}',
+      noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
+      signInRequired:
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
     },
   },
 } as const

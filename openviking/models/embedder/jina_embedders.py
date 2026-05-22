@@ -10,6 +10,7 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -121,7 +122,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             api_key=self.api_key,
             base_url=self.api_base,
         )
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Determine dimension
         max_dim = JINA_MODEL_DIMENSIONS.get(model_name, 1024)
@@ -158,12 +159,12 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _get_async_client(self):
-        if self._async_client is None:
-            self._async_client = openai.AsyncOpenAI(
+        return self._async_client_cache.get(
+            lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
             )
-        return self._async_client
+        )
 
     def _raise_task_error(self, error: openai.APIError) -> None:
         """Raise an actionable error if a 422 indicates an invalid task type."""

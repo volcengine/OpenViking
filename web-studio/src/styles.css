@@ -160,6 +160,43 @@
     height: 100%;
     overflow: hidden;
   }
+
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 1rem;
+      line-height: 1.5rem;
+    }
+  }
+}
+
+/* FS page on phone view: respect declared Tailwind sizes (no upscaling)
+   so text matches the density of Atlas / native file managers. Also
+   hide internal scrollbars — iOS/Atlas pattern is overlay scroll only
+   on active gesture, not a persistent track. */
+@media (max-width: 767px) {
+  .web-studio-resource-fs ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    background: transparent;
+  }
+  .web-studio-resource-fs * {
+    scrollbar-width: none;
+  }
+}
+
+/* PWA standalone mode: iOS reports a slightly different viewport from
+   Safari (no URL chrome, but full-svh includes home-indicator safe area).
+   The 1–2px mismatch makes the outer SidebarInset ScrollArea show a tall
+   page scrollbar on the FS route. Hide it — native iOS apps don't show a
+   page-level scrollbar, and the inner panes already overlay-scroll on
+   gesture. */
+@media (display-mode: standalone) {
+  body:has(.web-studio-resource-fs)
+    [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
+    display: none;
+  }
 }
 
 /* ---- FindPalette animations ---- */

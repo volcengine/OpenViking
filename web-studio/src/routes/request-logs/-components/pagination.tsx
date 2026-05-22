@@ -46,7 +46,7 @@ export function RequestLogPagination({
 
   return (
     <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center gap-3 sm:justify-start">
         <p className="text-sm text-muted-foreground">
           {t('pagination.summary', { page, pageCount, total })}
         </p>
@@ -68,7 +68,7 @@ export function RequestLogPagination({
           </SelectContent>
         </Select>
       </div>
-      <Pagination className="mx-0 w-auto justify-start sm:justify-end">
+      <Pagination className="mx-0 w-auto justify-center sm:justify-end">
         <PaginationContent>
           <PaginationItem>
             <PaginationPrevious

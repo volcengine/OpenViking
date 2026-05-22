@@ -11,7 +11,8 @@ from openviking.session.memory.memory_updater import MessageRange
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.utils import deserialize_full, serialize_with_metadata
+from openviking.session.memory.utils import MemoryFileUtils
+from openviking.session.memory.dataclass import MemoryFile
 
 
 def _message(*, created_at: str, role: str = "user", text: str = "hello") -> Message:
@@ -26,7 +27,7 @@ def _message(*, created_at: str, role: str = "user", text: str = "hello") -> Mes
 @pytest.fixture
 def stub_provider_config(monkeypatch):
     config = SimpleNamespace(
-        memory=SimpleNamespace(eager_prefetch=False),
+        memory=SimpleNamespace(eager_prefetch=False, prefetch_search_topn=5, link_enabled=True),
         language_fallback="en",
     )
     monkeypatch.setattr(
@@ -56,11 +57,13 @@ def test_conversation_message_accepts_z_suffix_timestamps(stub_provider_config):
 def test_message_range_accepts_extended_fractional_seconds():
     msg_range = MessageRange(
         [
-            _message(created_at="2026-04-17T09:10:11.1234567+08:00"),
-            _message(
-                created_at="2026-04-17T09:12:13.7654321+08:00",
-                role="assistant",
-            ),
+            [
+                _message(created_at="2026-04-17T09:10:11.1234567+08:00"),
+                _message(
+                    created_at="2026-04-17T09:12:13.7654321+08:00",
+                    role="assistant",
+                ),
+            ]
         ]
     )
 
@@ -69,17 +72,18 @@ def test_message_range_accepts_extended_fractional_seconds():
 
 
 def test_deserialize_full_parses_memory_metadata_timestamps_with_z_suffix():
-    full_content = serialize_with_metadata(
-        {
-            "content": "memory body",
+    mf = MemoryFile(
+        content="memory body",
+        extra_fields={
             "created_at": "2026-04-17T01:26:14.481Z",
             "updated_at": "2026-04-17T09:10:11.1234567+08:00",
-        }
+        },
     )
+    full_content = MemoryFileUtils.write(mf)
 
-    result = deserialize_full(full_content)
+    result = MemoryFileUtils.read(full_content)
 
-    assert result.plain_content == "memory body"
-    assert result.memory_fields is not None
-    assert result.memory_fields["created_at"].isoformat() == "2026-04-17T01:26:14.481000+00:00"
-    assert result.memory_fields["updated_at"].isoformat() == "2026-04-17T09:10:11.123456+08:00"
+    assert result.content == "memory body"
+    assert result.extra_fields is not None
+    assert result.extra_fields["created_at"].isoformat() == "2026-04-17T01:26:14.481000+00:00"
+    assert result.extra_fields["updated_at"].isoformat() == "2026-04-17T09:10:11.123456+08:00"
