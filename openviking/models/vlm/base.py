@@ -4,21 +4,14 @@
 
 import logging
 import re
-import threading
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.model_retry import (
-    classify_api_error,
-    ERROR_CLASS_QUOTA_EXCEEDED,
-    ERROR_CLASS_TRANSIENT,
-    ERROR_CLASS_PERMANENT,
     PrimaryBackupSwitcher,
 )
-from openviking.utils.time_utils import format_iso8601
 from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
@@ -372,12 +365,7 @@ class FailoverVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
-    def _get_completion_with_failover(
-        self,
-        method_name: str,
-        *args,
-        **kwargs
-    ):
+    def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
         Args:
@@ -419,12 +407,7 @@ class FailoverVLM(VLMBase):
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
-    async def _get_completion_with_failover_async(
-        self,
-        method_name: str,
-        *args,
-        **kwargs
-    ):
+    async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
         """Execute an async VLM method with failover support.
 
         Args:
@@ -572,9 +555,9 @@ class FailoverVLM(VLMBase):
     def get_token_usage(self) -> Dict[str, Any]:
         """Get combined token usage from both primary and backup instances."""
         from openviking.models.vlm.token_usage import TokenUsageTracker
+
         merged_tracker = TokenUsageTracker.merge(
-            self.primary._token_tracker,
-            self.backup._token_tracker
+            self.primary._token_tracker, self.backup._token_tracker
         )
         return merged_tracker.to_dict()
 

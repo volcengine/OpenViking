@@ -37,8 +37,9 @@ Common labels.
 {{- define "openviking.labels" -}}
 helm.sh/chart: {{ include "openviking.chart" . }}
 {{ include "openviking.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- $appVersion := include "openviking.appVersion" . }}
+{{- if $appVersion }}
+app.kubernetes.io/version: {{ $appVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -63,9 +64,16 @@ Create the name of the service account to use.
 {{- end }}
 
 {{/*
+Return the deployed app version label.
+*/}}
+{{- define "openviking.appVersion" -}}
+{{- default "latest" .Values.image.tag -}}
+{{- end }}
+
+{{/*
 Return the image name including tag.
 */}}
 {{- define "openviking.image" -}}
-{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
+{{- $tag := default "latest" .Values.image.tag -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end }}

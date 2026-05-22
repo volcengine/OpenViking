@@ -7,10 +7,14 @@ skill data is None, instead of falling through to the generic
 'Unsupported data type' error.
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestParseSkillNoneData:
@@ -38,6 +42,21 @@ class TestParseSkillNoneData:
         assert skill_dict["name"] == "test-skill"
         assert aux_files == []
         assert base_path is None
+
+    def test_parse_skill_normalizes_hyphenated_allowed_tools(self):
+        processor = SkillProcessor(vikingdb=None)
+        skill_dict, _, _ = processor._parse_skill(
+            {
+                "name": "test-skill",
+                "description": "A test skill",
+                "allowed-tools": ["Read", "Write"],
+                "tags": ["test"],
+            }
+        )
+
+        assert skill_dict["allowed_tools"] == ["Read", "Write"]
+        assert "allowed-tools" not in skill_dict
+        assert skill_dict["tags"] == ["test"]
 
     @pytest.mark.parametrize("skill_dict", [{}, {"description": "missing name"}])
     def test_validate_skill_dict_requires_name_field(self, skill_dict):
@@ -76,3 +95,41 @@ class TestParseSkillNoneData:
 
         with pytest.raises(OSError, match="File name too long"):
             processor._parse_skill(raw_skill)
+
+
+@pytest.mark.asyncio
+async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypatch):
+    config = MagicMock()
+    config.vlm.get_completion_async = AsyncMock(return_value="overview")
+    monkeypatch.setattr(
+        "openviking.utils.skill_processor.get_openviking_config",
+        lambda: config,
+    )
+
+    vikingdb = MagicMock()
+    vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
+    viking_fs = MagicMock()
+    viking_fs.write_context = AsyncMock()
+
+    processor = SkillProcessor(vikingdb=vikingdb)
+    result = await processor.process_skill(
+        data={
+            "name": "dict-skill",
+            "description": "Skill from dict",
+            "content": "# Dict Skill",
+            "allowed-tools": ["Read"],
+            "tags": ["dict"],
+        },
+        viking_fs=viking_fs,
+        ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        allow_local_path_resolution=False,
+    )
+
+    assert result["name"] == "dict-skill"
+    written_content = viking_fs.write_context.await_args.kwargs["content"]
+    assert "allowed-tools:" in written_content
+    assert "- Read" in written_content
+    assert "tags:" in written_content
+    embedding_msg = vikingdb.enqueue_embedding_msg.await_args.args[0]
+    assert embedding_msg.context_data["meta"]["allowed_tools"] == ["Read"]
+    assert embedding_msg.context_data["meta"]["tags"] == ["dict"]

@@ -259,7 +259,7 @@ class SessionService:
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
-        task = get_task_tracker().get(
+        task = await get_task_tracker().get(
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,

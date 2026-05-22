@@ -126,9 +126,9 @@ class OwnedLockLease(LockLease):
         manager: Optional[LockManager] = None,
     ) -> "OwnedLockLease":
         manager = manager or get_lock_manager()
-        handle = manager.get_handle(ref.handle_id)
+        handle = await manager.get_handle_async(ref.handle_id)
         if handle is None:
-            handle = manager.adopt_handle(ref.handle_id, ref.lock_paths)
+            handle = await manager.adopt_handle_async(ref.handle_id, ref.lock_paths)
         if handle is None:
             raise LockAcquisitionError(f"Lock handle is no longer active: {ref.handle_id}")
         return cls(manager, handle)

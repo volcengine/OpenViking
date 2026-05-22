@@ -190,15 +190,13 @@ OpenViking provides pre-built Docker images published to GitHub Container Regist
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
 
 By default, the Docker image starts:
-- OpenViking HTTP service on port `1933` (bound to `0.0.0.0`)
-- OpenViking Console on port `8020`
+- OpenViking HTTP service on port `1933` (bound to `0.0.0.0`), also serving the Web Studio UI at `/studio`
 - `vikingbot` gateway
 
 Since the server binds to `0.0.0.0` inside the container (required for Docker port-mapping to work), you **must** set `root_api_key` in your `ov.conf`:
@@ -227,7 +225,6 @@ If you want to disable `vikingbot` for a specific container run, you can use eit
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest \
@@ -239,7 +236,6 @@ docker run -d \
   --name openviking \
   -e OPENVIKING_WITH_BOT=0 \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
@@ -255,7 +251,6 @@ Some managed platforms (Railway, Fly.io, Heroku-style PaaS) don't let you bind-m
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -e OPENVIKING_CONF_CONTENT="$(cat ~/.openviking/ov.conf)" \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
@@ -267,7 +262,7 @@ docker run -d \
 docker exec -it openviking openviking-server init
 ```
 
-As soon as `ov.conf` appears, the entrypoint resumes and starts the server + console automatically.
+As soon as `ov.conf` appears, the entrypoint resumes and starts the server automatically.
 
 You can also use Docker Compose, which provides a `docker-compose.yml` in the project root:
 
@@ -276,9 +271,9 @@ docker compose up -d
 ```
 
 After startup, you can access:
-- Aggregated entry point: `http://localhost:1934` (Caddy merges API + Console)
-- API service (direct): `http://localhost:1933`
-- Console UI (direct): `http://localhost:8020`
+- API service: `http://localhost:1933`
+- Web Studio: `http://localhost:1933/studio` (same origin as the API)
+- Legacy entry point: `http://localhost:1934` (Caddy reverse proxy to 1933, kept for existing deployments)
 
 For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 

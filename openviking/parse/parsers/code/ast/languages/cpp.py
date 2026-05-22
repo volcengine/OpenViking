@@ -79,7 +79,14 @@ def _extract_function(node, content_bytes: bytes, docstring: str = "") -> Functi
                 if sub.type == "function_declarator":
                     name, params = _extract_function_declarator(sub, content_bytes)
 
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_class(node, content_bytes: bytes, docstring: str = "") -> ClassSkeleton:
@@ -127,11 +134,23 @@ def _extract_class(node, content_bytes: bytes, docstring: str = "") -> ClassSkel
                     doc = _preceding_doc(siblings, idx, content_bytes)
                     methods.append(
                         FunctionSig(
-                            name=fn_name, params=fn_params, return_type=ret_type, docstring=doc
+                            name=fn_name,
+                            params=fn_params,
+                            return_type=ret_type,
+                            docstring=doc,
+                            line_start=child.start_point[0] + 1,
+                            line_end=child.end_point[0] + 1,
                         )
                     )
 
-    return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
+    return ClassSkeleton(
+        name=name,
+        bases=bases,
+        docstring=docstring,
+        methods=methods,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_typedef_struct(
@@ -155,9 +174,11 @@ def _extract_typedef_struct(
         return None
 
     skeleton = _extract_class(struct_node, content_bytes, docstring=docstring)
-    # Prefer the typedef alias as the canonical name
+    # Prefer the typedef alias as the canonical name; span the outer typedef.
     if typedef_name:
         skeleton.name = typedef_name
+    skeleton.line_start = node.start_point[0] + 1
+    skeleton.line_end = node.end_point[0] + 1
     return skeleton if skeleton.name else None
 
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -82,7 +83,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             api_key=self.api_key,
             base_url=self.api_base,
         )
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         self._dimension = dimension or get_voyage_model_default_dimension(normalized_model_name)
 
@@ -93,12 +94,12 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _get_async_client(self):
-        if self._async_client is None:
-            self._async_client = openai.AsyncOpenAI(
+        return self._async_client_cache.get(
+            lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
             )
-        return self._async_client
+        )
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""

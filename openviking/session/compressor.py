@@ -18,6 +18,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -64,11 +65,13 @@ class SessionCompressor:
     def __init__(
         self,
         vikingdb: VikingDBManager,
+        skill_processor: Optional[SkillProcessor] = None,
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
         self.extractor = MemoryExtractor()
         self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
+        self.skill_processor = skill_processor
         self._pending_semantic_changes: Dict[str, Dict[str, set]] = {}
 
     def _record_semantic_change(

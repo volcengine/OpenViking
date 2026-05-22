@@ -5,6 +5,7 @@
 import time
 from unittest.mock import AsyncMock, MagicMock
 
+from openviking.storage.transaction import path_lock as path_lock_module
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
     EXACT_LOCK_FILE_PREFIX,
@@ -137,6 +138,13 @@ class TestPathLockIsLocked:
         lock = PathLockEngine(agfs, lock_expire=300.0)
         assert lock.is_locked("/local/u/foo", ignore_stale=False) is True
 
+    async def test_is_locked_async_uses_async_agfs_path(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
+        agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
+        lock = PathLockEngine(agfs)
+
+        assert await lock.is_locked_async("/local/u/foo/bar") is True
+
 
 class TestPathLockOwnership:
     async def test_refresh_reports_refreshed_lost_and_failed_paths(self):
@@ -265,6 +273,33 @@ class TestPathLockBehavior:
             raise
         except Exception:
             pass
+
+        await lock.release(parent)
+
+    async def test_fail_fast_tree_conflict_warning_is_throttled(
+        self, agfs_client, test_dir, monkeypatch
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-tree")
+        child_retry = LockHandle(id="tx-child-tree-retry")
+        target = f"{test_dir}/blocked-resource"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+
+        warnings = []
+        debug_logs = []
+        path_lock_module._last_timeout_warning_at.clear()
+        monkeypatch.setattr(path_lock_module.logger, "warning", warnings.append)
+        monkeypatch.setattr(path_lock_module.logger, "debug", debug_logs.append)
+
+        assert await lock.acquire_tree(target, child, timeout=0.0) is False
+        assert await lock.acquire_tree(target, child_retry, timeout=0.0) is False
+
+        timeout_warnings = [message for message in warnings if "Timeout waiting" in message]
+        assert len(timeout_warnings) == 1
+        assert "Timeout waiting for ancestor TREE lock" in timeout_warnings[0]
+        assert debug_logs == []
 
         await lock.release(parent)
 

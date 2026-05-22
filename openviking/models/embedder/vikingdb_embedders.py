@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VikingDB Embedder Implementation via HTTP API"""
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -17,6 +16,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     DEFAULT_TIMEOUT,
     ClientForDataApi,
 )
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -39,7 +39,7 @@ class VikingDBClientMixin:
             raise ValueError("AK and SK are required for VikingDB Embedder")
 
         self.client = ClientForDataApi(self.ak, self.sk, self.region, self.host)
-        self._async_client: Optional[httpx.AsyncClient] = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
     def _call_api(
         self,
@@ -93,10 +93,9 @@ class VikingDBClientMixin:
             req_body["sparse_model"] = sparse_model
 
         req = self.client.prepare_request(method="POST", path=path, data=req_body)
-        if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=DEFAULT_TIMEOUT))
 
-        response = await self._async_client.request(
+        response = await client.request(
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,
@@ -638,12 +637,4 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         return self.dimension if self.dimension else 2048
 
     def close(self):
-        if getattr(self, "_async_client", None) is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                loop.create_task(self._async_client.aclose())
-            else:
-                asyncio.run(self._async_client.aclose())
+        self._async_client_cache.close_all_with_aclose()

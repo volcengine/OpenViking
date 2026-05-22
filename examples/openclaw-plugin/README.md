@@ -1,59 +1,78 @@
-# @openviking/openclaw-plugin — OpenViking OpenClaw Plugin
+# OpenViking for OpenClaw
 
-OpenClaw context-engine plugin for OpenViking remote memory, context database, RAG and semantic retrieval.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term context engine: automatic recall, session archive, memory extraction, semantic search, and RAG over a remote OpenViking server.
 
-## Important: Plugin vs Skill
-
-This page is for the **OpenClaw plugin package**:
-
-```
-@openviking/openclaw-plugin
-```
-
-**Do NOT** install the plugin with `clawhub install openviking` — that installs the `openviking` AgentSkill (under `skills/openviking`), which is a different thing.
-
-For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openviking/openclaw-plugin`.
-
-## Install (Natural Language)
-
-Ask your agent:
-
-> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
-
-Or in Chinese:
-
-> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
-
-The agent will automatically run install → setup → restart → verify. No manual steps needed.
-
-## Install (Command Line)
+## Quick Start
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
 openclaw openviking status --json
 ```
 
-The `setup` command automatically activates the context-engine slot and validates the server connection.
+That's it. The `setup` command activates the context-engine slot and validates the connection.
 
-## Search Keywords
+### Or ask your agent
 
-@openviking/openclaw-plugin, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
+> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
+
+The agent runs install → setup → restart → verify automatically. See [INSTALL-AGENT.md](./INSTALL-AGENT.md).
+
+## How It Works
+
+| Stage | What happens |
+|-------|-------------|
+| **Every turn** (`afterTurn`) | Your messages are archived into an OpenViking session |
+| **On `/compact`** (`compact`) | Archived messages are extracted into long-term memories |
+| **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
+
+## Tools
+
+Once installed, the plugin provides these agent tools:
+
+| Tool | Purpose |
+|------|---------|
+| `memory_recall` | Explicit long-term memory search |
+| `memory_store` | Persist important information immediately |
+| `memory_forget` | Delete memories by URI or query |
+| `ov_archive_search` | Search across archives by keyword |
+| `ov_archive_expand` | Expand an archive back to raw messages |
+| `add_resource` | Import documents, URLs, or Git repos |
+| `add_skill` | Import agent skills |
+| `memory_search` | Search imported resources and skills |
+
+## Data Flow & Privacy
+
+- **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
+- **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
+- **Storage**: All data lives on your OpenViking server under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
+- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
+- **Multi-tenant isolation**: Supports `accountId`, `userId`, and `agent_prefix` for per-tenant scoping.
+
+## Verify
+
+```bash
+openclaw openviking status --json     # one-shot health check
+openclaw config get plugins.slots.contextEngine  # should output: openviking
+```
 
 ## Documentation
 
-- Install and upgrade: [INSTALL.md](./INSTALL.md)
-- Chinese design and install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
-- Agent-oriented operator guide: [INSTALL-AGENT.md](./INSTALL-AGENT.md)
+| Doc | Description |
+|-----|-------------|
+| [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
+| [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
+| [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+
+> **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
 ---
 
-## Technical Overview
+<details>
+<summary><b>Technical Overview (for integrators and engineers)</b></summary>
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
-
-The remainder of this document is an implementation-focused design note for integrators and engineers.
+This plugin is registered as the `openviking` context engine in OpenClaw.
 
 ## Design Positioning
 
@@ -315,3 +334,5 @@ ov tui
 ---
 
 For installation, upgrade, and uninstall operations, use [INSTALL.md](./INSTALL.md).
+
+</details>

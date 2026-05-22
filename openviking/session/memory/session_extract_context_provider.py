@@ -104,12 +104,16 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.message.part import TextPart
         from openviking.session.memory.utils import resolve_output_language
 
-        text_parts = []
+        user_text_parts = []
+        all_text_parts = []
         for message in self.messages or []:
             for part in getattr(message, "parts", []):
                 if isinstance(part, TextPart) and part.text:
-                    text_parts.append(part.text)
+                    all_text_parts.append(part.text)
+                    if getattr(message, "role", "") == "user":
+                        user_text_parts.append(part.text)
 
+        text_parts = user_text_parts or all_text_parts
         return resolve_output_language("\n".join(text_parts))
 
     def get_output_language(self) -> str:
@@ -520,10 +524,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
-            if config.memory.enable_vaka_template:
-                vaka_dir = os.path.join(memory_templates_dir, "vaka")
-                if os.path.exists(vaka_dir):
-                    self._schema_directories.append(vaka_dir)
+            if getattr(config.memory, "experimental_memory_switch", False):
+                experimental_memory_dir = os.path.join(
+                    memory_templates_dir, "experimental_memory"
+                )
+                if os.path.exists(experimental_memory_dir):
+                    self._schema_directories.append(experimental_memory_dir)
             if custom_dir:
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):

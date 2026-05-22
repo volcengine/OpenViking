@@ -15,6 +15,7 @@ async def test_refresh_lock_updates_last_active_without_changing_created_at(monk
     handle.last_active_at = 100.0
     handle.add_lock("/local/tx/.path.ovlock")
     lm._path_lock.collect_lost_owner_locks = lambda owner: []
+    lm._path_lock.collect_lost_owner_locks_async = AsyncMock(return_value=[])
     lm._path_lock.refresh = AsyncMock(
         return_value=LockRefreshResult(refreshed_paths=["/local/tx/.path.ovlock"])
     )
@@ -58,13 +59,15 @@ async def test_stale_cleanup_releases_only_inactive_handles(monkeypatch):
     monkeypatch.setattr("openviking.storage.transaction.lock_manager.time.time", lambda: 400.0)
     monkeypatch.setattr(lm, "release", fake_release)
     lm._path_lock.collect_lost_owner_locks = lambda owner: []
+    lm._path_lock.collect_lost_owner_locks_async = AsyncMock(return_value=[])
 
     lm._running = True
     await lm._stale_cleanup_loop()
 
     assert released == [stale_handle.id]
-    assert active_handle.id in lm.get_active_handles()
-    assert unlocked_handle.id not in lm.get_active_handles()
+    active_handles = await lm.get_active_handles_async()
+    assert active_handle.id in active_handles
+    assert unlocked_handle.id not in active_handles
 
 
 def test_get_handle_returns_none_when_lock_ownership_is_lost():

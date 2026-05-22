@@ -13,13 +13,11 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
-from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
-from openviking.utils.embedding_utils import vectorize_file
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -468,50 +466,6 @@ class ContentWriteCoordinator:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
-    async def _vectorize_single_file(
-        self,
-        uri: str,
-        *,
-        context_type: str,
-        ctx: RequestContext,
-    ) -> None:
-        parent = VikingURI(uri).parent
-        if parent is None:
-            raise InvalidArgumentError(f"file has no parent directory: {uri}")
-        summary_dict = await self._summary_dict_for_vectorize(
-            uri, context_type=context_type, ctx=ctx
-        )
-        await vectorize_file(
-            file_path=uri,
-            summary_dict=summary_dict,
-            parent_uri=parent.uri,
-            context_type=context_type,
-            ctx=ctx,
-            preserve_existing_created_at=True,
-        )
-
-    async def _summary_dict_for_vectorize(
-        self,
-        uri: str,
-        *,
-        context_type: str,
-        ctx: RequestContext,
-    ) -> Dict[str, str]:
-        file_name = os.path.basename(uri)
-        if context_type != "memory":
-            return {"name": file_name}
-
-        try:
-            processor = SemanticProcessor(max_concurrent_llm=1)
-            return await processor._generate_single_file_summary(uri, ctx=ctx)
-        except Exception:
-            logger.warning(
-                "Failed to generate summary for memory write vector refresh: %s",
-                uri,
-                exc_info=True,
-            )
-            return {"name": file_name}
-
     async def _write_memory_with_refresh(
         self,
         *,
@@ -538,7 +492,6 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(uri, content, mode=mode, ctx=ctx)
-            await self._vectorize_single_file(uri, context_type="memory", ctx=ctx)
             await self._enqueue_memory_refresh(
                 root_uri=root_uri,
                 modified_uri=uri,

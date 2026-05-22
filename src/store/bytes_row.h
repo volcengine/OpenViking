@@ -7,8 +7,11 @@
 #include <memory>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 namespace vectordb {
+
+constexpr uint32_t STRING_MAX_UINT16_LENGTH = 0xFFFF;
 
 enum class FieldType {
   INT64 = 0,
@@ -117,10 +120,11 @@ class BytesRow {
     };
 
     auto write_string_value = [](const std::string& s, char* dest) {
-      uint16_t len = static_cast<uint16_t>(s.length());
-      std::memcpy(dest, &len, 2);
-      if (len > 0) {
-        std::memcpy(dest + 2, s.data(), len);
+      uint32_t len = static_cast<uint32_t>(s.length());
+      uint16_t short_len = static_cast<uint16_t>(len);
+      std::memcpy(dest, &short_len, 2);
+      if (short_len > 0) {
+        std::memcpy(dest + 2, s.data(), short_len);
       }
     };
 
@@ -188,6 +192,10 @@ class BytesRow {
             len = accessor.get_string_len(row, i);
           } else if (const auto* def = get_default_string(meta.default_value)) {
             len = static_cast<int>(def->length());
+          }
+          if (len > static_cast<int>(STRING_MAX_UINT16_LENGTH)) {
+            throw std::invalid_argument("string field '" + meta.name +
+                                        "' exceeds 65535 bytes");
           }
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += 2 + len;  // UINT16_SIZE

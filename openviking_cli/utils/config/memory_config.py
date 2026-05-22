@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -49,6 +49,14 @@ class MemoryConfig(BaseModel):
             "into higher-level experience memories."
         ),
     )
+    experimental_memory_switch: bool = Field(
+        default=False,
+        description=(
+            "Experimental memory switch for experimental testing. When enabled, "
+            "experimental memory templates are loaded and agent_memory_enabled defaults "
+            "to true unless explicitly configured."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(
@@ -75,11 +83,12 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
-    enable_vaka_template: bool = Field(
+    session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(
-            "When enabled, use vaka-specific memory templates (entities, profile) "
-            "from the bundled vaka/ subdirectory to override default templates."
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the agent skill directory. Disabled by "
+            "default."
         ),
     )
     role_id_memory_isolation_enabled: bool = Field(
@@ -100,6 +109,14 @@ class MemoryConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
+            data = data.copy()
+            data.setdefault("agent_memory_enabled", True)
+        return data
 
     @field_validator("agent_scope_mode")
     @classmethod

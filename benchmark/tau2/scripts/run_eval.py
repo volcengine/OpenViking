@@ -445,6 +445,8 @@ def _tau2_command(
     ]
     if fixed_first_user_file is not None:
         command.extend(["--fixed-first-user-file", str(fixed_first_user_file)])
+    if scope_prompt_file is not None:
+        command.extend(["--scope-prompt-file", str(scope_prompt_file)])
 
     if task_ids:
         for task_id in task_ids:

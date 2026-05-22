@@ -7,12 +7,12 @@ Supports embed-v4.0 and embed-english-v3.0 models with input_type
 for asymmetric retrieval.
 """
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,7 +91,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             },
             timeout=60.0,
         )
-        self._async_client: Optional[httpx.AsyncClient] = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
     def _build_payload(self, texts: List[str], input_type: str) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -111,8 +111,8 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         return data["embeddings"]["float"]
 
     async def _call_api_async(self, texts: List[str], input_type: str) -> List[List[float]]:
-        if self._async_client is None:
-            self._async_client = httpx.AsyncClient(
+        client = self._async_client_cache.get(
+            lambda: httpx.AsyncClient(
                 base_url=self.api_base,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -120,9 +120,8 @@ class CohereDenseEmbedder(DenseEmbedderBase):
                 },
                 timeout=60.0,
             )
-        resp = await self._async_client.post(
-            "/v2/embed", json=self._build_payload(texts, input_type)
         )
+        resp = await client.post("/v2/embed", json=self._build_payload(texts, input_type))
         resp.raise_for_status()
         data = resp.json()
         return data["embeddings"]["float"]
@@ -248,15 +247,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
     def close(self):
         """Close the httpx client connection pool."""
         self._client.close()
-        if self._async_client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                loop.create_task(self._async_client.aclose())
-            else:
-                asyncio.run(self._async_client.aclose())
+        self._async_client_cache.close_all_with_aclose()
 
     def get_dimension(self) -> int:
         return self._dimension

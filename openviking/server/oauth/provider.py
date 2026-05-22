@@ -46,6 +46,15 @@ ACCESS_TOKEN_PREFIX = "ovat_"
 REFRESH_TOKEN_PREFIX = "ovrt_"
 AUTH_CODE_PREFIX = "ovac_"
 
+# Primary authorize page: a /studio SPA route that runs in the same tab as
+# the user's Studio session, so it can read the session-stored API key.
+DEFAULT_AUTHORIZE_PAGE = "/studio/oauth/consent"
+# Server-rendered fallback used when the user can't open /studio on the
+# current device (e.g. CLI MCP clients). The HTML page shows the
+# 6-character display_code and points the user at /studio/oauth/verify on
+# another already-signed-in device.
+FALLBACK_AUTHORIZE_PAGE = "/oauth/authorize/page"
+
 
 class OVAuthorizationCode(AuthorizationCode):
     """AuthorizationCode subtype that pins the issuing identity."""
@@ -86,7 +95,7 @@ class OpenVikingOAuthProvider(
         access_token_ttl_seconds: int = 3600,
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
-        authorize_page_path: str = "/oauth/authorize/page",
+        authorize_page_path: str = DEFAULT_AUTHORIZE_PAGE,
         role_resolver: Optional[Callable[[str, str], "Role"]] = None,
     ) -> None:
         self._store = store
@@ -169,12 +178,15 @@ class OpenVikingOAuthProvider(
     ) -> str:
         """Mint a verification code and stash the AuthorizationParams.
 
-        Returns the URL of our authorize page, which displays a 6-character
-        verification code. The user re-types that code into the OpenViking
-        console (where they're already authenticated), the console calls our
-        ``/api/v1/auth/oauth-verify`` endpoint to bind the caller's identity
-        to the pending row, and the page polls until verified to redirect
-        back to the client's redirect_uri.
+        Returns the URL of the configured authorize page. By default this is
+        ``/studio/oauth/consent``, a SPA route inside OpenViking Studio that
+        renders a consent card using the Studio user's existing session and
+        calls ``/api/v1/auth/oauth-verify`` directly. For CLI / cross-device
+        flows the user can switch to ``/oauth/authorize/page`` (the
+        server-rendered fallback) which displays a 6-character display_code
+        and asks the user to enter it on another device's Studio at
+        ``/studio/oauth/verify``. Either path polls until verified and then
+        redirects back to the client's ``redirect_uri``.
         """
         assert client.client_id is not None
         display_code = generate_otp()

@@ -13,6 +13,7 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
@@ -64,6 +65,7 @@ class LegacyAPIKeyManager:
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
+        self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
@@ -632,8 +634,7 @@ class LegacyAPIKeyManager:
     async def _read_json(self, path: str) -> Optional[dict]:
         """Read a JSON file from AGFS with encryption support. Returns None if not found."""
         try:
-            # Read file directly using AGFS
-            content = self._viking_fs.agfs.read(path)
+            content = await self._async_agfs.read(path)
             if isinstance(content, bytes):
                 raw = content
             else:
@@ -662,12 +663,10 @@ class LegacyAPIKeyManager:
         account_id = parts[2] if len(parts) >= 3 else "default"
         content = await self._viking_fs.encrypt_bytes(account_id, content)
 
-        # Ensure parent directories exist
-        self._ensure_parent_dirs(path)
-        # Write file directly using AGFS
-        self._viking_fs.agfs.write(path, content)
+        await self._ensure_parent_dirs_async(path)
+        await self._async_agfs.write(path, content)
 
-    def _ensure_parent_dirs(self, path: str) -> None:
+    async def _ensure_parent_dirs_async(self, path: str) -> None:
         """Recursively create all parent directories for a file path."""
         # Handle direct AGFS paths
         if path.startswith("/local/"):
@@ -678,7 +677,7 @@ class LegacyAPIKeyManager:
                 for i in range(1, len(parts)):
                     parent = "/" + "/".join(parts[:i])
                     try:
-                        self._viking_fs.agfs.mkdir(parent)
+                        await self._async_agfs.mkdir(parent)
                     except Exception:
                         pass
 

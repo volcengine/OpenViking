@@ -54,6 +54,7 @@ class SemanticMsg:
     target_uri: str = ""
     lock_handoff: Optional[LockHandoffRef] = None
     is_code_repo: bool = False
+    target_preexisting: Optional[bool] = None
     coalesce_key: str = ""
     coalesce_version: int = 0
     changes: Optional[Dict[str, List[str]]] = (
@@ -74,6 +75,7 @@ class SemanticMsg:
         target_uri: str = "",
         lock_handoff: Optional[LockHandoffRef] = None,
         is_code_repo: bool = False,
+        target_preexisting: Optional[bool] = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
@@ -91,6 +93,7 @@ class SemanticMsg:
         self.target_uri = target_uri
         self.lock_handoff = lock_handoff
         self.is_code_repo = is_code_repo
+        self.target_preexisting = target_preexisting
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
@@ -133,6 +136,7 @@ class SemanticMsg:
             target_uri=data.get("target_uri", ""),
             lock_handoff=LockHandoffRef.from_value(data.get("lock_handoff")),
             is_code_repo=data.get("is_code_repo", False),
+            target_preexisting=data.get("target_preexisting"),
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),

@@ -24,7 +24,6 @@ class VolcEngineVLM(OpenAIVLM):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._sync_client = None
-        self._async_client = None
         self.provider = "volcengine"
 
         if not self.api_base:
@@ -85,20 +84,18 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return self._sync_client
 
-    def get_async_client(self):
-        """Get async client"""
-        if self._async_client is None:
-            try:
-                import volcenginesdkarkruntime
-            except ImportError:
-                raise ImportError(
-                    "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
-                )
-            self._async_client = volcenginesdkarkruntime.AsyncArk(
-                api_key=self.api_key,
-                base_url=self.api_base,
+    def _build_async_client(self):
+        """Create an async client for the current event loop."""
+        try:
+            import volcenginesdkarkruntime
+        except ImportError:
+            raise ImportError(
+                "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        return self._async_client
+        return volcenginesdkarkruntime.AsyncArk(
+            api_key=self.api_key,
+            base_url=self.api_base,
+        )
 
     def get_completion(
         self,

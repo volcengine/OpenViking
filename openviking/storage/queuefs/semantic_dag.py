@@ -82,6 +82,7 @@ class SemanticDagExecutor:
         recursive: bool = True,
         lock: LockLease = NO_LOCK,
         is_code_repo: bool = False,
+        sync_to_target: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
         skip_vectorization: bool = False,
         coalesce_key: str = "",
@@ -98,6 +99,7 @@ class SemanticDagExecutor:
         self._recursive = recursive
         self._lock = lock
         self._is_code_repo = is_code_repo
+        self._sync_to_target = sync_to_target
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
         self._coalesce_key = coalesce_key
@@ -133,8 +135,9 @@ class SemanticDagExecutor:
         if self._target_uri == self._root_uri:
             return noop_callback
 
-        # If full update, move temp uri to target uri has been handled in the processor
-        if not self._incremental_update:
+        # Full resource updates may still need a deferred temp -> target sync
+        # when semantic generation owns the resource lock.
+        if not self._incremental_update and not self._sync_to_target:
             return noop_callback
 
         async def sync_diff_callback() -> None:
@@ -295,7 +298,9 @@ class SemanticDagExecutor:
         try:
             entries = await self._viking_fs.ls(uri, ctx=self._ctx)
         except Exception as e:
-            logger.warning(f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}")
+            logger.warning(
+                f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}"
+            )
             return [], []
 
         children_dirs: List[str] = []
@@ -434,7 +439,9 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
-            target_dirs, target_files = await self._list_dir(target_path, "_check_dir_children_changed")
+            target_dirs, target_files = await self._list_dir(
+                target_path, "_check_dir_children_changed"
+            )
             current_file_names = {f.split("/")[-1] for f in current_files}
             target_file_names = {f.split("/")[-1] for f in target_files}
             if current_file_names != target_file_names:

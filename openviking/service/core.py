@@ -321,7 +321,10 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
         )
-        self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = create_session_compressor(
+            vikingdb=self._vikingdb_manager,
+            skill_processor=self._skill_processor,
+        )
 
         # Start LockManager if initialized
         if self._lock_manager:
