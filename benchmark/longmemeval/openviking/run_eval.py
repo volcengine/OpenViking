@@ -163,10 +163,6 @@ def is_single_search_excluded_uri(uri: str) -> bool:
     return basename in SINGLE_SEARCH_EXCLUDED_BASENAMES
 
 
-def is_single_search_excluded_before_rerank_uri(uri: str) -> bool:
-    return "/preferences/" in str(uri or "")
-
-
 def select_single_search_contexts(
     search_result: Any,
     limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
@@ -376,11 +372,7 @@ def run_single_search_context_answer(
             search_result,
             limit=single_search_context_limit,
         )
-        contexts = [
-            context
-            for context in contexts
-            if not is_single_search_excluded_before_rerank_uri(context.get("uri", ""))
-        ]
+        
         retrieved_uris = [context["uri"] for context in contexts]
 
         for context in contexts:
