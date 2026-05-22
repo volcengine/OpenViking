@@ -1035,6 +1035,60 @@ class TestCompressorV2:
         assert append_sources.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_agent_memory_batch_experience_respects_batch_size(self):
+        """Batch mode should reduce experience phases according to the configured chunk size."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            BatchAgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [f"viking://agent/default/memories/trajectories/{idx}.md" for idx in range(5)]
+        phase_labels: List[str] = []
+        batch_lengths: List[int] = []
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            phase_labels.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert isinstance(kwargs["provider"], BatchAgentExperienceContextProvider)
+            batch_lengths.append(len(kwargs["provider"].trajectory_items))
+            return [f"exp-for-{len(batch_lengths)}"], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="batch",
+                agent_experience_batch_max_trajectories=2,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        assert phase_labels == [
+            "trajectory",
+            "experience(batch:2)",
+            "experience(batch:2)",
+            "experience(batch:1)",
+        ]
+        assert batch_lengths == [2, 2, 1]
+
+    @pytest.mark.asyncio
     async def test_agent_memory_batch_experience_skips_source_append_without_attribution(self):
         """Batch mode should not attach the whole batch when source ids are missing."""
         from openviking.session.memory.batch_agent_experience_context_provider import (
