@@ -121,81 +121,80 @@ function Round2Styles() {
         white-space: nowrap;
       }
       .ovarch2-matrix {
-        overflow-x: auto;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .ovarch2-matrix__item {
         border: 1px solid var(--th-line);
         border-radius: var(--r2-radius);
-      }
-      .ovarch2-matrix table {
-        width: 100%;
-        min-width: 720px;
-        border-collapse: collapse;
         background: var(--th-bg);
+        padding: 12px;
       }
-      .ovarch2-matrix th,
-      .ovarch2-matrix td {
-        border-bottom: 1px solid var(--th-line);
-        padding: 11px;
-        text-align: left;
-        vertical-align: top;
+      .ovarch2-matrix__title {
+        color: var(--th-ink);
+        font-family: var(--th-font-display);
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1.25;
+        margin-bottom: 9px;
       }
-      .ovarch2-matrix th {
+      .ovarch2-matrix__fields {
+        display: grid;
+        gap: 7px;
+        font-size: 13.5px;
+        line-height: 1.45;
+      }
+      .ovarch2-matrix__field {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 8px;
+      }
+      .ovarch2-matrix__label {
         color: var(--th-mute);
         font-family: var(--th-font-mono);
         font-size: 11px;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
+        line-height: 1.45;
         text-transform: uppercase;
-      }
-      .ovarch2-matrix tr:last-child td { border-bottom: 0; }
-      .ovarch2-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border: 1px solid var(--th-line);
-        border-radius: 999px;
-        padding: 4px 8px;
-        font-family: var(--th-font-mono);
-        font-size: 11px;
-        white-space: nowrap;
       }
       .ovarch2-pipeline {
         display: grid;
         grid-template-columns: 1fr;
         gap: 10px;
-        padding: 14px;
-        border: 1px solid var(--th-line);
-        border-radius: var(--r2-radius);
-        background: var(--th-bg);
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
       .ovarch2-pipeline__stage {
         display: grid;
-        grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr);
-        gap: 12px;
-        align-items: center;
-        min-height: 0;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        border: 1px solid var(--th-line);
+        border-radius: var(--r2-radius);
+        background: var(--th-bg);
+        padding: 12px;
+      }
+      .ovarch2-pipeline__marker {
+        display: grid;
+        place-items: center;
+        width: 14px;
+        height: 14px;
+        margin: 6px 0 0 7px;
+        border: 1px solid color-mix(in oklab, var(--tone) 60%, var(--th-line));
+        border-radius: 999px;
+        background: color-mix(in oklab, var(--tone) 24%, var(--th-bg));
       }
       .ovarch2-pipeline__label {
         display: grid;
-        gap: 2px;
+        gap: 4px;
+        color: var(--th-ink);
       }
-      .ovarch2-pipeline__track {
-        height: 16px;
-        overflow: hidden;
-        border: 1px solid color-mix(in oklab, var(--tone) 62%, var(--th-line));
-        border-radius: 999px;
-        background: color-mix(in oklab, var(--tone) 9%, var(--th-bg));
-      }
-      .ovarch2-pipeline__bar {
-        display: block;
-        height: 100%;
-        min-width: 16px;
-        border-radius: inherit;
-        background: color-mix(in oklab, var(--tone) 28%, var(--th-bg));
-      }
-      .ovarch2-pipeline__stage.is-active .ovarch2-pipeline__bar {
-        background: color-mix(in oklab, var(--tone) 52%, var(--th-bg));
-      }
-      .ovarch2-pipeline__stage.is-active .ovarch2-pipeline__track {
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--tone) 14%, transparent);
+      .ovarch2-pipeline__note {
+        color: var(--th-mute);
+        font-size: 13.5px;
+        line-height: 1.45;
       }
       .ovarch2-flow {
         display: grid;
@@ -243,8 +242,11 @@ function Round2Styles() {
         .ovarch2-pipeline {
           grid-template-columns: 1fr;
         }
-        .ovarch2-pipeline__stage {
-          grid-template-columns: minmax(88px, 0.42fr) minmax(0, 1fr);
+        .ovarch2-matrix {
+          grid-template-columns: 1fr;
+        }
+        .ovarch2-matrix__field {
+          grid-template-columns: 64px minmax(0, 1fr);
         }
         .ovarch2-flow__boundary {
           min-height: 54px;
@@ -323,130 +325,100 @@ export function ArchitectureStack({ t }) {
 }
 
 export function ConsistencyLockMatrix({ t }) {
-  const [selected, setSelected] = useState('directory');
   const rows = [
     {
       key: 'vector',
       layer: tt(t, { en: 'Managed vector store', zh: '托管向量存储' }),
-      consistency: tt(t, { en: 'Eventually visible after write', zh: '写入后最终可见' }),
-      lock: tt(t, { en: 'Retry and visibility windows', zh: '重试和可见性窗口' }),
-      risk: tt(t, { en: 'Fresh resources may miss first retrieval.', zh: '新资源可能无法被首次检索命中。' }),
+      consistency: tt(t, { en: 'Visible after a delay', zh: '写后延迟可见' }),
+      protection: tt(t, { en: 'Retry after visibility delay', zh: '等待可见后重试' }),
+      risk: tt(t, { en: 'Fresh resources may not appear immediately.', zh: '新资源可能暂时搜不到。' }),
     },
     {
       key: 'file',
       layer: tt(t, { en: 'File artifact store', zh: '文件产物存储' }),
-      consistency: tt(t, { en: 'Strong when local, provider-defined when remote', zh: '本地强一致，远端取决于存储实现' }),
-      lock: tt(t, { en: 'File lock', zh: '文件锁' }),
-      risk: tt(t, { en: 'Concurrent overwrite or partial artifact exposure.', zh: '并发覆盖或半成品暴露。' }),
+      consistency: tt(t, { en: 'Local is strong; remote depends on provider', zh: '本地强一致；远端看存储' }),
+      protection: tt(t, { en: 'File lock', zh: '文件锁' }),
+      risk: tt(t, { en: 'Concurrent writes can expose partial files.', zh: '并发写可能暴露半成品。' }),
     },
     {
       key: 'directory',
       layer: tt(t, { en: 'Directory namespace', zh: '目录命名空间' }),
-      consistency: tt(t, { en: 'Must preserve tree invariants', zh: '必须维护树结构不变量' }),
-      lock: tt(t, { en: 'Directory lock', zh: '目录锁' }),
-      risk: tt(t, { en: 'Move/delete can race with indexing or traversal.', zh: '移动/删除可能和索引、遍历竞争。' }),
+      consistency: tt(t, { en: 'Tree structure must stay valid', zh: '树结构必须有效' }),
+      protection: tt(t, { en: 'Directory lock', zh: '目录锁' }),
+      risk: tt(t, { en: 'Move/delete can race with indexing.', zh: '移动/删除可能和索引竞争。' }),
     },
     {
       key: 'metadata',
       layer: tt(t, { en: 'Metadata and permissions', zh: '元数据和权限' }),
-      consistency: tt(t, { en: 'Read-your-policy is the target', zh: '目标是权限变更后读取立即生效' }),
-      lock: tt(t, { en: 'Transaction boundary', zh: '事务边界' }),
-      risk: tt(t, { en: 'Policy drift leaks or hides context.', zh: '权限漂移会泄露或隐藏上下文。' }),
+      consistency: tt(t, { en: 'Policy changes should affect reads immediately', zh: '权限变更应立刻影响读取' }),
+      protection: tt(t, { en: 'Transaction boundary', zh: '事务边界' }),
+      risk: tt(t, { en: 'Policy drift leaks or hides context.', zh: '权限漂移会误放或误拦上下文。' }),
     },
   ];
-  const active = rows.find(row => row.key === selected) || rows[0];
 
   return (
     <BlockShell
       t={t}
       kicker={tt(t, { en: 'Consistency and locks', zh: '一致性与锁' })}
       title={tt(t, { en: 'Where correctness has to be explicit', zh: '需要显式保证正确性的地方' })}
-      aside={tt(t, { en: 'Select a row to surface the failure mode.', zh: '选择一行查看对应故障模式。' })}
+      aside={tt(t, { en: 'Each layer has a different failure mode.', zh: '不同层的问题不一样。' })}
     >
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div className="ovarch2-matrix">
         {rows.map(row => (
-          <button
-            type="button"
-            className="ovarch2__button"
-            key={row.key}
-            aria-pressed={selected === row.key}
-            onClick={() => setSelected(row.key)}
-          >
-            {row.layer}
-          </button>
+          <article className="ovarch2-matrix__item" key={row.key}>
+            <div className="ovarch2-matrix__title">{row.layer}</div>
+            <div className="ovarch2-matrix__fields">
+              <div className="ovarch2-matrix__field">
+                <span className="ovarch2-matrix__label">{tt(t, { en: 'Consistency', zh: '一致性' })}</span>
+                <span>{row.consistency}</span>
+              </div>
+              <div className="ovarch2-matrix__field">
+                <span className="ovarch2-matrix__label">{tt(t, { en: 'Protection', zh: '保护' })}</span>
+                <span>{row.protection}</span>
+              </div>
+              <div className="ovarch2-matrix__field">
+                <span className="ovarch2-matrix__label">{tt(t, { en: 'Risk', zh: '风险' })}</span>
+                <span>{row.risk}</span>
+              </div>
+            </div>
+          </article>
         ))}
       </div>
-      <div className="ovarch2-matrix">
-        <table>
-          <thead>
-            <tr>
-              <th>{tt(t, { en: 'Layer', zh: '层' })}</th>
-              <th>{tt(t, { en: 'Consistency', zh: '一致性' })}</th>
-              <th>{tt(t, { en: 'Protection', zh: '保护机制' })}</th>
-              <th>{tt(t, { en: 'Primary risk', zh: '主要风险' })}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(row => (
-              <tr key={row.key} style={{ background: selected === row.key ? 'var(--r2-hover)' : undefined }}>
-                <td><strong>{row.layer}</strong></td>
-                <td>{row.consistency}</td>
-                <td><span className="ovarch2-pill">{row.lock}</span></td>
-                <td>{row.risk}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <P><strong>{active.layer}:</strong> {active.risk}</P>
     </BlockShell>
   );
 }
 
 export function WritePipelineBottleneck({ t }) {
   const stages = [
-    { key: 'receive', tone: theme.blue, cost: 28, title: tt(t, { en: 'Receive', zh: '接收' }), note: tt(t, { en: 'Upload, dedupe, place in work area.', zh: '上传、去重、放入工作区。' }) },
-    { key: 'parse', tone: theme.gold, cost: 58, title: tt(t, { en: 'Parse', zh: '解析' }), note: tt(t, { en: 'PDF, Office, code, images, archives.', zh: 'PDF、Office、代码、图片、压缩包。' }) },
-    { key: 'model', tone: theme.red, cost: 92, title: tt(t, { en: 'Model calls', zh: '模型调用' }), note: tt(t, { en: 'VLM, embedding, summary, memory extraction.', zh: 'VLM、向量化、摘要、记忆抽取。' }) },
-    { key: 'index', tone: theme.green, cost: 66, title: tt(t, { en: 'Index', zh: '索引' }), note: tt(t, { en: 'Vector write and scalar filters.', zh: '向量写入和标量过滤。' }) },
-    { key: 'publish', tone: theme.violet, cost: 44, title: tt(t, { en: 'Publish', zh: '发布' }), note: tt(t, { en: 'Move artifacts into visible namespace.', zh: '把产物移动到可见命名空间。' }) },
-    { key: 'observe', tone: theme.blue, cost: 34, title: tt(t, { en: 'Observe', zh: '观测' }), note: tt(t, { en: 'Logs, metrics, traces, retries.', zh: '日志、指标、链路、重试。' }) },
+    { key: 'receive', tone: theme.blue, title: tt(t, { en: 'Receive', zh: '接收' }), note: tt(t, { en: 'Upload, dedupe, place in work area.', zh: '上传、去重、放入工作区。' }) },
+    { key: 'parse', tone: theme.gold, title: tt(t, { en: 'Parse', zh: '解析' }), note: tt(t, { en: 'PDF, Office, code, images, archives.', zh: 'PDF、Office、代码、图片、压缩包。' }) },
+    { key: 'model', tone: theme.red, title: tt(t, { en: 'Model calls', zh: '模型调用' }), note: tt(t, { en: 'VLM, embedding, summary, memory extraction.', zh: 'VLM、向量化、摘要、记忆抽取。' }) },
+    { key: 'index', tone: theme.green, title: tt(t, { en: 'Index', zh: '索引' }), note: tt(t, { en: 'Vector write and scalar filters.', zh: '向量写入和标量过滤。' }) },
+    { key: 'publish', tone: theme.violet, title: tt(t, { en: 'Publish', zh: '发布' }), note: tt(t, { en: 'Move artifacts into visible namespace.', zh: '把产物移动到可见命名空间。' }) },
+    { key: 'observe', tone: theme.blue, title: tt(t, { en: 'Observe', zh: '观测' }), note: tt(t, { en: 'Logs, metrics, traces, retries.', zh: '日志、指标、链路、重试。' }) },
   ];
-  const [selected, setSelected] = useState('model');
-  const active = stages.find(stage => stage.key === selected) || stages[0];
-
   return (
     <BlockShell
       t={t}
       kicker={tt(t, { en: 'Write pipeline', zh: '写入链路' })}
       title={tt(t, { en: 'The bottleneck is a chain, not one database call', zh: '瓶颈是一条链，而不是一次数据库调用' })}
-      aside={tt(t, { en: 'Bar length approximates relative latency pressure.', zh: '条形长度表示相对延迟压力。' })}
+      aside={tt(t, { en: 'Every write crosses several subsystems.', zh: '每次写入都会穿过多个子系统。' })}
     >
-      <div className="ovarch2-pipeline" role="list">
+      <ol className="ovarch2-pipeline">
         {stages.map(stage => (
-          <button
-            type="button"
-            role="listitem"
+          <li
             key={stage.key}
-            className={`ovarch2-pipeline__stage ovarch2__button ${selected === stage.key ? 'is-active' : ''}`}
-            aria-pressed={selected === stage.key}
-            onClick={() => setSelected(stage.key)}
-            style={{ '--tone': stage.tone, textAlign: 'left', borderRadius: 8, padding: 8 }}
+            className="ovarch2-pipeline__stage"
+            style={{ '--tone': stage.tone }}
           >
+            <span className="ovarch2-pipeline__marker" aria-hidden="true" />
             <div className="ovarch2-pipeline__label">
               <strong>{stage.title}</strong>
-              <div className="ovarch2__mono">{stage.cost}</div>
+              <span className="ovarch2-pipeline__note">{stage.note}</span>
             </div>
-            <div className="ovarch2-pipeline__track" aria-hidden="true">
-              <span className="ovarch2-pipeline__bar" style={{ width: `${stage.cost}%` }} />
-            </div>
-          </button>
+          </li>
         ))}
-      </div>
-      <div className="ovarch2__card" style={{ marginTop: 12, borderLeft: `4px solid ${active.tone}` }}>
-        <H4 toc={false}>{active.title}</H4>
-        <P>{active.note}</P>
-      </div>
+      </ol>
     </BlockShell>
   );
 }
