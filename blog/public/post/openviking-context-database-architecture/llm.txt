@@ -116,7 +116,7 @@ The article separates four path concepts:
 
 | Path type | Who sees it | Purpose |
 | --- | --- | --- |
-| Source path | Example: `./docs/images/grafana-demo-dashboard.png` | Provenance: where the content came from. |
+| Source path | Example: `./docs/images/demo.png` | Provenance: where the content came from. |
 | Physical storage key | Internal only | Placement in local FS, AGFS/RAGFS, S3-like storage, or cache. |
 | Canonical URI | Example: `viking://resources/images/20260509/...` | Stable identity for read, cite, permission, update, and delete. |
 | Matched view URI | Example: `viking://calendar/2026/05/09/...` | Explains which logical root made the result relevant; it may differ from the canonical URI. |
@@ -128,7 +128,7 @@ Multimodality is a separate axis from directory semantics. Text, code, PDFs, and
 When an image is added with:
 
 ```bash
-ov add-resource ./docs/images/grafana-demo-dashboard.png
+ov add-resource ./docs/images/demo.png
 ```
 
 OpenViking creates L0 and L1 summaries for agent readability and stores the image file as L2. The image can be found through either abstract text or image similarity, depending on the query and model path.

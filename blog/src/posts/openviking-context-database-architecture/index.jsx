@@ -305,7 +305,7 @@ const OpenVikingArchitecturePost = ({ t }) => {
           T({ en: 'Purpose', zh: '用途' }),
         ]}
         rows={[
-          [T({ en: 'Source path', zh: '来源路径' }), <InlineCode>./docs/images/grafana-demo-dashboard.png</InlineCode>, T({ en: 'Provenance: where the content came from.', zh: '来源追踪：内容最初从哪里来。' })],
+          [T({ en: 'Source path', zh: '来源路径' }), <InlineCode>./docs/images/demo.png</InlineCode>, T({ en: 'Provenance: where the content came from.', zh: '来源追踪：内容最初从哪里来。' })],
           [T({ en: 'Physical storage key', zh: '真实存储路径' }), T({ en: 'Internal only', zh: '只在系统内部使用' }), T({ en: 'Placement in local FS, AGFS/RAGFS, S3-like storage, or cache.', zh: '用于本地 FS、AGFS/RAGFS、S3 类存储或缓存中的真实落位。' })],
           [T({ en: 'Canonical URI', zh: '规范 URI' }), <InlineCode>viking://resources/images/20260509/...</InlineCode>, T({ en: 'Stable identity for read, cite, permission, update, and delete.', zh: '用于读取、引用、鉴权、更新和删除的稳定身份。' })],
           [T({ en: 'Matched view URI', zh: '命中视图 URI' }), <InlineCode>viking://calendar/2026/05/09/...</InlineCode>, T({ en: 'Explains which logical root made the result relevant; it may differ from the canonical URI.', zh: '解释结果是从哪棵逻辑树命中的；它可以不同于规范 URI。' })],
@@ -320,10 +320,10 @@ const OpenVikingArchitecturePost = ({ t }) => {
         zh: '多模态和目录语义是两条轴，不应该混在一起。文本、代码、PDF 和图片都需要路径范围检索；图片只是更容易看出差异：一次查询可能命中 L0/L1 的文字摘要，也可能命中 L2 原图的 image embedding，或者两者都命中。目录决定在哪里搜，模态向量决定范围内什么相似。',
       })}</P>
       <P>{T({
-        en: 'For example, when `ov add-resource ./docs/images/grafana-demo-dashboard.png` runs, OpenViking creates a resource URI, stores the original image as L2, and generates L0 and L1 summaries so an agent can decide whether to inspect the full object.',
-        zh: '例如执行 `ov add-resource ./docs/images/grafana-demo-dashboard.png` 时，OpenViking 会生成资源 URI，把原图作为 L2 保存，并生成 L0、L1 摘要，让 Agent 先判断是否值得读取完整对象。',
+        en: 'For example, when `ov add-resource ./docs/images/demo.png` runs, OpenViking creates a resource URI, stores the original image as L2, and generates L0 and L1 summaries so an agent can decide whether to inspect the full object.',
+        zh: '例如执行 `ov add-resource ./docs/images/demo.png` 时，OpenViking 会生成资源 URI，把原图作为 L2 保存，并生成 L0、L1 摘要，让 Agent 先判断是否值得读取完整对象。',
       })}</P>
-      <Pre lang="js" filename="add-image-resource.sh">{`ov add-resource ./docs/images/grafana-demo-dashboard.png
+      <Pre lang="js" filename="add-image-resource.sh">{`ov add-resource ./docs/images/demo.png
 
 # creates a resource URI similar to:
 viking://resources/images/20260509/upload_321e98a827a0461f8721c683d726cbec_png`}</Pre>
@@ -334,9 +334,8 @@ viking://resources/images/20260509/upload_321e98a827a0461f8721c683d726cbec_png`}
           T({ en: 'Agent value', zh: 'Agent 价值' }),
         ]}
         rows={[
-          [<InlineCode>grafana-demo-dashboard.png</InlineCode>, T({ en: 'L0/L1 text abstracts plus L2 image embedding', zh: 'L0/L1 文字摘要，加 L2 图片向量' }), T({ en: 'Can be found through either abstract text or image similarity.', zh: '既可以通过文字摘要命中，也可以通过图片相似度命中。' })],
+          [<InlineCode>demo.png</InlineCode>, T({ en: 'L0/L1 text abstracts plus L2 image embedding', zh: 'L0/L1 文字摘要，加 L2 图片向量' }), T({ en: 'Can be found through either abstract text or image similarity.', zh: '既可以通过文字摘要命中，也可以通过图片相似度命中。' })],
           [T({ en: 'Code repository file', zh: '代码仓库文件' }), T({ en: 'Original relative path preserved', zh: '保留原始相对路径' }), T({ en: 'Agents can navigate like code while retrieval stays semantic.', zh: 'Agent 能像读代码一样导航，同时保留语义检索。' })],
-          [T({ en: 'Wiki or document subtree', zh: 'Wiki 或文档子树' }), T({ en: '`viking://` URI hierarchy', zh: '`viking://` URI 层级' }), T({ en: 'Search can stay inside the intended knowledge scope.', zh: '检索可以停留在预期知识范围内。' })],
         ]}
       />
 
@@ -408,8 +407,8 @@ ov admin register-user default <your_name>
       })}</P>
       <Callout type="warn">
         <P>{T({
-          en: 'The source article is explicit that OpenViking still has performance issues and should be evaluated carefully before production use. The architecture gives the system room to scale, but ingestion latency and write isolation are still active work.',
-          zh: '原文明确提醒：OpenViking 仍有性能问题，生产使用前需要认真评估。架构给系统留下了扩展空间，但摄取延迟和写入隔离仍是正在推进的工作。',
+          en: 'OpenViking still has performance issues and should be evaluated carefully before production use. The architecture gives the system room to scale, but ingestion latency and write isolation are still active work.',
+          zh: 'OpenViking 仍有性能问题，生产使用前需要认真评估。架构给系统留下了扩展空间，但摄取延迟和写入隔离仍是正在推进的工作。',
         })}</P>
       </Callout>
       <BottleneckGrid t={T} />
@@ -475,8 +474,8 @@ openviking privacy activate skill byted-viking-search-knowledgebase 2`}</Pre>
         zh: '这套架构仍在从概念走向产品化建设。开源发布已经带来了足够多的使用、issue 和反馈，让容量与性能成为下一阶段硬问题。这个设计的价值是把 Agent 依赖上下文系统前必须暴露的数据库属性命名出来，同时把一致性和时延这些未完成问题留在明面上。',
       })}</P>
       <P>{T({
-        en: 'The source note closes by thanking more than 150 contributors and participants, over 1000 merged changes, and a community that has pushed the project past 23k stars. That matters because the remaining questions are not slideware questions; they are the questions that show up when real agents, data, and users start sharing the same context substrate.',
-        zh: '原文最后感谢了 150 多位贡献者和参与者、1000 多次合入，以及把项目推到 23k+ star 的社区。这件事重要，因为剩下的问题不是 PPT 上的问题，而是真实 Agent、真实数据和真实用户开始共享同一个上下文底座时才会出现的问题。',
+        en: 'We are grateful to the 150+ contributors and participants, the work behind 1000+ merged changes, and the community that has pushed the project past 23k stars. That matters because the remaining questions are not slideware questions; they are the questions that show up when real agents, data, and users start sharing the same context substrate.',
+        zh: '我们感谢 150 多位贡献者和参与者、1000 多次合入背后的工作，以及把项目推到 23k+ star 的社区。这件事重要，因为剩下的问题不是 PPT 上的问题，而是真实 Agent、真实数据和真实用户开始共享同一个上下文底座时才会出现的问题。',
       })}</P>
     </Article>
   );
