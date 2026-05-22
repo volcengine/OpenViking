@@ -388,10 +388,10 @@ class SessionCompressorV2:
         Phase 2: for each newly written trajectory, decide whether to update an existing
         experience, create a new one, or do nothing.
 
-        Gated by `config.memory.experimental_memory_switch`. Returns [] when disabled.
+        Gated by `config.memory.agent_memory_enabled`. Returns [] when disabled.
         """
         config = get_openviking_config()
-        if not getattr(config.memory, "experimental_memory_switch", False):
+        if not getattr(config.memory, "agent_memory_enabled", False):
             return []
         if not messages or not ctx:
             return []

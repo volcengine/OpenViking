@@ -16,6 +16,8 @@ What this test covers
 Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
+    "memory": { "version": "v2", "agent_memory_enabled": true }
+  or:
     "memory": { "version": "v2", "experimental_memory_switch": true }
 
 Run
@@ -220,13 +222,11 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip unless experimental_memory_switch and memory.version == v2."""
+    """Skip unless agent_memory_enabled and memory.version == v2."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
-    if not getattr(config.memory, "experimental_memory_switch", False):
-        pytest.skip(
-            "experimental_memory_switch is not set in config — skipping agent memory tests"
-        )
+    if not getattr(config.memory, "agent_memory_enabled", False):
+        pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
     if config.memory.version != "v2":
         pytest.skip("memory.version != v2 — skipping agent memory tests")
 
