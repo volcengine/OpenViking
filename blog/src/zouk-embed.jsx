@@ -134,6 +134,16 @@ function senderKey(value = '') {
   return String(value || '').replace(/^@/, '').trim().toLowerCase();
 }
 
+function normalizeChannelName(value = '') {
+  return String(value || '').replace(/^#/, '').trim().toLowerCase();
+}
+
+function normalizeAgentChannel(value) {
+  if (typeof value === 'string') return normalizeChannelName(value);
+  if (value && typeof value === 'object') return normalizeChannelName(value.name || value.channelName || value.channel_name || '');
+  return '';
+}
+
 function normalizeAgentActivity(value = '') {
   const activity = String(value || '').trim().toLowerCase();
   return ['thinking', 'working', 'online', 'offline', 'error'].includes(activity)
@@ -158,8 +168,16 @@ function normalizeAgent(agent) {
     status: String(agent.status || 'inactive'),
     activity: normalizeAgentActivity(agent.activity),
     activityDetail: String(agent.activityDetail || agent.activity_detail || '').trim(),
-    channels: Array.isArray(agent.channels) ? agent.channels : [],
+    channels: Array.isArray(agent.channels)
+      ? agent.channels.map(normalizeAgentChannel).filter(Boolean)
+      : [],
   };
+}
+
+function agentBelongsToChannel(agent, channelName) {
+  const normalizedChannel = normalizeChannelName(channelName);
+  if (!normalizedChannel || !Array.isArray(agent?.channels)) return false;
+  return agent.channels.includes(normalizedChannel);
 }
 
 function agentSortWeight(agent) {
@@ -599,19 +617,23 @@ export function ZoukInteractiveBlog({ route }) {
     () => messages.filter((message) => !isSystemMessage(message)),
     [messages],
   );
+  const channelAgents = useMemo(
+    () => agents.filter((agent) => agentBelongsToChannel(agent, CONFIG.channel)),
+    [agents],
+  );
   const agentsBySender = useMemo(() => {
     const next = new Map();
-    agents.forEach((agent) => {
+    channelAgents.forEach((agent) => {
       [agent.name, agent.displayName, agent.id].forEach((key) => {
         const normalized = senderKey(key);
         if (normalized && !next.has(normalized)) next.set(normalized, agent);
       });
     });
     return next;
-  }, [agents]);
+  }, [channelAgents]);
   const liveAgents = useMemo(
-    () => agents.filter(agentIsLive),
-    [agents],
+    () => channelAgents.filter(agentIsLive),
+    [channelAgents],
   );
   const thinkingAgent = useMemo(
     () => liveAgents.find(agentIsThinking) || null,
