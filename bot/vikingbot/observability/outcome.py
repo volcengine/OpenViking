@@ -2,11 +2,46 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 REASK_WINDOW = timedelta(minutes=10)
+
+_POSITIVE_FEEDBACK_PATTERNS = (
+    re.compile(r"\b(thanks|thank you|thx|ty)\b", re.IGNORECASE),
+    re.compile(r"\b(helpful|great|awesome|perfect|solved|works?)\b", re.IGNORECASE),
+    re.compile(r"有帮助|帮到我了|解决了|搞定了|可以了|很好|太棒了|谢了|谢谢", re.IGNORECASE),
+)
+_NEGATIVE_FEEDBACK_PATTERNS = (
+    re.compile(r"\b(not helpful|did not help|doesn't help|does not help|wrong|bad answer)\b", re.IGNORECASE),
+    re.compile(r"没帮助|没有帮助|不对|答非所问|没解决|没有解决|还是不行|不行|有问题", re.IGNORECASE),
+)
+_FOLLOW_UP_SIGNAL_PATTERNS = (
+    re.compile(r"\?"),
+    re.compile(r"\b(how|what|why|can you|could you|please)\b", re.IGNORECASE),
+    re.compile(r"怎么|为什么|能不能|可以帮我|请问|请继续", re.IGNORECASE),
+)
+
+
+@dataclass(frozen=True)
+class DetectedFeedback:
+    """Implicit feedback inferred from a user's natural-language reply."""
+
+    feedback_type: str
+    feedback_text: str
+    feedback_reason: str = "natural_language"
+    feedback_score: float | None = None
+
+
+@dataclass(frozen=True)
+class LLMFeedbackDecision:
+    """Structured result for LLM-based natural-language feedback classification."""
+
+    is_feedback: bool
+    sentiment: str
+    confidence: float
 
 
 @dataclass
@@ -114,6 +149,65 @@ def evaluate_response_outcome(
             "user_follow_up_count": len(user_messages),
             "assistant_index": assistant_index,
         },
+    )
+
+
+def detect_feedback_from_message(message: str) -> DetectedFeedback | None:
+    """Infer a positive or negative feedback signal from a free-form user reply."""
+    normalized = (message or "").strip()
+    if not normalized:
+        return None
+
+    lowered = normalized.lower()
+    has_positive = any(pattern.search(normalized) for pattern in _POSITIVE_FEEDBACK_PATTERNS)
+    has_negative = any(pattern.search(normalized) for pattern in _NEGATIVE_FEEDBACK_PATTERNS)
+    has_follow_up_signal = any(pattern.search(normalized) for pattern in _FOLLOW_UP_SIGNAL_PATTERNS)
+
+    if has_positive and not has_negative and not has_follow_up_signal:
+        return DetectedFeedback(
+            feedback_type="thumb_up",
+            feedback_text=normalized,
+            feedback_score=1.0,
+        )
+
+    if has_negative and not has_positive:
+        if "?" in normalized and not lowered.startswith(("why", "what", "how", "can you", "could you")):
+            return DetectedFeedback(
+                feedback_type="thumb_down",
+                feedback_text=normalized,
+                feedback_score=-1.0,
+            )
+        if not has_follow_up_signal or lowered.startswith(("not helpful", "did not help", "wrong", "bad answer")):
+            return DetectedFeedback(
+                feedback_type="thumb_down",
+                feedback_text=normalized,
+                feedback_score=-1.0,
+            )
+
+    return None
+
+
+def normalize_llm_feedback_decision(payload: dict[str, Any]) -> LLMFeedbackDecision | None:
+    """Normalize raw JSON output from an LLM feedback classifier."""
+    if not isinstance(payload, dict):
+        return None
+
+    is_feedback = payload.get("is_feedback")
+    sentiment = str(payload.get("sentiment") or "").strip().lower()
+    confidence = payload.get("confidence")
+
+    if not isinstance(is_feedback, bool):
+        return None
+    if sentiment not in {"positive", "negative", "none"}:
+        return None
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+
+    normalized_confidence = max(0.0, min(1.0, float(confidence)))
+    return LLMFeedbackDecision(
+        is_feedback=is_feedback,
+        sentiment=sentiment,
+        confidence=normalized_confidence,
     )
 
 
