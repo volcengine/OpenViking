@@ -205,7 +205,7 @@ def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templat
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: SimpleNamespace(
-            memory=SimpleNamespace(custom_templates_dir="", enable_vaka_template=False)
+            memory=SimpleNamespace(custom_templates_dir="", experimental_memory_switch=False)
         ),
     )
 
@@ -256,7 +256,7 @@ def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_temp
         "openviking_cli.utils.config.get_openviking_config",
         lambda: SimpleNamespace(
             memory=SimpleNamespace(
-                custom_templates_dir=str(custom_memory_dir), enable_vaka_template=False
+                custom_templates_dir=str(custom_memory_dir), experimental_memory_switch=False
             )
         ),
     )
@@ -286,7 +286,7 @@ def test_context_provider_schema_directories_use_prompt_manager_resolved_templat
                 custom_templates_dir="",
                 eager_prefetch=False,
                 prefetch_search_topn=5,
-                enable_vaka_template=False,
+                experimental_memory_switch=False,
                 link_enabled=True,
             )
         ),
@@ -319,7 +319,7 @@ def test_context_provider_schema_directories_prefer_custom_memory_dir_over_promp
                 custom_templates_dir=str(custom_memory_dir),
                 eager_prefetch=False,
                 prefetch_search_topn=5,
-                enable_vaka_template=False,
+                experimental_memory_switch=False,
                 link_enabled=False,
             )
         ),
@@ -338,32 +338,34 @@ def test_context_provider_schema_directories_prefer_custom_memory_dir_over_promp
     ]
 
 
-def test_memory_type_registry_loads_vaka_templates_when_enabled(monkeypatch):
-    """When enable_vaka_template is True, vaka templates override defaults."""
+def test_memory_type_registry_loads_experimental_templates_when_switch_enabled(monkeypatch):
+    """When experimental_memory_switch is True, experimental templates override defaults."""
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: SimpleNamespace(
-            memory=SimpleNamespace(custom_templates_dir="", enable_vaka_template=True)
+            memory=SimpleNamespace(custom_templates_dir="", experimental_memory_switch=True)
         ),
     )
 
     registry = MemoryTypeRegistry(load_schemas=True)
 
-    # entities and profile should be loaded (overridden by vaka versions)
+    # entities and profile should be loaded (overridden by experimental versions)
     entities = registry.get("entities")
     profile = registry.get("profile")
     assert entities is not None
     assert profile is not None
-    # Vaka entities has specific description mentioning Zettelkasten
+    # Experimental entities has specific description mentioning Zettelkasten
     assert "Zettelkasten" in entities.description
 
 
-def test_memory_type_registry_does_not_load_vaka_when_disabled(monkeypatch):
-    """When enable_vaka_template is False, default templates are used as-is."""
+def test_memory_type_registry_does_not_load_experimental_templates_when_switch_disabled(
+    monkeypatch,
+):
+    """When experimental_memory_switch is False, default templates are used as-is."""
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: SimpleNamespace(
-            memory=SimpleNamespace(custom_templates_dir="", enable_vaka_template=False)
+            memory=SimpleNamespace(custom_templates_dir="", experimental_memory_switch=False)
         ),
     )
 
@@ -373,8 +375,8 @@ def test_memory_type_registry_does_not_load_vaka_when_disabled(monkeypatch):
     assert entities is not None
 
 
-def test_context_provider_includes_vaka_dir_when_enabled(monkeypatch):
-    """When enable_vaka_template is True, schema directories include vaka subdir."""
+def test_context_provider_includes_experimental_dir_when_switch_enabled(monkeypatch):
+    """When experimental_memory_switch is True, schema directories include experimental subdir."""
     monkeypatch.setattr(
         "openviking.session.memory.session_extract_context_provider.get_openviking_config",
         lambda: SimpleNamespace(
@@ -382,7 +384,7 @@ def test_context_provider_includes_vaka_dir_when_enabled(monkeypatch):
                 custom_templates_dir="",
                 eager_prefetch=False,
                 prefetch_search_topn=5,
-                enable_vaka_template=True,
+                experimental_memory_switch=True,
                 link_enabled=False,
             )
         ),
@@ -392,6 +394,8 @@ def test_context_provider_includes_vaka_dir_when_enabled(monkeypatch):
     dirs = provider.get_schema_directories()
 
     bundled_memory_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-    vaka_dir = str(PromptManager._get_bundled_templates_dir() / "memory" / "vaka")
+    experimental_memory_dir = str(
+        PromptManager._get_bundled_templates_dir() / "memory" / "experimental_memory"
+    )
     assert bundled_memory_dir in dirs
-    assert vaka_dir in dirs
+    assert experimental_memory_dir in dirs

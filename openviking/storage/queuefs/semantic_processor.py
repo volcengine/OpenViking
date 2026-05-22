@@ -469,10 +469,17 @@ class SemanticProcessor(DequeueHandlerBase):
             return None
         return self._dag_executor.get_stats()
 
-    async def _process_memory_directory(
-        self, msg: SemanticMsg, lock: LockLease = NO_LOCK
-    ) -> None:
-        """Process a memory directory with special handling."""
+    async def _process_memory_directory(self, msg: SemanticMsg, lock: LockLease = NO_LOCK) -> None:
+        """Process a memory directory with special handling.
+
+        For memory directories:
+        - Memory files are already vectorized via embedding queue
+        - Only generate abstract.md and overview.md
+        - Vectorize the generated abstract.md and overview.md
+
+        Args:
+            msg: The semantic message containing directory info and changes
+        """
         viking_fs = get_viking_fs()
         dir_uri = msg.uri
         ctx = self._current_ctx
@@ -613,9 +620,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     lock=lock,
                 )
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to write abstract/overview for {dir_uri}: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
             if not wrote_semantics:
                 _mark_done()
                 return

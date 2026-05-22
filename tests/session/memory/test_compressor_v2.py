@@ -15,12 +15,13 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
 from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
-from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
@@ -280,6 +281,28 @@ def create_test_conversation() -> List[Message]:
 
 class TestCompressorV2:
     """Tests for SessionCompressorV2."""
+
+    @pytest.mark.asyncio
+    async def test_memory_lock_retry_logging_is_throttled(self, monkeypatch):
+        warnings = []
+        debug_logs = []
+        monkeypatch.setattr(compressor_v2_module.logger, "warning", warnings.append)
+        monkeypatch.setattr(compressor_v2_module.logger, "debug", debug_logs.append)
+
+        last_warning_at = compressor_v2_module._log_memory_lock_retry(
+            retry_count=1,
+            max_retries=0,
+            last_warning_at=0.0,
+        )
+        compressor_v2_module._log_memory_lock_retry(
+            retry_count=2,
+            max_retries=0,
+            last_warning_at=last_warning_at,
+        )
+
+        assert len(warnings) == 1
+        assert "attempt=1" in warnings[0]
+        assert debug_logs == []
 
     @pytest.mark.asyncio
     async def test_extract_long_term_memories_includes_latest_archive_overview(self):
@@ -789,7 +812,10 @@ class TestExtractLoopPatchRepair:
         assert "Regenerate the complete operations JSON" in second_call_content
         assert target_uri in second_call_content
         assert other_uri in second_call_content
-        assert operations.upsert_operations[0].memory_fields["content"].blocks[0].search == "- Likes reading"
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Likes reading"
+        )
 
     @pytest.mark.asyncio
     async def test_invalid_patch_search_repairs_only_once(self):
@@ -883,7 +909,10 @@ class TestExtractLoopPatchRepair:
             message["content"] for call_messages in vlm.messages for message in call_messages
         )
         assert all_messages.count("SEARCH/REPLACE patch could not be applied") == 1
-        assert operations.upsert_operations[0].memory_fields["content"].blocks[0].search == "- Missing two"
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Missing two"
+        )
 
     @pytest.mark.asyncio
     async def test_fuzzy_patch_success_does_not_trigger_repair(self):
@@ -972,4 +1001,7 @@ class TestExtractLoopPatchRepair:
         operations, _tools_used = await loop.run()
 
         assert len(vlm.messages) == 1
-        assert operations.upsert_operations[0].memory_fields["content"].blocks[0].search == "- Likes reading"
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Likes reading"
+        )

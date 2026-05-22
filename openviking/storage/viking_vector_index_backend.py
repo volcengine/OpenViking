@@ -72,6 +72,27 @@ URI_REWRITE_OUTPUT_FIELDS = [
 ]
 
 
+class _AsyncVectorAdapter:
+    """Thread-offloaded facade for sync vector adapters."""
+
+    def __init__(self, adapter: Any):
+        self._adapter = adapter
+
+    async def call(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(getattr(self._adapter, method_name), *args, **kwargs)
+
+    async def run(self, func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    async def collection_meta(self) -> Dict[str, Any]:
+        return await asyncio.to_thread(lambda: self._adapter.get_collection().get_meta_data() or {})
+
+    async def update_collection_description(self, description: str) -> None:
+        await asyncio.to_thread(
+            lambda: self._adapter.get_collection().update(description=description)
+        )
+
+
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
 
@@ -95,6 +116,7 @@ class _SingleAccountBackend:
         """
         self._bound_account_id = bound_account_id
         self._adapter = shared_adapter or create_collection_adapter(config)
+        self._async_adapter = _AsyncVectorAdapter(self._adapter)
         self._collection_config: Dict[str, Any] = {}
         self._meta_data_cache: Dict[str, Any] = {}
         self._mode = self._adapter.mode
@@ -135,6 +157,9 @@ class _SingleAccountBackend:
         filtered = self._filter_known_fields(payload)
         return {k: v for k, v in filtered.items() if v is not None}
 
+    async def _refresh_meta_data_async(self) -> None:
+        self._meta_data_cache = await self._async_adapter.collection_meta()
+
     # =========================================================================
     # Collection Management
     # =========================================================================
@@ -148,7 +173,8 @@ class _SingleAccountBackend:
                     vector_dim = field.get("Dim")
                     break
 
-            created = self._adapter.create_collection(
+            created = await self._async_adapter.call(
+                "create_collection",
                 name=name,
                 schema=collection_meta,
                 distance=self._distance_metric,
@@ -163,7 +189,7 @@ class _SingleAccountBackend:
                 "distance": self._distance_metric,
                 "schema": schema,
             }
-            self._refresh_meta_data(self._get_collection())
+            await self._refresh_meta_data_async()
             logger.info("Created collection: %s", name)
             return True
         except Exception as e:
@@ -172,7 +198,7 @@ class _SingleAccountBackend:
 
     async def drop_collection(self) -> bool:
         try:
-            dropped = self._adapter.drop_collection()
+            dropped = await self._async_adapter.call("drop_collection")
             if dropped:
                 self._collection_config = {}
                 self._meta_data_cache = {}
@@ -182,9 +208,7 @@ class _SingleAccountBackend:
             return False
 
     async def collection_exists(self) -> bool:
-        # Some adapters perform blocking HTTP requests (for example via
-        # requests), so move the existence check off the event loop.
-        return await asyncio.to_thread(self._adapter.collection_exists)
+        return await self._async_adapter.call("collection_exists")
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         if not await self.collection_exists():
@@ -200,14 +224,13 @@ class _SingleAccountBackend:
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
         if not await self.collection_exists():
             return None
-        return self._get_collection().get_meta_data()
+        return await self._async_adapter.collection_meta()
 
     async def update_collection_description(self, description: str) -> bool:
         if not await self.collection_exists():
             return False
-        coll = self._get_collection()
-        coll.update(description=description)
-        self._refresh_meta_data(coll)
+        await self._async_adapter.update_collection_description(description)
+        await self._refresh_meta_data_async()
         return True
 
     # =========================================================================
@@ -238,13 +261,13 @@ class _SingleAccountBackend:
         if not payload.get("id"):
             payload["id"] = str(uuid.uuid4())
 
-        payload = self._prepare_upsert_payload(payload)
-        ids = self._adapter.upsert(payload)
+        payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
+        ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = await asyncio.to_thread(self._adapter.get, ids)
+            records = await self._async_adapter.call("get", ids)
             if self._bound_account_id:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
@@ -261,7 +284,7 @@ class _SingleAccountBackend:
                     logger.warning("Attempted to delete records outside bound account")
                 ids = valid_ids
 
-            return self._adapter.delete(ids=ids)
+            return await self._async_adapter.call("delete", ids=ids)
         except Exception as e:
             logger.error("Error deleting records: %s", e)
             return 0
@@ -269,7 +292,7 @@ class _SingleAccountBackend:
     async def delete_by_filter(self, filter: FilterExpr) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
-            return self._adapter.delete(filter=filter)
+            return await self._async_adapter.call("delete", filter=filter)
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
             return 0
@@ -321,8 +344,8 @@ class _SingleAccountBackend:
                     f"[_SingleAccountBackend.query] Applied account filter, final filter={filter}"
                 )
 
-            return await asyncio.to_thread(
-                self._adapter.query,
+            return await self._async_adapter.call(
+                "query",
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=filter,
@@ -440,7 +463,7 @@ class _SingleAccountBackend:
                 else:
                     filter = account_filter
 
-            return self._adapter.count(filter=filter)
+            return await self._async_adapter.call("count", filter=filter)
         except Exception as e:
             logger.error("Error counting records: %s", e)
             return 0
@@ -449,7 +472,7 @@ class _SingleAccountBackend:
         try:
             if self._bound_account_id:
                 return await self.delete_by_filter(Eq("account_id", self._bound_account_id)) > 0
-            return self._adapter.clear()
+            return await self._async_adapter.call("clear")
         except Exception as e:
             logger.error("Error clearing collection: %s", e)
             return False
@@ -460,7 +483,7 @@ class _SingleAccountBackend:
 
     async def close(self) -> None:
         try:
-            self._adapter.close()
+            await self._async_adapter.call("close")
             self._collection_config = {}
             self._meta_data_cache = {}
             logger.info("_SingleAccountBackend closed")

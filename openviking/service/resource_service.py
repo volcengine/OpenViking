@@ -292,7 +292,7 @@ class ResourceService:
 
                 task_tracker = get_task_tracker()
                 root_uri = result.get("root_uri", "")
-                task = task_tracker.create(
+                task = await task_tracker.create(
                     "add_resource",
                     resource_id=root_uri,
                     account_id=ctx.account_id,
@@ -310,10 +310,10 @@ class ResourceService:
                         )
                     )
                 else:
-                    task_tracker.start(
+                    await task_tracker.start(
                         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
                     )
-                    task_tracker.complete(
+                    await task_tracker.complete(
                         task.task_id,
                         {"root_uri": root_uri},
                         account_id=ctx.account_id,
@@ -347,27 +347,27 @@ class ResourceService:
 
         task_tracker = get_task_tracker()
         request_wait_tracker = get_request_wait_tracker()
-        task_tracker.start(task_id, account_id=account_id, user_id=user_id)
+        await task_tracker.start(task_id, account_id=account_id, user_id=user_id)
         try:
             await request_wait_tracker.wait_for_request(telemetry_id)
             status = request_wait_tracker.build_queue_status(telemetry_id)
             errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
             if errors:
-                task_tracker.fail(
+                await task_tracker.fail(
                     task_id,
                     f"queue processing failed: {status}",
                     account_id=account_id,
                     user_id=user_id,
                 )
             else:
-                task_tracker.complete(
+                await task_tracker.complete(
                     task_id,
                     {"queue_status": status},
                     account_id=account_id,
                     user_id=user_id,
                 )
         except Exception as exc:
-            task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
+            await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
@@ -546,7 +546,7 @@ class ResourceService:
                 from openviking.service.task_tracker import get_task_tracker
 
                 task_tracker = get_task_tracker()
-                task = task_tracker.create(
+                task = await task_tracker.create(
                     "add_skill",
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
@@ -563,10 +563,10 @@ class ResourceService:
                         )
                     )
                 else:
-                    task_tracker.start(
+                    await task_tracker.start(
                         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
                     )
-                    task_tracker.complete(
+                    await task_tracker.complete(
                         task.task_id,
                         {},
                         account_id=ctx.account_id,

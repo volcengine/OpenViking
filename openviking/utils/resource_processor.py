@@ -7,7 +7,6 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
-import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -336,18 +335,8 @@ class ResourceProcessor:
 
             if resource_lock.active:
                 if not should_summarize and temp_uri:
-                    from openviking.pyagfs.helpers import cp as agfs_cp
-
                     viking_fs = get_viking_fs()
-                    src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                    dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                    await asyncio.to_thread(
-                        agfs_cp,
-                        viking_fs.agfs,
-                        src_path,
-                        dst_path,
-                        recursive=True,
-                    )
+                    await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                     await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
                 await resource_lock.close()
 

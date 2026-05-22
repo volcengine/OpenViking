@@ -17,6 +17,8 @@ Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
     "memory": { "version": "v2", "agent_memory_enabled": true }
+  or:
+    "memory": { "version": "v2", "experimental_memory_switch": true }
 
 Run
 ---

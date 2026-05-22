@@ -21,7 +21,7 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     """Poll the task tracker until the task reaches a terminal state."""
     tracker = get_task_tracker()
     for _ in range(int(timeout / 0.1)):
-        task = tracker.get(task_id)
+        task = await tracker.get(task_id)
         if task and task.status.value in ("completed", "failed"):
             return task.to_dict()
         await asyncio.sleep(0.1)

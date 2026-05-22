@@ -100,7 +100,7 @@ class ReindexExecutor:
 
         tracker = get_task_tracker()
         if wait:
-            if tracker.has_running(
+            if await tracker.has_running(
                 REINDEX_TASK_TYPE,
                 uri,
                 account_id=ctx.account_id,
@@ -118,7 +118,7 @@ class ReindexExecutor:
                 ctx=ctx,
             )
 
-        task = tracker.create_if_no_running(
+        task = await tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
             account_id=ctx.account_id,
@@ -447,7 +447,7 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
-        tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
             result = await self._run(
                 uri=uri,
@@ -455,9 +455,19 @@ class ReindexExecutor:
                 mode=mode,
                 ctx=ctx,
             )
-            tracker.complete(task_id, result, account_id=ctx.account_id, user_id=ctx.user.user_id)
+            await tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
         except Exception as exc:
-            tracker.fail(task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id)
+            await tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
 
     async def _reindex_resource(
         self,
@@ -1088,8 +1098,7 @@ class ReindexExecutor:
         for file_uri in file_uris:
             counters.scanned_records += 1
             body = await self._safe_read_text(file_uri, ctx=ctx)
-            mf = MemoryFileUtils.read(body) if body else MemoryFile()
-            memory_content = mf.content
+            memory_content = MemoryFileUtils.read(body).content if body else ""
             existing = await self._fetch_existing_record(uri=file_uri, level=2, ctx=ctx)
             abstract = self._best_non_empty(
                 self._record_abstract(existing),
