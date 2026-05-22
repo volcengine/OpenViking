@@ -40,13 +40,11 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    agent_memory_enabled: bool = Field(
+    experimental_memory_switch: bool = Field(
         default=False,
         description=(
-            "Enable agent-scope trajectory/experience memory extraction. When true, "
-            "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
-            "execution trajectories from the conversation; Phase 2 consolidates them "
-            "into higher-level experience memories."
+            "Experimental memory switch for experimental testing. When enabled, it turns "
+            "on agent-scope memory extraction and experimental memory templates."
         ),
     )
     eager_prefetch: bool = Field(
@@ -73,13 +71,6 @@ class MemoryConfig(BaseModel):
             "to produce long-term memories. When disabled, sessions are archived "
             "but no memory extraction is performed. Useful for read-only or "
             "stateless deployments."
-        ),
-    )
-    enable_vaka_template: bool = Field(
-        default=False,
-        description=(
-            "When enabled, use vaka-specific memory templates (entities, profile) "
-            "from the bundled vaka/ subdirectory to override default templates."
         ),
     )
     enable_role_id_memory_isolate: bool = Field(

@@ -57,12 +57,18 @@ class MemoryTypeRegistry:
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load vaka templates if enabled (overrides default for matching memory_types)
-        if config.memory.enable_vaka_template:
-            vaka_dir = str(Path(memory_templates_dir) / "vaka")
-            if os.path.exists(vaka_dir):
-                vaka_loaded = self.load_from_directory(vaka_dir, replace=True)
-                logger.info(f"Loaded {vaka_loaded} vaka memory schemas from: {vaka_dir}")
+        # Load experimental memory templates when the experimental memory switch is enabled.
+        if getattr(config.memory, "experimental_memory_switch", False):
+            experimental_memory_dir = str(Path(memory_templates_dir) / "experimental_memory")
+            if os.path.exists(experimental_memory_dir):
+                experimental_memory_loaded = self.load_from_directory(
+                    experimental_memory_dir, replace=True
+                )
+                logger.info(
+                    "Loaded %s experimental memory schemas from: %s",
+                    experimental_memory_loaded,
+                    experimental_memory_dir,
+                )
 
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
