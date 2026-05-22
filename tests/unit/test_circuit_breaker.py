@@ -13,8 +13,8 @@ from openviking.utils.circuit_breaker import (
     classify_api_error,
 )
 from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
-    ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
 )
@@ -120,6 +120,11 @@ class TestClassifyApiError:
         error = Exception("403 Forbidden 429 timeout")
         assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
+    def test_classify_input_too_large(self):
+        """Test context-window errors are classified separately from provider failures."""
+        error = Exception("BadRequestError: 400 maximum context length is 8192 tokens")
+        assert classify_api_error(error) == ERROR_CLASS_INPUT_TOO_LARGE
+
 
 class TestCircuitBreaker:
     """Test CircuitBreaker class."""
@@ -165,6 +170,15 @@ class TestCircuitBreaker:
 
         with pytest.raises(CircuitBreakerOpen):
             cb.check()
+
+    def test_input_too_large_does_not_trip_or_increment(self):
+        """Test row-specific input errors do not affect global circuit state."""
+        cb = CircuitBreaker(failure_threshold=1)
+
+        cb.record_failure(Exception("expected maxLength: 50000, actual: 75000"))
+
+        cb.check()
+        assert cb._failure_count == 0
 
     def test_success_resets_failure_count(self):
         """Test success resets failure count."""
