@@ -4,6 +4,8 @@
 
 Help the user install, configure, validate, and start OpenViking with the smallest viable path.
 
+This page is for OpenViking server setup. For client-only CLI setup, use the [OpenViking CLI Setup](05-cli-setup.md) guide instead.
+
 ## General Principles
 
 - Default to the normal end-user installation path; do not default to source builds

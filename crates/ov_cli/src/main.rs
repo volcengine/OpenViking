@@ -2,15 +2,21 @@ mod base_client;
 mod client;
 mod commands;
 mod config;
+mod config_command_ui;
+mod config_wizard;
 mod error;
+mod error_ui;
 mod handlers;
+mod health_ui;
+mod help_ui;
 mod output;
+mod status_ui;
 mod tui;
 mod utils;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use config::Config;
-use error::Result;
+use error::{Error, Result};
 use output::OutputFormat;
 use std::ffi::OsString;
 
@@ -632,7 +638,11 @@ enum Commands {
         action: TaskCommands,
     },
     /// [Status] All OpenViking Server components status
-    Status,
+    Status {
+        /// Show full component tables
+        #[arg(long)]
+        verbose: bool,
+    },
     /// [Status] Observe OpenViking Server components status
     Observer {
         #[command(subcommand)]
@@ -640,10 +650,10 @@ enum Commands {
     },
     /// [Status] Quick health check
     Health,
-    /// [Status] Configuration management
+    /// [Status] Configuration management; run without a subcommand to add, edit, or delete configs
     Config {
         #[command(subcommand)]
-        action: ConfigCommands,
+        action: Option<ConfigCommands>,
     },
     /// [Status] Show CLI version
     Version,
@@ -1008,9 +1018,7 @@ enum ConfigCommands {
     Show,
     /// Validate configuration file
     Validate,
-    /// Interactive setup to configure CLI
-    SetupCli,
-    /// Switch between saved configurations
+    /// Switch between saved configs
     Switch,
 }
 
@@ -1131,7 +1139,29 @@ fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse_from(preprocess_privacy_args(std::env::args_os().collect()));
+    let args = preprocess_privacy_args(std::env::args_os().collect());
+    if help_ui::is_top_level_help_request(&args) {
+        print!("{}", help_ui::render_top_level_help());
+        return;
+    }
+    if let Some(help) = help_ui::render_command_help_request(&args) {
+        print!("{help}");
+        return;
+    }
+
+    let cli = match Cli::try_parse_from(args.clone()) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.exit_code() == 0 {
+                let _ = error.print();
+            } else {
+                let report = error_ui::report_for_clap_error(&args, &error.to_string());
+                error_ui::print_report(&report, false);
+            }
+            std::process::exit(error.exit_code());
+        }
+    };
+    let command_display = error_ui::display_command(&args);
 
     let output_format = cli.output;
     let compact = cli.compact;
@@ -1141,7 +1171,16 @@ async fn main() {
         verbose: cli.verbose,
     };
     if let Some(message) = legacy_upload_option_error(legacy_upload_options, &cli.command) {
-        eprintln!("Error: {}", message);
+        let report = error_ui::report_for_message_error(
+            &command_display,
+            "Command Error",
+            message,
+            vec![
+                error_ui::ErrorAction::new("ov add-resource --help", "Show add-resource options"),
+                error_ui::ErrorAction::new("ov add-skill --help", "Show add-skill options"),
+            ],
+        );
+        error_ui::print_report(&report, false);
         std::process::exit(2);
     }
 
@@ -1157,22 +1196,41 @@ async fn main() {
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, cli.verbose);
             std::process::exit(2);
         }
     };
+    let verbose_errors = ctx.is_verbose();
 
     // Check if --sudo is used but root_api_key is not configured
     if ctx.sudo && ctx.config.root_api_key.is_none() {
-        eprintln!(
-            "Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf"
+        let report = error_ui::report_for_message_error(
+            &command_display,
+            "Configuration Error",
+            "--sudo requires root_api_key in ~/.openviking/ovcli.conf.",
+            vec![
+                error_ui::ErrorAction::new("ov config", "Edit the active config"),
+                error_ui::ErrorAction::new("ov config show", "Show the active config"),
+            ],
         );
+        error_ui::print_report(&report, false);
         std::process::exit(2);
     }
 
     // Check if --sudo is used with non-admin command
     if ctx.sudo && !cli.command.is_admin_command() {
-        eprintln!("Error: --sudo is only supported for admin commands (admin, system, reindex)");
+        let report = error_ui::report_for_message_error(
+            &command_display,
+            "Command Error",
+            "--sudo is only supported for admin, system, and reindex commands.",
+            vec![
+                error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
+                error_ui::ErrorAction::new("ov system --help", "Show system commands"),
+                error_ui::ErrorAction::new("ov reindex --help", "Show reindex options"),
+            ],
+        );
+        error_ui::print_report(&report, false);
         std::process::exit(2);
     };
 
@@ -1278,28 +1336,20 @@ async fn main() {
                 let client = ctx.get_client();
                 match action {
                     WatchCommands::Ls { active_only } => {
-                        commands::watch::ls(
-                            &client,
-                            active_only,
-                            ctx.output_format,
-                            ctx.compact,
-                        )
-                        .await
+                        commands::watch::ls(&client, active_only, ctx.output_format, ctx.compact)
+                            .await
                     }
                     WatchCommands::Show { key } => {
-                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Rm { key } => {
                         commands::watch::rm(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Pause { key } => {
-                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Resume { key } => {
-                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Update {
                         key,
@@ -1321,20 +1371,22 @@ async fn main() {
                         .await
                     }
                     WatchCommands::Trigger { key } => {
-                        commands::watch::trigger(
-                            &client,
-                            &key,
-                            ctx.output_format,
-                            ctx.compact,
-                        )
-                        .await
+                        commands::watch::trigger(&client, &key, ctx.output_format, ctx.compact)
+                            .await
                     }
                 }
             }
         },
-        Commands::Status => {
+        Commands::Status { verbose } => {
             let client = ctx.get_client();
-            commands::observer::system(&client, ctx.output_format, ctx.compact).await
+            commands::system::diagnostic_status(
+                &client,
+                &ctx.config,
+                ctx.output_format,
+                ctx.compact,
+                verbose,
+            )
+            .await
         }
         Commands::Health => handlers::handle_health(ctx).await,
         Commands::System { action } => handlers::handle_system(action, ctx).await,
@@ -1448,7 +1500,10 @@ async fn main() {
             after,
             before,
             level,
-        } => handlers::handle_find(query, uri, node_limit, threshold, after, before, level, ctx).await,
+        } => {
+            handlers::handle_find(query, uri, node_limit, threshold, after, before, level, ctx)
+                .await
+        }
         Commands::Search {
             query,
             uri,
@@ -1492,7 +1547,10 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        if !matches!(e, Error::AlreadyReported) {
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, verbose_errors);
+        }
         std::process::exit(1);
     }
 }
@@ -1575,9 +1633,14 @@ mod tests {
 
     #[test]
     fn cli_parses_upload_flags_on_upload_commands() {
-        let add_resource =
-            Cli::try_parse_from(["ov", "add-resource", "./README.md", "--progress", "--verbose"])
-                .expect("add-resource upload flags should parse");
+        let add_resource = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--progress",
+            "--verbose",
+        ])
+        .expect("add-resource upload flags should parse");
         match add_resource.command {
             Commands::AddResource { upload_options, .. } => {
                 assert!(upload_options.progress);
@@ -1623,9 +1686,8 @@ mod tests {
             .expect("hidden legacy flag still parses before runtime validation");
         assert!(legacy_upload_option_error(upload_options, &tree.command).is_some());
 
-        let add_resource =
-            Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
-                .expect("legacy pre-command upload flags should parse for add-resource");
+        let add_resource = Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
+            .expect("legacy pre-command upload flags should parse for add-resource");
         assert!(legacy_upload_option_error(upload_options, &add_resource.command).is_none());
     }
 
@@ -1635,6 +1697,35 @@ mod tests {
             .expect("pre-command sudo should parse");
 
         assert!(cli.sudo);
+    }
+
+    #[test]
+    fn cli_config_without_subcommand_parses_as_setup_entrypoint() {
+        Cli::try_parse_from(["ov", "config"]).expect("bare config command should parse");
+    }
+
+    #[test]
+    fn cli_config_single_purpose_subcommands_still_parse() {
+        for subcommand in ["show", "validate", "switch"] {
+            Cli::try_parse_from(["ov", "config", subcommand])
+                .unwrap_or_else(|_| panic!("config {subcommand} should parse"));
+        }
+    }
+
+    #[test]
+    fn cli_config_rejects_removed_setup_cli_subcommand() {
+        assert!(Cli::try_parse_from(["ov", "config", "setup-cli"]).is_err());
+    }
+
+    #[test]
+    fn cli_status_parses_verbose_flag() {
+        let cli =
+            Cli::try_parse_from(["ov", "status", "--verbose"]).expect("status verbose parses");
+
+        match cli.command {
+            Commands::Status { verbose } => assert!(verbose),
+            _ => panic!("expected status command"),
+        }
     }
 
     #[test]

@@ -1106,7 +1106,9 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 ### ovcli.conf
 
-You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+
+For the guided CLI setup flow, see [OpenViking CLI Setup](../getting-started/05-cli-setup.md).
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 

@@ -504,7 +504,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 #### CLI/Client Configuration Examples
 
-You can initialize the configuration of the CLI/client interactively through the `ov config setup-cli` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
+You can initialize the configuration of the CLI/client interactively through the `ov config` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
 
 👇 Expand to see the configuration example for your CLI/Client:
 <details>
