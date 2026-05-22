@@ -20,6 +20,12 @@ content_template: |
   {{ summary }}
   {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
   {{ extract_context.get_event_content(ranges, summary, 0) }}
+embedding_template: |-
+  {{ event_name }}
+
+  {{ goal }}
+
+  {{ content }}
 
 overview_template: |-
   # Events Overview
@@ -42,20 +48,17 @@ fields:
       6. Patterns like "person_chat", "chat_about_xxx", "daily_talk" are forbidden;
       7. Output only the event name, no extra explanation.
     merge_op: immutable
-    searchable: true
 
   - name: goal
     type: string
     description: |
       Summarize the purpose of the content in 5 words or less
-    searchable: true
 
   - name: summary
     type: string
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
-    searchable: true
 
   - name: ranges
     type: string

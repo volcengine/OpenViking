@@ -11,6 +11,12 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/preferences"
 filename_template: "{{ user }}/{{ topic }}.md"
 enabled: true
+embedding_template: |-
+  {{ user }}
+
+  {{ topic }}
+
+  {{ content }}
 
 overview_template: |-
   # Preferences Overview
@@ -26,7 +32,6 @@ fields:
     description: |
       Username for the preference owner
     merge_op: immutable
-    searchable: true
 
   - name: topic
     type: string
@@ -38,7 +43,6 @@ fields:
       Different preference topics should be stored as separate memories, do not mix unrelated preferences.
       If a topic becomes too broad, split it into smaller semantic subtopics.
     merge_op: immutable
-    searchable: true
 
   - name: content
     type: string

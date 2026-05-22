@@ -209,7 +209,6 @@ class MemoryTypeRegistry:
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
                 init_value=field_data.get("init_value"),
-                searchable=field_data.get("searchable", False),
             )
             fields.append(field)
 
@@ -219,6 +218,7 @@ class MemoryTypeRegistry:
             fields=fields,
             filename_template=data.get("filename_template", ""),
             content_template=data.get("content_template"),
+            embedding_template=data.get("embedding_template"),
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
