@@ -7,8 +7,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.agent_experience_context_provider import (
+    AgentExperienceContextProvider,
+)
+from openviking.session.memory.batch_agent_experience_context_provider import (
+    SOURCE_TRAJECTORY_IDS_FIELD,
+    BatchAgentExperienceContextProvider,
+)
+from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -103,3 +109,100 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     assert add_tool_call_pair.call_count == 2
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_agent_experience_prefetch_includes_multiple_new_trajectories():
+    provider = BatchAgentExperienceContextProvider(
+        messages=[],
+        trajectory_items=[
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/first.md",
+                "content": "first trajectory",
+            },
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/second.md",
+                "content": "second trajectory",
+            },
+        ],
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+    provider._viking_fs = AsyncMock()
+    provider._transaction_handle = None
+    provider.search_files = AsyncMock(return_value=[])
+
+    with patch(
+        "openviking.session.memory.batch_agent_experience_context_provider.add_tool_call_pair_to_messages"
+    ) as add_tool_call_pair:
+        messages = await provider.prefetch()
+
+    assert add_tool_call_pair.call_count == 2
+    assert add_tool_call_pair.call_args_list[0].kwargs["call_id"] == "new-trajectory-0"
+    assert add_tool_call_pair.call_args_list[0].kwargs["result"]["uri"].endswith("/first.md")
+    assert add_tool_call_pair.call_args_list[0].kwargs["result"]["source_trajectory_id"] == "T1"
+    assert add_tool_call_pair.call_args_list[1].kwargs["call_id"] == "new-trajectory-1"
+    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["uri"].endswith("/second.md")
+    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["source_trajectory_id"] == "T2"
+    assert "multiple `new_trajectory`" in messages[-1]["content"]
+
+
+def test_batch_agent_experience_schema_adds_temporary_source_ids_field():
+    provider = BatchAgentExperienceContextProvider(
+        messages=[],
+        trajectory_items=[
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/first.md",
+                "content": "first trajectory",
+            }
+        ],
+    )
+
+    schemas = provider.get_memory_schemas(
+        RequestContext(
+            user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+            role=Role.USER,
+            namespace_policy=AccountNamespacePolicy(),
+        )
+    )
+
+    assert any(
+        field.name == SOURCE_TRAJECTORY_IDS_FIELD for field in schemas[0].fields
+    )
+
+
+def test_batch_agent_experience_resolves_and_removes_source_attribution():
+    provider = BatchAgentExperienceContextProvider(
+        messages=[],
+        trajectory_items=[
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/first.md",
+                "content": "first trajectory",
+            },
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/second.md",
+                "content": "second trajectory",
+            },
+        ],
+    )
+    op = ResolvedOperation(
+        memory_type="experiences",
+        uris=["viking://agent/agent_sample_9/memories/experiences/debug.md"],
+        memory_fields={
+            "experience_name": "debug",
+            SOURCE_TRAJECTORY_IDS_FIELD: "T2",
+        },
+    )
+    operations = ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[])
+
+    attribution = provider.resolve_source_attribution(operations)
+
+    assert attribution == {
+        "viking://agent/agent_sample_9/memories/experiences/debug.md": [
+            "viking://agent/agent_sample_9/memories/trajectories/second.md"
+        ]
+    }
+    assert SOURCE_TRAJECTORY_IDS_FIELD not in op.memory_fields
