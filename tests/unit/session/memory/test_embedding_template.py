@@ -112,13 +112,7 @@ class TestEmbeddingTextConstruction:
                 },
             )
 
-        assert any(
-            "Embedding text for vectorization" in call.args[0]
-            and call.args[1] == "viking://user/alice/memories/entities/person/alice.md"
-            and call.args[2] == "entities"
-            and call.args[3] == "person -> alice -> Plain body"
-            for call in mock_logger_error.call_args_list
-        )
+        mock_logger_error.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_embedding_template_overrides_plain_content(self):
