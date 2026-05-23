@@ -24,6 +24,11 @@ from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.parse.parsers.media.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
@@ -42,6 +47,7 @@ class URLType(Enum):
     DOWNLOAD_MD = "download_md"  # Markdown file download link
     DOWNLOAD_TXT = "download_txt"  # Text file download link
     DOWNLOAD_HTML = "download_html"  # HTML file download link
+    DOWNLOAD_BINARY = "download_binary"  # Non-text binary (image/audio/video/octet-stream)
     UNKNOWN = "unknown"  # Unknown or unsupported type
 
 
@@ -65,6 +71,9 @@ class URLTypeDetector:
     # (e.g., .html/.htm -> DOWNLOAD_HTML instead of DOWNLOAD_TXT)
     EXTENSION_MAP: Dict[str, URLType] = {
         **dict.fromkeys(CODE_EXTENSIONS, URLType.DOWNLOAD_TXT),
+        **dict.fromkeys(IMAGE_EXTENSIONS, URLType.DOWNLOAD_BINARY),
+        **dict.fromkeys(AUDIO_EXTENSIONS, URLType.DOWNLOAD_BINARY),
+        **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_BINARY),
         ".pdf": URLType.DOWNLOAD_PDF,
         ".md": URLType.DOWNLOAD_MD,
         ".markdown": URLType.DOWNLOAD_MD,
@@ -95,6 +104,11 @@ class URLTypeDetector:
         # Plain text
         "text/plain": URLType.DOWNLOAD_TXT,
         "text/*": URLType.DOWNLOAD_TXT,
+        # Non-text binary payloads — must not be parsed as HTML/text
+        "image/*": URLType.DOWNLOAD_BINARY,
+        "audio/*": URLType.DOWNLOAD_BINARY,
+        "video/*": URLType.DOWNLOAD_BINARY,
+        "application/octet-stream": URLType.DOWNLOAD_BINARY,
     }
 
     # URLType to file extension mapping
@@ -104,6 +118,7 @@ class URLTypeDetector:
         URLType.DOWNLOAD_MD: ".md",
         URLType.DOWNLOAD_TXT: ".txt",
         URLType.DOWNLOAD_HTML: ".html",
+        URLType.DOWNLOAD_BINARY: ".bin",
         URLType.UNKNOWN: ".html",
     }
 
@@ -165,14 +180,24 @@ class URLTypeDetector:
 
             async with httpx.AsyncClient(**client_kwargs) as client:
                 response = await client.head(url)
+                meta["status_code"] = response.status_code
 
-                # Get raw headers for debugging
+                # Only trust HEAD headers on a 2xx response. Some signed-URL providers
+                # (e.g. Aliyun OSS signs the verb, so HEAD on a GET-signed URL 403s)
+                # return error-document headers (e.g. application/xml) that would
+                # otherwise misroute the real binary payload to a text parser.
+                if not (200 <= response.status_code < 300):
+                    meta["head_status_skipped"] = response.status_code
+                    raise RuntimeError(
+                        f"HEAD returned status {response.status_code}; "
+                        "headers not trusted for type detection"
+                    )
+
                 content_type_raw = response.headers.get("content-type", "")
                 content_disposition = response.headers.get("content-disposition", "")
 
                 meta["content_type_raw"] = content_type_raw
                 meta["content_disposition_raw"] = content_disposition
-                meta["status_code"] = response.status_code
 
                 # === Step 2a: Check Content-Disposition for filename (RFC 6266) ===
                 filename_from_disposition = self._extract_filename_from_disposition(
@@ -487,6 +512,19 @@ class HTTPAccessor(DataAccessor):
                 # Write to temp file
                 Path(temp_path).write_bytes(response.content)
 
+            # Auto-detect actual content type from the GET response and bytes.
+            # This is the only reliable signal for sources where HEAD lies or
+            # fails (e.g. Aliyun OSS GET-signed URLs 403 on HEAD, CDNs without
+            # extensions, URLs whose path extension misrepresents the payload).
+            temp_path, url_type, ext = self._reconcile_actual_type(
+                temp_path=temp_path,
+                current_ext=ext,
+                current_url_type=url_type,
+                response_content_type=response.headers.get("content-type", ""),
+                content=response.content,
+                meta=meta,
+            )
+
             return temp_path, url_type, meta
         except Exception:
             # Clean up on error
@@ -497,6 +535,144 @@ class HTTPAccessor(DataAccessor):
             except Exception:
                 pass
             raise
+
+    # === Magic-byte signatures for the most common binary payloads we see
+    # delivered without a trustworthy URL extension or HEAD. Each entry is
+    # (signature_bytes, offset, extension). Order matters only for tie-breaking;
+    # signatures are otherwise unambiguous.
+    _MAGIC_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+        (b"\x89PNG\r\n\x1a\n", ".png"),
+        (b"\xff\xd8\xff", ".jpg"),
+        (b"GIF87a", ".gif"),
+        (b"GIF89a", ".gif"),
+        (b"BM", ".bmp"),
+        (b"%PDF", ".pdf"),
+        (b"PK\x03\x04", ".zip"),
+        (b"PK\x05\x06", ".zip"),
+        (b"\x1f\x8b", ".gz"),
+        (b"ID3", ".mp3"),
+        (b"\xff\xfb", ".mp3"),
+        (b"<svg", ".svg"),
+    )
+
+    @classmethod
+    def _sniff_magic_extension(cls, content: bytes) -> Optional[str]:
+        """Return a file extension based on magic bytes, or None if unrecognised.
+
+        Composite containers (RIFF, ISO base media) are disambiguated explicitly
+        because the leading bytes alone are ambiguous (RIFF is shared by WEBP /
+        WAV / AVI; the ISO `ftyp` box appears at offset 4 with a brand selecting
+        MP4 vs MOV).
+        """
+        if not content:
+            return None
+        head = content[:64]
+        # RIFF container — disambiguate WEBP / WAV / AVI by the form tag at offset 8.
+        if head[:4] == b"RIFF" and len(head) >= 12:
+            form = head[8:12]
+            if form == b"WEBP":
+                return ".webp"
+            if form == b"WAVE":
+                return ".wav"
+            if form == b"AVI ":
+                return ".avi"
+        # ISO base media (MP4/MOV/etc.): a `ftyp` box lives at offset 4.
+        if len(head) >= 12 and head[4:8] == b"ftyp":
+            brand = head[8:12]
+            if brand == b"qt  ":
+                return ".mov"
+            return ".mp4"
+        # XML preamble that's actually SVG.
+        if head.lstrip().startswith(b"<?xml") and b"<svg" in content[:512]:
+            return ".svg"
+        for signature, ext in cls._MAGIC_SIGNATURES:
+            if head.startswith(signature):
+                return ext
+        return None
+
+    @classmethod
+    def _reconcile_actual_type(
+        cls,
+        temp_path: str,
+        current_ext: str,
+        current_url_type: URLType,
+        response_content_type: str,
+        content: bytes,
+        meta: Dict[str, Any],
+    ) -> Tuple[str, URLType, str]:
+        """Refine the temp file extension and URL type using actual GET response
+        signals (Content-Type + magic bytes).
+
+        Detection precedence:
+            1. Magic bytes on the response body (most authoritative).
+            2. Content-Type on the GET response.
+        Either signal can override the earlier guess derived from URL path / HEAD.
+
+        Args:
+            temp_path: Current temp file path (already written).
+            current_ext: Extension used to create the temp file.
+            current_url_type: URLType detected before download.
+            response_content_type: Content-Type from the GET response.
+            content: Downloaded bytes (first chunk is enough for sniffing).
+            meta: Mutable metadata dict; this method records the reconciliation.
+
+        Returns:
+            (possibly renamed temp_path, possibly updated URLType, final extension).
+        """
+        sniffed_ext = cls._sniff_magic_extension(content)
+        if sniffed_ext:
+            meta["sniffed_ext"] = sniffed_ext
+
+        # Decide the authoritative extension.
+        # Magic bytes win; otherwise fall back to GET Content-Type → ext.
+        authoritative_ext: Optional[str] = sniffed_ext
+        if not authoritative_ext and response_content_type:
+            iana_ext = get_preferred_extension(response_content_type)
+            if iana_ext:
+                authoritative_ext = iana_ext
+                meta["response_content_type"] = response_content_type
+
+        if not authoritative_ext:
+            return temp_path, current_url_type, current_ext
+
+        # Decide the authoritative URLType. For known binary media, route to
+        # DOWNLOAD_BINARY so downstream picks the right parser (image/audio/video).
+        media_ext_set = set(IMAGE_EXTENSIONS) | set(AUDIO_EXTENSIONS) | set(VIDEO_EXTENSIONS)
+        if authoritative_ext in media_ext_set or authoritative_ext in {
+            ".bin",
+            ".zip",
+            ".gz",
+            ".pdf",
+        }:
+            if authoritative_ext == ".pdf":
+                new_url_type = URLType.DOWNLOAD_PDF
+            else:
+                new_url_type = URLType.DOWNLOAD_BINARY
+        else:
+            new_url_type = current_url_type
+
+        if authoritative_ext.lower() == current_ext.lower():
+            # Same extension, still update url_type if it changed (e.g. WEBPAGE→DOWNLOAD_BINARY)
+            if new_url_type != current_url_type:
+                meta["url_type_corrected_from"] = current_url_type.value
+            return temp_path, new_url_type, current_ext
+
+        # Rename temp file to the correct extension so downstream parser dispatch
+        # picks the right parser (e.g. ImageParser for .png).
+        new_path = str(Path(temp_path).with_suffix(authoritative_ext))
+        try:
+            Path(temp_path).rename(new_path)
+            meta["extension_corrected_from"] = current_ext
+            meta["extension"] = authoritative_ext
+            if new_url_type != current_url_type:
+                meta["url_type_corrected_from"] = current_url_type.value
+            return new_path, new_url_type, authoritative_ext
+        except OSError as e:
+            logger.warning(
+                f"[HTTPAccessor] Failed to rename temp file with corrected extension: {e}. "
+                f"Keeping {current_ext}."
+            )
+            return temp_path, current_url_type, current_ext
 
     def _determine_file_extension(
         self,
