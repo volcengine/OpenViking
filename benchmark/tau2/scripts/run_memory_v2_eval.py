@@ -604,6 +604,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                     )
             result = client.commit_session(sid, telemetry=True)
             task = _wait_task(client, result.get("task_id"), args.openviking_wait_timeout)
+            task_result = task.get("result") if isinstance(task.get("result"), dict) else {}
             committed.append(
                 {
                     "session_id": sid,
@@ -614,6 +615,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                     "commit_status": result.get("status"),
                     "openviking_task_id": result.get("task_id"),
                     "openviking_task_status": task.get("status"),
+                    "openviking_task_telemetry": task_result.get("telemetry"),
                 }
             )
     finally:

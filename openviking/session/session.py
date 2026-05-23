@@ -1395,6 +1395,7 @@ class Session:
                             + self._meta.embedding_token_usage["total_tokens"]
                         },
                     },
+                    "telemetry": snapshot.to_dict(include_summary=True) if snapshot else None,
                 },
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
