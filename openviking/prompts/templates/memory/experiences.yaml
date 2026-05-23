@@ -14,7 +14,6 @@ fields:
     type: string
     description: |
       Name the generalizable pattern, not the specific instance.
-      Must be written in {{ language }}.
       Choose ONE language and stick to it — do not create both a Chinese and an English version of the same concept.
       If English: lowercase snake_case, max 5 words.
       If Chinese: concise noun phrase, max 15 characters.
@@ -53,7 +52,7 @@ fields:
         Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
       - MACHINE READABILITY (IMPERATIVE VOICE): Use commanding imperatives ("Ask the user for X").
       - ABSTRACTION MANDATE: Strip specific entities, IDs, user names. Use generalized descriptions.
-      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
+      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints in 'Reflect'.
       - STRICT FORMATTING: Exactly 3 headings, concise markdown bullets, no numbered lists,
         no introductory sentences, no closing paragraphs. Token efficiency is critical.
 
