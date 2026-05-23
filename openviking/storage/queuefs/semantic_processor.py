@@ -62,6 +62,13 @@ class DiffResult:
     added_dirs: List[str] = field(default_factory=list)
     deleted_dirs: List[str] = field(default_factory=list)
 
+    def to_changes(self) -> Dict[str, List[str]]:
+        return {
+            "added": self.added_files + self.added_dirs,
+            "modified": self.updated_files,
+            "deleted": self.deleted_files + self.deleted_dirs,
+        }
+
 
 class RequestQueueStats:
     processed: int = 0
@@ -352,24 +359,36 @@ class SemanticProcessor(DequeueHandlerBase):
                         else:
                             is_incremental = False
                             target_uri = msg.target_uri
+                            run_uri = msg.uri
+                            changes = msg.changes
                             viking_fs = get_viking_fs()
                             if msg.target_uri:
                                 target_exists = await viking_fs.exists(
                                     msg.target_uri, ctx=self._current_ctx
                                 )
-                                # Check if target URI exists and is not the same as the source URI（避免重复处理）
                                 if msg.uri != msg.target_uri:
-                                    if msg.target_preexisting is None:
-                                        target_preexisting = target_exists
-                                    else:
-                                        target_preexisting = bool(msg.target_preexisting)
-                                else:
-                                    target_preexisting = target_exists
-                                if target_preexisting and msg.uri != msg.target_uri:
-                                    is_incremental = True
                                     logger.info(
-                                        f"Target URI exists, using incremental update: {msg.target_uri}"
+                                        "Syncing semantic source into target before processing: "
+                                        f"{msg.uri} -> {msg.target_uri}"
                                     )
+                                    diff = await self._sync_topdown_recursive(
+                                        msg.uri,
+                                        msg.target_uri,
+                                        ctx=self._current_ctx,
+                                        lock=semantic_lock.lock,
+                                    )
+                                    logger.info(
+                                        "[SyncDiff] Diff computed: "
+                                        f"added_files={len(diff.added_files)}, "
+                                        f"deleted_files={len(diff.deleted_files)}, "
+                                        f"updated_files={len(diff.updated_files)}, "
+                                        f"added_dirs={len(diff.added_dirs)}, "
+                                        f"deleted_dirs={len(diff.deleted_dirs)}"
+                                    )
+                                    changes = diff.to_changes()
+                                    is_incremental = True
+                                    target_uri = msg.target_uri
+                                    run_uri = msg.target_uri
                                 elif target_exists and msg.changes and msg.uri == msg.target_uri:
                                     is_incremental = True
                                     logger.info(
@@ -394,18 +413,17 @@ class SemanticProcessor(DequeueHandlerBase):
                                 recursive=msg.recursive,
                                 lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
-                                sync_to_target=bool(target_uri and msg.uri != target_uri),
-                                changes=msg.changes,
+                                changes=changes,
                                 skip_vectorization=msg.skip_vectorization,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
                             self._dag_executor = executor
                             lock_transferred = True
-                            await executor.run(msg.uri)
+                            await executor.run(run_uri)
                             self._cache_dag_stats(
                                 msg.telemetry_id,
-                                msg.uri,
+                                run_uri,
                                 executor.get_stats(),
                             )
                             if not executor.stale:
@@ -712,7 +730,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 name = entry.get("name", "")
                 if not name or name in [".", ".."]:
                     continue
-                if name.startswith(".") and name not in [".abstract.md", ".overview.md"]:
+                if name.startswith("."):
                     continue
                 item_uri = VikingURI(dir_uri).join(name).uri
                 if entry.get("isDir", False):
@@ -724,18 +742,6 @@ class SemanticProcessor(DequeueHandlerBase):
         async def sync_dir(root_dir: str, target_dir: str) -> None:
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
-
-            try:
-                await viking_fs._mv_vector_store_l0_l1(
-                    root_dir,
-                    target_dir,
-                    ctx=ctx,
-                    lock_handle=lock_handle,
-                )
-            except Exception as e:
-                logger.error(
-                    f"[SyncDiff] Failed to move L0/L1 index: {root_dir} -> {target_dir}, error={e}"
-                )
 
             file_names = set(root_files.keys()) | set(target_files.keys())
             for name in sorted(file_names):
@@ -793,7 +799,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             )
                             changed = False
                     if changed:
-                        diff.updated_files.append(root_file)
+                        diff.updated_files.append(target_file)
                         try:
                             await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         except Exception as e:
@@ -814,8 +820,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     continue
 
                 if root_file and not target_file:
-                    diff.added_files.append(root_file)
                     target_file_uri = VikingURI(target_dir).join(name).uri
+                    diff.added_files.append(target_file_uri)
                     try:
                         await viking_fs.mv(
                             root_file,
@@ -865,8 +871,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     continue
 
                 if root_subdir and not target_subdir:
-                    diff.added_dirs.append(root_subdir)
                     target_subdir_uri = VikingURI(target_dir).join(name).uri
+                    diff.added_dirs.append(target_subdir_uri)
                     try:
                         await viking_fs.mv(
                             root_subdir,
@@ -888,7 +894,7 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri = VikingURI(target_uri).parent
             if parent_uri:
                 await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
-            diff.added_dirs.append(root_uri)
+            diff.added_dirs.append(target_uri)
             await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
             return diff
 

@@ -255,6 +255,7 @@ class ResourceProcessor:
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: LockLease = NO_LOCK
             target_preexisting = False
+            source_committed = False
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import get_lock_manager
@@ -276,6 +277,11 @@ class ResourceProcessor:
                         resource_lock = await self._acquire_resource_lock(
                             lock_manager, dst_path, uri=root_uri
                         )
+                    if not target_preexisting:
+                        await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                        temp_uri = root_uri
+                        source_committed = True
                 except Exception:
                     stage_status = "error"
                     raise
@@ -334,7 +340,7 @@ class ResourceProcessor:
                         pass
 
             if resource_lock.active:
-                if not should_summarize and temp_uri:
+                if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
                     await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                     await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
