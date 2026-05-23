@@ -29,6 +29,7 @@ from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -655,17 +656,26 @@ class TestCompressorV2:
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
-            result = await compressor._run_extract_phase(
-                provider=DummyProvider(),
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-                phase_label="experience(test)",
-                post_apply=post_apply,
-            )
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                    post_apply=post_apply,
+                )
 
         assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
         assert events == ["acquire", "apply", "post_apply", "release"]
+        summary = telemetry.finish().summary
+        phase = summary["memory"]["agent"]["phase"]["experience_single"]
+        assert phase["count"] == 1
+        assert phase.get("total_ms", 0) >= 0
+        assert phase.get("lock_wait_ms", 0) >= 0
+        assert phase.get("memory_apply_ms", 0) >= 0
+        assert phase.get("post_apply_ms", 0) >= 0
 
     @pytest.mark.asyncio
     async def test_extract_phase_strips_batch_source_attribution_before_apply(self):

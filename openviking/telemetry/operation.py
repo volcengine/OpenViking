@@ -62,6 +62,20 @@ class TelemetrySummaryBuilder:
         "summarize": "resource.flags.summarize",
         "watch_enabled": "resource.flags.watch_enabled",
     }
+    _AGENT_MEMORY_PHASE_KEYS = (
+        "trajectory",
+        "experience_single",
+        "experience_batch",
+        "other",
+    )
+    _AGENT_MEMORY_PHASE_DURATION_KEYS = {
+        "total_ms": "total.duration_ms",
+        "lock_wait_ms": "lock_wait.duration_ms",
+        "llm_ms": "llm.duration_ms",
+        "memory_apply_ms": "memory_apply.duration_ms",
+        "post_apply_ms": "post_apply.duration_ms",
+        "skill_apply_ms": "skill_apply.duration_ms",
+    }
 
     @staticmethod
     def _i(value: Any, default: int = 0) -> int:
@@ -247,6 +261,40 @@ class TelemetrySummaryBuilder:
                         public_key: cls._f(gauges.get(metric_key), 0.0)
                         for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()
                     },
+                }
+            if cls._has_metric_prefix("memory.agent", counters, gauges):
+                phase_summary: Dict[str, Any] = {
+                    "count": cls._i(counters.get("memory.agent.extract.phase.count"), 0),
+                }
+                for phase_key in cls._AGENT_MEMORY_PHASE_KEYS:
+                    metric_prefix = f"memory.agent.extract.phase.{phase_key}"
+                    if not cls._has_metric_prefix(metric_prefix, counters, gauges):
+                        continue
+                    phase_summary[phase_key] = {
+                        "count": cls._i(counters.get(f"{metric_prefix}.count"), 0),
+                        "lock_retries": cls._i(counters.get(f"{metric_prefix}.lock_retries"), 0),
+                        **{
+                            public_key: cls._f(gauges.get(f"{metric_prefix}.{metric_key}"), 0.0)
+                            for public_key, metric_key in (
+                                cls._AGENT_MEMORY_PHASE_DURATION_KEYS.items()
+                            )
+                        },
+                    }
+
+                memory_summary["agent"] = {
+                    "trajectories_created": cls._i(
+                        gauges.get("memory.agent.trajectories.created"), 0
+                    ),
+                    "experience_batch": {
+                        "count": cls._i(gauges.get("memory.agent.experience.batch.count"), 0),
+                        "max_trajectories": cls._i(
+                            gauges.get("memory.agent.experience.batch.max_trajectories"), 0
+                        ),
+                        "input_trajectories": cls._i(
+                            gauges.get("memory.agent.experience.batch.input_trajectories"), 0
+                        ),
+                    },
+                    "phase": phase_summary,
                 }
             summary["memory"] = memory_summary
 
