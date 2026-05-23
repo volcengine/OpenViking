@@ -36,6 +36,7 @@ TRAIN_TRANSCRIPT_OPENVIKING_TEXT = "openviking_text"
 TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS = "role_tool_blocks"
 TRAIN_TRANSCRIPT_CUSTOM_LIKE = "custom_like"
 DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS = 5000
+DEFAULT_OPENVIKING_WAIT_TIMEOUT_SECONDS = 3600
 
 
 def _json(text: str) -> dict[str, Any]:
@@ -956,7 +957,11 @@ def main() -> int:
     parser.add_argument("--openviking-user")
     parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
-    parser.add_argument("--openviking-wait-timeout", type=int, default=600)
+    parser.add_argument(
+        "--openviking-wait-timeout",
+        type=int,
+        default=DEFAULT_OPENVIKING_WAIT_TIMEOUT_SECONDS,
+    )
     parser.add_argument(
         "--expected-agent-experience-consolidation-mode",
         choices=["per_trajectory", "batch"],
