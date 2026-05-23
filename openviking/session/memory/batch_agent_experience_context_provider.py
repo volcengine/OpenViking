@@ -50,43 +50,92 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
         )
 
     def instruction(self) -> str:
-        output_language = self._output_language
-        return f"""You are a memory extraction agent. Your job is to distill experience memories from agent execution trajectories.
+        instruction = super().instruction()
 
-You are given:
-- Multiple new trajectories from the latest committed session
-- Up to {SEARCH_TOP_K} candidate existing experiences (retrieved by relevance). Top candidates also include their source trajectories as grounding material.
+        def replace_required(options: List[str], new: Any) -> str:
+            nonlocal instruction
+            for old in options:
+                if old in instruction:
+                    replacement = new(old) if callable(new) else new
+                    instruction = instruction.replace(old, replacement)
+                    return old
+            raise ValueError(
+                "AgentExperienceContextProvider instruction changed; "
+                "update BatchAgentExperienceContextProvider prompt adapter."
+            )
 
-The source trajectories are for reference only — do NOT include or modify them in your output.
+        def replace_optional(options: List[str], new: str) -> None:
+            nonlocal instruction
+            for old in options:
+                if old in instruction:
+                    instruction = instruction.replace(old, new)
+                    return
 
-## What to output
-
-For each distinct behavioral pattern across the new trajectories, output an experience entry with:
-- `experience_name`: the name of the experience (new or existing)
-- `content`: the full experience content (rewrite holistically, incorporating old + relevant new trajectories)
-- `source_trajectory_ids`: comma-separated new trajectory ids that directly support this experience
-- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
-
-The system handles create vs update automatically:
-- Same `experience_name` as an existing one → updates it in place
-- New `experience_name` → creates a new experience
-- `supersedes` set → old experience is deleted and its history is inherited
-
-## Rules
-
-- **One experience per distinct pattern.** Multiple experiences are only valid for genuinely independent behavioral patterns with different triggers and action sequences.
-- **No near-duplicates.** Merge experiences that share the same trigger or approach into one.
-- **Only incorporate relevant trajectories.** If a new trajectory does not improve any durable experience, skip it.
-- **Precise source attribution.** `source_trajectory_ids` MUST include only ids from the provided
-  `new_trajectory` reads (for example `T1,T3`). Do not include a trajectory id unless its content
-  directly supports that specific experience.
-- **Consistent naming language.** All `experience_name` values in one output must use the same language.
-- **Do NOT use `delete_uris`** for experience operations — use `supersedes` instead.
-- Follow field descriptions in the schema.
-- Output JSON only. Do not call any tools.
-
-All memory content must be written in {output_language}.
-"""
+        replace_required(
+            ["- A new trajectory (the latest agent execution to incorporate)"],
+            "- Multiple new trajectories from the latest committed session",
+        )
+        replace_optional(
+            [
+                "The new trajectory includes an `outcome` field. Read it before writing:",
+            ],
+            "Each new trajectory may include an `outcome` field. Read it before writing:",
+        )
+        replace_required(
+            [
+                "For each distinct behavioral pattern in the trajectory, output an experience entry with:",
+                "For each distinct user intent in the trajectory, output a SEPARATE experience entry.",
+            ],
+            lambda old: (
+                "For each distinct user intent across the new trajectories, "
+                "output a SEPARATE experience entry."
+                if "user intent" in old
+                else "For each distinct behavioral pattern across the new trajectories, "
+                "output an experience entry with:"
+            ),
+        )
+        replace_optional(
+            [
+                "A single trajectory may contain multiple user intents — you MUST produce one entry per intent,\n"
+                "not one entry for the whole trajectory.",
+            ],
+            (
+                "The provided trajectories may contain multiple user intents — you MUST produce "
+                "one entry per intent,\nnot one entry for the whole batch."
+            ),
+        )
+        replace_required(
+            ["- `content`: the full experience content (rewrite holistically, incorporating old + new)"],
+            (
+                "- `content`: the full experience content (rewrite holistically, "
+                "incorporating old + relevant new trajectories)\n"
+                "- `source_trajectory_ids`: comma-separated new trajectory ids that directly "
+                "support this experience"
+            ),
+        )
+        replace_optional(
+            [
+                "- **One experience per distinct user intent.** If a trajectory covers N different user goals\n"
+                "  (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.",
+            ],
+            (
+                "- **One experience per distinct user intent.** If the provided trajectories cover N different "
+                "user goals\n  (e.g., cancel + modify + add baggage), output N separate entries — never merge "
+                "them into one."
+            ),
+        )
+        replace_required(
+            [
+                "- **Consistent naming language.** All `experience_name` values in one output must use the same language.",
+            ],
+            (
+                "- **Precise source attribution.** `source_trajectory_ids` MUST include only ids "
+                "from the provided `new_trajectory` reads (for example `T1,T3`). Do not include "
+                "a trajectory id unless its content directly supports that specific experience.\n"
+                "- **Consistent naming language.** All `experience_name` values in one output must use the same language."
+            ),
+        )
+        return instruction
 
     def get_memory_schemas(self, ctx):
         schemas = super().get_memory_schemas(ctx)

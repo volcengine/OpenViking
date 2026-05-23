@@ -177,6 +177,30 @@ def test_batch_agent_experience_schema_adds_temporary_source_ids_field():
     assert any(field.name == SOURCE_TRAJECTORY_IDS_FIELD for field in schemas[0].fields)
 
 
+def test_batch_agent_experience_instruction_derives_from_single_prompt():
+    provider = BatchAgentExperienceContextProvider(
+        messages=[],
+        trajectory_items=[
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/first.md",
+                "content": "first trajectory",
+            },
+            {
+                "uri": "viking://agent/agent_sample_9/memories/trajectories/second.md",
+                "content": "second trajectory",
+            },
+        ],
+    )
+
+    instruction = provider.instruction()
+
+    assert "Multiple new trajectories from the latest committed session" in instruction
+    assert "`source_trajectory_ids`" in instruction
+    assert "Precise source attribution" in instruction
+    assert "One experience per distinct pattern" in instruction
+    assert "Only incorporate relevant trajectories" not in instruction
+
+
 def test_batch_agent_experience_resolves_and_removes_source_attribution():
     provider = BatchAgentExperienceContextProvider(
         messages=[],
