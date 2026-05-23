@@ -146,6 +146,21 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _openviking_wait_timeout_seconds(
+    config: dict[str, Any], strategy: dict[str, Any]
+) -> int | None:
+    openviking = config.get("openviking") or {}
+    value = strategy.get("openviking_wait_timeout_seconds")
+    if value is None:
+        value = openviking.get("wait_timeout_seconds")
+    if value is None:
+        return None
+    timeout = int(value)
+    if timeout <= 0:
+        raise ValueError("openviking.wait_timeout_seconds must be positive")
+    return timeout
+
+
 def _openviking_server_config_path(config: dict[str, Any]) -> Path:
     openviking = config.get("openviking") or {}
     raw = openviking.get("server_config_file") or os.environ.get("OPENVIKING_CONFIG_FILE")
@@ -511,6 +526,9 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
+        wait_timeout_seconds = _openviking_wait_timeout_seconds(config, strategy)
+        if wait_timeout_seconds is not None:
+            command.extend(["--openviking-wait-timeout", str(wait_timeout_seconds)])
         if agent_experience_config["expected_agent_experience_consolidation_mode"] is not None:
             command.extend(
                 [
@@ -768,6 +786,11 @@ def _build_plan(
                         "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
                         "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
                         "openviking_memory_config": _openviking_agent_experience_config(config)
+                        if strategy.get("memory_backend") == "openviking"
+                        else None,
+                        "openviking_wait_timeout_seconds": _openviking_wait_timeout_seconds(
+                            config, strategy
+                        )
                         if strategy.get("memory_backend") == "openviking"
                         else None,
                         "retrieval_budget": _retrieval_budget(config, strategy),
