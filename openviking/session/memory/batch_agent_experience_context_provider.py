@@ -52,62 +52,37 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
     def instruction(self) -> str:
         instruction = super().instruction()
 
-        def replace_required(options: List[str], new: Any) -> str:
+        def replace_required(old: str, new: str) -> None:
             nonlocal instruction
-            for old in options:
-                if old in instruction:
-                    replacement = new(old) if callable(new) else new
-                    instruction = instruction.replace(old, replacement)
-                    return old
+            if old in instruction:
+                instruction = instruction.replace(old, new)
+                return
             raise ValueError(
                 "AgentExperienceContextProvider instruction changed; "
                 "update BatchAgentExperienceContextProvider prompt adapter."
             )
 
-        def replace_optional(options: List[str], new: str) -> None:
-            nonlocal instruction
-            for old in options:
-                if old in instruction:
-                    instruction = instruction.replace(old, new)
-                    return
-
         replace_required(
-            ["- A new trajectory (the latest agent execution to incorporate)"],
+            "- A new trajectory (the latest agent execution to incorporate)",
             "- Multiple new trajectories from the latest committed session",
         )
-        replace_optional(
-            [
-                "The new trajectory includes an `outcome` field. Read it before writing:",
-            ],
-            "Each new trajectory may include an `outcome` field. Read it before writing:",
-        )
         replace_required(
-            [
-                "For each distinct behavioral pattern in the trajectory, output an experience entry with:",
-                "For each distinct user intent in the trajectory, output a SEPARATE experience entry.",
-            ],
-            lambda old: (
+            "For each distinct user intent in the trajectory, output a SEPARATE experience entry.",
+            (
                 "For each distinct user intent across the new trajectories, "
                 "output a SEPARATE experience entry."
-                if "user intent" in old
-                else "For each distinct behavioral pattern across the new trajectories, "
-                "output an experience entry with:"
             ),
         )
-        replace_optional(
-            [
-                "A single trajectory may contain multiple user intents — you MUST produce one entry per intent,\n"
-                "not one entry for the whole trajectory.",
-            ],
+        replace_required(
+            "A single trajectory may contain multiple user intents — you MUST produce one entry per intent,\n"
+            "not one entry for the whole trajectory.",
             (
                 "The provided trajectories may contain multiple user intents — you MUST produce "
                 "one entry per intent,\nnot one entry for the whole batch."
             ),
         )
         replace_required(
-            [
-                "- `content`: the full experience content (rewrite holistically, incorporating old + new)"
-            ],
+            "- `content`: the full experience content (rewrite holistically, incorporating old + new)",
             (
                 "- `content`: the full experience content (rewrite holistically, "
                 "incorporating old + relevant new trajectories)\n"
@@ -115,11 +90,9 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
                 "support this experience"
             ),
         )
-        replace_optional(
-            [
-                "- **One experience per distinct user intent.** If a trajectory covers N different user goals\n"
-                "  (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.",
-            ],
+        replace_required(
+            "- **One experience per distinct user intent.** If a trajectory covers N different user goals\n"
+            "  (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.",
             (
                 "- **One experience per distinct user intent.** If the provided trajectories cover N different "
                 "user goals\n  (e.g., cancel + modify + add baggage), output N separate entries — never merge "
@@ -127,9 +100,7 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
             ),
         )
         replace_required(
-            [
-                "- **Consistent naming language.** All `experience_name` values in one output must use the same language.",
-            ],
+            "- **Consistent naming language.** All `experience_name` values in one output must use the same language.",
             (
                 "- **Precise source attribution.** `source_trajectory_ids` MUST include only ids "
                 "from the provided `new_trajectory` reads (for example `T1,T3`). Do not include "
