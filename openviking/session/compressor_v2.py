@@ -966,6 +966,19 @@ class SessionCompressorV2:
                     user_ids=user_ids,
                     agent_ids=agent_ids,
                 )
+                if exact_lock_paths or tree_lock_dirs:
+                    tracer.info(
+                        f"[{phase_label}] schema lock plan: "
+                        f"exact_paths={exact_lock_paths}, tree_paths={tree_lock_dirs}"
+                    )
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}.schema_exact_lock_path_count",
+                        len(exact_lock_paths),
+                    )
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}.schema_tree_lock_path_count",
+                        len(tree_lock_dirs),
+                    )
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
@@ -1065,6 +1078,15 @@ class SessionCompressorV2:
                     ctx,
                     viking_fs,
                 )
+                if exact_lock_paths:
+                    tracer.info(
+                        f"[{phase_label}] operation-exact lock plan: "
+                        f"exact_paths={exact_lock_paths}"
+                    )
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_lock_path_count",
+                        len(exact_lock_paths),
+                    )
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 last_lock_retry_warning_at = 0.0

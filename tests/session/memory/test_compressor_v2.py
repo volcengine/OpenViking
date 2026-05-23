@@ -583,7 +583,13 @@ class TestCompressorV2:
 
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
-                return []
+                return [
+                    SimpleNamespace(
+                        memory_type="experiences",
+                        directory="viking://agent/default/memories/experiences",
+                        filename_template="{{experience_name}}.md",
+                    )
+                ]
 
             def _get_registry(self):
                 return object()
@@ -677,6 +683,8 @@ class TestCompressorV2:
         assert phase.get("lock_wait_ms", 0) >= 0
         assert phase.get("memory_apply_ms", 0) >= 0
         assert phase.get("post_apply_ms", 0) >= 0
+        assert phase["schema_tree_lock_path_count"] == 1
+        assert phase.get("schema_exact_lock_path_count", 0) == 0
 
     @pytest.mark.asyncio
     async def test_experience_operation_exact_apply_locks_after_llm(self):
@@ -800,6 +808,7 @@ class TestCompressorV2:
         assert phase_summary["candidate_uri_count"] == 2
         assert phase_summary["operation_target_uri_count"] == 2
         assert phase_summary["candidate_target_overlap_count"] == 1
+        assert phase_summary["operation_exact_lock_path_count"] == 2
 
     @pytest.mark.asyncio
     async def test_experience_operation_exact_apply_detects_stale_prefetch(self):

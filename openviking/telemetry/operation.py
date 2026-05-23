@@ -282,6 +282,15 @@ class TelemetrySummaryBuilder:
                         "candidate_target_overlap_count": cls._i(
                             counters.get(f"{metric_prefix}.candidate_target_overlap_count"), 0
                         ),
+                        "schema_exact_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.schema_exact_lock_path_count"), 0
+                        ),
+                        "schema_tree_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.schema_tree_lock_path_count"), 0
+                        ),
+                        "operation_exact_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_lock_path_count"), 0
+                        ),
                         "operation_exact_conflicts": cls._i(
                             counters.get(f"{metric_prefix}.operation_exact_conflicts"), 0
                         ),
