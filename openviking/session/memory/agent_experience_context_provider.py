@@ -61,10 +61,15 @@ The source trajectories are for reference only — do NOT include or modify them
 
 ## What to output
 
-For each distinct behavioral pattern in the trajectory, output an experience entry with:
+For each distinct user intent in the trajectory, output a SEPARATE experience entry.
+A single trajectory may contain multiple user intents — you MUST produce one entry per intent,
+not one entry for the whole trajectory.
+
+Each entry:
 - `experience_name`: the name of the experience (new or existing)
 - `content`: the full experience content (rewrite holistically, incorporating old + new)
-- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
+- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when
+  the new name is genuinely different and broader. Leave empty otherwise.
 
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → updates it in place
@@ -73,8 +78,10 @@ The system handles create vs update automatically:
 
 ## Rules
 
-- **One experience per distinct pattern.** Multiple experiences are only valid for genuinely independent behavioral patterns with different triggers and action sequences.
-- **No near-duplicates.** Merge experiences that share the same trigger or approach into one.
+- **One experience per distinct user intent.** If a trajectory covers N different user goals
+  (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.
+- **Split over merge.** When in doubt whether two patterns belong together, split them.
+  Only merge with an existing experience when it covers the EXACT same user intent and tool sequence.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
 - **Do NOT use `delete_uris`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.

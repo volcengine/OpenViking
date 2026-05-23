@@ -197,7 +197,9 @@ def test_batch_agent_experience_instruction_derives_from_single_prompt():
     assert "Multiple new trajectories from the latest committed session" in instruction
     assert "`source_trajectory_ids`" in instruction
     assert "Precise source attribution" in instruction
-    assert "One experience per distinct pattern" in instruction
+    assert "For each distinct user intent across the new trajectories" in instruction
+    assert "one entry per intent" in instruction
+    assert "Split over merge" in instruction
     assert "Only incorporate relevant trajectories" not in instruction
 
 
