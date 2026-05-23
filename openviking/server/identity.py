@@ -113,6 +113,7 @@ class ToolContext:
     default_search_uris: List[str] = field(default_factory=list)
     transaction_handle: Optional[Any] = None
     read_file_contents: Optional[Any] = None  # 用于记录已读取的文件内容
+    read_file_versions: Optional[Any] = None  # Content digests for memory files read.
     page_id_map: Optional[Any] = None  # PageIdMap for annotating read results
 
     @property

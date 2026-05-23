@@ -14,7 +14,9 @@ from openviking.session.memory.batch_agent_experience_context_provider import (
     SOURCE_TRAJECTORY_IDS_FIELD,
     BatchAgentExperienceContextProvider,
 )
-from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.versioning import content_digest
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -114,6 +116,38 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         == "candidate_experience"
     )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_records_content_version_digest():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+
+    uri = "viking://agent/agent_sample_9/memories/experiences/debug.md"
+    raw_content = MemoryFileUtils.write(
+        MemoryFile(
+            uri=uri,
+            content="debug content",
+            links=[],
+            backlinks=[],
+            memory_type="experiences",
+            extra_fields={"experience_name": "debug"},
+        )
+    )
+    provider._viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw_content))
+
+    result = await provider.read_file(uri)
+
+    assert result["experience_name"] == "debug"
+    assert provider.read_file_versions[uri] == content_digest(raw_content)
 
 
 @pytest.mark.asyncio

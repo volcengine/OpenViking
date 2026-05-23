@@ -74,6 +74,14 @@ class MemoryConfig(BaseModel):
             "memory.agent_experience_consolidation_mode='batch'."
         ),
     )
+    agent_experience_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
+        default="tree",
+        description=(
+            "Experimental lock scope for agent experience apply. 'tree' preserves the existing "
+            "schema-directory lock around read/LLM/apply. 'operation_exact' lets the read/LLM phase "
+            "run before acquiring exact locks for the concrete files that will be written."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(

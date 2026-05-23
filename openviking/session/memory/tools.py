@@ -10,9 +10,9 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.versioning import content_digest
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -189,6 +189,8 @@ class MemoryReadTool(MemoryTool):
             # Parse MEMORY_FIELDS from comment and return dict directly
             mf = MemoryFileUtils.read(content, uri=uri)
             ctx.read_file_contents[uri] = mf
+            if getattr(ctx, "read_file_versions", None) is not None:
+                ctx.read_file_versions[uri] = content_digest(content)
             # Remove links/backlinks from LLM-visible output (not needed for extraction)
             llm_result = mf.to_metadata()
             llm_result.pop("links", None)

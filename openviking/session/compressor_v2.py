@@ -26,6 +26,7 @@ from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdat
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.session.memory.versioning import MISSING_CONTENT_DIGEST, content_digest
 from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
 from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
 from openviking.storage import VikingDBManager
@@ -117,6 +118,63 @@ def _render_memory_schema_locks(
                 _append_unique(exact_paths, viking_fs._uri_to_path(file_uri, ctx))
 
     return exact_paths, tree_paths
+
+
+def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
+    memory_config = getattr(config, "memory", None)
+    return (
+        phase_label.startswith("experience(")
+        and getattr(memory_config, "agent_experience_apply_lock_mode", "tree") == "operation_exact"
+    )
+
+
+class OperationExactVersionConflict(RuntimeError):
+    def __init__(self, phase_label: str, conflicts: List[str]):
+        self.conflicts = conflicts
+        super().__init__(
+            f"[{phase_label}] Memory files changed after prefetch; "
+            f"retrying with tree lock. conflicts={conflicts}"
+        )
+
+
+def _parent_uri(uri: str) -> str:
+    return uri.rsplit("/", 1)[0] if "/" in uri else uri
+
+
+def _collect_operation_lock_uris(operations: ResolvedOperations) -> list[str]:
+    uris: list[str] = []
+    dirs: list[str] = []
+
+    def add_uri(uri: str) -> None:
+        if uri and uri not in uris:
+            uris.append(uri)
+
+    def add_dir(uri: str) -> None:
+        directory = _parent_uri(uri)
+        if directory and directory not in dirs:
+            dirs.append(directory)
+
+    for op in operations.upsert_operations:
+        for uri in op.uris:
+            add_uri(uri)
+            add_dir(uri)
+
+    for file_content in operations.delete_file_contents:
+        if not file_content.uri:
+            continue
+        add_uri(file_content.uri)
+        add_dir(file_content.uri)
+
+    for link in operations.resolved_links or []:
+        add_uri(link.from_uri)
+        add_dir(link.from_uri)
+        add_uri(link.to_uri)
+        add_dir(link.to_uri)
+
+    for directory in dirs:
+        add_uri(f"{directory.rstrip('/')}/.overview.md")
+
+    return uris
 
 
 def _phase_metric_key(phase_label: str) -> str:
@@ -757,6 +815,46 @@ class SessionCompressorV2:
         uris = list(dict.fromkeys(uris))
         return uris if len(uris) == 1 else []
 
+    def _render_operation_exact_paths(
+        self,
+        operations: ResolvedOperations,
+        ctx: RequestContext,
+        viking_fs,
+    ) -> List[str]:
+        exact_paths: List[str] = []
+        for uri in _collect_operation_lock_uris(operations):
+            try:
+                _append_unique(exact_paths, viking_fs._uri_to_path(uri, ctx))
+            except Exception as e:
+                tracer.error(f"Failed to render operation lock path for {uri}: {e}")
+        return exact_paths
+
+    async def _find_operation_version_conflicts(
+        self,
+        *,
+        operations: ResolvedOperations,
+        provider,
+        ctx: RequestContext,
+        viking_fs,
+    ) -> List[str]:
+        read_versions = getattr(provider, "read_file_versions", {}) or {}
+        if not read_versions:
+            return []
+
+        conflicts: List[str] = []
+        for uri in _collect_operation_lock_uris(operations):
+            expected_digest = read_versions.get(uri)
+            if not expected_digest:
+                continue
+            try:
+                current_content = await viking_fs.read_file(uri, ctx=ctx)
+                current_digest = content_digest(current_content)
+            except Exception:
+                current_digest = MISSING_CONTENT_DIGEST
+            if current_digest != expected_digest:
+                conflicts.append(uri)
+        return conflicts
+
     async def _run_extract_phase(
         self,
         provider,
@@ -765,6 +863,7 @@ class SessionCompressorV2:
         strict_extract_errors: bool,
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
+        force_tree_lock: bool = False,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -787,6 +886,9 @@ class SessionCompressorV2:
         post_apply_ms = 0.0
         skill_apply_ms = 0.0
         retry_count = 0
+        operation_exact_apply = not force_tree_lock and _operation_exact_lock_enabled(
+            config, phase_label
+        )
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
@@ -817,7 +919,7 @@ class SessionCompressorV2:
             transaction_handle = lock_manager.create_handle()
 
         try:
-            if lock_manager:
+            if lock_manager and not operation_exact_apply:
                 schemas = [
                     schema
                     for schema in provider.get_memory_schemas(ctx)
@@ -901,6 +1003,53 @@ class SessionCompressorV2:
                     unsupported_skill_deletes,
                 )
 
+            if lock_manager and operation_exact_apply:
+                exact_lock_paths = self._render_operation_exact_paths(
+                    memory_operations,
+                    ctx,
+                    viking_fs,
+                )
+                retry_interval = config.memory.v2_lock_retry_interval_seconds
+                max_retries = config.memory.v2_lock_max_retries
+                last_lock_retry_warning_at = 0.0
+                lock_wait_started_at = asyncio.get_running_loop().time()
+                while True:
+                    lock_acquired = await lock_manager.acquire_exact_path_batch(
+                        transaction_handle,
+                        exact_lock_paths,
+                        timeout=None,
+                    )
+                    if lock_acquired:
+                        break
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            f"[{phase_label}] Failed to acquire operation exact locks after "
+                            f"{retry_count} retries (max={max_retries})"
+                        )
+                    last_lock_retry_warning_at = _log_memory_lock_retry(
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        last_warning_at=last_lock_retry_warning_at,
+                        phase_label=phase_label,
+                    )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
+                lock_wait_ms = (asyncio.get_running_loop().time() - lock_wait_started_at) * 1000
+
+                conflicts = await self._find_operation_version_conflicts(
+                    operations=memory_operations,
+                    provider=provider,
+                    ctx=ctx,
+                    viking_fs=viking_fs,
+                )
+                if conflicts:
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_conflicts",
+                        len(conflicts),
+                    )
+                    raise OperationExactVersionConflict(phase_label, conflicts)
+
             memory_result = MemoryUpdateResult()
             if (
                 memory_operations.upsert_operations
@@ -975,6 +1124,31 @@ class SessionCompressorV2:
                 skill_results,
             )
         except Exception as e:
+            if isinstance(e, OperationExactVersionConflict) and operation_exact_apply:
+                logger.warning(
+                    "[%s] Operation-exact apply saw stale reads; falling back to tree lock: %s",
+                    phase_label,
+                    e.conflicts,
+                )
+                if lock_manager and transaction_handle:
+                    try:
+                        await lock_manager.release(transaction_handle)
+                    except Exception as release_error:
+                        logger.warning(
+                            "[%s] Failed to release exact locks before fallback: %s",
+                            phase_label,
+                            release_error,
+                        )
+                    transaction_handle = None
+                return await self._run_extract_phase(
+                    provider=provider,
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=strict_extract_errors,
+                    phase_label=phase_label,
+                    post_apply=post_apply,
+                    force_tree_lock=True,
+                )
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
                 raise

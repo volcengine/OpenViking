@@ -63,6 +63,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
+        self._read_file_versions: Dict[str, str] = {}
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
@@ -75,6 +76,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
         return self._read_file_contents
+
+    @property
+    def read_file_versions(self) -> Dict[str, str]:
+        return self._read_file_versions
 
     def get_conversation_text(self) -> str:
         """Get the full conversation text for match_text validation."""
@@ -320,6 +325,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             transaction_handle=self._transaction_handle,
             default_search_uris=default_search_uris,
             read_file_contents=self._read_file_contents,
+            read_file_versions=self._read_file_versions,
             page_id_map=extract_context.page_id_map,
         )
         return tool_ctx
@@ -525,9 +531,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
             if getattr(config.memory, "experimental_memory_switch", False):
-                experimental_memory_dir = os.path.join(
-                    memory_templates_dir, "experimental_memory"
-                )
+                experimental_memory_dir = os.path.join(memory_templates_dir, "experimental_memory")
                 if os.path.exists(experimental_memory_dir):
                     self._schema_directories.append(experimental_memory_dir)
             if custom_dir:
