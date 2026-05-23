@@ -273,6 +273,24 @@ class TelemetrySummaryBuilder:
                     phase_summary[phase_key] = {
                         "count": cls._i(counters.get(f"{metric_prefix}.count"), 0),
                         "lock_retries": cls._i(counters.get(f"{metric_prefix}.lock_retries"), 0),
+                        "candidate_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.candidate_uri_count"), 0
+                        ),
+                        "operation_target_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_target_uri_count"), 0
+                        ),
+                        "candidate_target_overlap_count": cls._i(
+                            counters.get(f"{metric_prefix}.candidate_target_overlap_count"), 0
+                        ),
+                        "operation_exact_conflicts": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_conflicts"), 0
+                        ),
+                        "operation_exact_retries": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_retries"), 0
+                        ),
+                        "operation_exact_retry_attempt": cls._i(
+                            gauges.get(f"{metric_prefix}.operation_exact_retry_attempt"), 0
+                        ),
                         **{
                             public_key: cls._f(gauges.get(f"{metric_prefix}.{metric_key}"), 0.0)
                             for public_key, metric_key in (

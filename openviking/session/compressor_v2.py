@@ -1035,6 +1035,30 @@ class SessionCompressorV2:
                     unsupported_skill_deletes,
                 )
 
+            candidate_uris = list(dict.fromkeys(getattr(provider, "prefetched_uris", []) or []))
+            operation_target_uris = _collect_operation_lock_uris(memory_operations)
+            operation_target_uri_count = len(operation_target_uris)
+            candidate_target_overlap_count = len(set(candidate_uris) & set(operation_target_uris))
+            if candidate_uris or operation_target_uris:
+                tracer.info(
+                    f"[{phase_label}] memory target diagnostics: "
+                    f"candidate_uris={candidate_uris}, "
+                    f"operation_target_uris={operation_target_uris}, "
+                    f"candidate_target_overlap={candidate_target_overlap_count}"
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.candidate_uri_count",
+                    len(candidate_uris),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.operation_target_uri_count",
+                    operation_target_uri_count,
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.candidate_target_overlap_count",
+                    candidate_target_overlap_count,
+                )
+
             if lock_manager and operation_exact_apply:
                 exact_lock_paths = self._render_operation_exact_paths(
                     memory_operations,

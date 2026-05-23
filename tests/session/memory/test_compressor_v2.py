@@ -698,6 +698,10 @@ class TestCompressorV2:
                 return ""
 
         class DummyProvider:
+            prefetched_uris = [
+                exp_uri,
+                "viking://agent/default/memories/experiences/other.md",
+            ]
             read_file_versions = {}
 
             def get_memory_schemas(self, _ctx):
@@ -776,18 +780,26 @@ class TestCompressorV2:
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
-            result = await compressor._run_extract_phase(
-                provider=DummyProvider(),
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-                phase_label="experience(test)",
-                post_apply=post_apply,
-            )
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                    post_apply=post_apply,
+                )
 
         assert result[0] == [exp_uri]
         assert events == ["llm", "acquire_exact", "apply", "post_apply", "release"]
         lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"][
+            "experience_single"
+        ]
+        assert phase_summary["candidate_uri_count"] == 2
+        assert phase_summary["operation_target_uri_count"] == 2
+        assert phase_summary["candidate_target_overlap_count"] == 1
 
     @pytest.mark.asyncio
     async def test_experience_operation_exact_apply_detects_stale_prefetch(self):
@@ -905,13 +917,15 @@ class TestCompressorV2:
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
-            result = await compressor._run_extract_phase(
-                provider=DummyProvider(),
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-                phase_label="experience(test)",
-            )
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                )
 
         assert result[0] == [exp_uri]
         assert events == [
@@ -927,6 +941,12 @@ class TestCompressorV2:
             "release:handle-3",
         ]
         lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"][
+            "experience_single"
+        ]
+        assert phase_summary["operation_exact_conflicts"] == 2
+        assert phase_summary["operation_exact_retries"] == 2
+        assert phase_summary["operation_exact_retry_attempt"] == 2
 
     @pytest.mark.asyncio
     async def test_extract_phase_strips_batch_source_attribution_before_apply(self):
