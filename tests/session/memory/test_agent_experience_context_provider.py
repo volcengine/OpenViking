@@ -199,6 +199,10 @@ def test_batch_agent_experience_instruction_derives_from_single_prompt():
     assert "Precise source attribution" in instruction
     assert "Do not split only for attribution" in instruction
     assert "One experience may cite multiple `source_trajectory_ids`" in instruction
+    assert "Preserve action-boundary differences" in instruction
+    assert "legal action boundary" in instruction
+    assert "write target/provenance" in instruction
+    assert "continuation policy" in instruction
     assert "For each distinct user intent across the new trajectories" in instruction
     assert "one entry per intent" in instruction
     assert "Split over merge" in instruction

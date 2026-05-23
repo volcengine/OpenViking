@@ -138,6 +138,11 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
                 "`source_trajectory_ids`; if multiple trajectories support the same user "
                 "intent and tool sequence, consolidate them into the same experience instead "
                 "of creating one-source duplicates.\n"
+                "- **Preserve action-boundary differences.** Consolidate near-duplicates, "
+                "but keep separate experiences when the trigger changes the legal action "
+                "boundary, write target/provenance, or continuation policy; do not bury a "
+                "blocked operation, required follow-up, or incompatible object mutation "
+                "inside a broader workflow.\n"
                 "- **Consistent naming language.** All `experience_name` values in one output must use the same language."
             ),
         )
