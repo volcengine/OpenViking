@@ -124,8 +124,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         "batch",
     }:
         raise ValueError(
-            "openviking.agent_experience_consolidation_mode must be "
-            "'per_trajectory' or 'batch'"
+            "openviking.agent_experience_consolidation_mode must be 'per_trajectory' or 'batch'"
         )
     if (
         result["expected_agent_experience_batch_max_trajectories"] is not None
@@ -206,10 +205,7 @@ def _openviking_server_memory_config_report(
         actual_batch_max = int(actual["agent_experience_batch_max_trajectories"])
     except (TypeError, ValueError):
         actual_batch_max = None
-    if (
-        expected_batch_max is not None
-        and actual_batch_max != expected_batch_max
-    ):
+    if expected_batch_max is not None and actual_batch_max != expected_batch_max:
         errors.append(
             "OpenViking server memory.agent_experience_batch_max_trajectories mismatch: "
             f"expected {expected_batch_max!r}, actual "
@@ -504,9 +500,7 @@ def _tau2_command(
                 [
                     "--expected-agent-experience-batch-max-trajectories",
                     str(
-                        agent_experience_config[
-                            "expected_agent_experience_batch_max_trajectories"
-                        ]
+                        agent_experience_config["expected_agent_experience_batch_max_trajectories"]
                     ),
                 ]
             )
