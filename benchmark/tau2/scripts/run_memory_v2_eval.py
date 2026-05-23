@@ -641,6 +641,14 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         "train_include_system_prompt": bool(args.train_include_system_prompt),
         "train_skip_failed_sessions": bool(args.train_skip_failed_sessions),
         "train_tool_output_max_chars": args.train_tool_output_max_chars,
+        "openviking_memory_config": {
+            "expected_agent_experience_consolidation_mode": (
+                args.expected_agent_experience_consolidation_mode
+            ),
+            "expected_agent_experience_batch_max_trajectories": (
+                args.expected_agent_experience_batch_max_trajectories
+            ),
+        },
         "committed_sessions": committed,
         "committed_session_count": len(committed),
         "skipped_failed_sessions": skipped_failed_sessions,
@@ -946,6 +954,23 @@ def main() -> int:
     parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
+    parser.add_argument(
+        "--expected-agent-experience-consolidation-mode",
+        choices=["per_trajectory", "batch"],
+        help=(
+            "Expected server-side memory.agent_experience_consolidation_mode. "
+            "This runner records it for corpus identity; the running OpenViking "
+            "server must be configured separately."
+        ),
+    )
+    parser.add_argument(
+        "--expected-agent-experience-batch-max-trajectories",
+        type=int,
+        help=(
+            "Expected server-side memory.agent_experience_batch_max_trajectories. "
+            "Recorded in corpus manifests for reproducibility."
+        ),
+    )
     parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument("--first-user-retrieval-top-k", type=int)
@@ -1007,6 +1032,11 @@ def main() -> int:
     normalize_litellm_env()
     if args.train_tool_output_max_chars <= 0:
         parser.error("--train-tool-output-max-chars must be positive")
+    if (
+        args.expected_agent_experience_batch_max_trajectories is not None
+        and args.expected_agent_experience_batch_max_trajectories <= 0
+    ):
+        parser.error("--expected-agent-experience-batch-max-trajectories must be positive")
     for name in (
         "memory_inject_max_chars",
         "first_user_memory_inject_max_chars",
