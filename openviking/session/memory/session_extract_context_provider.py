@@ -64,6 +64,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
         self._read_file_versions: Dict[str, str] = {}
+        self._track_read_file_versions = False
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
@@ -325,7 +326,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             transaction_handle=self._transaction_handle,
             default_search_uris=default_search_uris,
             read_file_contents=self._read_file_contents,
-            read_file_versions=self._read_file_versions,
+            read_file_versions=self._read_file_versions if self._track_read_file_versions else None,
             page_id_map=extract_context.page_id_map,
         )
         return tool_ctx

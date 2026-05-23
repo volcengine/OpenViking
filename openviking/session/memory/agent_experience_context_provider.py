@@ -46,6 +46,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         latest_archive_overview: str = "",
     ):
         super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
+        self._track_read_file_versions = True
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
         self.prefetched_uris: List[str] = []

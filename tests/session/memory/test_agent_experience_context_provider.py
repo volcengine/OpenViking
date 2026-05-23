@@ -15,9 +15,18 @@ from openviking.session.memory.batch_agent_experience_context_provider import (
     BatchAgentExperienceContextProvider,
 )
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.versioning import content_digest
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_session_provider_does_not_track_read_file_versions_by_default():
+    provider = SessionExtractContextProvider(messages=[])
+
+    tool_ctx = provider.create_tool_context()
+
+    assert tool_ctx.read_file_versions is None
 
 
 def test_create_tool_context_uses_extract_context_page_id_map():
@@ -35,6 +44,7 @@ def test_create_tool_context_uses_extract_context_page_id_map():
     tool_ctx = provider.create_tool_context()
 
     assert tool_ctx.page_id_map is extract_context.page_id_map
+    assert tool_ctx.read_file_versions is provider.read_file_versions
 
 
 @pytest.mark.asyncio
