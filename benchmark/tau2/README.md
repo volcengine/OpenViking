@@ -173,12 +173,6 @@ Start the OpenViking service before executing memory cells, and verify it with
 Memory V2 baseline. For trajectory memory evidence, start the service from this
 branch and inspect generated trajectory files; changing `search_uri` alone does
 not prove the new trajectory prompt was used.
-Agent Harness / TAU-2 corpus preparation defaults to batch experience
-consolidation. Configure the running OpenViking server with
-`memory.agent_experience_consolidation_mode="batch"` and
-`memory.agent_experience_batch_max_trajectories=5`; `--strict-preflight` checks
-`OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`) and fails fast if the
-server-side memory config does not match the experiment config.
 
 ## Memory Adapter
 

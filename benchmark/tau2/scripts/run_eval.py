@@ -101,121 +101,6 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _has_openviking_train_strategy(config: dict[str, Any]) -> bool:
-    return any(
-        strategy.get("memory_backend") == "openviking" and strategy.get("train_required")
-        for strategy in config.get("strategies") or []
-    )
-
-
-def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any]:
-    openviking = config.get("openviking") or {}
-    mode = openviking.get("agent_experience_consolidation_mode")
-    batch_max = openviking.get("agent_experience_batch_max_trajectories")
-    result: dict[str, Any] = {
-        "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
-        "expected_agent_experience_batch_max_trajectories": (
-            int(batch_max) if batch_max is not None else None
-        ),
-    }
-    if result["expected_agent_experience_consolidation_mode"] not in {
-        None,
-        "per_trajectory",
-        "batch",
-    }:
-        raise ValueError(
-            "openviking.agent_experience_consolidation_mode must be 'per_trajectory' or 'batch'"
-        )
-    if (
-        result["expected_agent_experience_batch_max_trajectories"] is not None
-        and result["expected_agent_experience_batch_max_trajectories"] < 1
-    ):
-        raise ValueError("openviking.agent_experience_batch_max_trajectories must be >= 1")
-    return result
-
-
-def _openviking_server_config_path(config: dict[str, Any]) -> Path:
-    openviking = config.get("openviking") or {}
-    raw = openviking.get("server_config_file") or os.environ.get("OPENVIKING_CONFIG_FILE")
-    if raw:
-        return resolve_path(str(raw))
-    return Path.home() / ".openviking" / "ov.conf"
-
-
-def _openviking_server_memory_config_report(
-    config: dict[str, Any], *, strict: bool
-) -> tuple[dict[str, Any], list[str]]:
-    expected = _openviking_agent_experience_config(config)
-    report: dict[str, Any] = {
-        "expected": expected,
-        "config_path": None,
-        "exists": False,
-        "actual": None,
-        "checked": False,
-    }
-    errors: list[str] = []
-    if not _has_openviking_train_strategy(config):
-        return report, errors
-    if not any(value is not None for value in expected.values()):
-        return report, errors
-
-    config_path = _openviking_server_config_path(config)
-    report["config_path"] = str(config_path)
-    report["exists"] = config_path.is_file()
-    if not config_path.is_file():
-        if strict:
-            errors.append(
-                "cannot verify OpenViking server memory config for agent-experience "
-                f"consolidation; set OPENVIKING_CONFIG_FILE or openviking.server_config_file "
-                f"(checked {config_path})"
-            )
-        return report, errors
-
-    try:
-        raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError as exc:
-        if strict:
-            errors.append(f"invalid OpenViking server config JSON at {config_path}: {exc}")
-        report["error"] = str(exc)
-        return report, errors
-
-    memory = raw.get("memory") if isinstance(raw, dict) else {}
-    if not isinstance(memory, dict):
-        memory = {}
-    actual = {
-        "agent_experience_consolidation_mode": memory.get(
-            "agent_experience_consolidation_mode", "per_trajectory"
-        ),
-        "agent_experience_batch_max_trajectories": memory.get(
-            "agent_experience_batch_max_trajectories", 5
-        ),
-    }
-    report["actual"] = actual
-    report["checked"] = True
-
-    expected_mode = expected["expected_agent_experience_consolidation_mode"]
-    if expected_mode is not None and actual["agent_experience_consolidation_mode"] != expected_mode:
-        errors.append(
-            "OpenViking server memory.agent_experience_consolidation_mode mismatch: "
-            f"expected {expected_mode!r}, actual "
-            f"{actual['agent_experience_consolidation_mode']!r} in {config_path}"
-        )
-    expected_batch_max = expected["expected_agent_experience_batch_max_trajectories"]
-    try:
-        actual_batch_max = int(actual["agent_experience_batch_max_trajectories"])
-    except (TypeError, ValueError):
-        actual_batch_max = None
-    if expected_batch_max is not None and actual_batch_max != expected_batch_max:
-        errors.append(
-            "OpenViking server memory.agent_experience_batch_max_trajectories mismatch: "
-            f"expected {expected_batch_max!r}, actual "
-            f"{actual['agent_experience_batch_max_trajectories']!r} in {config_path}"
-        )
-    if not strict:
-        errors = []
-    return report, errors
-
-
 def _require_fixed_first_user(config: dict[str, Any]) -> bool:
     return _enabled(config.get("eval", {}).get("require_fixed_first_user"))
 
@@ -427,7 +312,6 @@ def _tau2_command(
         if not search_uri:
             search_uri = _search_uri(agent_id, search_memory_type)
         budget = _retrieval_budget(config, strategy)
-        agent_experience_config = _openviking_agent_experience_config(config)
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -488,22 +372,6 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
-        if agent_experience_config["expected_agent_experience_consolidation_mode"] is not None:
-            command.extend(
-                [
-                    "--expected-agent-experience-consolidation-mode",
-                    agent_experience_config["expected_agent_experience_consolidation_mode"],
-                ]
-            )
-        if agent_experience_config["expected_agent_experience_batch_max_trajectories"] is not None:
-            command.extend(
-                [
-                    "--expected-agent-experience-batch-max-trajectories",
-                    str(
-                        agent_experience_config["expected_agent_experience_batch_max_trajectories"]
-                    ),
-                ]
-            )
         if budget["memory_inject_max_chars"] is not None:
             command.extend(["--memory-inject-max-chars", str(budget["memory_inject_max_chars"])])
         if budget["first_user_memory_inject_max_chars"] is not None:
@@ -737,9 +605,6 @@ def _build_plan(
                         ),
                         "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
                         "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
-                        "openviking_memory_config": _openviking_agent_experience_config(config)
-                        if strategy.get("memory_backend") == "openviking"
-                        else None,
                         "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
@@ -766,7 +631,6 @@ def _build_plan(
         "eval_protocol": config.get("eval", {}).get("protocol"),
         "require_fixed_first_user": require_fixed_first_user,
         "simulator_policy": policy_report,
-        "openviking_memory_config": _openviking_agent_experience_config(config),
         "cell_count": len(cells),
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
@@ -864,14 +728,6 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
             raise RuntimeError(
                 "cached corpus train_skip_failed_sessions mismatch for "
                 f"{key}: {cached_skip_failed!r} != {requested_skip_failed!r}; "
-                "use a distinct corpus_id or rebuild the corpus"
-            )
-        cached_memory_config = manifest.get("openviking_memory_config")
-        requested_memory_config = cell.get("openviking_memory_config")
-        if cached_memory_config != requested_memory_config:
-            raise RuntimeError(
-                "cached corpus openviking_memory_config mismatch for "
-                f"{key}: {cached_memory_config!r} != {requested_memory_config!r}; "
                 "use a distinct corpus_id or rebuild the corpus"
             )
         row = {
@@ -1100,10 +956,6 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     llm_env = normalize_litellm_env()
     tau2_info = tau2_context(config)
     policy_report = simulator_policy_report(config)
-    openviking_memory_config_report, openviking_memory_config_errors = (
-        _openviking_server_memory_config_report(config, strict=strict)
-    )
-    errors.extend(openviking_memory_config_errors)
     if strict and not tau2_info["tau2_repo_exists"]:
         errors.append(f"missing TAU-2 repo: {tau2_info['tau2_repo']}")
     if strict and not tau2_info["tau2_cli_resolved"]:
@@ -1157,7 +1009,6 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "require_fixed_first_user": _require_fixed_first_user(config),
         "llm_env": llm_env,
         "simulator_policy": policy_report,
-        "openviking_memory_config": openviking_memory_config_report,
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,
