@@ -105,7 +105,9 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
             ),
         )
         replace_required(
-            ["- `content`: the full experience content (rewrite holistically, incorporating old + new)"],
+            [
+                "- `content`: the full experience content (rewrite holistically, incorporating old + new)"
+            ],
             (
                 "- `content`: the full experience content (rewrite holistically, "
                 "incorporating old + relevant new trajectories)\n"
