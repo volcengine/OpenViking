@@ -133,8 +133,13 @@ class OperationExactVersionConflict(RuntimeError):
         self.conflicts = conflicts
         super().__init__(
             f"[{phase_label}] Memory files changed after prefetch; "
-            f"retrying with tree lock. conflicts={conflicts}"
+            f"operation-exact apply will retry with refreshed reads. conflicts={conflicts}"
         )
+
+
+class _OperationExactRetrySignal:
+    def __init__(self, next_attempt: int) -> None:
+        self.next_attempt = next_attempt
 
 
 def _parent_uri(uri: str) -> str:
@@ -855,6 +860,12 @@ class SessionCompressorV2:
                 conflicts.append(uri)
         return conflicts
 
+    def _clear_provider_prefetch_cache(self, provider) -> None:
+        for attr in ("_read_file_versions", "_read_file_contents"):
+            cache = getattr(provider, attr, None)
+            if isinstance(cache, dict):
+                cache.clear()
+
     async def _run_extract_phase(
         self,
         provider,
@@ -864,6 +875,8 @@ class SessionCompressorV2:
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
         force_tree_lock: bool = False,
+        operation_exact_version_attempt: int = 0,
+        _operation_exact_retry_driver: bool = False,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -874,6 +887,25 @@ class SessionCompressorV2:
         Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
+        if not _operation_exact_retry_driver:
+            next_attempt = operation_exact_version_attempt
+            while True:
+                result = await self._run_extract_phase(
+                    provider=provider,
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=strict_extract_errors,
+                    phase_label=phase_label,
+                    post_apply=post_apply,
+                    force_tree_lock=force_tree_lock,
+                    operation_exact_version_attempt=next_attempt,
+                    _operation_exact_retry_driver=True,
+                )
+                if isinstance(result, _OperationExactRetrySignal):
+                    next_attempt = result.next_attempt
+                    continue
+                return result
+
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
         config = get_openviking_config()
@@ -1125,30 +1157,37 @@ class SessionCompressorV2:
             )
         except Exception as e:
             if isinstance(e, OperationExactVersionConflict) and operation_exact_apply:
-                logger.warning(
-                    "[%s] Operation-exact apply saw stale reads; falling back to tree lock: %s",
-                    phase_label,
-                    e.conflicts,
-                )
                 if lock_manager and transaction_handle:
                     try:
                         await lock_manager.release(transaction_handle)
                     except Exception as release_error:
                         logger.warning(
-                            "[%s] Failed to release exact locks before fallback: %s",
+                            "[%s] Failed to release exact locks before retry: %s",
                             phase_label,
                             release_error,
                         )
                     transaction_handle = None
-                return await self._run_extract_phase(
-                    provider=provider,
-                    messages=messages,
-                    ctx=ctx,
-                    strict_extract_errors=strict_extract_errors,
-                    phase_label=phase_label,
-                    post_apply=post_apply,
-                    force_tree_lock=True,
+                next_attempt = operation_exact_version_attempt + 1
+                logger.warning(
+                    "[%s] Operation-exact apply saw stale reads; retrying with "
+                    "refreshed reads under exact locks (attempt=%s): %s",
+                    phase_label,
+                    next_attempt,
+                    e.conflicts,
                 )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_retries",
+                    1,
+                )
+                telemetry.set(
+                    f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_retry_attempt",
+                    next_attempt,
+                )
+                self._clear_provider_prefetch_cache(provider)
+                retry_interval = getattr(config.memory, "v2_lock_retry_interval_seconds", 0.0)
+                if retry_interval > 0:
+                    await asyncio.sleep(retry_interval)
+                return _OperationExactRetrySignal(next_attempt)
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
                 raise

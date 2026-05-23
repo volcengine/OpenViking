@@ -112,10 +112,14 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     openviking = config.get("openviking") or {}
     mode = openviking.get("agent_experience_consolidation_mode")
     batch_max = openviking.get("agent_experience_batch_max_trajectories")
+    apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
     result: dict[str, Any] = {
         "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
         "expected_agent_experience_batch_max_trajectories": (
             int(batch_max) if batch_max is not None else None
+        ),
+        "expected_agent_experience_apply_lock_mode": (
+            str(apply_lock_mode) if apply_lock_mode is not None else None
         ),
     }
     if result["expected_agent_experience_consolidation_mode"] not in {
@@ -131,6 +135,14 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         and result["expected_agent_experience_batch_max_trajectories"] < 1
     ):
         raise ValueError("openviking.agent_experience_batch_max_trajectories must be >= 1")
+    if result["expected_agent_experience_apply_lock_mode"] not in {
+        None,
+        "tree",
+        "operation_exact",
+    }:
+        raise ValueError(
+            "openviking.agent_experience_apply_lock_mode must be 'tree' or 'operation_exact'"
+        )
     return result
 
 
@@ -189,6 +201,7 @@ def _openviking_server_memory_config_report(
         "agent_experience_batch_max_trajectories": memory.get(
             "agent_experience_batch_max_trajectories", 5
         ),
+        "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
     }
     report["actual"] = actual
     report["checked"] = True
@@ -210,6 +223,16 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.agent_experience_batch_max_trajectories mismatch: "
             f"expected {expected_batch_max!r}, actual "
             f"{actual['agent_experience_batch_max_trajectories']!r} in {config_path}"
+        )
+    expected_apply_lock_mode = expected["expected_agent_experience_apply_lock_mode"]
+    if (
+        expected_apply_lock_mode is not None
+        and actual["agent_experience_apply_lock_mode"] != expected_apply_lock_mode
+    ):
+        errors.append(
+            "OpenViking server memory.agent_experience_apply_lock_mode mismatch: "
+            f"expected {expected_apply_lock_mode!r}, actual "
+            f"{actual['agent_experience_apply_lock_mode']!r} in {config_path}"
         )
     if not strict:
         errors = []
@@ -502,6 +525,13 @@ def _tau2_command(
                     str(
                         agent_experience_config["expected_agent_experience_batch_max_trajectories"]
                     ),
+                ]
+            )
+        if agent_experience_config["expected_agent_experience_apply_lock_mode"] is not None:
+            command.extend(
+                [
+                    "--expected-agent-experience-apply-lock-mode",
+                    agent_experience_config["expected_agent_experience_apply_lock_mode"],
                 ]
             )
         if budget["memory_inject_max_chars"] is not None:

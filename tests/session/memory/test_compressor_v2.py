@@ -791,7 +791,7 @@ class TestCompressorV2:
 
     @pytest.mark.asyncio
     async def test_experience_operation_exact_apply_detects_stale_prefetch(self):
-        """Exact-apply mode should retry under tree lock if a targeted file changed."""
+        """Exact-apply mode should keep retrying with refreshed reads after stale reads."""
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
@@ -809,7 +809,13 @@ class TestCompressorV2:
                 return "new-content"
 
         class DummyProvider:
-            read_file_versions = {exp_uri: content_digest("old-content")}
+            def __init__(self):
+                self._read_file_versions = {exp_uri: content_digest("old-content")}
+                self._read_file_contents = {}
+
+            @property
+            def read_file_versions(self):
+                return self._read_file_versions
 
             def get_memory_schemas(self, _ctx):
                 return []
@@ -818,11 +824,20 @@ class TestCompressorV2:
                 return object()
 
         class DummyExtractLoop:
+            run_count = 0
+
             def __init__(self, **kwargs):
-                pass
+                self.provider = kwargs["context_provider"]
 
             async def run(self):
+                DummyExtractLoop.run_count += 1
                 events.append("llm")
+                if DummyExtractLoop.run_count < 3:
+                    self.provider._read_file_versions[exp_uri] = content_digest(
+                        f"old-content-{DummyExtractLoop.run_count}"
+                    )
+                else:
+                    self.provider._read_file_versions[exp_uri] = content_digest("new-content")
                 return (
                     ResolvedOperations(
                         upsert_operations=[
@@ -857,6 +872,7 @@ class TestCompressorV2:
         handles = [
             SimpleNamespace(id="handle-1", locks=[]),
             SimpleNamespace(id="handle-2", locks=[]),
+            SimpleNamespace(id="handle-3", locks=[]),
         ]
 
         async def acquire_exact_path_batch(_handle, _paths, **kwargs):
@@ -902,11 +918,15 @@ class TestCompressorV2:
             "llm",
             "acquire_exact",
             "release:handle-1",
-            "acquire_tree",
             "llm",
-            "apply",
+            "acquire_exact",
             "release:handle-2",
+            "llm",
+            "acquire_exact",
+            "apply",
+            "release:handle-3",
         ]
+        lock_manager.acquire_exact_tree_batch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_extract_phase_strips_batch_source_attribution_before_apply(self):

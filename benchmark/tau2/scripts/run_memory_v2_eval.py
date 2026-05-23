@@ -648,6 +648,9 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
             "expected_agent_experience_batch_max_trajectories": (
                 args.expected_agent_experience_batch_max_trajectories
             ),
+            "expected_agent_experience_apply_lock_mode": (
+                args.expected_agent_experience_apply_lock_mode
+            ),
         },
         "committed_sessions": committed,
         "committed_session_count": len(committed),
@@ -968,6 +971,14 @@ def main() -> int:
         type=int,
         help=(
             "Expected server-side memory.agent_experience_batch_max_trajectories. "
+            "Recorded in corpus manifests for reproducibility."
+        ),
+    )
+    parser.add_argument(
+        "--expected-agent-experience-apply-lock-mode",
+        choices=["tree", "operation_exact"],
+        help=(
+            "Expected server-side memory.agent_experience_apply_lock_mode. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )
