@@ -134,6 +134,10 @@ class BatchAgentExperienceContextProvider(AgentExperienceContextProvider):
                 "- **Precise source attribution.** `source_trajectory_ids` MUST include only ids "
                 "from the provided `new_trajectory` reads (for example `T1,T3`). Do not include "
                 "a trajectory id unless its content directly supports that specific experience.\n"
+                "- **Do not split only for attribution.** One experience may cite multiple "
+                "`source_trajectory_ids`; if multiple trajectories support the same user "
+                "intent and tool sequence, consolidate them into the same experience instead "
+                "of creating one-source duplicates.\n"
                 "- **Consistent naming language.** All `experience_name` values in one output must use the same language."
             ),
         )

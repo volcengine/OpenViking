@@ -197,6 +197,8 @@ def test_batch_agent_experience_instruction_derives_from_single_prompt():
     assert "Multiple new trajectories from the latest committed session" in instruction
     assert "`source_trajectory_ids`" in instruction
     assert "Precise source attribution" in instruction
+    assert "Do not split only for attribution" in instruction
+    assert "One experience may cite multiple `source_trajectory_ids`" in instruction
     assert "For each distinct user intent across the new trajectories" in instruction
     assert "one entry per intent" in instruction
     assert "Split over merge" in instruction
@@ -222,7 +224,7 @@ def test_batch_agent_experience_resolves_and_removes_source_attribution():
         uris=["viking://agent/agent_sample_9/memories/experiences/debug.md"],
         memory_fields={
             "experience_name": "debug",
-            SOURCE_TRAJECTORY_IDS_FIELD: "T2",
+            SOURCE_TRAJECTORY_IDS_FIELD: "T1,T2",
         },
     )
     operations = ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[])
@@ -231,6 +233,7 @@ def test_batch_agent_experience_resolves_and_removes_source_attribution():
 
     assert attribution == {
         "viking://agent/agent_sample_9/memories/experiences/debug.md": [
+            "viking://agent/agent_sample_9/memories/trajectories/first.md",
             "viking://agent/agent_sample_9/memories/trajectories/second.md"
         ]
     }
