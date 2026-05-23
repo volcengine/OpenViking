@@ -234,7 +234,7 @@ def test_batch_agent_experience_resolves_and_removes_source_attribution():
     assert attribution == {
         "viking://agent/agent_sample_9/memories/experiences/debug.md": [
             "viking://agent/agent_sample_9/memories/trajectories/first.md",
-            "viking://agent/agent_sample_9/memories/trajectories/second.md"
+            "viking://agent/agent_sample_9/memories/trajectories/second.md",
         ]
     }
     assert SOURCE_TRAJECTORY_IDS_FIELD not in op.memory_fields
