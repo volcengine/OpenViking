@@ -1,7 +1,6 @@
 memory_type: entities
 description: |
   Wikipedia article - manages page using Zettelkasten method.
-  Each page represents an article with relative path links to events.
   Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
