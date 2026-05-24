@@ -136,8 +136,14 @@ def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
 
 
 class OperationExactVersionConflict(RuntimeError):
-    def __init__(self, phase_label: str, conflicts: List[str]):
+    def __init__(
+        self,
+        phase_label: str,
+        conflicts: List[str],
+        conflict_details: Optional[List[dict[str, str]]] = None,
+    ):
         self.conflicts = conflicts
+        self.conflict_details = conflict_details or []
         super().__init__(
             f"[{phase_label}] Memory files changed after prefetch; "
             f"operation-exact apply will retry with refreshed reads. conflicts={conflicts}"
@@ -162,6 +168,18 @@ def _memory_bucket_from_uri(uri: str) -> str:
     if not rest:
         return "unknown"
     return _metric_label(rest.split("/", 1)[0].removesuffix(".md"))
+
+
+def _digest_state(digest: str) -> str:
+    if digest == MISSING_CONTENT_DIGEST:
+        return "missing"
+    return "present"
+
+
+def _short_digest(digest: str) -> str:
+    if not digest or digest == MISSING_CONTENT_DIGEST:
+        return digest or "unknown"
+    return digest[:12]
 
 
 def _parent_uri(uri: str) -> str:
@@ -1000,7 +1018,7 @@ class SessionCompressorV2:
         provider,
         ctx: RequestContext,
         viking_fs,
-    ) -> List[str]:
+    ) -> List[dict[str, str]]:
         read_versions = getattr(provider, "read_file_versions", {}) or {}
         if not read_versions:
             return []
@@ -1014,7 +1032,7 @@ class SessionCompressorV2:
         if not conflict_sensitive_uris:
             return []
 
-        conflicts: List[str] = []
+        conflicts: List[dict[str, str]] = []
         for uri in conflict_sensitive_uris:
             expected_digest = read_versions.get(uri)
             if not expected_digest:
@@ -1025,7 +1043,15 @@ class SessionCompressorV2:
             except Exception:
                 current_digest = MISSING_CONTENT_DIGEST
             if current_digest != expected_digest:
-                conflicts.append(uri)
+                conflicts.append(
+                    {
+                        "uri": uri,
+                        "base_digest": expected_digest,
+                        "current_digest": current_digest,
+                        "base_state": _digest_state(expected_digest),
+                        "current_state": _digest_state(current_digest),
+                    }
+                )
         return conflicts
 
     def _clear_provider_prefetch_cache(self, provider) -> None:
@@ -1319,13 +1345,31 @@ class SessionCompressorV2:
                     viking_fs=viking_fs,
                 )
                 if conflicts:
+                    conflict_uris = [conflict["uri"] for conflict in conflicts]
                     diagnostics_by_uri = {
                         diagnostic["uri"]: diagnostic
                         for diagnostic in conflict_sensitive_diagnostics
                     }
                     retry_buckets: set[str] = set()
                     retry_reasons: set[str] = set()
-                    for conflict_uri in conflicts:
+                    stale_read_details = [
+                        {
+                            "uri": conflict["uri"],
+                            "base": _short_digest(conflict["base_digest"]),
+                            "current": _short_digest(conflict["current_digest"]),
+                        }
+                        for conflict in conflicts
+                    ]
+                    tracer.info(
+                        f"[{phase_label}] operation-exact stale-read details: {stale_read_details}"
+                    )
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}."
+                        "operation_exact_stale_read_uri_count",
+                        len(conflicts),
+                    )
+                    for conflict in conflicts:
+                        conflict_uri = conflict["uri"]
                         diagnostic = diagnostics_by_uri.get(conflict_uri) or {
                             "bucket": _memory_bucket_from_uri(conflict_uri),
                             "reason": "unknown_conflict",
@@ -1344,6 +1388,16 @@ class SessionCompressorV2:
                             f"operation_exact_conflict_reason.{reason}",
                             1,
                         )
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_stale_base_state.{conflict['base_state']}",
+                            1,
+                        )
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_stale_current_state.{conflict['current_state']}",
+                            1,
+                        )
                     for bucket in retry_buckets:
                         telemetry.count(
                             f"memory.agent.extract.phase.{phase_metric_key}."
@@ -1360,7 +1414,11 @@ class SessionCompressorV2:
                         f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_conflicts",
                         len(conflicts),
                     )
-                    raise OperationExactVersionConflict(phase_label, conflicts)
+                    raise OperationExactVersionConflict(
+                        phase_label,
+                        conflict_uris,
+                        conflicts,
+                    )
 
             memory_result = MemoryUpdateResult()
             if (

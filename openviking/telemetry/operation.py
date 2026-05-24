@@ -359,6 +359,10 @@ class TelemetrySummaryBuilder:
                         "operation_exact_retries": cls._i(
                             counters.get(f"{metric_prefix}.operation_exact_retries"), 0
                         ),
+                        "operation_exact_stale_read_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_stale_read_uri_count"),
+                            0,
+                        ),
                         "operation_exact_retry_attempt": cls._i(
                             gauges.get(f"{metric_prefix}.operation_exact_retry_attempt"), 0
                         ),
@@ -396,6 +400,18 @@ class TelemetrySummaryBuilder:
                             cls._build_counter_suffix_summary(
                                 counters,
                                 f"{metric_prefix}.operation_exact_retry_reason",
+                            )
+                        ),
+                        "operation_exact_stale_base_states": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_stale_base_state",
+                            )
+                        ),
+                        "operation_exact_stale_current_states": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_stale_current_state",
                             )
                         ),
                         **{

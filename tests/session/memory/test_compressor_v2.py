@@ -1168,6 +1168,7 @@ class TestCompressorV2:
         phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
         assert phase_summary["operation_exact_conflicts"] == 2
         assert phase_summary["operation_exact_retries"] == 2
+        assert phase_summary["operation_exact_stale_read_uri_count"] == 2
         assert phase_summary["operation_exact_retry_attempt"] == 2
         assert phase_summary["operation_exact_conflict_sensitive_buckets"] == {"experiences": 3}
         assert phase_summary["operation_exact_conflict_sensitive_reasons"] == {"unknown_schema": 3}
@@ -1175,6 +1176,8 @@ class TestCompressorV2:
         assert phase_summary["operation_exact_conflict_reasons"] == {"unknown_schema": 2}
         assert phase_summary["operation_exact_retry_buckets"] == {"experiences": 2}
         assert phase_summary["operation_exact_retry_reasons"] == {"unknown_schema": 2}
+        assert phase_summary["operation_exact_stale_base_states"] == {"present": 2}
+        assert phase_summary["operation_exact_stale_current_states"] == {"present": 2}
 
     @pytest.mark.asyncio
     async def test_long_term_operation_exact_allows_merge_safe_stale_prefetch(self):
@@ -1487,10 +1490,13 @@ class TestCompressorV2:
         phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["other"]
         assert phase_summary["operation_exact_conflicts"] == 1
         assert phase_summary["operation_exact_retries"] == 1
+        assert phase_summary["operation_exact_stale_read_uri_count"] == 1
         assert phase_summary["operation_exact_conflict_buckets"] == {"tools": 1}
         assert phase_summary["operation_exact_conflict_reasons"] == {"plain_string_patch": 1}
         assert phase_summary["operation_exact_retry_buckets"] == {"tools": 1}
         assert phase_summary["operation_exact_retry_reasons"] == {"plain_string_patch": 1}
+        assert phase_summary["operation_exact_stale_base_states"] == {"present": 1}
+        assert phase_summary["operation_exact_stale_current_states"] == {"present": 1}
 
     @pytest.mark.asyncio
     async def test_extract_phase_strips_batch_source_attribution_before_apply(self):
