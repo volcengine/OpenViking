@@ -53,9 +53,14 @@ openviking:
   # by the running server's ov.conf; strict preflight verifies they match.
   agent_experience_consolidation_mode: batch
   agent_experience_batch_max_trajectories: 5
+  agent_experience_apply_lock_mode: tree
+  agent_trajectory_apply_lock_mode: tree
+  long_term_apply_lock_mode: tree
   # Corpus prepare can legitimately take far longer than the low-level client
   # default on tree-lock paths. Keep tree/exact lock experiments comparable by
-  # making the task wait timeout explicit in the generated run plan.
+  # making both the HTTP client and task wait timeout explicit in the generated
+  # run plan.
+  timeout_seconds: 3600
   wait_timeout_seconds: 3600
   reuse_corpus_across_runs: true
   retrieval_top_k: 4

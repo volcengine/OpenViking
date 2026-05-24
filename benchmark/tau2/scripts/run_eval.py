@@ -114,6 +114,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     batch_max = openviking.get("agent_experience_batch_max_trajectories")
     apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
+    long_term_apply_lock_mode = openviking.get("long_term_apply_lock_mode")
     result: dict[str, Any] = {
         "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
         "expected_agent_experience_batch_max_trajectories": (
@@ -124,6 +125,9 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         ),
         "expected_agent_trajectory_apply_lock_mode": (
             str(trajectory_apply_lock_mode) if trajectory_apply_lock_mode is not None else None
+        ),
+        "expected_long_term_apply_lock_mode": (
+            str(long_term_apply_lock_mode) if long_term_apply_lock_mode is not None else None
         ),
     }
     if result["expected_agent_experience_consolidation_mode"] not in {
@@ -155,6 +159,14 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         raise ValueError(
             "openviking.agent_trajectory_apply_lock_mode must be 'tree' or 'operation_exact'"
         )
+    if result["expected_long_term_apply_lock_mode"] not in {
+        None,
+        "tree",
+        "operation_exact",
+    }:
+        raise ValueError(
+            "openviking.long_term_apply_lock_mode must be 'tree' or 'operation_exact'"
+        )
     return result
 
 
@@ -170,6 +182,19 @@ def _openviking_wait_timeout_seconds(
     timeout = int(value)
     if timeout <= 0:
         raise ValueError("openviking.wait_timeout_seconds must be positive")
+    return timeout
+
+
+def _openviking_timeout_seconds(config: dict[str, Any], strategy: dict[str, Any]) -> float | None:
+    openviking = config.get("openviking") or {}
+    value = strategy.get("openviking_timeout_seconds")
+    if value is None:
+        value = openviking.get("timeout_seconds")
+    if value is None:
+        return None
+    timeout = float(value)
+    if timeout <= 0:
+        raise ValueError("openviking.timeout_seconds must be positive")
     return timeout
 
 
@@ -230,6 +255,7 @@ def _openviking_server_memory_config_report(
         ),
         "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
         "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
+        "long_term_apply_lock_mode": memory.get("long_term_apply_lock_mode", "tree"),
     }
     report["actual"] = actual
     report["checked"] = True
@@ -271,6 +297,16 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.agent_trajectory_apply_lock_mode mismatch: "
             f"expected {expected_trajectory_apply_lock_mode!r}, actual "
             f"{actual['agent_trajectory_apply_lock_mode']!r} in {config_path}"
+        )
+    expected_long_term_apply_lock_mode = expected["expected_long_term_apply_lock_mode"]
+    if (
+        expected_long_term_apply_lock_mode is not None
+        and actual["long_term_apply_lock_mode"] != expected_long_term_apply_lock_mode
+    ):
+        errors.append(
+            "OpenViking server memory.long_term_apply_lock_mode mismatch: "
+            f"expected {expected_long_term_apply_lock_mode!r}, actual "
+            f"{actual['long_term_apply_lock_mode']!r} in {config_path}"
         )
     if not strict:
         errors = []
@@ -549,6 +585,9 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
+        timeout_seconds = _openviking_timeout_seconds(config, strategy)
+        if timeout_seconds is not None:
+            command.extend(["--openviking-timeout", str(timeout_seconds)])
         wait_timeout_seconds = _openviking_wait_timeout_seconds(config, strategy)
         if wait_timeout_seconds is not None:
             command.extend(["--openviking-wait-timeout", str(wait_timeout_seconds)])
@@ -580,6 +619,13 @@ def _tau2_command(
                 [
                     "--expected-agent-trajectory-apply-lock-mode",
                     agent_experience_config["expected_agent_trajectory_apply_lock_mode"],
+                ]
+            )
+        if agent_experience_config["expected_long_term_apply_lock_mode"] is not None:
+            command.extend(
+                [
+                    "--expected-long-term-apply-lock-mode",
+                    agent_experience_config["expected_long_term_apply_lock_mode"],
                 ]
             )
         if budget["memory_inject_max_chars"] is not None:
@@ -816,6 +862,11 @@ def _build_plan(
                         "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
                         "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
                         "openviking_memory_config": _openviking_agent_experience_config(config)
+                        if strategy.get("memory_backend") == "openviking"
+                        else None,
+                        "openviking_timeout_seconds": _openviking_timeout_seconds(
+                            config, strategy
+                        )
                         if strategy.get("memory_backend") == "openviking"
                         else None,
                         "openviking_wait_timeout_seconds": _openviking_wait_timeout_seconds(

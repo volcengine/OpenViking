@@ -206,6 +206,25 @@ class TelemetrySummaryBuilder:
         return summary
 
     @classmethod
+    def _build_counter_suffix_summary(
+        cls,
+        counters: Dict[str, float],
+        prefix: str,
+    ) -> Dict[str, int]:
+        needle = f"{prefix}."
+        summary: Dict[str, int] = {}
+        for key, value in counters.items():
+            if not key.startswith(needle):
+                continue
+            suffix = key[len(needle) :]
+            if not suffix or "." in suffix:
+                continue
+            count = cls._i(value, 0)
+            if count > 0:
+                summary[suffix] = count
+        return dict(sorted(summary.items()))
+
+    @classmethod
     def build(
         cls,
         *,
@@ -348,6 +367,42 @@ class TelemetrySummaryBuilder:
                         ),
                         "operation_exact_retry_attempt": cls._i(
                             gauges.get(f"{metric_prefix}.operation_exact_retry_attempt"), 0
+                        ),
+                        "operation_exact_conflict_sensitive_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_sensitive_bucket",
+                            )
+                        ),
+                        "operation_exact_conflict_sensitive_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_sensitive_reason",
+                            )
+                        ),
+                        "operation_exact_conflict_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_bucket",
+                            )
+                        ),
+                        "operation_exact_conflict_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_reason",
+                            )
+                        ),
+                        "operation_exact_retry_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_retry_bucket",
+                            )
+                        ),
+                        "operation_exact_retry_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_retry_reason",
+                            )
                         ),
                         **{
                             public_key: cls._f(gauges.get(f"{metric_prefix}.{metric_key}"), 0.0)

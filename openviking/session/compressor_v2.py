@@ -132,6 +132,11 @@ def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
             getattr(memory_config, "agent_trajectory_apply_lock_mode", "tree")
             == "operation_exact"
         )
+    if phase_label == "long_term":
+        return (
+            getattr(memory_config, "long_term_apply_lock_mode", "tree")
+            == "operation_exact"
+        )
     return False
 
 
@@ -147,6 +152,21 @@ class OperationExactVersionConflict(RuntimeError):
 class _OperationExactRetrySignal:
     def __init__(self, next_attempt: int) -> None:
         self.next_attempt = next_attempt
+
+
+def _metric_label(value: str) -> str:
+    label = str(value or "unknown").strip().lower()
+    return "".join(char if char.isalnum() else "_" for char in label).strip("_") or "unknown"
+
+
+def _memory_bucket_from_uri(uri: str) -> str:
+    marker = "/memories/"
+    if marker not in uri:
+        return "unknown"
+    rest = uri.split(marker, 1)[1].lstrip("/")
+    if not rest:
+        return "unknown"
+    return _metric_label(rest.split("/", 1)[0].removesuffix(".md"))
 
 
 def _parent_uri(uri: str) -> str:
@@ -185,6 +205,100 @@ def _collect_operation_lock_uris(operations: ResolvedOperations) -> list[str]:
 
     for directory in dirs:
         add_uri(f"{directory.rstrip('/')}/.overview.md")
+
+    return uris
+
+
+def _merge_op_value(field: Any) -> str:
+    merge_op = getattr(field, "merge_op", "")
+    return str(getattr(merge_op, "value", merge_op)).lower()
+
+
+def _field_type_value(field: Any) -> str:
+    field_type = getattr(field, "field_type", "")
+    return str(getattr(field_type, "value", field_type)).lower()
+
+
+def _is_structured_string_patch(value: Any) -> bool:
+    if hasattr(value, "blocks"):
+        return True
+    return isinstance(value, dict) and isinstance(value.get("blocks"), list)
+
+
+def _operation_conflict_reason(operation: Any, registry: Any) -> str:
+    getter = getattr(registry, "get", None)
+    schema = getter(operation.memory_type) if callable(getter) else None
+    if schema is None:
+        return "unknown_schema"
+
+    fields = {field.name: field for field in getattr(schema, "fields", []) or []}
+    for name, value in (operation.memory_fields or {}).items():
+        field = fields.get(name)
+        if field is None:
+            return "unknown_field"
+
+        merge_op = _merge_op_value(field)
+        if merge_op == "replace":
+            return "replace"
+        if merge_op == "patch" and _field_type_value(field) == "string":
+            # Structured SEARCH/REPLACE patches are replayed against the latest
+            # file inside MemoryUpdater. A plain string would become a full
+            # replacement, so keep the conservative stale-read retry for it.
+            if not _is_structured_string_patch(value):
+                return "plain_string_patch"
+
+    return ""
+
+
+def _collect_conflict_sensitive_operation_diagnostics(
+    operations: ResolvedOperations,
+    registry: Any,
+) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+
+    def add(uri: str, *, memory_type: str, operation: str, reason: str) -> None:
+        if not uri:
+            return
+        diagnostics.append(
+            {
+                "uri": uri,
+                "bucket": _memory_bucket_from_uri(uri),
+                "memory_type": _metric_label(memory_type),
+                "operation": _metric_label(operation),
+                "reason": _metric_label(reason),
+            }
+        )
+
+    for operation in operations.upsert_operations:
+        reason = _operation_conflict_reason(operation, registry)
+        if not reason:
+            continue
+        for uri in operation.uris:
+            add(uri, memory_type=operation.memory_type, operation="upsert", reason=reason)
+
+    for file_content in operations.delete_file_contents:
+        add(
+            file_content.uri,
+            memory_type=_memory_bucket_from_uri(file_content.uri),
+            operation="delete",
+            reason="delete",
+        )
+
+    return diagnostics
+
+
+def _collect_conflict_sensitive_operation_uris(
+    operations: ResolvedOperations,
+    registry: Any,
+) -> list[str]:
+    uris: list[str] = []
+
+    def add_uri(uri: str) -> None:
+        if uri and uri not in uris:
+            uris.append(uri)
+
+    for diagnostic in _collect_conflict_sensitive_operation_diagnostics(operations, registry):
+        add_uri(diagnostic["uri"])
 
     return uris
 
@@ -352,8 +466,53 @@ class SessionCompressorV2:
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
         from openviking.storage.viking_fs import get_viking_fs
 
-        # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         viking_fs = get_viking_fs()
+        if getattr(config.memory, "long_term_apply_lock_mode", "tree") == "operation_exact":
+            from openviking.session.memory.session_extract_context_provider import (
+                SessionExtractContextProvider,
+            )
+
+            provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+            )
+            if archive_uri:
+                provider._memory_diff_archive_uri = archive_uri
+
+            phase_result = await self._run_extract_phase(
+                provider=provider,
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=strict_extract_errors,
+                phase_label="long_term",
+            )
+            if phase_result is None:
+                return []
+
+            _written_uris, _edited_uris, contexts, _inheritance_map, _skill_results = phase_result
+            telemetry.set(
+                "memory.extract.candidates.total",
+                sum(
+                    1
+                    for context in contexts
+                    if context.category in {"memory_write", "memory_edit"}
+                ),
+            )
+            telemetry.set(
+                "memory.extract.created",
+                sum(1 for context in contexts if context.category == "memory_write"),
+            )
+            telemetry.set(
+                "memory.extract.merged",
+                sum(1 for context in contexts if context.category == "memory_edit"),
+            )
+            telemetry.set(
+                "memory.extract.deleted",
+                sum(1 for context in contexts if context.category == "memory_delete"),
+            )
+            return contexts
+
+        # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         lock_manager = None
         transaction_handle = None
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
@@ -853,8 +1012,17 @@ class SessionCompressorV2:
         if not read_versions:
             return []
 
+        registry_getter = getattr(provider, "_get_registry", None)
+        registry = registry_getter() if callable(registry_getter) else None
+        conflict_sensitive_uris = _collect_conflict_sensitive_operation_uris(
+            operations,
+            registry,
+        )
+        if not conflict_sensitive_uris:
+            return []
+
         conflicts: List[str] = []
-        for uri in _collect_operation_lock_uris(operations):
+        for uri in conflict_sensitive_uris:
             expected_digest = read_versions.get(uri)
             if not expected_digest:
                 continue
@@ -941,6 +1109,8 @@ class SessionCompressorV2:
         provider._isolation_handler = isolation_handler
         provider._ctx = ctx
         provider._viking_fs = viking_fs
+        if operation_exact_apply and hasattr(provider, "_track_read_file_versions"):
+            provider._track_read_file_versions = True
 
         orchestrator = ExtractLoop(
             vlm=vlm,
@@ -1057,6 +1227,18 @@ class SessionCompressorV2:
 
             candidate_uris = list(dict.fromkeys(getattr(provider, "prefetched_uris", []) or []))
             operation_target_uris = _collect_operation_lock_uris(memory_operations)
+            registry_getter = getattr(provider, "_get_registry", None)
+            provider_registry = registry_getter() if callable(registry_getter) else None
+            conflict_sensitive_diagnostics = (
+                _collect_conflict_sensitive_operation_diagnostics(
+                    memory_operations,
+                    provider_registry,
+                )
+            )
+            conflict_sensitive_uris = _collect_conflict_sensitive_operation_uris(
+                memory_operations,
+                provider_registry,
+            )
             operation_target_uri_count = len(operation_target_uris)
             candidate_target_overlap_count = len(set(candidate_uris) & set(operation_target_uris))
             if candidate_uris or operation_target_uris:
@@ -1064,6 +1246,7 @@ class SessionCompressorV2:
                     f"[{phase_label}] memory target diagnostics: "
                     f"candidate_uris={candidate_uris}, "
                     f"operation_target_uris={operation_target_uris}, "
+                    f"conflict_sensitive_uris={conflict_sensitive_uris}, "
                     f"candidate_target_overlap={candidate_target_overlap_count}"
                 )
                 telemetry.count(
@@ -1074,6 +1257,23 @@ class SessionCompressorV2:
                     f"memory.agent.extract.phase.{phase_metric_key}.operation_target_uri_count",
                     operation_target_uri_count,
                 )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_conflict_sensitive_uri_count",
+                    len(conflict_sensitive_uris),
+                )
+                for diagnostic in conflict_sensitive_diagnostics:
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}."
+                        f"operation_exact_conflict_sensitive_bucket."
+                        f"{diagnostic['bucket']}",
+                        1,
+                    )
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}."
+                        f"operation_exact_conflict_sensitive_reason."
+                        f"{diagnostic['reason']}",
+                        1,
+                    )
                 telemetry.count(
                     f"memory.agent.extract.phase.{phase_metric_key}.candidate_target_overlap_count",
                     candidate_target_overlap_count,
@@ -1120,7 +1320,7 @@ class SessionCompressorV2:
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
-                lock_wait_ms = (asyncio.get_running_loop().time() - lock_wait_started_at) * 1000
+                lock_wait_ms += (asyncio.get_running_loop().time() - lock_wait_started_at) * 1000
 
                 conflicts = await self._find_operation_version_conflicts(
                     operations=memory_operations,
@@ -1129,6 +1329,43 @@ class SessionCompressorV2:
                     viking_fs=viking_fs,
                 )
                 if conflicts:
+                    diagnostics_by_uri = {
+                        diagnostic["uri"]: diagnostic
+                        for diagnostic in conflict_sensitive_diagnostics
+                    }
+                    retry_buckets: set[str] = set()
+                    retry_reasons: set[str] = set()
+                    for conflict_uri in conflicts:
+                        diagnostic = diagnostics_by_uri.get(conflict_uri) or {
+                            "bucket": _memory_bucket_from_uri(conflict_uri),
+                            "reason": "unknown_conflict",
+                        }
+                        bucket = diagnostic["bucket"]
+                        reason = diagnostic["reason"]
+                        retry_buckets.add(bucket)
+                        retry_reasons.add(reason)
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_conflict_bucket.{bucket}",
+                            1,
+                        )
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_conflict_reason.{reason}",
+                            1,
+                        )
+                    for bucket in retry_buckets:
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_retry_bucket.{bucket}",
+                            1,
+                        )
+                    for reason in retry_reasons:
+                        telemetry.count(
+                            f"memory.agent.extract.phase.{phase_metric_key}."
+                            f"operation_exact_retry_reason.{reason}",
+                            1,
+                        )
                     telemetry.count(
                         f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_conflicts",
                         len(conflicts),
@@ -1157,6 +1394,22 @@ class SessionCompressorV2:
                 f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
                 f"errors={len(memory_result.errors)}"
             )
+
+            archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
+            if archive_uri and viking_fs:
+                memory_diff = await self._build_memory_diff(
+                    result=memory_result,
+                    operations=memory_operations,
+                    viking_fs=viking_fs,
+                    ctx=ctx,
+                    archive_uri=archive_uri,
+                )
+                await viking_fs.write_file(
+                    uri=f"{archive_uri}/memory_diff.json",
+                    content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
+                    ctx=ctx,
+                )
+                logger.info(f"[{phase_label}] Wrote memory_diff.json to {archive_uri}")
 
             if post_apply:
                 post_apply_started_at = asyncio.get_running_loop().time()

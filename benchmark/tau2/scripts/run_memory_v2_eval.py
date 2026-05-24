@@ -36,6 +36,7 @@ TRAIN_TRANSCRIPT_OPENVIKING_TEXT = "openviking_text"
 TRAIN_TRANSCRIPT_ROLE_TOOL_BLOCKS = "role_tool_blocks"
 TRAIN_TRANSCRIPT_CUSTOM_LIKE = "custom_like"
 DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS = 5000
+DEFAULT_OPENVIKING_TIMEOUT_SECONDS = 3600.0
 DEFAULT_OPENVIKING_WAIT_TIMEOUT_SECONDS = 3600
 
 
@@ -655,6 +656,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
             "expected_agent_trajectory_apply_lock_mode": (
                 args.expected_agent_trajectory_apply_lock_mode
             ),
+            "expected_long_term_apply_lock_mode": args.expected_long_term_apply_lock_mode,
         },
         "committed_sessions": committed,
         "committed_session_count": len(committed),
@@ -959,7 +961,11 @@ def main() -> int:
     parser.add_argument("--openviking-account")
     parser.add_argument("--openviking-user")
     parser.add_argument("--openviking-agent-id")
-    parser.add_argument("--openviking-timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--openviking-timeout",
+        type=float,
+        default=DEFAULT_OPENVIKING_TIMEOUT_SECONDS,
+    )
     parser.add_argument(
         "--openviking-wait-timeout",
         type=int,
@@ -995,6 +1001,14 @@ def main() -> int:
         choices=["tree", "operation_exact"],
         help=(
             "Expected server-side memory.agent_trajectory_apply_lock_mode. "
+            "Recorded in corpus manifests for reproducibility."
+        ),
+    )
+    parser.add_argument(
+        "--expected-long-term-apply-lock-mode",
+        choices=["tree", "operation_exact"],
+        help=(
+            "Expected server-side memory.long_term_apply_lock_mode. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )
