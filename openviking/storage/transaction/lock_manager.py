@@ -19,6 +19,25 @@ _HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
 _USE_MANAGER_DEFAULT_TIMEOUT = object()
 
 
+def _lock_bucket(path: str) -> str:
+    normalized = str(path or "")
+    if "/memories/" in normalized:
+        suffix = normalized.split("/memories/", 1)[1].strip("/")
+        memory_type = suffix.split("/", 1)[0] if suffix else "root"
+        return f"memories_{_sanitize_bucket(memory_type)}"
+    if "/skills/" in normalized:
+        return "skills"
+    if "/session/" in normalized:
+        return "session"
+    return "other"
+
+
+def _sanitize_bucket(value: str) -> str:
+    chars = [ch.lower() if ch.isalnum() else "_" for ch in str(value or "unknown")]
+    sanitized = "".join(chars).strip("_")
+    return sanitized or "unknown"
+
+
 class _LockManagerLike(Protocol):
     def get_handle(self, handle_id: str) -> Optional[LockHandle]: ...
 
@@ -66,6 +85,23 @@ class LockManager:
 
     def _mark_handle_active(self, handle: LockHandle) -> None:
         handle.last_active_at = time.time()
+
+    def _record_lock_acquire(self, mode: str, path: str, elapsed_ms: float, success: bool) -> None:
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            telemetry = get_current_telemetry()
+            prefix = f"lock.acquire.{mode}"
+            result_key = "successes" if success else "failures"
+            bucket = _lock_bucket(path)
+            telemetry.count(f"{prefix}.attempts", 1)
+            telemetry.count(f"{prefix}.{result_key}", 1)
+            telemetry.add_duration(prefix, elapsed_ms)
+            telemetry.count(f"{prefix}.bucket.{bucket}.attempts", 1)
+            telemetry.count(f"{prefix}.bucket.{bucket}.{result_key}", 1)
+            telemetry.add_duration(f"{prefix}.bucket.{bucket}", elapsed_ms)
+        except Exception:
+            logger.debug("Failed to record lock acquire telemetry", exc_info=True)
 
     def get_active_handles(self) -> Dict[str, LockHandle]:
         active_handles: Dict[str, LockHandle] = {}
@@ -125,8 +161,12 @@ class LockManager:
         path: str,
         timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
+        started_at = time.perf_counter()
         acquired = await self._path_lock.acquire_exact_path(
             path, handle, timeout=self._resolve_timeout(timeout)
+        )
+        self._record_lock_acquire(
+            "exact", path, (time.perf_counter() - started_at) * 1000, acquired
         )
         if acquired:
             self._mark_handle_active(handle)
@@ -138,8 +178,12 @@ class LockManager:
         path: str,
         timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
+        started_at = time.perf_counter()
         acquired = await self._path_lock.acquire_tree(
             path, handle, timeout=self._resolve_timeout(timeout)
+        )
+        self._record_lock_acquire(
+            "tree", path, (time.perf_counter() - started_at) * 1000, acquired
         )
         if acquired:
             self._mark_handle_active(handle)
@@ -180,10 +224,14 @@ class LockManager:
         try:
             for path in sorted_paths:
                 locks_before = set(handle.locks)
+                started_at = time.perf_counter()
                 success = await self._path_lock.acquire_tree(
                     path,
                     handle,
                     timeout=self._resolve_timeout(timeout),
+                )
+                self._record_lock_acquire(
+                    "tree", path, (time.perf_counter() - started_at) * 1000, success
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -215,10 +263,14 @@ class LockManager:
         try:
             for path in sorted_paths:
                 locks_before = set(handle.locks)
+                started_at = time.perf_counter()
                 success = await self._path_lock.acquire_exact_path(
                     path,
                     handle,
                     timeout=self._resolve_timeout(timeout),
+                )
+                self._record_lock_acquire(
+                    "exact", path, (time.perf_counter() - started_at) * 1000, success
                 )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
@@ -256,6 +308,7 @@ class LockManager:
         try:
             for path, is_tree in sorted_pairs:
                 locks_before = set(handle.locks)
+                started_at = time.perf_counter()
                 if is_tree:
                     success = await self._path_lock.acquire_tree(
                         path,
@@ -268,6 +321,12 @@ class LockManager:
                         handle,
                         timeout=self._resolve_timeout(timeout),
                     )
+                self._record_lock_acquire(
+                    "tree" if is_tree else "exact",
+                    path,
+                    (time.perf_counter() - started_at) * 1000,
+                    success,
+                )
                 if not success:
                     await self._path_lock.release_selected(handle, acquired_lock_paths)
                     return False

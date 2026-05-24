@@ -161,6 +161,51 @@ class TelemetrySummaryBuilder:
         return summary
 
     @classmethod
+    def _build_lock_acquire_summary(
+        cls, counters: Dict[str, float], gauges: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {}
+        for mode in ("tree", "exact"):
+            prefix = f"lock.acquire.{mode}"
+            if not cls._has_metric_prefix(prefix, counters, gauges):
+                continue
+            mode_summary: Dict[str, Any] = {
+                "attempts": cls._i(counters.get(f"{prefix}.attempts"), 0),
+                "successes": cls._i(counters.get(f"{prefix}.successes"), 0),
+                "failures": cls._i(counters.get(f"{prefix}.failures"), 0),
+                "duration_ms": cls._f(gauges.get(f"{prefix}.duration_ms"), 0.0),
+            }
+            bucket_prefix = f"{prefix}.bucket."
+            bucket_names = set()
+            for key in list(counters) + list(gauges):
+                if not key.startswith(bucket_prefix):
+                    continue
+                rest = key[len(bucket_prefix) :]
+                bucket_name = rest.split(".", 1)[0]
+                if bucket_name:
+                    bucket_names.add(bucket_name)
+            if bucket_names:
+                mode_summary["buckets"] = {
+                    bucket: {
+                        "attempts": cls._i(
+                            counters.get(f"{bucket_prefix}{bucket}.attempts"), 0
+                        ),
+                        "successes": cls._i(
+                            counters.get(f"{bucket_prefix}{bucket}.successes"), 0
+                        ),
+                        "failures": cls._i(
+                            counters.get(f"{bucket_prefix}{bucket}.failures"), 0
+                        ),
+                        "duration_ms": cls._f(
+                            gauges.get(f"{bucket_prefix}{bucket}.duration_ms"), 0.0
+                        ),
+                    }
+                    for bucket in sorted(bucket_names)
+                }
+            summary[mode] = mode_summary
+        return summary
+
+    @classmethod
     def build(
         cls,
         *,
@@ -238,6 +283,10 @@ class TelemetrySummaryBuilder:
                 "pending": gauges.get("semantic_nodes.pending"),
                 "running": gauges.get("semantic_nodes.running"),
             }
+
+        lock_acquire_summary = cls._build_lock_acquire_summary(counters, gauges)
+        if lock_acquire_summary:
+            summary["locks"] = {"acquire": lock_acquire_summary}
 
         if cls._has_metric_prefix("memory", counters, gauges):
             memory_summary = {
@@ -362,7 +411,16 @@ class TelemetrySummaryBuilder:
                 "message": error_message,
             }
 
-        for key in ("tokens", "queue", "vector", "semantic_nodes", "memory", "resource", "errors"):
+        for key in (
+            "tokens",
+            "queue",
+            "vector",
+            "semantic_nodes",
+            "locks",
+            "memory",
+            "resource",
+            "errors",
+        ):
             if key not in summary:
                 continue
             pruned_value = cls._prune_zero_metrics(summary[key])

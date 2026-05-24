@@ -279,6 +279,43 @@ def test_telemetry_summary_includes_agent_memory_phase_metrics():
     }
 
 
+def test_telemetry_summary_includes_lock_acquire_metrics():
+    telemetry = MemoryOperationTelemetry(operation="session.commit", enabled=True)
+    telemetry.count("lock.acquire.tree.attempts", 2)
+    telemetry.count("lock.acquire.tree.successes", 2)
+    telemetry.add_duration("lock.acquire.tree", 125.25)
+    telemetry.count("lock.acquire.tree.bucket.memories_tools.attempts", 1)
+    telemetry.count("lock.acquire.tree.bucket.memories_tools.successes", 1)
+    telemetry.add_duration("lock.acquire.tree.bucket.memories_tools", 120.0)
+    telemetry.count("lock.acquire.exact.attempts", 1)
+    telemetry.count("lock.acquire.exact.failures", 1)
+    telemetry.add_duration("lock.acquire.exact", 3.5)
+
+    result = telemetry.finish().summary
+
+    assert result["locks"] == {
+        "acquire": {
+            "tree": {
+                "attempts": 2,
+                "successes": 2,
+                "duration_ms": 125.25,
+                "buckets": {
+                    "memories_tools": {
+                        "attempts": 1,
+                        "successes": 1,
+                        "duration_ms": 120.0,
+                    }
+                },
+            },
+            "exact": {
+                "attempts": 1,
+                "failures": 1,
+                "duration_ms": 3.5,
+            },
+        },
+    }
+
+
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
     captured = {}
 
