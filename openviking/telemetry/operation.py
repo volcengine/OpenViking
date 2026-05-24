@@ -187,15 +187,9 @@ class TelemetrySummaryBuilder:
             if bucket_names:
                 mode_summary["buckets"] = {
                     bucket: {
-                        "attempts": cls._i(
-                            counters.get(f"{bucket_prefix}{bucket}.attempts"), 0
-                        ),
-                        "successes": cls._i(
-                            counters.get(f"{bucket_prefix}{bucket}.successes"), 0
-                        ),
-                        "failures": cls._i(
-                            counters.get(f"{bucket_prefix}{bucket}.failures"), 0
-                        ),
+                        "attempts": cls._i(counters.get(f"{bucket_prefix}{bucket}.attempts"), 0),
+                        "successes": cls._i(counters.get(f"{bucket_prefix}{bucket}.successes"), 0),
+                        "failures": cls._i(counters.get(f"{bucket_prefix}{bucket}.failures"), 0),
                         "duration_ms": cls._f(
                             gauges.get(f"{bucket_prefix}{bucket}.duration_ms"), 0.0
                         ),

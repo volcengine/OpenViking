@@ -182,9 +182,7 @@ class LockManager:
         acquired = await self._path_lock.acquire_tree(
             path, handle, timeout=self._resolve_timeout(timeout)
         )
-        self._record_lock_acquire(
-            "tree", path, (time.perf_counter() - started_at) * 1000, acquired
-        )
+        self._record_lock_acquire("tree", path, (time.perf_counter() - started_at) * 1000, acquired)
         if acquired:
             self._mark_handle_active(handle)
         return acquired

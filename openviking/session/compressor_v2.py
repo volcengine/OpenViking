@@ -124,19 +124,14 @@ def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
     memory_config = getattr(config, "memory", None)
     if phase_label.startswith("experience("):
         return (
-            getattr(memory_config, "agent_experience_apply_lock_mode", "tree")
-            == "operation_exact"
+            getattr(memory_config, "agent_experience_apply_lock_mode", "tree") == "operation_exact"
         )
     if phase_label == "trajectory":
         return (
-            getattr(memory_config, "agent_trajectory_apply_lock_mode", "tree")
-            == "operation_exact"
+            getattr(memory_config, "agent_trajectory_apply_lock_mode", "tree") == "operation_exact"
         )
     if phase_label == "long_term":
-        return (
-            getattr(memory_config, "long_term_apply_lock_mode", "tree")
-            == "operation_exact"
-        )
+        return getattr(memory_config, "long_term_apply_lock_mode", "tree") == "operation_exact"
     return False
 
 
@@ -493,9 +488,7 @@ class SessionCompressorV2:
             telemetry.set(
                 "memory.extract.candidates.total",
                 sum(
-                    1
-                    for context in contexts
-                    if context.category in {"memory_write", "memory_edit"}
+                    1 for context in contexts if context.category in {"memory_write", "memory_edit"}
                 ),
             )
             telemetry.set(
@@ -1229,11 +1222,9 @@ class SessionCompressorV2:
             operation_target_uris = _collect_operation_lock_uris(memory_operations)
             registry_getter = getattr(provider, "_get_registry", None)
             provider_registry = registry_getter() if callable(registry_getter) else None
-            conflict_sensitive_diagnostics = (
-                _collect_conflict_sensitive_operation_diagnostics(
-                    memory_operations,
-                    provider_registry,
-                )
+            conflict_sensitive_diagnostics = _collect_conflict_sensitive_operation_diagnostics(
+                memory_operations,
+                provider_registry,
             )
             conflict_sensitive_uris = _collect_conflict_sensitive_operation_uris(
                 memory_operations,
@@ -1287,8 +1278,7 @@ class SessionCompressorV2:
                 )
                 if exact_lock_paths:
                     tracer.info(
-                        f"[{phase_label}] operation-exact lock plan: "
-                        f"exact_paths={exact_lock_paths}"
+                        f"[{phase_label}] operation-exact lock plan: exact_paths={exact_lock_paths}"
                     )
                     telemetry.count(
                         f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_lock_path_count",

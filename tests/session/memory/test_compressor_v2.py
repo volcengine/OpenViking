@@ -802,9 +802,7 @@ class TestCompressorV2:
         assert result[0] == [exp_uri]
         assert events == ["llm", "acquire_exact", "apply", "post_apply", "release"]
         lock_manager.acquire_exact_tree_batch.assert_not_called()
-        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"][
-            "experience_single"
-        ]
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
         assert phase_summary["candidate_uri_count"] == 2
         assert phase_summary["operation_target_uri_count"] == 2
         assert phase_summary["candidate_target_overlap_count"] == 1
@@ -1167,18 +1165,12 @@ class TestCompressorV2:
             "release:handle-3",
         ]
         lock_manager.acquire_exact_tree_batch.assert_not_called()
-        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"][
-            "experience_single"
-        ]
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
         assert phase_summary["operation_exact_conflicts"] == 2
         assert phase_summary["operation_exact_retries"] == 2
         assert phase_summary["operation_exact_retry_attempt"] == 2
-        assert phase_summary["operation_exact_conflict_sensitive_buckets"] == {
-            "experiences": 3
-        }
-        assert phase_summary["operation_exact_conflict_sensitive_reasons"] == {
-            "unknown_schema": 3
-        }
+        assert phase_summary["operation_exact_conflict_sensitive_buckets"] == {"experiences": 3}
+        assert phase_summary["operation_exact_conflict_sensitive_reasons"] == {"unknown_schema": 3}
         assert phase_summary["operation_exact_conflict_buckets"] == {"experiences": 2}
         assert phase_summary["operation_exact_conflict_reasons"] == {"unknown_schema": 2}
         assert phase_summary["operation_exact_retry_buckets"] == {"experiences": 2}
@@ -1438,7 +1430,10 @@ class TestCompressorV2:
                 long_term_apply_lock_mode="operation_exact",
             ),
         )
-        handles = [SimpleNamespace(id="handle-1", locks=[]), SimpleNamespace(id="handle-2", locks=[])]
+        handles = [
+            SimpleNamespace(id="handle-1", locks=[]),
+            SimpleNamespace(id="handle-2", locks=[]),
+        ]
         handle_iter = iter(handles)
 
         async def acquire_exact_path_batch(handle, _paths, **kwargs):
@@ -1493,13 +1488,9 @@ class TestCompressorV2:
         assert phase_summary["operation_exact_conflicts"] == 1
         assert phase_summary["operation_exact_retries"] == 1
         assert phase_summary["operation_exact_conflict_buckets"] == {"tools": 1}
-        assert phase_summary["operation_exact_conflict_reasons"] == {
-            "plain_string_patch": 1
-        }
+        assert phase_summary["operation_exact_conflict_reasons"] == {"plain_string_patch": 1}
         assert phase_summary["operation_exact_retry_buckets"] == {"tools": 1}
-        assert phase_summary["operation_exact_retry_reasons"] == {
-            "plain_string_patch": 1
-        }
+        assert phase_summary["operation_exact_retry_reasons"] == {"plain_string_patch": 1}
 
     @pytest.mark.asyncio
     async def test_extract_phase_strips_batch_source_attribution_before_apply(self):

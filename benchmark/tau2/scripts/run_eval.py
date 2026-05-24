@@ -164,9 +164,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         "tree",
         "operation_exact",
     }:
-        raise ValueError(
-            "openviking.long_term_apply_lock_mode must be 'tree' or 'operation_exact'"
-        )
+        raise ValueError("openviking.long_term_apply_lock_mode must be 'tree' or 'operation_exact'")
     return result
 
 
@@ -864,9 +862,7 @@ def _build_plan(
                         "openviking_memory_config": _openviking_agent_experience_config(config)
                         if strategy.get("memory_backend") == "openviking"
                         else None,
-                        "openviking_timeout_seconds": _openviking_timeout_seconds(
-                            config, strategy
-                        )
+                        "openviking_timeout_seconds": _openviking_timeout_seconds(config, strategy)
                         if strategy.get("memory_backend") == "openviking"
                         else None,
                         "openviking_wait_timeout_seconds": _openviking_wait_timeout_seconds(

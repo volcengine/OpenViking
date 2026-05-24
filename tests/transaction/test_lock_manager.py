@@ -66,10 +66,7 @@ class TestLockManagerBasic:
         assert result["locks"]["acquire"]["tree"]["buckets"]["memories_tools"]["attempts"] == 1
         assert result["locks"]["acquire"]["exact"]["attempts"] == 1
         assert (
-            result["locks"]["acquire"]["exact"]["buckets"]["memories_experiences"][
-                "attempts"
-            ]
-            == 1
+            result["locks"]["acquire"]["exact"]["buckets"]["memories_experiences"]["attempts"] == 1
         )
 
         await lm.release(handle)
