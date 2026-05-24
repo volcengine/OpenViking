@@ -44,6 +44,15 @@ def _json(text: str) -> dict[str, Any]:
     return json.loads(text) if text else {}
 
 
+def _parse_bool(text: str) -> bool:
+    value = str(text).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"expected boolean value, got {text!r}")
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -657,6 +666,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 args.expected_agent_trajectory_apply_lock_mode
             ),
             "expected_long_term_apply_lock_mode": args.expected_long_term_apply_lock_mode,
+            "expected_long_term_extraction_enabled": (args.expected_long_term_extraction_enabled),
         },
         "committed_sessions": committed,
         "committed_session_count": len(committed),
@@ -1009,6 +1019,14 @@ def main() -> int:
         choices=["tree", "operation_exact"],
         help=(
             "Expected server-side memory.long_term_apply_lock_mode. "
+            "Recorded in corpus manifests for reproducibility."
+        ),
+    )
+    parser.add_argument(
+        "--expected-long-term-extraction-enabled",
+        type=_parse_bool,
+        help=(
+            "Expected server-side memory.long_term_extraction_enabled. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )

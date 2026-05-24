@@ -101,6 +101,19 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"expected boolean value, got {value!r}")
+
+
 def _has_openviking_train_strategy(config: dict[str, Any]) -> bool:
     return any(
         strategy.get("memory_backend") == "openviking" and strategy.get("train_required")
@@ -115,6 +128,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
     long_term_apply_lock_mode = openviking.get("long_term_apply_lock_mode")
+    long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
     result: dict[str, Any] = {
         "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
         "expected_agent_experience_batch_max_trajectories": (
@@ -129,6 +143,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         "expected_long_term_apply_lock_mode": (
             str(long_term_apply_lock_mode) if long_term_apply_lock_mode is not None else None
         ),
+        "expected_long_term_extraction_enabled": _optional_bool(long_term_extraction_enabled),
     }
     if result["expected_agent_experience_consolidation_mode"] not in {
         None,
@@ -254,6 +269,7 @@ def _openviking_server_memory_config_report(
         "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
         "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
         "long_term_apply_lock_mode": memory.get("long_term_apply_lock_mode", "tree"),
+        "long_term_extraction_enabled": memory.get("long_term_extraction_enabled", True),
     }
     report["actual"] = actual
     report["checked"] = True
@@ -305,6 +321,17 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.long_term_apply_lock_mode mismatch: "
             f"expected {expected_long_term_apply_lock_mode!r}, actual "
             f"{actual['long_term_apply_lock_mode']!r} in {config_path}"
+        )
+    expected_long_term_extraction_enabled = expected["expected_long_term_extraction_enabled"]
+    if (
+        expected_long_term_extraction_enabled is not None
+        and _optional_bool(actual["long_term_extraction_enabled"])
+        != expected_long_term_extraction_enabled
+    ):
+        errors.append(
+            "OpenViking server memory.long_term_extraction_enabled mismatch: "
+            f"expected {expected_long_term_extraction_enabled!r}, actual "
+            f"{actual['long_term_extraction_enabled']!r} in {config_path}"
         )
     if not strict:
         errors = []
@@ -624,6 +651,13 @@ def _tau2_command(
                 [
                     "--expected-long-term-apply-lock-mode",
                     agent_experience_config["expected_long_term_apply_lock_mode"],
+                ]
+            )
+        if agent_experience_config["expected_long_term_extraction_enabled"] is not None:
+            command.extend(
+                [
+                    "--expected-long-term-extraction-enabled",
+                    str(agent_experience_config["expected_long_term_extraction_enabled"]).lower(),
                 ]
             )
         if budget["memory_inject_max_chars"] is not None:

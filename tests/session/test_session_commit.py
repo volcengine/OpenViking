@@ -117,6 +117,34 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
+    async def test_commit_can_skip_long_term_while_extracting_agent_memory(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = False
+        config.memory.agent_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            agent_context = MagicMock()
+            agent_context.category = "agent_experience"
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={"contexts": [agent_context], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {"agent_experience": 1}
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""
         initial_message_count = len(session_with_messages.messages)

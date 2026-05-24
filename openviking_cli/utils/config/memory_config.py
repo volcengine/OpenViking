@@ -121,9 +121,19 @@ class MemoryConfig(BaseModel):
         default=True,
         description=(
             "When enabled (default), memory extraction runs on session commit "
-            "to produce long-term memories. When disabled, sessions are archived "
-            "but no memory extraction is performed. Useful for read-only or "
-            "stateless deployments."
+            "to produce memories. When disabled, sessions are archived "
+            "but no standard or agent memory extraction is performed. Useful for "
+            "read-only or stateless deployments."
+        ),
+    )
+    long_term_extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), session commit extracts standard long-term "
+            "memories such as user memories, tool memories, and skill memories. "
+            "Set to false to skip this standard extraction while still allowing "
+            "archive summaries, agent memory extraction, and session skill "
+            "extraction when their own switches are enabled."
         ),
     )
     session_skill_extraction_enabled: bool = Field(
