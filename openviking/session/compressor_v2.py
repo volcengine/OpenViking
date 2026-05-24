@@ -122,10 +122,17 @@ def _render_memory_schema_locks(
 
 def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
     memory_config = getattr(config, "memory", None)
-    return (
-        phase_label.startswith("experience(")
-        and getattr(memory_config, "agent_experience_apply_lock_mode", "tree") == "operation_exact"
-    )
+    if phase_label.startswith("experience("):
+        return (
+            getattr(memory_config, "agent_experience_apply_lock_mode", "tree")
+            == "operation_exact"
+        )
+    if phase_label == "trajectory":
+        return (
+            getattr(memory_config, "agent_trajectory_apply_lock_mode", "tree")
+            == "operation_exact"
+        )
+    return False
 
 
 class OperationExactVersionConflict(RuntimeError):

@@ -811,6 +811,118 @@ class TestCompressorV2:
         assert phase_summary["operation_exact_lock_path_count"] == 2
 
     @pytest.mark.asyncio
+    async def test_trajectory_operation_exact_apply_locks_after_llm(self):
+        """Trajectory exact-apply mode should not hold the schema tree lock during LLM."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        events: List[str] = []
+        traj_uri = "viking://agent/default/memories/trajectories/debug_20260524010101.md"
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+            async def read_file(self, uri: str, ctx=None):
+                return ""
+
+        class DummyProvider:
+            prefetched_uris = []
+            read_file_versions = {}
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                events.append("llm")
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="trajectories",
+                                uris=[traj_uri],
+                                memory_fields={"trajectory_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = [traj_uri]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+                agent_experience_apply_lock_mode="tree",
+                agent_trajectory_apply_lock_mode="operation_exact",
+            ),
+        )
+        handle = SimpleNamespace(id="handle-trajectory", locks=[])
+
+        async def acquire_exact_path_batch(_handle, paths, **kwargs):
+            events.append("acquire_exact")
+            assert paths == [
+                traj_uri,
+                "viking://agent/default/memories/trajectories/.overview.md",
+            ]
+            return True
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(),
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            release=AsyncMock(side_effect=lambda _handle: events.append("release")),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="trajectory",
+                )
+
+        assert result[0] == [traj_uri]
+        assert events == ["llm", "acquire_exact", "apply", "release"]
+        lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["trajectory"]
+        assert phase_summary["operation_exact_lock_path_count"] == 2
+
+    @pytest.mark.asyncio
     async def test_experience_operation_exact_apply_detects_stale_prefetch(self):
         """Exact-apply mode should keep retrying with refreshed reads after stale reads."""
         compressor = SessionCompressorV2(vikingdb=None)

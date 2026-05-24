@@ -82,6 +82,15 @@ class MemoryConfig(BaseModel):
             "run before acquiring exact locks for the concrete files that will be written."
         ),
     )
+    agent_trajectory_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
+        default="tree",
+        description=(
+            "Experimental lock scope for agent trajectory apply. 'tree' preserves the existing "
+            "schema-directory lock around trajectory read/LLM/apply. 'operation_exact' lets the "
+            "trajectory LLM phase run before acquiring exact locks for the concrete trajectory files "
+            "and overview that will be written."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(
