@@ -501,6 +501,25 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     }
 
 
+def _expected_openviking_memory_config(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "expected_agent_experience_consolidation_mode": (
+            args.expected_agent_experience_consolidation_mode
+        ),
+        "expected_agent_experience_batch_max_trajectories": (
+            args.expected_agent_experience_batch_max_trajectories
+        ),
+        "expected_agent_experience_apply_lock_mode": (
+            args.expected_agent_experience_apply_lock_mode
+        ),
+        "expected_agent_trajectory_apply_lock_mode": (
+            args.expected_agent_trajectory_apply_lock_mode
+        ),
+        "expected_long_term_apply_lock_mode": args.expected_long_term_apply_lock_mode,
+        "expected_long_term_extraction_enabled": args.expected_long_term_extraction_enabled,
+    }
+
+
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
     if corpus_manifest.is_file() and not args.force_train:
         manifest = json.loads(corpus_manifest.read_text())
@@ -534,6 +553,14 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
             raise ValueError(
                 "cached corpus train_skip_failed_sessions mismatch: "
                 f"{cached_skip_failed!r} != {bool(args.train_skip_failed_sessions)!r}; "
+                "use a distinct corpus_id or --force-train"
+            )
+        cached_memory_config = manifest.get("openviking_memory_config")
+        requested_memory_config = _expected_openviking_memory_config(args)
+        if cached_memory_config != requested_memory_config:
+            raise ValueError(
+                "cached corpus openviking_memory_config mismatch: "
+                f"{cached_memory_config!r} != {requested_memory_config!r}; "
                 "use a distinct corpus_id or --force-train"
             )
         return manifest
@@ -652,22 +679,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         "train_include_system_prompt": bool(args.train_include_system_prompt),
         "train_skip_failed_sessions": bool(args.train_skip_failed_sessions),
         "train_tool_output_max_chars": args.train_tool_output_max_chars,
-        "openviking_memory_config": {
-            "expected_agent_experience_consolidation_mode": (
-                args.expected_agent_experience_consolidation_mode
-            ),
-            "expected_agent_experience_batch_max_trajectories": (
-                args.expected_agent_experience_batch_max_trajectories
-            ),
-            "expected_agent_experience_apply_lock_mode": (
-                args.expected_agent_experience_apply_lock_mode
-            ),
-            "expected_agent_trajectory_apply_lock_mode": (
-                args.expected_agent_trajectory_apply_lock_mode
-            ),
-            "expected_long_term_apply_lock_mode": args.expected_long_term_apply_lock_mode,
-            "expected_long_term_extraction_enabled": (args.expected_long_term_extraction_enabled),
-        },
+        "openviking_memory_config": _expected_openviking_memory_config(args),
         "committed_sessions": committed,
         "committed_session_count": len(committed),
         "skipped_failed_sessions": skipped_failed_sessions,
