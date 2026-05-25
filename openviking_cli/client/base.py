@@ -296,7 +296,7 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def add_messages(
+    async def batch_add_messages(
         self,
         session_id: str,
         messages: list[dict],

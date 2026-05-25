@@ -702,7 +702,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 ---
 
-### add_messages()
+### batch_add_messages()
 
 #### 1. API Implementation Introduction
 
@@ -710,12 +710,12 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 
 **Difference from `add_message()`**:
 - `add_message()`: Add 1 message per request
-- `add_messages()`: Add multiple messages per request (max 100), reducing network round trips and file I/O
+- `batch_add_messages()`: Add multiple messages per request (max 100), reducing network round trips and file I/O
 
 **Code Entry Points**:
-- `openviking/session/session.py:Session.add_messages()` - Core implementation
-- `openviking/server/routers/sessions.py:add_messages()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.add_messages()` - Python SDK
+- `openviking/session/session.py:Session.batch_add_messages()` - Core implementation
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
 
 #### 2. Interface and Parameter Description
@@ -760,7 +760,7 @@ import openviking as ov
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # Add messages in batch
-result = await client.add_messages(
+result = await client.batch_add_messages(
     session_id="a1b2c3d4",
     messages=[
         {"role": "user", "content": "How do I authenticate users?"},

@@ -74,7 +74,7 @@ class Session:
             role_id=role_id,
         )
 
-    async def add_messages(
+    async def batch_add_messages(
         self,
         messages: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
@@ -87,7 +87,7 @@ class Session:
         Returns:
             Result dict with session_id, message_count, and added count.
         """
-        return await self._client.add_messages(
+        return await self._client.batch_add_messages(
             self.session_id,
             messages=messages,
         )
