@@ -14,7 +14,12 @@ from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.transaction import NO_LOCK, LockLease, OwnedLockLease
+from openviking.storage.transaction import (
+    LOCK_TIMEOUT_DEFAULT,
+    NO_LOCK,
+    LockLease,
+    OwnedLockLease,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
@@ -390,7 +395,7 @@ class ResourceProcessor:
         path: str,
         *,
         uri: str = "",
-        timeout: Optional[float] = None,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> OwnedLockLease:
         """Acquire the per-resource TreeLock or raise a structured conflict."""
         from openviking.storage.errors import ResourceBusyError

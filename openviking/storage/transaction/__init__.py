@@ -16,6 +16,7 @@ from openviking.storage.transaction.lock_lease import (
     OwnedLockLease,
 )
 from openviking.storage.transaction.lock_manager import (
+    LOCK_TIMEOUT_DEFAULT,
     LockManager,
     get_lock_handle_async,
     get_lock_manager,
@@ -32,6 +33,7 @@ __all__ = [
     "LockHandle",
     "LockHandoffRef",
     "LockLease",
+    "LOCK_TIMEOUT_DEFAULT",
     "LockManager",
     "LockOwner",
     "NO_LOCK",

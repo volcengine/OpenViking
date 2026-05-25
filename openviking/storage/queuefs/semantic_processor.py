@@ -27,6 +27,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -239,6 +240,25 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
+    async def _requeue_semantic_msg_after_error(
+        self,
+        msg: SemanticMsg,
+        data: Optional[Dict[str, Any]],
+        error: Exception,
+    ) -> None:
+        try:
+            await self._reenqueue_semantic_msg(msg)
+            self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+            get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+            self.report_requeue()
+        except Exception as requeue_err:
+            logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
+            self._merge_request_stats(msg.telemetry_id, error_count=1)
+            get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(error))
+            self.report_error(str(error), data)
+            return
+        self.report_success()
+
     async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
         if msg.context_type not in {"resource", "skill"}:
             return
@@ -440,6 +460,19 @@ class SemanticProcessor(DequeueHandlerBase):
                     reset_root_observability_context(root_context_token)
 
         except Exception as e:
+            if isinstance(e, LockAcquisitionError):
+                logger.warning(
+                    "Lock error processing semantic message, re-enqueueing without "
+                    "tripping API circuit breaker: %s",
+                    e,
+                    exc_info=True,
+                )
+                if msg is not None:
+                    await self._requeue_semantic_msg_after_error(msg, data, e)
+                else:
+                    self.report_error(str(e), data)
+                return None
+
             error_class = classify_api_error(e)
             if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
                 logger.error(
@@ -472,20 +505,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 self._circuit_breaker.record_failure(e)
                 if msg is not None:
-                    try:
-                        await self._reenqueue_semantic_msg(msg)
-                        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-                        get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
-                        self.report_requeue()
-                    except Exception as requeue_err:
-                        logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
-                        self._merge_request_stats(msg.telemetry_id, error_count=1)
-                        get_request_wait_tracker().mark_semantic_failed(
-                            msg.telemetry_id, msg.id, str(e)
-                        )
-                        self.report_error(str(e), data)
-                        return None
-                    self.report_success()
+                    await self._requeue_semantic_msg_after_error(msg, data, e)
                 else:
                     self.report_error(str(e), data)
             return None
