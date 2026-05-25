@@ -94,8 +94,9 @@ export function useVikingFilePreview(
     () => ({
       offset: readOptions.offset ?? 0,
       limit: readOptions.limit ?? defaultReadLimit,
+      raw: readOptions.raw,
     }),
-    [readOptions.offset, readOptions.limit, defaultReadLimit],
+    [readOptions.offset, readOptions.limit, readOptions.raw, defaultReadLimit],
   )
 
   const autoRead = useMemo(

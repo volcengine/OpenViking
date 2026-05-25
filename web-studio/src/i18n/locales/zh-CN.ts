@@ -83,6 +83,10 @@ const zhCN = {
         label: 'Account',
         placeholder: 'default',
       },
+      agentId: {
+        label: 'Agent',
+        placeholder: 'web-studio',
+      },
       apiKey: {
         label: 'API Key',
         placeholder: '输入 X-API-Key 或 Bearer token',
