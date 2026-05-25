@@ -117,7 +117,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         if batch:
             call_openviking(
                 client,
-                "batch_add_messages",
+                "add_messages",
                 session_id=self.session_id,
                 messages=batch,
             )

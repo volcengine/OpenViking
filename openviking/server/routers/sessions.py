@@ -440,7 +440,7 @@ async def add_message(
 
 
 @router.post("/{session_id}/messages/batch")
-async def batch_add_messages(
+async def add_messages(
     request: BatchAddMessageRequest,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
@@ -472,7 +472,7 @@ async def batch_add_messages(
         }
 
     execution = await run_operation(
-        operation="session.batch_add_messages",
+        operation="session.add_messages",
         telemetry=request.telemetry,
         fn=_batch_add,
     )

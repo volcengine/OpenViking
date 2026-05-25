@@ -350,6 +350,19 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
+        SessionCommands::AddMessages {
+            session_id,
+            messages,
+        } => {
+            commands::session::add_messages(
+                &client,
+                &session_id,
+                &messages,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         SessionCommands::Commit { session_id } => {
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await

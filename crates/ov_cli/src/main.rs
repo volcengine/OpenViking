@@ -816,6 +816,13 @@ enum SessionCommands {
         #[arg(long)]
         content: String,
     },
+    /// Add multiple messages to a session
+    AddMessages {
+        /// Session ID
+        session_id: String,
+        /// Messages as JSON array of {role, content} objects
+        messages: String,
+    },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID

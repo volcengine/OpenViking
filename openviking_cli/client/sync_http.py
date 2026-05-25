@@ -149,7 +149,7 @@ class SyncHTTPClient:
             )
         )
 
-    def batch_add_messages(
+    def add_messages(
         self,
         session_id: str,
         messages: list[dict],
@@ -167,7 +167,7 @@ class SyncHTTPClient:
             Result dict with session_id, message_count, and added count.
         """
         return run_async(
-            self._async_client.batch_add_messages(
+            self._async_client.add_messages(
                 session_id,
                 messages,
                 telemetry,

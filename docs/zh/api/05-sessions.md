@@ -702,7 +702,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 ---
 
-### batch_add_messages()
+### add_messages()
 
 #### 1. API 实现介绍
 
@@ -710,13 +710,13 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 **与 `add_message()` 的区别**：
 - `add_message()`：单次请求添加 1 条消息
-- `batch_add_messages()`：单次请求添加多条消息（上限 100 条），减少网络往返和文件 I/O
+- `add_messages()`：单次请求添加多条消息（上限 100 条），减少网络往返和文件 I/O
 
 **代码入口**：
 - `openviking/session/session.py:Session.add_messages()` - 核心实现
-- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP 路由
-- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
-- `crates/ov_cli/src/commands/session.rs:add_memory()` - CLI 命令（内部使用批量接口）
+- `openviking/server/routers/sessions.py:add_messages()` - HTTP 路由
+- `openviking_cli/client/base.py:BaseClient.add_messages()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI 命令
 
 #### 2. 接口和参数说明
 
@@ -760,7 +760,7 @@ import openviking as ov
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
 # 批量添加消息
-result = await client.batch_add_messages(
+result = await client.add_messages(
     session_id="a1b2c3d4",
     messages=[
         {"role": "user", "content": "How do I authenticate users?"},
@@ -774,7 +774,10 @@ print(f"Added: {result['added']}, Total: {result['message_count']}")
 **CLI**
 
 ```bash
-# ov add-memory 内部自动使用批量接口
+# 向会话中批量添加消息
+ov session add-messages a1b2c3d4 '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+
+# ov add-memory 内部也自动使用批量接口
 ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
 ```
 

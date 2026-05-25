@@ -439,7 +439,7 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
 
-    async def batch_add_messages(
+    async def add_messages(
         self,
         session_id: str,
         messages: list[dict],
