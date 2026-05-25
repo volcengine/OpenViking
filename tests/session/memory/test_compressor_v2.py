@@ -107,8 +107,7 @@ def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
         "- Keep user locale.\n"
     )
     assert (
-        compressor_v2_module._operation_conflict_reason(operation, registry)
-        != "plain_string_patch"
+        compressor_v2_module._operation_conflict_reason(operation, registry) != "plain_string_patch"
     )
 
 
@@ -129,7 +128,9 @@ async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
             ),
         ],
     )
-    registry = SimpleNamespace(get=lambda memory_type: schema if memory_type == "experiences" else None)
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
     exp_uri = "viking://agent/default/memories/experiences/debug.md"
     old_content = "## Situation\n- old\n"
     stale_replacement = "## Situation\n- old\n- learned from stale read\n"

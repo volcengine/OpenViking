@@ -129,9 +129,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
     long_term_apply_lock_mode = openviking.get("long_term_apply_lock_mode")
     long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
-    operation_exact_apply_window_seconds = openviking.get(
-        "operation_exact_apply_window_seconds"
-    )
+    operation_exact_apply_window_seconds = openviking.get("operation_exact_apply_window_seconds")
     result: dict[str, Any] = {
         "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
         "expected_agent_experience_batch_max_trajectories": (
@@ -714,11 +712,7 @@ def _tau2_command(
             command.extend(
                 [
                     "--expected-operation-exact-apply-window-seconds",
-                    str(
-                        agent_experience_config[
-                            "expected_operation_exact_apply_window_seconds"
-                        ]
-                    ),
+                    str(agent_experience_config["expected_operation_exact_apply_window_seconds"]),
                 ]
             )
         if budget["memory_inject_max_chars"] is not None:

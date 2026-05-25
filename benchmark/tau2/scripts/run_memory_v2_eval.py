@@ -672,8 +672,7 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 {
                     "input_index": input_index,
                     "session_id": (
-                        f"tau2-{args.domain}-train-{sim.get('task_id')}-"
-                        f"trial-{sim.get('trial', 0)}"
+                        f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
                     ),
                     "task_id": sim.get("task_id"),
                     "trial": sim.get("trial", 0),

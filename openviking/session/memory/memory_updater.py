@@ -467,9 +467,8 @@ class MemoryUpdater:
                     # regular prompt uses merge_op=replace; apply that patch
                     # against the latest on-disk content instead of replacing
                     # the whole field from a stale LLM snapshot.
-                    if (
-                        field.field_type == FieldType.STRING
-                        and _is_structured_string_patch(patch_value)
+                    if field.field_type == FieldType.STRING and _is_structured_string_patch(
+                        patch_value
                     ):
                         merge_op = PatchOp(field.field_type)
                     else:

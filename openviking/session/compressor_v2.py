@@ -1430,8 +1430,7 @@ class SessionCompressorV2:
                 )
             if structured_patch_conversions:
                 telemetry.count(
-                    f"memory.agent.extract.phase.{phase_metric_key}."
-                    "plain_string_patch_converted",
+                    f"memory.agent.extract.phase.{phase_metric_key}.plain_string_patch_converted",
                     len(structured_patch_conversions),
                 )
                 tracer.info(
@@ -1512,9 +1511,7 @@ class SessionCompressorV2:
                         window_seconds=window_seconds,
                         phase_metric_key=phase_metric_key,
                     )
-                    lock_wait_ms += (
-                        asyncio.get_running_loop().time() - window_started_at
-                    ) * 1000
+                    lock_wait_ms += (asyncio.get_running_loop().time() - window_started_at) * 1000
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 last_lock_retry_warning_at = 0.0
