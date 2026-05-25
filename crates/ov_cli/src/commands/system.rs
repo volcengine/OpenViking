@@ -9,9 +9,6 @@ pub async fn wait(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    // Pass the caller's timeout in the request body so the server-side queue
-    // poll honors it. The previous URL `?timeout=...` form was ignored by the
-    // Pydantic body-only handler, causing the queue to poll forever.
     let response: serde_json::Value = client
         .post("/api/v1/system/wait", &json!({ "timeout": timeout }))
         .await?;
