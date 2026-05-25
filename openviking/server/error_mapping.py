@@ -6,10 +6,24 @@ import re
 from typing import Any, Iterator
 
 from openviking.pyagfs.exceptions import (
+    AGFSAlreadyExistsError,
     AGFSClientError,
+    AGFSConfigError,
     AGFSConnectionError,
+    AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
+    AGFSInternalError,
+    AGFSInvalidOperationError,
+    AGFSInvalidPathError,
+    AGFSIoError,
+    AGFSIsADirectoryError,
+    AGFSMountPointNotFoundError,
+    AGFSNetworkError,
+    AGFSNotADirectoryError,
     AGFSNotFoundError,
+    AGFSPermissionDeniedError,
+    AGFSPluginError,
+    AGFSSerializationError,
     AGFSTimeoutError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -398,6 +412,10 @@ def _not_found_error(resource: str | None, resource_type: str) -> NotFoundError:
     return NotFoundError(resource or "", resource_type)
 
 
+def _resource_details(resource: str | None) -> dict[str, str] | None:
+    return {"resource": resource} if resource else None
+
+
 def map_exception(
     exc: Exception,
     *,
@@ -454,6 +472,34 @@ def map_exception(
             )
         if exc.status_code in {500, 502, 503, 504}:
             return UnavailableError("storage backend", reason=str(exc))
+    if isinstance(exc, AGFSPermissionDeniedError):
+        return PermissionDeniedError(str(exc), resource=resource)
+    if isinstance(exc, AGFSAlreadyExistsError):
+        return ConflictError(str(exc), resource=resource)
+    if isinstance(exc, AGFSInvalidPathError):
+        message = str(exc)
+        return InvalidURIError(resource or message, message)
+    if isinstance(exc, AGFSNotADirectoryError):
+        return FailedPreconditionError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSIsADirectoryError):
+        return InvalidArgumentError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSDirectoryNotEmptyError):
+        return FailedPreconditionError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSInvalidOperationError):
+        return InvalidArgumentError(str(exc), details=_resource_details(resource))
+    if isinstance(
+        exc,
+        (
+            AGFSConfigError,
+            AGFSInternalError,
+            AGFSIoError,
+            AGFSMountPointNotFoundError,
+            AGFSNetworkError,
+            AGFSPluginError,
+            AGFSSerializationError,
+        ),
+    ):
+        return UnavailableError("storage backend", reason=str(exc))
     if isinstance(exc, AGFSClientError):
         message = str(exc)
         if is_not_found_error(exc):
@@ -462,12 +508,21 @@ def map_exception(
             return InvalidURIError(resource or message, message)
         lowered = message.lower()
         if "not a directory" in lowered:
-            details = {"resource": resource} if resource else None
-            return FailedPreconditionError(message, details=details)
+            return FailedPreconditionError(message, details=_resource_details(resource))
+        if "is a directory" in lowered:
+            return InvalidArgumentError(message, details=_resource_details(resource))
+        if "directory not empty" in lowered:
+            return FailedPreconditionError(message, details=_resource_details(resource))
         if "permission denied" in lowered:
             return PermissionDeniedError(message, resource=resource)
         if "already exists" in lowered:
             return ConflictError(message, resource=resource)
+        if (
+            "invalid operation" in lowered
+            or "regex parse error" in lowered
+            or "invalid regular expression" in lowered
+        ):
+            return InvalidArgumentError(message, details=_resource_details(resource))
         if "timeout" in lowered or "connection refused" in lowered:
             return UnavailableError("storage backend", reason=message)
     upstream_mapped = _map_upstream_api_error(exc)

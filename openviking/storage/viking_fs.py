@@ -559,6 +559,27 @@ class VikingFS:
                 raise
             raise FileNotFoundError(f"mv source not found: {old_uri}") from exc
 
+        if not is_dir:
+            if new_uri.rstrip("/") != new_uri:
+                raise InvalidArgumentError(
+                    f"mv destination for a file must include the target file name: {new_uri}",
+                    details={"from_uri": old_uri, "to_uri": new_uri},
+                )
+            try:
+                destination_stat = await self._async_agfs.stat(new_path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    mapped = map_exception(exc, resource=new_uri)
+                    if mapped is not None:
+                        raise mapped from exc
+                    raise
+            else:
+                if isinstance(destination_stat, dict) and destination_stat.get("isDir", False):
+                    raise InvalidArgumentError(
+                        f"mv destination for a file must include the target file name: {new_uri}",
+                        details={"from_uri": old_uri, "to_uri": new_uri},
+                    )
+
         lock_context = (
             LockContext(
                 get_lock_manager(),
@@ -908,6 +929,20 @@ class VikingFS:
                 else:
                     file_uris.append(entry_uri)
 
+        normalized_uri = self._normalize_uri(uri)
+        if excluded_prefix and (
+            normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
+        ):
+            logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
+            return file_uris
+        try:
+            root_stat = await self.stat(normalized_uri, ctx=ctx)
+        except Exception:
+            return file_uris
+        if not root_stat.get("isDir", False):
+            file_uris.append(normalized_uri)
+            return file_uris
+
         await search_recursive(uri, 0)
         return file_uris
 
@@ -942,15 +977,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         try:
-            self._ensure_access(entry_uri, ctx)
-            path = self._uri_to_path(entry_uri, ctx=ctx)
-            result = await self._async_agfs.read(path, 0, -1)
-            if isinstance(result, bytes):
-                content = result
-            elif result is not None and hasattr(result, "content"):
-                content = result.content
-            else:
-                content = b""
+            content = await self.read(entry_uri, ctx=ctx)
             if isinstance(content, bytes):
                 content = content.decode("utf-8", errors="replace")
 
