@@ -700,6 +700,78 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 }
 ```
 
+### add_messages()
+
+#### 1. API 实现介绍
+
+在单次请求中向 session 添加多条消息。每条消息的格式与 `add_message()` 相同，同时支持简单文本模式和 Parts 模式。批量写入用单次 HTTP 请求和单次批量 JSONL 写入替代 N 次往返。首次添加时会自动创建不存在的 session。
+
+**代码入口：**
+- `openviking/session/session.py:Session.add_messages()` - 核心实现
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP 路由
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | Session ID |
+| messages | List[dict] | 是 | - | 最多 100 条消息的列表。每一项接受与 `add_message()` 相同的字段：`role`（必填），以及 `content`、`parts`、`created_at`、`role_id`（可选） |
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/messages/batch
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I authenticate users?"},
+      {"role": "assistant", "content": "You can configure OAuth in the settings."}
+    ]
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+await client.batch_add_messages(
+    session_id="a1b2c3d4",
+    messages=[
+        {"role": "user", "content": "How do I authenticate users?"},
+        {"role": "assistant", "content": "You can configure OAuth in the settings."},
+    ]
+)
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 2,
+    "added": 2
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ---
 
 ### used()
