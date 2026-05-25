@@ -173,12 +173,20 @@ Start the OpenViking service before executing memory cells, and verify it with
 Memory V2 baseline. For trajectory memory evidence, start the service from this
 branch and inspect generated trajectory files; changing `search_uri` alone does
 not prove the new trajectory prompt was used.
-Agent Harness / TAU-2 corpus preparation defaults to batch experience
-consolidation. Configure the running OpenViking server with
-`memory.agent_experience_consolidation_mode="batch"` and
-`memory.agent_experience_batch_max_trajectories=5`; `--strict-preflight` checks
-`OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`) and fails fast if the
-server-side memory config does not match the experiment config.
+Agent Harness / TAU-2 corpus preparation opts into the faster agent-memory
+write path. Configure the running OpenViking server with:
+
+- `memory.agent_experience_consolidation_mode="batch"`
+- `memory.agent_experience_batch_max_trajectories=5`
+- `memory.agent_experience_apply_lock_mode="operation_exact"`
+- `memory.agent_trajectory_apply_lock_mode="operation_exact"`
+- `memory.long_term_apply_lock_mode="operation_exact"`
+- `memory.long_term_extraction_enabled=false`
+
+`--strict-preflight` checks `OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`)
+and fails fast if the server-side memory config does not match the experiment
+config. OpenViking product defaults remain unchanged; these settings are the
+benchmark / Vaka corpus-prepare defaults for faster iteration.
 
 ## Memory Adapter
 
@@ -209,8 +217,12 @@ is retrieved during eval (`experiences` by default, `trajectories` for
 `config/trajectory.yaml`). The runner prepares each distinct
 `domain + corpus_id` once and reuses it across eval run ids when the cached
 `corpus_manifest.json` is present. Different corpora may be prepared in
-parallel with `benchmark.corpus_prepare_concurrency`; session commits inside one
-corpus remain serial to preserve OpenViking write semantics.
+parallel with `benchmark.corpus_prepare_concurrency`. Session commits inside one
+corpus can also be submitted concurrently with
+`openviking.corpus_session_commit_concurrency`; the default benchmark config uses
+`4`, while `1` keeps the historical serial commit / wait behavior. The corpus
+manifest records both the configured concurrency and stable input-order rows so
+later eval runs can fail fast on mismatched corpus-build semantics.
 
 By default, trajectory extraction is transcript-only: the runner replays TAU-2
 messages into an OpenViking session and does not expose held-out reward or
@@ -220,9 +232,10 @@ session, skip failed train sessions when building positive procedure memory, and
 cap injected memory by total character budget for content-shape ablations.
 
 Eval cells run in parallel with `benchmark.strategy_concurrency` by default and
-can be overridden with `--strategy-concurrency`. This only parallelizes read-only
-TAU-2 eval cells; corpus writes inside one corpus are still serialized by the
-prepare step.
+can be overridden with `--strategy-concurrency`. This parallelizes read-only
+TAU-2 eval cells; corpus writes are controlled separately by
+`benchmark.corpus_prepare_concurrency` across corpora and
+`openviking.corpus_session_commit_concurrency` within a corpus.
 
 ## User Simulator Policy
 
