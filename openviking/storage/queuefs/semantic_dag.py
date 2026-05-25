@@ -467,9 +467,7 @@ class SemanticDagExecutor:
                 summary_by_path.setdefault(file_path, self._empty_file_summary(file_path))
         finally:
             self._stats.done_nodes += len(file_paths)
-            self._stats.in_progress_nodes = max(
-                0, self._stats.in_progress_nodes - len(file_paths)
-            )
+            self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - len(file_paths))
 
         for file_path in file_paths:
             summary_dict = summary_by_path.get(file_path, self._empty_file_summary(file_path))
@@ -489,7 +487,9 @@ class SemanticDagExecutor:
                     )
                     await self._add_vectorize_task(task)
             except Exception as e:
-                logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True
+                )
             await self._on_file_done(parent_uri, file_path, summary_dict)
 
     @staticmethod
