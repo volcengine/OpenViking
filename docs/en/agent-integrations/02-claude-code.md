@@ -1,199 +1,98 @@
 # Claude Code Memory Plugin
 
-Long-term semantic memory for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview). Recall happens automatically before every prompt and capture happens automatically after every turn — no MCP tool calls required from the model.
+Give [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) a cross-project, cross-session memory that grows smarter over time. Install once — recall and capture happen automatically on every conversation, no MCP tool calls required from the model.
 
-Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)
+Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [Blog: motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## Quick Start
-
-### One-line installer (recommended)
+## Install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
 ```
 
-The script runs on macOS and Linux. It checks dependencies, asks whether you'll connect to a **self-hosted** server or to **Volcengine OpenViking Cloud** (`https://api.vikingdb.cn-beijing.volces.com/openviking`), sets up `~/.openviking/ovcli.conf` (prompting only if missing), clones the OpenViking repo to `~/.openviking/openviking-repo`, adds the `claude` function wrapper to your shell rc, and installs the plugin via `claude plugin install`. Every step is idempotent — re-running is safe.
+The installer checks dependencies, configures your OpenViking connection, and installs the plugin. Every step is idempotent — re-running is safe.
 
-If you'd rather do it by hand, follow the three steps below.
+After install, start Claude Code and ask it something from a previous session. It remembers.
 
-### Manual setup
+<details>
+<summary><b>Manual setup</b></summary>
 
-#### 1. Wrap `claude` to inject env from `ovcli.conf`
+If you prefer to set things up by hand:
 
-This is the recommended path. The plugin's hooks **and** the bundled MCP server both read env vars, so we set them once — but scoped to the `claude` invocation only, not exported globally. Append to `~/.zshrc` or `~/.bashrc`:
+1. **Shell function wrapper** — append a `claude()` function to `~/.zshrc` or `~/.bashrc` that injects `OPENVIKING_URL` and `OPENVIKING_API_KEY` from `~/.openviking/ovcli.conf` at each invocation. This keeps the API key scoped to the `claude` process tree. See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#1-wrap-claude-to-inject-env-from-ovcliconf) for the full function and security rationale.
+
+2. **Install the plugin** from the OpenViking repo root:
+
+   ```bash
+   claude plugin marketplace add "$(pwd)/examples"
+   claude plugin install claude-code-memory-plugin@openviking-plugins-local
+   ```
+
+3. **Start Claude Code** and run `/mcp` to confirm the OpenViking entry shows your server URL.
+
+> Don't have `ovcli.conf` yet? See [Deployment Guide → CLI](../guides/03-deployment.md#cli).
+>
+> Pure local mode (`http://127.0.0.1:1933`, no auth)? Skip step 1 — the plugin uses the local default.
+>
+> Claude Code < 2.0? See the [plugin README's Legacy mode section](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
+
+</details>
+
+## Verify
 
 ```bash
-claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
-    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
-    command claude "$@"
-  else
-    command claude "$@"
-  fi
-}
-```
-
-Re-source your rc and verify (use `~/.bashrc` if you're on bash):
-
-```bash
-source ~/.zshrc    # or: source ~/.bashrc
 type claude        # expect: claude is a shell function
 ```
 
-Inside Claude Code, run `/mcp` after the next start — the OpenViking entry should show your remote URL with valid auth.
+Inside Claude Code:
 
-> **Don't have `ovcli.conf` yet?** See the [CLI section of the Deployment Guide](../guides/03-deployment.md#cli) to set one up.
->
-> **Pure local mode** (`http://127.0.0.1:1933`, no auth)? Skip this step — the plugin uses the local default silently.
->
-> **Why a function instead of `export`?** Globally exported env vars leak into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function-wrapper limits the secret to the `claude` process tree only.
+- `/plugins` → find **openviking-memory** in Installed (with **openviking** MCP connected underneath)
+- `/mcp` → the OpenViking entry should show your server URL with valid auth
+- `/openviking-memory:ov` → shows server health, identity, recall/injection stats, and toggle states
 
-#### 2. Install the plugin
+If the plugin doesn't seem to fire, set `OPENVIKING_DEBUG=1` and check `~/.openviking/logs/cc-hooks.log`.
 
-From the OpenViking repo root:
+## How it works
 
-```bash
-claude plugin marketplace add "$(pwd)/examples"
-claude plugin install claude-code-memory-plugin@openviking-plugins-local
-```
+The plugin hooks into Claude Code's lifecycle: it searches OpenViking and injects relevant memories before every prompt, captures new conversation turns after each response, injects your profile and memory index on session start, commits pending messages before compaction and on session end, and gives each subagent an isolated memory session. All write operations run asynchronously so you never wait for OpenViking.
 
-> The plugin installs at user scope by default — active from any directory. We don't pass `--scope` because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag.
->
-> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
->
-> **Claude Code < 2.0?** `claude plugin` shipped in 2.0 (Oct 2025). Older builds still expose `claude mcp add` + the hooks system — the [plugin README's Legacy mode section](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20) shows how to wire the same functionality by hand, and the one-line installer detects the version and offers it automatically.
+<details>
+<summary><b>Configuration</b></summary>
 
-#### 3. Start Claude Code
+Config priority: env vars > `ovcli.conf` > `ov.conf` > built-in defaults (`http://127.0.0.1:1933`, no auth).
 
-```bash
-claude
-```
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `OPENVIKING_AUTO_RECALL` | `true` | Auto-recall on every user prompt |
+| `OPENVIKING_RECALL_LIMIT` | `6` | Max memories to inject per turn |
+| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Token budget for inline content |
+| `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
+| `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
+| `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
+| `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
+| `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
 
-Inside Claude Code, run `/mcp` to confirm the OpenViking MCP entry shows your remote URL. If the plugin doesn't seem to fire, set `OPENVIKING_DEBUG=1` and check `~/.openviking/logs/cc-hooks.log`.
+For multi-tenant deployments, set `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_AGENT_ID`. Full env-var list in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
 
-## Why a function wrapper?
-
-The plugin's hooks read `ovcli.conf` directly — but the bundled `.mcp.json` entry **cannot**. Claude Code parses `.mcp.json` itself and only supports `${VAR}` substitution, so config-file values can't transparently reach the MCP server URL or auth headers.
-
-Injecting env vars at `claude` invocation is the single path that covers both hooks and MCP. Wrapping in a shell function (rather than a global `export`) keeps the API key out of every other shell child process — see the security note in [the manual setup step 1](#1-wrap-claude-to-inject-env-from-ovcli-conf).
-
-**Symptom of misconfiguration**: hooks (auto-recall, auto-capture) work fine because they read `ovcli.conf` via Node, but the on-demand MCP tools (`search`, `read`, `store`, …) silently connect to `http://127.0.0.1:1933` with empty auth headers, and `/mcp` shows the wrong URL.
-
-## Configuration
-
-### Resolution priority
-
-Every plugin field follows this chain (highest → lowest):
-
-1. **Environment variables** (`OPENVIKING_*`)
-2. **`ovcli.conf`** — connection fields only (`url`, `api_key`, `account`, `user`, `agent_id`)
-3. **`ov.conf`** — server config; the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present
-4. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
-
-> ⚠️ **Hooks only.** This chain is implemented in `scripts/config.mjs` and consumed by hook scripts. It does **not** apply to MCP server registration — see [Why a function wrapper?](#why-a-function-wrapper) above.
-
-### Key environment variables
-
-| Env Var                                          | Default       | Description                                                           |
-|--------------------------------------------------|---------------|-----------------------------------------------------------------------|
-| `OPENVIKING_URL` / `OPENVIKING_BASE_URL`         | —             | Full server URL                                                       |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | —             | API key; sent as `Authorization: Bearer <key>`                        |
-| `OPENVIKING_AUTO_RECALL`                         | `true`        | Enable auto-recall on every user prompt                               |
-| `OPENVIKING_RECALL_LIMIT`                        | `6`           | Max memories to inject per turn                                       |
-| `OPENVIKING_RECALL_TOKEN_BUDGET`                 | `2000`        | Token budget for inline content; over-budget items degrade to URI hints |
-| `OPENVIKING_AUTO_CAPTURE`                        | `true`        | Enable auto-capture; also gates write hooks                           |
-| `OPENVIKING_BYPASS_SESSION`                      | `false`       | One-shot: `1`/`true` skips every hook in the current process          |
-| `OPENVIKING_BYPASS_SESSION_PATTERNS`             | `""`          | CSV of glob patterns matched against `session_id` or `cwd`            |
-| `OPENVIKING_MEMORY_ENABLED`                      | (auto)        | `0`/`false`=force off; `1`/`true`=force on                            |
-| `OPENVIKING_DEBUG`                               | `false`       | Write hook logs to `~/.openviking/logs/cc-hooks.log`                  |
-
-For multi-tenant deployments, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_AGENT_ID` set the corresponding `X-OpenViking-*` headers. The full env-var list (recall tuning, capture tuning, lifecycle, debug) is in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
-
-### Bypass a session
-
-Use Claude Code in a `/tmp` PoC directory without polluting your long-term memory:
-
-```bash
-# Persistent: any session whose session_id or cwd matches a pattern
-export OPENVIKING_BYPASS_SESSION_PATTERNS='/tmp/**,**/scratch/**,/Users/me/Dev/throwaway/*'
-
-# Or one-shot:
-OPENVIKING_BYPASS_SESSION=1 claude
-```
-
-When bypass is active, every hook approves immediately without contacting OpenViking.
+</details>
 
 ## Statusline
 
-The plugin also renders a one-line OpenViking status under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so it has to live in user settings).
-
-```text
-OV ✓ │ ↩ 6 mem (0.92) · 50ms             last turn injected 6 memories, top score 0.92
-OV ⚠ slow                                 probe missed the 1 s budget (server may be lagging)
-OV ✗ offline                              server unreachable
-OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
-OV ✓ │ ✎ 573/20k · 2 arch                 pending capture, two archives produced this session
-OV ✓ │ 🔗 resumed │ +3 today              session re-hydrated; 3 archives committed today
-```
-
-The hook scripts write small JSON snapshots to `~/.openviking/state/`; the statusline script reads those plus a 5 s shared cache of `GET /health`. The probe is bounded by a 1 s hard timeout; the cache is shared across sessions to prevent stampedes.
-
-Set `OPENVIKING_STATUSLINE=off` to silence without removing the registration, or `jq 'del(.statusLine)' ~/.claude/settings.json` to remove. If you already had a custom statusline, the installer prompts replace / skip / manual compose.
-
-For the full segment glossary (when each one shows, why one might be missing) and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`examples/claude-code-memory-plugin/STATUSLINE.md`](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md). The easiest path is to open Claude Code and ask it to read the doc, explain the segments, and tailor anything to your preference.
-
-## Compared to Claude Code's built-in `MEMORY.md`
-
-This plugin **complements** Claude Code's native memory system, it doesn't replace it:
-
-| Feature      | Built-in `MEMORY.md`              | OpenViking plugin                                  |
-|--------------|-----------------------------------|----------------------------------------------------|
-| Storage      | Flat markdown                     | Vector DB + structured extraction                  |
-| Search       | Loaded into context wholesale     | Semantic similarity + ranking + token budget       |
-| Scope        | Per-project                       | Cross-project, cross-session, cross-agent          |
-| Capacity     | ~200 lines (context limit)        | Unlimited (server-side storage)                    |
-| Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction |
-| Subagents    | Same as parent                    | Isolated session + typed agent namespace           |
-
-## Hook behavior
-
-| Hook                  | Trigger                                    | Action                                                                                            |
-|-----------------------|--------------------------------------------|---------------------------------------------------------------------------------------------------|
-| `UserPromptSubmit`    | Each user turn                             | Search OV → rank → inject `<openviking-context>` block within a token budget                      |
-| `Stop`                | Claude finishes a response                 | Parse transcript → push new user turns to OV session → commit when pending tokens cross threshold |
-| `SessionStart`        | New / resumed / post-compact session       | Every source (startup/clear/resume/compact): inject the user's `profile.md` and an annotated listing of `preferences/` + `entities/`, capped by `OPENVIKING_PROFILE_TOKEN_BUDGET` (default `10000` tokens, CJK-aware; set `OPENVIKING_NO_AUTO_INJECT=1` to skip). On `resume`/`compact` additionally fetch the persistent session's latest archive overview + pre-archive abstracts. Both halves compose into a single `<openviking-context>` envelope. |
-| `PreCompact`          | Before Claude Code rewrites the transcript | Commit pending messages so they become an archive before CC mutates the transcript                |
-| `SessionEnd`          | Claude Code session closes                 | Final commit so the last window is archived                                                       |
-| `SubagentStart`       | Parent spawns a subagent via Task tool     | Derive an isolated OV session ID for the subagent, persist start state                            |
-| `SubagentStop`        | Subagent finishes                          | Read subagent transcript → push to isolated session with subagent-typed agent header → commit     |
-
-`Stop`, `SessionEnd`, and `SubagentStop` use a detached-worker pattern so the user never waits for OpenViking. Disable with `OPENVIKING_WRITE_PATH_ASYNC=false` if you need deterministic ordering.
-
-`auto-capture` strips `<openviking-context>`, `<system-reminder>`, `<relevant-memories>`, and `[Subagent Context]` blocks before pushing to OV — without this, the recall context the plugin injects this turn would be captured back as part of the user's message next turn.
-
-### OV session ID derivation
-
-The OV session ID embeds the CC `session_id` verbatim, so you can map between the two by eye:
-
-- Parent: `cc-<ccSessionId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783`
-- Subagent: `cc-<ccSessionId>__agent-<agentId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783__agent-abc123`
-
-`~/.openviking/state/last-capture.json` shows the live `cc_session_id` and `ov_session_id` for the current session; the CC side's session ID is also the filename of `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl`.
+The plugin renders an OpenViking status indicator under your Claude Code input box — connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for the full segment glossary and personalization recipes.
 
 ## Troubleshooting
 
-| Symptom                                    | Cause                                                          | Fix                                                                                          |
-|--------------------------------------------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                              | Run the [one-line installer](#one-line-installer-recommended), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY env vars |
-| Hooks fire but recall is empty             | OpenViking server not running, or wrong URL                    | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"`                                     |
-| MCP tools hit `127.0.0.1` instead of remote | `.mcp.json` only resolves `${VAR}`, no `ovcli.conf` integration | See [Why a function wrapper?](#why-a-function-wrapper)                                       |
-| Remote auth 401 / 403                      | Wrong API key or missing tenant headers                        | Verify `OPENVIKING_API_KEY`; for multi-tenant, also check `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
-| `Stop` hook times out                      | Server slow + sync write path                                  | Leave `OPENVIKING_WRITE_PATH_ASYNC=true` (default), or raise the `Stop` timeout in `hooks/hooks.json` |
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Plugin not activating | No `ov.conf` / `ovcli.conf` found | Run the [installer](#install), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY env vars |
+| Hooks fire but recall is empty | Server not running or wrong URL | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
+| MCP tools hit `127.0.0.1` instead of remote | Missing function wrapper | Ensure `type claude` says "shell function"; see [Manual setup](#install) |
+| Remote auth 401 / 403 | Wrong API key or missing tenant headers | Check `OPENVIKING_API_KEY`; for multi-tenant also check `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
 
 ## See also
 
-- [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — exhaustive env-var tables, hook timeouts, debug logging, architecture diagram
+- [Blog: OpenViking in Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) — motivation, architecture overview, and demo
+- [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — full env-var tables, hook details, architecture diagram
 - [Migration notes](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) — upgrading from earlier plugin versions
-- [MCP Integration Guide](../guides/06-mcp-integration.md) — for MCP tool parameters and other clients
+- [MCP Clients](./06-mcp-clients.md) — for MCP tool parameters and other clients
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup
