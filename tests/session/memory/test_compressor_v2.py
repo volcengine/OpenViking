@@ -9,7 +9,7 @@ Uses MockVikingFS and real VLM (from config).
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, call, patch
 
 import pytest
 
@@ -17,12 +17,19 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
+)
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -585,7 +592,20 @@ class TestCompressorV2:
                 pass
 
             async def run(self):
-                return SimpleNamespace(upsert_operations=[], delete_file_contents=[]), []
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="experiences",
+                                uris=["viking://agent/default/memories/experiences/debug.md"],
+                                memory_fields={"experience_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
 
         class DummyUpdater:
             async def apply_operations(self, operations, ctx, **kwargs):
@@ -617,10 +637,11 @@ class TestCompressorV2:
             release=AsyncMock(side_effect=release),
         )
 
-        async def post_apply(result, inheritance_map, lock_handle):
+        async def post_apply(result, inheritance_map, lock_handle, source_attribution_map):
             assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
             assert lock_handle is handle
+            assert source_attribution_map == {}
             events.append("post_apply")
 
         with (
@@ -635,17 +656,121 @@ class TestCompressorV2:
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                    post_apply=post_apply,
+                )
+
+        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
+        assert events == ["acquire", "apply", "post_apply", "release"]
+        summary = telemetry.finish().summary
+        phase = summary["memory"]["agent"]["phase"]["experience_single"]
+        assert phase["count"] == 1
+        assert phase.get("total_ms", 0) >= 0
+        assert phase.get("lock_wait_ms", 0) >= 0
+        assert phase.get("memory_apply_ms", 0) >= 0
+        assert phase.get("post_apply_ms", 0) >= 0
+
+    @pytest.mark.asyncio
+    async def test_extract_phase_strips_batch_source_attribution_before_apply(self):
+        """Batch-only source ids should guide post-apply attribution without persisting."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            SOURCE_TRAJECTORY_IDS_FIELD,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+
+        class FakeVikingFS:
+            pass
+
+        class DummyProvider:
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+            def resolve_source_attribution(self, operations, _ctx=None):
+                raw = operations.upsert_operations[0].memory_fields.pop(SOURCE_TRAJECTORY_IDS_FIELD)
+                return {exp_uri: [raw]}
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="experiences",
+                                uris=[exp_uri],
+                                memory_fields={
+                                    "experience_name": "debug",
+                                    SOURCE_TRAJECTORY_IDS_FIELD: "traj-1",
+                                },
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                assert (
+                    SOURCE_TRAJECTORY_IDS_FIELD not in operations.upsert_operations[0].memory_fields
+                )
+                result = MemoryUpdateResult()
+                result.written_uris = [exp_uri]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+            ),
+        )
+
+        seen_source_map: Dict[str, List[str]] = {}
+
+        async def post_apply(result, inheritance_map, lock_handle, source_attribution_map):
+            seen_source_map.update(source_attribution_map)
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
             result = await compressor._run_extract_phase(
                 provider=DummyProvider(),
                 messages=messages,
                 ctx=ctx,
                 strict_extract_errors=True,
-                phase_label="experience(test)",
+                phase_label="experience(batch:1)",
                 post_apply=post_apply,
             )
 
-        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
-        assert events == ["acquire", "apply", "post_apply", "release"]
+        assert result[0] == [exp_uri]
+        assert seen_source_map == {exp_uri: ["traj-1"]}
 
     @pytest.mark.asyncio
     async def test_append_trajectories_uses_exact_lock(self):
@@ -709,6 +834,330 @@ class TestCompressorV2:
             "write",
             "release",
         ]
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_batch_experience_runs_single_phase(self):
+        """Batch mode should consolidate multiple trajectories in one experience phase."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            BatchAgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+        calls: List[str] = []
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=uri,
+                        content=f"content for {uri}",
+                        extra_fields={},
+                    )
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            calls.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert phase_label == "experience(batch:2)"
+            assert isinstance(kwargs["provider"], BatchAgentExperienceContextProvider)
+            assert kwargs["provider"].trajectory_items == [
+                {"id": "T1", "uri": traj_uris[0], "content": f"content for {traj_uris[0]}"},
+                {"id": "T2", "uri": traj_uris[1], "content": f"content for {traj_uris[1]}"},
+            ]
+            result = MemoryUpdateResult()
+            result.written_uris = [exp_uri]
+            await kwargs["post_apply"](
+                result,
+                {exp_uri: ["old-traj"]},
+                None,
+                {exp_uri: [traj_uris[1]]},
+            )
+            return [exp_uri], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="batch",
+                agent_experience_batch_max_trajectories=5,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+            patch.object(
+                compressor,
+                "_append_trajectories_to_experiences",
+                new_callable=AsyncMock,
+            ) as append_sources,
+        ):
+            result = await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        assert result == {"contexts": [], "session_skills": []}
+        assert calls == ["trajectory", "experience(batch:2)"]
+        append_sources.assert_awaited_once_with(
+            [exp_uri],
+            [traj_uris[1], "old-traj"],
+            ctx,
+            ANY,
+            lock_handle=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_default_keeps_per_trajectory_experience_phases(self):
+        """Default config should preserve one experience phase per trajectory."""
+        from openviking.session.memory.agent_experience_context_provider import (
+            AgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        calls: List[str] = []
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            calls.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert isinstance(kwargs["provider"], AgentExperienceContextProvider)
+            assert phase_label.startswith(
+                "experience(viking://agent/default/memories/trajectories/"
+            )
+            return [f"exp-for-{len(calls)}"], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="per_trajectory",
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        assert calls == [
+            "trajectory",
+            f"experience({traj_uris[0]})",
+            f"experience({traj_uris[1]})",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_batch_experience_keeps_sources_separate_per_experience(self):
+        """Batch attribution should not cross-attach source trajectories across experiences."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            BatchAgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        exp_uris = [
+            "viking://agent/default/memories/experiences/first.md",
+            "viking://agent/default/memories/experiences/second.md",
+        ]
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert phase_label == "experience(batch:2)"
+            assert isinstance(kwargs["provider"], BatchAgentExperienceContextProvider)
+            result = MemoryUpdateResult()
+            result.written_uris = exp_uris
+            await kwargs["post_apply"](
+                result,
+                {},
+                None,
+                {
+                    exp_uris[0]: [traj_uris[0]],
+                    exp_uris[1]: [traj_uris[1]],
+                },
+            )
+            return exp_uris, [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="batch",
+                agent_experience_batch_max_trajectories=5,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+            patch.object(
+                compressor,
+                "_append_trajectories_to_experiences",
+                new_callable=AsyncMock,
+            ) as append_sources,
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        append_sources.assert_has_awaits(
+            [
+                call([exp_uris[0]], [traj_uris[0]], ctx, ANY, lock_handle=None),
+                call([exp_uris[1]], [traj_uris[1]], ctx, ANY, lock_handle=None),
+            ]
+        )
+        assert append_sources.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_batch_experience_respects_batch_size(self):
+        """Batch mode should reduce experience phases according to the configured chunk size."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            BatchAgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [f"viking://agent/default/memories/trajectories/{idx}.md" for idx in range(5)]
+        phase_labels: List[str] = []
+        batch_lengths: List[int] = []
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            phase_labels.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert isinstance(kwargs["provider"], BatchAgentExperienceContextProvider)
+            batch_lengths.append(len(kwargs["provider"].trajectory_items))
+            return [f"exp-for-{len(batch_lengths)}"], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="batch",
+                agent_experience_batch_max_trajectories=2,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        assert phase_labels == [
+            "trajectory",
+            "experience(batch:2)",
+            "experience(batch:2)",
+            "experience(batch:1)",
+        ]
+        assert batch_lengths == [2, 2, 1]
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_batch_experience_skips_source_append_without_attribution(self):
+        """Batch mode should not attach the whole batch when source ids are missing."""
+        from openviking.session.memory.batch_agent_experience_context_provider import (
+            BatchAgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=uri,
+                        content=f"content for {uri}",
+                        extra_fields={},
+                    )
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert phase_label == "experience(batch:2)"
+            assert isinstance(kwargs["provider"], BatchAgentExperienceContextProvider)
+            result = MemoryUpdateResult()
+            result.written_uris = [exp_uri]
+            await kwargs["post_apply"](result, {}, None, {})
+            return [exp_uri], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_consolidation_mode="batch",
+                agent_experience_batch_max_trajectories=5,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+            patch.object(
+                compressor,
+                "_append_trajectories_to_experiences",
+                new_callable=AsyncMock,
+            ) as append_sources,
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        append_sources.assert_not_called()
 
 
 class TestExtractLoopPatchRepair:

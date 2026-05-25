@@ -238,6 +238,47 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
     assert result["memory"] == {"extracted": 6}
 
 
+def test_telemetry_summary_includes_agent_memory_phase_metrics():
+    telemetry = MemoryOperationTelemetry(operation="session.commit", enabled=True)
+    telemetry.set("memory.agent.trajectories.created", 3)
+    telemetry.set("memory.agent.experience.batch.max_trajectories", 2)
+    telemetry.set("memory.agent.experience.batch.count", 2)
+    telemetry.set("memory.agent.experience.batch.input_trajectories", 3)
+    telemetry.count("memory.agent.extract.phase.count", 2)
+    telemetry.count("memory.agent.extract.phase.trajectory.count", 1)
+    telemetry.add_duration("memory.agent.extract.phase.trajectory.total", 10.5)
+    telemetry.add_duration("memory.agent.extract.phase.trajectory.lock_wait", 1.25)
+    telemetry.count("memory.agent.extract.phase.experience_batch.count", 1)
+    telemetry.count("memory.agent.extract.phase.experience_batch.lock_retries", 2)
+    telemetry.add_duration("memory.agent.extract.phase.experience_batch.total", 20.0)
+    telemetry.add_duration("memory.agent.extract.phase.experience_batch.llm", 12.0)
+
+    result = telemetry.finish().summary
+
+    assert result["memory"]["agent"] == {
+        "trajectories_created": 3,
+        "experience_batch": {
+            "count": 2,
+            "max_trajectories": 2,
+            "input_trajectories": 3,
+        },
+        "phase": {
+            "count": 2,
+            "trajectory": {
+                "count": 1,
+                "total_ms": 10.5,
+                "lock_wait_ms": 1.25,
+            },
+            "experience_batch": {
+                "count": 1,
+                "lock_retries": 2,
+                "total_ms": 20.0,
+                "llm_ms": 12.0,
+            },
+        },
+    }
+
+
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
     captured = {}
 

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -55,6 +55,23 @@ class MemoryConfig(BaseModel):
             "Experimental memory switch for experimental testing. When enabled, "
             "experimental memory templates are loaded and agent_memory_enabled defaults "
             "to true unless explicitly configured."
+        ),
+    )
+    agent_experience_consolidation_mode: Literal["per_trajectory", "batch"] = Field(
+        default="per_trajectory",
+        description=(
+            "Controls agent experience consolidation after trajectory extraction. "
+            "'per_trajectory' preserves the existing behavior. 'batch' consolidates "
+            "multiple newly extracted trajectories from the same session in one "
+            "experience extraction pass."
+        ),
+    )
+    agent_experience_batch_max_trajectories: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Maximum number of new trajectories to consolidate in one batch when "
+            "memory.agent_experience_consolidation_mode='batch'."
         ),
     )
     eager_prefetch: bool = Field(

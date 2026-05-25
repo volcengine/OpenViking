@@ -54,6 +54,9 @@ class TestCommit:
         assert "memories_extracted" in task_result["result"]
         memory_counts = task_result["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
+        telemetry = task_result["result"]["telemetry"]
+        assert telemetry["summary"]["operation"] == "session_commit_phase2"
+        assert telemetry["summary"]["status"] == "ok"
 
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)

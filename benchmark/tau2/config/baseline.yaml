@@ -48,6 +48,11 @@ openviking:
   url: ${OPENVIKING_URL:-http://localhost:1933}
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  # Agent Harness / TAU-2 experiment corpus preparation defaults to the
+  # batch consolidation path. OpenViking's product default remains configured
+  # by the running server's ov.conf; strict preflight verifies they match.
+  agent_experience_consolidation_mode: batch
+  agent_experience_batch_max_trajectories: 5
   reuse_corpus_across_runs: true
   retrieval_top_k: 4
   prewrite_retrieval_top_k: 6

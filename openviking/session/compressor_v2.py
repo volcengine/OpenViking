@@ -41,7 +41,9 @@ logger = get_logger(__name__)
 MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
 _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
-ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
+ExtractPostApply = Callable[
+    [MemoryUpdateResult, Dict[str, List[str]], Any, Dict[str, List[str]]], Awaitable[None]
+]
 
 
 def _filename_has_variables(schema: Any) -> bool:
@@ -115,6 +117,16 @@ def _render_memory_schema_locks(
                 _append_unique(exact_paths, viking_fs._uri_to_path(file_uri, ctx))
 
     return exact_paths, tree_paths
+
+
+def _phase_metric_key(phase_label: str) -> str:
+    if phase_label == "trajectory":
+        return "trajectory"
+    if phase_label.startswith("experience(batch:"):
+        return "experience_batch"
+    if phase_label.startswith("experience("):
+        return "experience_single"
+    return "other"
 
 
 class SessionCompressorV2:
@@ -501,6 +513,8 @@ class SessionCompressorV2:
         # producing identical URIs. Without this, experience extraction would run
         # once per duplicate and generate near-identical experiences.
         written_trajectory_uris = list(dict.fromkeys(written_trajectory_uris))
+        telemetry = get_current_telemetry()
+        telemetry.set("memory.agent.trajectories.created", len(written_trajectory_uris))
 
         if not include_trajectories or not written_trajectory_uris:
             if not written_trajectory_uris:
@@ -512,6 +526,100 @@ class SessionCompressorV2:
 
         # Phase 2: for each new trajectory, consolidate into experiences.
         viking_fs = get_viking_fs()
+        consolidation_mode = getattr(
+            config.memory, "agent_experience_consolidation_mode", "per_trajectory"
+        )
+        if consolidation_mode == "batch" and len(written_trajectory_uris) > 1:
+            from openviking.session.memory.batch_agent_experience_context_provider import (
+                BatchAgentExperienceContextProvider,
+            )
+
+            trajectory_items: List[Dict[str, str]] = []
+            for traj_uri in written_trajectory_uris:
+                try:
+                    mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                    trajectory_items.append({"uri": traj_uri, "content": mf.content})
+                except Exception as e:
+                    logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
+
+            if not trajectory_items:
+                return {
+                    "contexts": contexts,
+                    "session_skills": session_skill_results,
+                }
+
+            batch_size = int(
+                getattr(config.memory, "agent_experience_batch_max_trajectories", 5) or 5
+            )
+            batch_size = max(1, batch_size)
+            telemetry.set("memory.agent.experience.batch.max_trajectories", batch_size)
+            telemetry.set(
+                "memory.agent.experience.batch.count",
+                -(-len(trajectory_items) // batch_size),
+            )
+            telemetry.set(
+                "memory.agent.experience.batch.input_trajectories",
+                len(trajectory_items),
+            )
+
+            for start in range(0, len(trajectory_items), batch_size):
+                batch_items = trajectory_items[start : start + batch_size]
+                exp_provider = BatchAgentExperienceContextProvider(
+                    messages=messages,
+                    trajectory_items=batch_items,
+                )
+
+                async def _append_batch_sources_before_unlock(
+                    result: MemoryUpdateResult,
+                    inheritance_map: Dict[str, List[str]],
+                    lock_handle: Any,
+                    source_attribution_map: Dict[str, List[str]],
+                ) -> None:
+                    # Batch mode intentionally avoids the single-candidate fallback:
+                    # the whole batch may contain multiple unrelated patterns, so
+                    # attribution is only safe for experiences this phase actually
+                    # wrote or edited and the LLM explicitly linked to source ids.
+                    all_exp_uris = list(result.written_uris) + list(result.edited_uris)
+                    for exp_uri in all_exp_uris:
+                        selected_sources = source_attribution_map.get(exp_uri, [])
+                        if not selected_sources:
+                            tracer.info(
+                                f"[source_traj] batch attribution missing, skip source append: {exp_uri}"
+                            )
+                            continue
+                        inherited = inheritance_map.get(exp_uri, [])
+                        source_uris = list(dict.fromkeys(selected_sources + inherited))
+                        await self._append_trajectories_to_experiences(
+                            [exp_uri],
+                            source_uris,
+                            ctx,
+                            viking_fs,
+                            lock_handle=lock_handle,
+                        )
+
+                exp_result = await self._run_extract_phase(
+                    provider=exp_provider,
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=strict_extract_errors,
+                    phase_label=f"experience(batch:{len(batch_items)})",
+                    post_apply=_append_batch_sources_before_unlock,
+                )
+
+                if exp_result is None:
+                    tracer.info(
+                        f"[source_traj] batch experience phase failed; skip fallback append for {len(batch_items)} trajectories"
+                    )
+                    continue
+
+                _, _, exp_contexts, _, _ = exp_result
+                contexts.extend(exp_contexts)
+
+            return {
+                "contexts": contexts,
+                "session_skills": session_skill_results,
+            }
+
         for traj_uri in written_trajectory_uris:
             try:
                 mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
@@ -531,6 +639,7 @@ class SessionCompressorV2:
                 result: MemoryUpdateResult,
                 inheritance_map: Dict[str, List[str]],
                 lock_handle: Any,
+                source_attribution_map: Dict[str, List[str]],
                 exp_provider=exp_provider,
                 exp_dir=exp_dir,
                 traj_uri=traj_uri,
@@ -669,6 +778,15 @@ class SessionCompressorV2:
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
         config = get_openviking_config()
+        telemetry = get_current_telemetry()
+        phase_metric_key = _phase_metric_key(phase_label)
+        phase_started_at = asyncio.get_running_loop().time()
+        lock_wait_ms = 0.0
+        llm_ms = 0.0
+        memory_apply_ms = 0.0
+        post_apply_ms = 0.0
+        skill_apply_ms = 0.0
+        retry_count = 0
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
@@ -717,8 +835,8 @@ class SessionCompressorV2:
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
-                retry_count = 0
                 last_lock_retry_warning_at = 0.0
+                lock_wait_started_at = asyncio.get_running_loop().time()
                 while True:
                     lock_acquired = await lock_manager.acquire_exact_tree_batch(
                         transaction_handle,
@@ -742,10 +860,13 @@ class SessionCompressorV2:
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
+                lock_wait_ms = (asyncio.get_running_loop().time() - lock_wait_started_at) * 1000
 
             provider._transaction_handle = transaction_handle
             orchestrator._transaction_handle = transaction_handle
+            llm_started_at = asyncio.get_running_loop().time()
             operations, _ = await orchestrator.run()
+            llm_ms = (asyncio.get_running_loop().time() - llm_started_at) * 1000
 
             if operations is None:
                 tracer.info(f"[{phase_label}] No memory operations generated")
@@ -765,6 +886,10 @@ class SessionCompressorV2:
             # queue for deletion, and return per-URI inheritance map so only the
             # superseding experience inherits the old source_trajectories.
             inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
+            source_attribution_map: Dict[str, List[str]] = {}
+            source_attribution_resolver = getattr(provider, "resolve_source_attribution", None)
+            if callable(source_attribution_resolver):
+                source_attribution_map = source_attribution_resolver(operations, ctx) or {}
 
             memory_operations, skill_operations, unsupported_skill_deletes = (
                 self._split_operations_by_memory_type(operations)
@@ -784,12 +909,14 @@ class SessionCompressorV2:
             ):
                 registry = provider._get_registry()
                 updater = self._get_or_create_updater(registry, transaction_handle)
+                apply_started_at = asyncio.get_running_loop().time()
                 memory_result = await updater.apply_operations(
                     memory_operations,
                     ctx,
                     extract_context=extract_context,
                     isolation_handler=isolation_handler,
                 )
+                memory_apply_ms = (asyncio.get_running_loop().time() - apply_started_at) * 1000
 
             tracer.info(
                 f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
@@ -798,7 +925,14 @@ class SessionCompressorV2:
             )
 
             if post_apply:
-                await post_apply(memory_result, inheritance_map, transaction_handle)
+                post_apply_started_at = asyncio.get_running_loop().time()
+                await post_apply(
+                    memory_result,
+                    inheritance_map,
+                    transaction_handle,
+                    source_attribution_map,
+                )
+                post_apply_ms = (asyncio.get_running_loop().time() - post_apply_started_at) * 1000
 
             skill_results: List[Dict[str, Any]] = []
             if skill_operations.upsert_operations:
@@ -810,7 +944,9 @@ class SessionCompressorV2:
                     skill_processor=self.skill_processor,
                     viking_fs=viking_fs,
                 )
+                skill_apply_started_at = asyncio.get_running_loop().time()
                 skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+                skill_apply_ms = (asyncio.get_running_loop().time() - skill_apply_started_at) * 1000
                 tracer.info(
                     f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
                     f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
@@ -844,6 +980,37 @@ class SessionCompressorV2:
                 raise
             return None
         finally:
+            total_ms = (asyncio.get_running_loop().time() - phase_started_at) * 1000
+            telemetry.count("memory.agent.extract.phase.count", 1)
+            telemetry.count(f"memory.agent.extract.phase.{phase_metric_key}.count", 1)
+            telemetry.add_duration("memory.agent.extract.phase.total", total_ms)
+            telemetry.add_duration(f"memory.agent.extract.phase.{phase_metric_key}.total", total_ms)
+            telemetry.add_duration(
+                f"memory.agent.extract.phase.{phase_metric_key}.lock_wait", lock_wait_ms
+            )
+            telemetry.add_duration(f"memory.agent.extract.phase.{phase_metric_key}.llm", llm_ms)
+            telemetry.add_duration(
+                f"memory.agent.extract.phase.{phase_metric_key}.memory_apply",
+                memory_apply_ms,
+            )
+            telemetry.add_duration(
+                f"memory.agent.extract.phase.{phase_metric_key}.post_apply",
+                post_apply_ms,
+            )
+            telemetry.add_duration(
+                f"memory.agent.extract.phase.{phase_metric_key}.skill_apply",
+                skill_apply_ms,
+            )
+            telemetry.count(
+                f"memory.agent.extract.phase.{phase_metric_key}.lock_retries",
+                retry_count,
+            )
+            tracer.info(
+                f"[{phase_label}] timings: total_ms={total_ms:.1f}, "
+                f"lock_wait_ms={lock_wait_ms:.1f}, llm_ms={llm_ms:.1f}, "
+                f"memory_apply_ms={memory_apply_ms:.1f}, post_apply_ms={post_apply_ms:.1f}, "
+                f"skill_apply_ms={skill_apply_ms:.1f}, lock_retries={retry_count}"
+            )
             if lock_manager and transaction_handle:
                 try:
                     await lock_manager.release(transaction_handle)
