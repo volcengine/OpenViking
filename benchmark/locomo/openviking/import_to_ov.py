@@ -624,9 +624,17 @@ async def run_import(args: argparse.Namespace) -> None:
                     args=args,
                 )
 
-        # 不同 sample 之间并行执行
-        tasks = [asyncio.create_task(process_sample(item)) for item in samples]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 不同 sample 之间并行执行；可用 --parallel-samples 控制并发上限。
+        if args.parallel_samples:
+            semaphore = asyncio.Semaphore(args.parallel_samples)
+
+            async def process_sample_with_limit(item):
+                async with semaphore:
+                    await process_sample(item)
+
+            tasks = [asyncio.create_task(process_sample_with_limit(item)) for item in samples]
+        else:
+            tasks = [asyncio.create_task(process_sample(item)) for item in samples]
 
     else:
         # Plain text format
@@ -755,6 +763,12 @@ def main():
         type=int,
         default=None,
         help="LoCoMo JSON: question index (0-based). When specified, auto-detect required sessions from question's evidence.",
+    )
+    parser.add_argument(
+        "--parallel-samples",
+        type=int,
+        default=None,
+        help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
     )
     parser.add_argument(
         "--force-ingest",

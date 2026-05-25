@@ -17,6 +17,7 @@ except ModuleNotFoundError:
 
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
+csv.field_size_limit(sys.maxsize)
 
 
 DEFAULT_AZURE_API_VERSION = "2025-01-01-preview"
@@ -152,7 +153,7 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-code-preview-260215",
+        default="doubao-seed-2-0-pro-260215",
         help="Judge model name",
     )
     parser.add_argument(

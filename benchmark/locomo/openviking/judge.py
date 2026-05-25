@@ -6,6 +6,7 @@ import asyncio
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from pathlib import Path
+import sys
 
 try:
     from benchmark.locomo.openviking.locomo_prompts import (
@@ -28,6 +29,7 @@ except ModuleNotFoundError:
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
+csv.field_size_limit(sys.maxsize)
 
 
 def _parse_evidence_text(raw: str) -> str:
@@ -114,6 +116,21 @@ def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     return rows, fieldnames
 
 
+def get_ungraded_rows(rows: list[dict], force: bool = False) -> list[int]:
+    """Return row indexes to judge, excluding adversarial rows without normal answers."""
+    indexes = []
+    for i, row in enumerate(rows):
+        if str(row.get("category", "")).strip() == "5":
+            continue
+        if force:
+            row["result"] = ""
+            row["reasoning"] = ""
+            indexes.append(i)
+        elif not row.get("result"):
+            indexes.append(i)
+    return indexes
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="VikingBot QA judge script, same logic as openclaw evaluation"
@@ -135,11 +152,16 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-code-preview-260215",
-        help="Judge model name, default: doubao-seed-2-0-code-preview-260215",
+        default="doubao-seed-2-0-pro-260215",
+        help="Judge model name, default: doubao-seed-2-0-pro-260215",
     )
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-grade all non-adversarial rows even if result already exists",
     )
     args = parser.parse_args()
 
@@ -156,11 +178,7 @@ async def main():
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
     # 筛选未评分的行
-    ungraded = [
-        i
-        for i, row in enumerate(rows)
-        if not row.get("result") and str(row.get("category", "")).strip() != "5"
-    ]
+    ungraded = get_ungraded_rows(rows, force=args.force)
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:

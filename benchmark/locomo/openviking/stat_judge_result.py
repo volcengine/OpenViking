@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 from collections import defaultdict
 
 
@@ -12,6 +13,8 @@ CATEGORY_NAMES = {
     "4": "single-hop",
     "5": "adversarial",
 }
+
+csv.field_size_limit(sys.maxsize)
 
 
 def category_label(category: str) -> str:

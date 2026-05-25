@@ -2,7 +2,10 @@ import argparse
 import csv
 import json
 import os
+import sys
 from collections import defaultdict
+
+csv.field_size_limit(sys.maxsize)
 
 
 def main():
