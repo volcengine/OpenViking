@@ -34,6 +34,8 @@ examples/opencode-plugin/
 │   ├── memory-tools.mjs
 │   ├── memory-recall.mjs
 │   └── utils.mjs
+├── tests/
+│   └── test-project-isolation.mjs
 └── wrappers/
     └── openviking.mjs
 ```
@@ -111,6 +113,7 @@ Create `~/.config/opencode/openviking-config.json`:
   "account": "",
   "user": "",
   "agentId": "",
+  "projectIsolation": true,
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -125,14 +128,43 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-`apiKey` is sent as `X-API-Key`. `account`, `user`, and `agentId` are sent as
-`X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent`.
-They are required by multi-tenant OpenViking servers for tenant-scoped APIs.
+`apiKey` is sent as `X-API-Key`. `account`, `user`, and the resolved
+`agentId` are sent as `X-OpenViking-Account`, `X-OpenViking-User`, and
+`X-OpenViking-Agent`. They are required by multi-tenant OpenViking servers for
+tenant-scoped APIs.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and
 `OPENVIKING_AGENT_ID` take precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
+
+### Project Isolation
+
+`projectIsolation` defaults to `true`. With isolation enabled, the plugin derives
+the effective `agentId` from the configured base `agentId` and the current
+OpenCode project directory:
+
+```text
+<agentId>-<project-name>-<directory-hash>
+```
+
+For example, two projects that both configure `"agentId": "alice"` will write
+memories under different `X-OpenViking-Agent` values, preventing unrelated
+project memories from mixing.
+
+Set `"projectIsolation": false` to keep the previous behavior where every
+project uses the exact configured `agentId`.
+
+Set `OPENVIKING_AGENT_ID_OVERRIDE` to force one exact agent ID for the current
+process. This is an escape hatch for one-off maintenance and migration commands.
+
+If you already have memories under the old shared agent and want to move them to
+a project's isolated agent, first determine the new value from the plugin log or
+by matching the pattern above, then run:
+
+```bash
+ov mv viking://agent/<old> viking://agent/<new>
+```
 
 ## Tools
 
