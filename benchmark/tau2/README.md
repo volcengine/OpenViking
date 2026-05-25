@@ -247,7 +247,7 @@ write path. The default evidence path keeps experience consolidation on the
 normal per-trajectory route and relies on concurrent session commits plus
 server-side exact apply. Configure the running OpenViking server with:
 
-- `memory.agent_experience_consolidation_mode="per_trajectory"`
+- `memory.agent_memory_enabled=true`
 - `memory.agent_experience_apply_lock_mode="operation_exact"`
 - `memory.agent_trajectory_apply_lock_mode="operation_exact"`
 - `memory.long_term_apply_lock_mode="operation_exact"`
@@ -258,13 +258,15 @@ server-side exact apply. Configure the running OpenViking server with:
 and fails fast if the server-side memory config does not match the experiment
 config. The `10.0s` operation-exact apply window is now also the OpenViking
 product default; the remaining settings are benchmark / Vaka corpus-prepare
-defaults for faster iteration. Batch experience consolidation remains available
-as a separate quality / latency ablation, but the main corpus-prepare
-acceleration path does not depend on batching multiple trajectories into one
-experience pass. The operation-exact apply window is a server-side ordering
-primitive: the first request for the same concrete target set waits for a short
-engineering window, then queued followers apply in order; it does not perform
-semantic reconcile or batch-level patch rewriting.
+defaults for faster iteration. Experience consolidation keeps the normal
+per-trajectory semantics, while same-session experience phases may run
+concurrently when operation-exact apply is enabled. The operation-exact apply
+window is a server-side owner
+primitive: requests for the same concrete target set queue during a short
+engineering window, then one owner acquires the union of exact locks and applies
+the queued patch timeline in order against locked, latest content. It is not a
+client-side sleep and does not require the benchmark runner to serialize session
+commits.
 
 ## Memory Adapter
 

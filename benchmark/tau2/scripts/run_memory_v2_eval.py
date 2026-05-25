@@ -504,12 +504,7 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
 
 def _expected_openviking_memory_config(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        "expected_agent_experience_consolidation_mode": (
-            args.expected_agent_experience_consolidation_mode
-        ),
-        "expected_agent_experience_batch_max_trajectories": (
-            args.expected_agent_experience_batch_max_trajectories
-        ),
+        "expected_agent_memory_enabled": args.expected_agent_memory_enabled,
         "expected_agent_experience_apply_lock_mode": (
             args.expected_agent_experience_apply_lock_mode
         ),
@@ -1066,19 +1061,10 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--expected-agent-experience-consolidation-mode",
-        choices=["per_trajectory", "batch"],
+        "--expected-agent-memory-enabled",
+        type=_parse_bool,
         help=(
-            "Expected server-side memory.agent_experience_consolidation_mode. "
-            "This runner records it for corpus identity; the running OpenViking "
-            "server must be configured separately."
-        ),
-    )
-    parser.add_argument(
-        "--expected-agent-experience-batch-max-trajectories",
-        type=int,
-        help=(
-            "Expected server-side memory.agent_experience_batch_max_trajectories. "
+            "Expected server-side memory.agent_memory_enabled. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )
@@ -1185,11 +1171,6 @@ def main() -> int:
         parser.error("--corpus-session-commit-concurrency must be positive")
     if args.train_tool_output_max_chars <= 0:
         parser.error("--train-tool-output-max-chars must be positive")
-    if (
-        args.expected_agent_experience_batch_max_trajectories is not None
-        and args.expected_agent_experience_batch_max_trajectories <= 0
-    ):
-        parser.error("--expected-agent-experience-batch-max-trajectories must be positive")
     for name in (
         "memory_inject_max_chars",
         "first_user_memory_inject_max_chars",

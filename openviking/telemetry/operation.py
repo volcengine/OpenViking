@@ -65,7 +65,6 @@ class TelemetrySummaryBuilder:
     _AGENT_MEMORY_PHASE_KEYS = (
         "trajectory",
         "experience_single",
-        "experience_batch",
         "other",
     )
     _AGENT_MEMORY_PHASE_DURATION_KEYS = {
@@ -75,6 +74,10 @@ class TelemetrySummaryBuilder:
         "memory_apply_ms": "memory_apply.duration_ms",
         "post_apply_ms": "post_apply.duration_ms",
         "skill_apply_ms": "skill_apply.duration_ms",
+        "operation_exact_apply_window_wait_ms": ("operation_exact_apply_window_wait.duration_ms"),
+        "operation_exact_apply_window_lock_wait_ms": (
+            "operation_exact_apply_window_lock_wait.duration_ms"
+        ),
     }
 
     @staticmethod
@@ -359,6 +362,30 @@ class TelemetrySummaryBuilder:
                         "operation_exact_retries": cls._i(
                             counters.get(f"{metric_prefix}.operation_exact_retries"), 0
                         ),
+                        "operation_exact_apply_window_entered": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_entered"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_leader": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_leader"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_follower": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_follower"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_batch_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_batch_items"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_lock_path_count_total": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_lock_path_count_total"
+                            ),
+                            0,
+                        ),
                         "operation_exact_stale_read_uri_count": cls._i(
                             counters.get(f"{metric_prefix}.operation_exact_stale_read_uri_count"),
                             0,
@@ -402,6 +429,12 @@ class TelemetrySummaryBuilder:
                                 f"{metric_prefix}.operation_exact_retry_reason",
                             )
                         ),
+                        "operation_exact_apply_window_batch_sizes": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_batch_size",
+                            )
+                        ),
                         "operation_exact_stale_base_states": (
                             cls._build_counter_suffix_summary(
                                 counters,
@@ -426,13 +459,14 @@ class TelemetrySummaryBuilder:
                     "trajectories_created": cls._i(
                         gauges.get("memory.agent.trajectories.created"), 0
                     ),
-                    "experience_batch": {
-                        "count": cls._i(gauges.get("memory.agent.experience.batch.count"), 0),
-                        "max_trajectories": cls._i(
-                            gauges.get("memory.agent.experience.batch.max_trajectories"), 0
+                    "experience_per_trajectory": {
+                        "max_concurrency": cls._i(
+                            gauges.get("memory.agent.experience.per_trajectory.max_concurrency"),
+                            0,
                         ),
                         "input_trajectories": cls._i(
-                            gauges.get("memory.agent.experience.batch.input_trajectories"), 0
+                            gauges.get("memory.agent.experience.per_trajectory.input_trajectories"),
+                            0,
                         ),
                     },
                     "phase": phase_summary,

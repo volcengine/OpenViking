@@ -57,21 +57,14 @@ class MemoryConfig(BaseModel):
             "to true unless explicitly configured."
         ),
     )
-    agent_experience_consolidation_mode: Literal["per_trajectory", "batch"] = Field(
-        default="per_trajectory",
-        description=(
-            "Controls agent experience consolidation after trajectory extraction. "
-            "'per_trajectory' preserves the existing behavior. 'batch' consolidates "
-            "multiple newly extracted trajectories from the same session in one "
-            "experience extraction pass."
-        ),
-    )
-    agent_experience_batch_max_trajectories: int = Field(
-        default=5,
+    agent_experience_per_trajectory_max_concurrency: int = Field(
+        default=4,
         ge=1,
         description=(
-            "Maximum number of new trajectories to consolidate in one batch when "
-            "memory.agent_experience_consolidation_mode='batch'."
+            "Maximum number of per-trajectory experience consolidation phases to run "
+            "concurrently within one committed session when agent experience apply uses "
+            "operation_exact. Tree-lock apply still runs serially to preserve the existing "
+            "safe behavior."
         ),
     )
     agent_experience_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
@@ -104,11 +97,11 @@ class MemoryConfig(BaseModel):
         default=10.0,
         ge=0.0,
         description=(
-            "Server-side apply window for operation_exact phases. The first request for a "
-            "concrete target set waits briefly before taking exact file locks, allowing "
-            "concurrent requests for the same target set to queue behind the same in-process "
-            "window lock. Followers apply later in order; this does not perform semantic "
-            "reconcile. Set to 0 to disable the window."
+            "Server-side apply window for operation_exact phases. Requests for the same "
+            "concrete target set queue behind one in-process window owner. After the window "
+            "closes, the owner acquires the union of exact file locks and applies the queued "
+            "patches in arrival order while reading the latest locked content. Set to 0 to "
+            "disable the window."
         ),
     )
     eager_prefetch: bool = Field(

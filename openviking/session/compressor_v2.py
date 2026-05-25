@@ -10,6 +10,7 @@ Maintains the same interface as compressor.py for backward compatibility.
 import asyncio
 import difflib
 import json
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -161,7 +162,24 @@ class _OperationExactRetrySignal:
         self.next_attempt = next_attempt
 
 
-_OPERATION_EXACT_APPLY_WINDOW_LOCKS: dict[tuple[str, ...], asyncio.Lock] = {}
+@dataclass
+class _OperationExactApplyWindowItem:
+    lock_paths: list[str]
+    phase_metric_key: str
+    apply_func: Callable[[Any], Awaitable[Any]]
+    future: asyncio.Future
+    telemetry: Any
+    enqueued_at: float
+
+
+@dataclass
+class _OperationExactApplyWindowQueue:
+    items: list[_OperationExactApplyWindowItem] = field(default_factory=list)
+    key_paths: set[str] = field(default_factory=set)
+    owner_task: Optional[asyncio.Task] = None
+
+
+_OPERATION_EXACT_APPLY_WINDOW_QUEUES: dict[tuple[str, ...], _OperationExactApplyWindowQueue] = {}
 _OPERATION_EXACT_APPLY_WINDOW_GUARD = asyncio.Lock()
 
 
@@ -228,6 +246,23 @@ def _collect_operation_lock_uris(operations: ResolvedOperations) -> list[str]:
 
     for directory in dirs:
         add_uri(f"{directory.rstrip('/')}/.overview.md")
+
+    return uris
+
+
+def _collect_operation_write_uris(operations: ResolvedOperations) -> list[str]:
+    uris: list[str] = []
+
+    def add_uri(uri: str) -> None:
+        if uri and uri not in uris:
+            uris.append(uri)
+
+    for op in operations.upsert_operations:
+        for uri in op.uris:
+            add_uri(uri)
+
+    for file_content in operations.delete_file_contents:
+        add_uri(file_content.uri)
 
     return uris
 
@@ -417,54 +452,156 @@ def _collect_conflict_sensitive_operation_diagnostics(
     return diagnostics
 
 
-async def _acquire_operation_exact_apply_window(
+async def _enqueue_operation_exact_apply_window(
     *,
+    lock_manager: Any,
+    window_key_paths: list[str],
     lock_paths: list[str],
     window_seconds: float,
     phase_metric_key: str,
-) -> Optional[asyncio.Lock]:
-    if not lock_paths or window_seconds <= 0:
-        return None
+    apply_func: Callable[[Any], Awaitable[Any]],
+) -> Any:
+    if not lock_manager or not lock_paths or window_seconds <= 0:
+        return await apply_func(None)
 
-    key = tuple(sorted(dict.fromkeys(lock_paths)))
+    key_path_set = set(dict.fromkeys(window_key_paths or lock_paths))
+    lock_paths = list(dict.fromkeys(lock_paths))
     telemetry = get_current_telemetry()
-    acquired_under_guard = False
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    item = _OperationExactApplyWindowItem(
+        lock_paths=lock_paths,
+        phase_metric_key=phase_metric_key,
+        apply_func=apply_func,
+        future=future,
+        telemetry=telemetry,
+        enqueued_at=loop.time(),
+    )
+    is_leader = False
     async with _OPERATION_EXACT_APPLY_WINDOW_GUARD:
-        lock = _OPERATION_EXACT_APPLY_WINDOW_LOCKS.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _OPERATION_EXACT_APPLY_WINDOW_LOCKS[key] = lock
-        is_leader = not lock.locked()
-        if is_leader:
-            await lock.acquire()
-            acquired_under_guard = True
+        for stale_key, stale_queue in list(_OPERATION_EXACT_APPLY_WINDOW_QUEUES.items()):
+            if stale_queue.owner_task is not None and stale_queue.owner_task.done():
+                _OPERATION_EXACT_APPLY_WINDOW_QUEUES.pop(stale_key, None)
 
-    wait_started_at = asyncio.get_running_loop().time()
-    if not acquired_under_guard:
-        await lock.acquire()
-    wait_ms = (asyncio.get_running_loop().time() - wait_started_at) * 1000
+        key = tuple(sorted(key_path_set))
+        queue: Optional[_OperationExactApplyWindowQueue] = None
+        for candidate in _OPERATION_EXACT_APPLY_WINDOW_QUEUES.values():
+            if candidate.key_paths & key_path_set:
+                queue = candidate
+                break
+
+        if queue is None:
+            queue = _OperationExactApplyWindowQueue(key_paths=set(key_path_set))
+            _OPERATION_EXACT_APPLY_WINDOW_QUEUES[key] = queue
+        else:
+            queue.key_paths.update(key_path_set)
+
+        queue.items.append(item)
+        if queue.owner_task is None or queue.owner_task.done():
+            is_leader = True
+            queue.owner_task = loop.create_task(
+                _drain_operation_exact_apply_window(
+                    key=key,
+                    lock_manager=lock_manager,
+                    window_seconds=window_seconds,
+                )
+            )
+
     telemetry.count(
         f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_entered",
         1,
     )
-    telemetry.add_duration(
-        f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_wait",
-        wait_ms,
-    )
-
     if is_leader:
         telemetry.count(
             f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_leader",
             1,
         )
-        await asyncio.sleep(window_seconds)
     else:
         telemetry.count(
             f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_follower",
             1,
         )
 
-    return lock
+    return await future
+
+
+async def _drain_operation_exact_apply_window(
+    *,
+    key: tuple[str, ...],
+    lock_manager: Any,
+    window_seconds: float,
+) -> None:
+    if window_seconds > 0:
+        await asyncio.sleep(window_seconds)
+
+    async with _OPERATION_EXACT_APPLY_WINDOW_GUARD:
+        queue = _OPERATION_EXACT_APPLY_WINDOW_QUEUES.pop(key, None)
+    if queue is None or not queue.items:
+        return
+
+    items = queue.items
+    lock_paths = list(dict.fromkeys(path for item in items for path in item.lock_paths if path))
+    owner_handle = None
+    loop = asyncio.get_running_loop()
+    lock_wait_started_at = loop.time()
+    lock_acquired = False
+    try:
+        owner_handle = lock_manager.create_handle()
+        lock_acquired = await lock_manager.acquire_exact_path_batch(
+            owner_handle,
+            lock_paths,
+            timeout=None,
+        )
+        lock_wait_ms = (loop.time() - lock_wait_started_at) * 1000
+        for item in items:
+            wait_ms = (loop.time() - item.enqueued_at) * 1000
+            prefix = f"memory.agent.extract.phase.{item.phase_metric_key}"
+            item.telemetry.add_duration(
+                f"{prefix}.operation_exact_apply_window_wait",
+                wait_ms,
+            )
+            item.telemetry.add_duration(
+                f"{prefix}.operation_exact_apply_window_lock_wait",
+                lock_wait_ms,
+            )
+            item.telemetry.count(f"{prefix}.operation_exact_apply_window_batch_items", 1)
+            item.telemetry.count(
+                f"{prefix}.operation_exact_apply_window_batch_size.{len(items)}",
+                1,
+            )
+            item.telemetry.count(
+                f"{prefix}.operation_exact_apply_window_lock_path_count_total",
+                len(lock_paths),
+            )
+        if not lock_acquired:
+            error = TimeoutError(
+                f"Failed to acquire operation-exact apply-window locks for {len(lock_paths)} paths"
+            )
+            for item in items:
+                if not item.future.done():
+                    item.future.set_exception(error)
+            return
+
+        for item in items:
+            if item.future.done():
+                continue
+            try:
+                item.future.set_result(await item.apply_func(owner_handle))
+            except Exception as exc:
+                item.future.set_exception(exc)
+    except Exception as exc:
+        for item in items:
+            if not item.future.done():
+                item.future.set_exception(exc)
+    finally:
+        if lock_acquired and owner_handle is not None:
+            try:
+                await lock_manager.release(owner_handle)
+            except Exception:
+                logger.warning(
+                    "Failed to release operation-exact apply-window owner lock",
+                    exc_info=True,
+                )
 
 
 def _collect_conflict_sensitive_operation_uris(
@@ -486,8 +623,6 @@ def _collect_conflict_sensitive_operation_uris(
 def _phase_metric_key(phase_label: str) -> str:
     if phase_label == "trajectory":
         return "trajectory"
-    if phase_label.startswith("experience(batch:"):
-        return "experience_batch"
     if phase_label.startswith("experience("):
         return "experience_single"
     return "other"
@@ -936,69 +1071,70 @@ class SessionCompressorV2:
 
         # Phase 2: for each new trajectory, consolidate into experiences.
         viking_fs = get_viking_fs()
-        consolidation_mode = getattr(
-            config.memory, "agent_experience_consolidation_mode", "per_trajectory"
+        trajectory_items: List[Dict[str, str]] = []
+        for traj_uri in written_trajectory_uris:
+            try:
+                mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+                trajectory_items.append({"uri": traj_uri, "content": mf.content})
+            except Exception as e:
+                logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
+
+        if not trajectory_items:
+            return {
+                "contexts": contexts,
+                "session_skills": session_skill_results,
+            }
+
+        per_trajectory_concurrency = 1
+        if getattr(config.memory, "agent_experience_apply_lock_mode", "tree") == "operation_exact":
+            per_trajectory_concurrency = int(
+                getattr(config.memory, "agent_experience_per_trajectory_max_concurrency", 4) or 1
+            )
+        per_trajectory_concurrency = max(
+            1,
+            min(per_trajectory_concurrency, len(trajectory_items)),
         )
-        if consolidation_mode == "batch" and len(written_trajectory_uris) > 1:
-            from openviking.session.memory.batch_agent_experience_context_provider import (
-                BatchAgentExperienceContextProvider,
-            )
+        telemetry.set(
+            "memory.agent.experience.per_trajectory.max_concurrency",
+            per_trajectory_concurrency,
+        )
+        telemetry.set(
+            "memory.agent.experience.per_trajectory.input_trajectories",
+            len(trajectory_items),
+        )
 
-            trajectory_items: List[Dict[str, str]] = []
-            for traj_uri in written_trajectory_uris:
-                try:
-                    mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
-                    trajectory_items.append({"uri": traj_uri, "content": mf.content})
-                except Exception as e:
-                    logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
+        semaphore = asyncio.Semaphore(per_trajectory_concurrency)
 
-            if not trajectory_items:
-                return {
-                    "contexts": contexts,
-                    "session_skills": session_skill_results,
-                }
-
-            batch_size = int(
-                getattr(config.memory, "agent_experience_batch_max_trajectories", 5) or 5
-            )
-            batch_size = max(1, batch_size)
-            telemetry.set("memory.agent.experience.batch.max_trajectories", batch_size)
-            telemetry.set(
-                "memory.agent.experience.batch.count",
-                -(-len(trajectory_items) // batch_size),
-            )
-            telemetry.set(
-                "memory.agent.experience.batch.input_trajectories",
-                len(trajectory_items),
-            )
-
-            for start in range(0, len(trajectory_items), batch_size):
-                batch_items = trajectory_items[start : start + batch_size]
-                exp_provider = BatchAgentExperienceContextProvider(
+        async def _run_per_trajectory_experience(item: Dict[str, str]) -> List[Context]:
+            traj_uri = item["uri"]
+            traj_content = item["content"]
+            async with semaphore:
+                exp_provider = AgentExperienceContextProvider(
                     messages=messages,
-                    trajectory_items=batch_items,
+                    trajectory_summary=traj_content,
+                    trajectory_uri=traj_uri,
                 )
+                exp_dir = exp_provider._render_experience_dir(ctx)
 
-                async def _append_batch_sources_before_unlock(
+                async def _append_sources_before_unlock(
                     result: MemoryUpdateResult,
                     inheritance_map: Dict[str, List[str]],
                     lock_handle: Any,
                     source_attribution_map: Dict[str, List[str]],
+                    exp_provider=exp_provider,
+                    exp_dir=exp_dir,
+                    traj_uri=traj_uri,
                 ) -> None:
-                    # Batch mode intentionally avoids the single-candidate fallback:
-                    # the whole batch may contain multiple unrelated patterns, so
-                    # attribution is only safe for experiences this phase actually
-                    # wrote or edited and the LLM explicitly linked to source ids.
-                    all_exp_uris = list(result.written_uris) + list(result.edited_uris)
+                    all_exp_uris = await self._resolve_source_target_experience_uris(
+                        result=result,
+                        provider=exp_provider,
+                        exp_dir=exp_dir,
+                        ctx=ctx,
+                        viking_fs=viking_fs,
+                    )
                     for exp_uri in all_exp_uris:
-                        selected_sources = source_attribution_map.get(exp_uri, [])
-                        if not selected_sources:
-                            tracer.info(
-                                f"[source_traj] batch attribution missing, skip source append: {exp_uri}"
-                            )
-                            continue
                         inherited = inheritance_map.get(exp_uri, [])
-                        source_uris = list(dict.fromkeys(selected_sources + inherited))
+                        source_uris = list(dict.fromkeys([traj_uri] + inherited))
                         await self._append_trajectories_to_experiences(
                             [exp_uri],
                             source_uris,
@@ -1012,91 +1148,37 @@ class SessionCompressorV2:
                     messages=messages,
                     ctx=ctx,
                     strict_extract_errors=strict_extract_errors,
-                    phase_label=f"experience(batch:{len(batch_items)})",
-                    post_apply=_append_batch_sources_before_unlock,
+                    phase_label=f"experience({traj_uri})",
+                    post_apply=_append_sources_before_unlock,
                 )
-
                 if exp_result is None:
-                    tracer.info(
-                        f"[source_traj] batch experience phase failed; skip fallback append for {len(batch_items)} trajectories"
+                    fallback_uris = await self._single_existing_experience_uris(
+                        exp_dir=exp_dir,
+                        ctx=ctx,
+                        viking_fs=viking_fs,
                     )
-                    continue
+                    if fallback_uris:
+                        tracer.info(
+                            f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
+                        )
+                        await self._append_trajectories_to_experiences(
+                            fallback_uris, [traj_uri], ctx, viking_fs
+                        )
+                    return []
 
                 _, _, exp_contexts, _, _ = exp_result
+                return exp_contexts
+
+        if per_trajectory_concurrency == 1:
+            for item in trajectory_items:
+                contexts.extend(await _run_per_trajectory_experience(item))
+        else:
+            results = await asyncio.gather(
+                *(_run_per_trajectory_experience(item) for item in trajectory_items)
+            )
+            for exp_contexts in results:
                 contexts.extend(exp_contexts)
 
-            return {
-                "contexts": contexts,
-                "session_skills": session_skill_results,
-            }
-
-        for traj_uri in written_trajectory_uris:
-            try:
-                mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
-                traj_content = mf.content
-            except Exception as e:
-                logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
-                continue
-
-            exp_provider = AgentExperienceContextProvider(
-                messages=messages,
-                trajectory_summary=traj_content,
-                trajectory_uri=traj_uri,
-            )
-            exp_dir = exp_provider._render_experience_dir(ctx)
-
-            async def _append_sources_before_unlock(
-                result: MemoryUpdateResult,
-                inheritance_map: Dict[str, List[str]],
-                lock_handle: Any,
-                source_attribution_map: Dict[str, List[str]],
-                exp_provider=exp_provider,
-                exp_dir=exp_dir,
-                traj_uri=traj_uri,
-            ) -> None:
-                all_exp_uris = await self._resolve_source_target_experience_uris(
-                    result=result,
-                    provider=exp_provider,
-                    exp_dir=exp_dir,
-                    ctx=ctx,
-                    viking_fs=viking_fs,
-                )
-                for exp_uri in all_exp_uris:
-                    inherited = inheritance_map.get(exp_uri, [])
-                    source_uris = list(dict.fromkeys([traj_uri] + inherited))
-                    await self._append_trajectories_to_experiences(
-                        [exp_uri],
-                        source_uris,
-                        ctx,
-                        viking_fs,
-                        lock_handle=lock_handle,
-                    )
-
-            exp_result = await self._run_extract_phase(
-                provider=exp_provider,
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=strict_extract_errors,
-                phase_label=f"experience({traj_uri})",
-                post_apply=_append_sources_before_unlock,
-            )
-            if exp_result is None:
-                fallback_uris = await self._single_existing_experience_uris(
-                    exp_dir=exp_dir,
-                    ctx=ctx,
-                    viking_fs=viking_fs,
-                )
-                if fallback_uris:
-                    tracer.info(
-                        f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
-                    )
-                    await self._append_trajectories_to_experiences(
-                        fallback_uris, [traj_uri], ctx, viking_fs
-                    )
-                continue
-
-            _, _, exp_contexts, _, _ = exp_result
-            contexts.extend(exp_contexts)
         return {
             "contexts": contexts,
             "session_skills": session_skill_results,
@@ -1285,7 +1367,6 @@ class SessionCompressorV2:
         operation_exact_apply = not force_tree_lock and _operation_exact_lock_enabled(
             config, phase_label
         )
-        operation_exact_window_lock: Optional[asyncio.Lock] = None
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
@@ -1491,6 +1572,112 @@ class SessionCompressorV2:
                     candidate_target_overlap_count,
                 )
 
+            async def _apply_generated_operations(lock_handle: Any):
+                nonlocal memory_apply_ms, post_apply_ms, skill_apply_ms
+
+                memory_result = MemoryUpdateResult()
+                if (
+                    memory_operations.upsert_operations
+                    or memory_operations.delete_file_contents
+                    or memory_operations.errors
+                ):
+                    registry = provider._get_registry()
+                    updater = self._get_or_create_updater(registry, lock_handle)
+                    apply_started_at = asyncio.get_running_loop().time()
+                    memory_result = await updater.apply_operations(
+                        memory_operations,
+                        ctx,
+                        extract_context=extract_context,
+                        isolation_handler=isolation_handler,
+                    )
+                    memory_apply_ms = (asyncio.get_running_loop().time() - apply_started_at) * 1000
+
+                tracer.info(
+                    f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
+                    f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
+                    f"errors={len(memory_result.errors)}"
+                )
+
+                archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
+                if archive_uri and viking_fs:
+                    memory_diff = await self._build_memory_diff(
+                        result=memory_result,
+                        operations=memory_operations,
+                        viking_fs=viking_fs,
+                        ctx=ctx,
+                        archive_uri=archive_uri,
+                    )
+                    await viking_fs.write_file(
+                        uri=f"{archive_uri}/memory_diff.json",
+                        content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
+                        ctx=ctx,
+                    )
+                    logger.info(f"[{phase_label}] Wrote memory_diff.json to {archive_uri}")
+
+                if post_apply:
+                    post_apply_started_at = asyncio.get_running_loop().time()
+                    await post_apply(
+                        memory_result,
+                        inheritance_map,
+                        lock_handle,
+                        source_attribution_map,
+                    )
+                    post_apply_ms = (
+                        asyncio.get_running_loop().time() - post_apply_started_at
+                    ) * 1000
+
+                skill_results: List[Dict[str, Any]] = []
+                if skill_operations.upsert_operations:
+                    if not self.skill_processor:
+                        raise RuntimeError(
+                            "SkillProcessor is required for session skill extraction"
+                        )
+                    deduped_skill_operations = dedup_session_skill_operations(skill_operations)
+                    skill_updater = SkillOperationUpdater(
+                        registry=provider._get_registry(),
+                        skill_processor=self.skill_processor,
+                        viking_fs=viking_fs,
+                    )
+                    skill_apply_started_at = asyncio.get_running_loop().time()
+                    skill_result = await skill_updater.apply_operations(
+                        deduped_skill_operations,
+                        ctx,
+                    )
+                    skill_apply_ms = (
+                        asyncio.get_running_loop().time() - skill_apply_started_at
+                    ) * 1000
+                    tracer.info(
+                        f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
+                        f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
+                    )
+                    if skill_result.errors:
+                        logger.warning(
+                            "[%s] Session skill extraction completed with %d errors",
+                            phase_label,
+                            len(skill_result.errors),
+                        )
+                    skill_results = list(skill_result.operation_results)
+
+                contexts: List[Context] = []
+                for uri in memory_result.written_uris:
+                    contexts.append(
+                        Context(uri=uri, category="memory_write", context_type="memory")
+                    )
+                for uri in memory_result.edited_uris:
+                    contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+                for uri in memory_result.deleted_uris:
+                    contexts.append(
+                        Context(uri=uri, category="memory_delete", context_type="memory")
+                    )
+
+                return (
+                    list(memory_result.written_uris),
+                    list(memory_result.edited_uris),
+                    contexts,
+                    inheritance_map,
+                    skill_results,
+                )
+
             if lock_manager and operation_exact_apply:
                 exact_lock_paths = self._render_operation_exact_paths(
                     memory_operations,
@@ -1509,13 +1696,34 @@ class SessionCompressorV2:
                     getattr(config.memory, "operation_exact_apply_window_seconds", 0.0) or 0.0
                 )
                 if exact_lock_paths and window_seconds > 0:
-                    window_started_at = asyncio.get_running_loop().time()
-                    operation_exact_window_lock = await _acquire_operation_exact_apply_window(
+                    window_key_uris = conflict_sensitive_uris or _collect_operation_write_uris(
+                        memory_operations
+                    )
+                    window_key_paths = self._render_operation_exact_paths(
+                        ResolvedOperations(
+                            upsert_operations=[
+                                op
+                                for op in memory_operations.upsert_operations
+                                if set(op.uris) & set(window_key_uris)
+                            ],
+                            delete_file_contents=[
+                                item
+                                for item in memory_operations.delete_file_contents
+                                if item.uri in set(window_key_uris)
+                            ],
+                            errors=[],
+                        ),
+                        ctx,
+                        viking_fs,
+                    )
+                    return await _enqueue_operation_exact_apply_window(
+                        lock_manager=lock_manager,
+                        window_key_paths=window_key_paths or exact_lock_paths,
                         lock_paths=exact_lock_paths,
                         window_seconds=window_seconds,
                         phase_metric_key=phase_metric_key,
+                        apply_func=_apply_generated_operations,
                     )
-                    lock_wait_ms += (asyncio.get_running_loop().time() - window_started_at) * 1000
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 last_lock_retry_warning_at = 0.0
@@ -1626,95 +1834,7 @@ class SessionCompressorV2:
                         conflicts,
                     )
 
-            memory_result = MemoryUpdateResult()
-            if (
-                memory_operations.upsert_operations
-                or memory_operations.delete_file_contents
-                or memory_operations.errors
-            ):
-                registry = provider._get_registry()
-                updater = self._get_or_create_updater(registry, transaction_handle)
-                apply_started_at = asyncio.get_running_loop().time()
-                memory_result = await updater.apply_operations(
-                    memory_operations,
-                    ctx,
-                    extract_context=extract_context,
-                    isolation_handler=isolation_handler,
-                )
-                memory_apply_ms = (asyncio.get_running_loop().time() - apply_started_at) * 1000
-
-            tracer.info(
-                f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
-                f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
-                f"errors={len(memory_result.errors)}"
-            )
-
-            archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
-            if archive_uri and viking_fs:
-                memory_diff = await self._build_memory_diff(
-                    result=memory_result,
-                    operations=memory_operations,
-                    viking_fs=viking_fs,
-                    ctx=ctx,
-                    archive_uri=archive_uri,
-                )
-                await viking_fs.write_file(
-                    uri=f"{archive_uri}/memory_diff.json",
-                    content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
-                    ctx=ctx,
-                )
-                logger.info(f"[{phase_label}] Wrote memory_diff.json to {archive_uri}")
-
-            if post_apply:
-                post_apply_started_at = asyncio.get_running_loop().time()
-                await post_apply(
-                    memory_result,
-                    inheritance_map,
-                    transaction_handle,
-                    source_attribution_map,
-                )
-                post_apply_ms = (asyncio.get_running_loop().time() - post_apply_started_at) * 1000
-
-            skill_results: List[Dict[str, Any]] = []
-            if skill_operations.upsert_operations:
-                if not self.skill_processor:
-                    raise RuntimeError("SkillProcessor is required for session skill extraction")
-                skill_operations = dedup_session_skill_operations(skill_operations)
-                skill_updater = SkillOperationUpdater(
-                    registry=provider._get_registry(),
-                    skill_processor=self.skill_processor,
-                    viking_fs=viking_fs,
-                )
-                skill_apply_started_at = asyncio.get_running_loop().time()
-                skill_result = await skill_updater.apply_operations(skill_operations, ctx)
-                skill_apply_ms = (asyncio.get_running_loop().time() - skill_apply_started_at) * 1000
-                tracer.info(
-                    f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
-                    f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
-                )
-                if skill_result.errors:
-                    logger.warning(
-                        "[%s] Session skill extraction completed with %d errors",
-                        phase_label,
-                        len(skill_result.errors),
-                    )
-                skill_results = list(skill_result.operation_results)
-
-            contexts: List[Context] = []
-            for uri in memory_result.written_uris:
-                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
-            for uri in memory_result.edited_uris:
-                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
-            for uri in memory_result.deleted_uris:
-                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
-
-            return (
-                list(memory_result.written_uris),
-                list(memory_result.edited_uris),
-                contexts,
-                inheritance_map,
-                skill_results,
-            )
+            return await _apply_generated_operations(transaction_handle)
         except Exception as e:
             if isinstance(e, OperationExactVersionConflict) and operation_exact_apply:
                 if lock_manager and transaction_handle:
@@ -1789,15 +1909,6 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"[{phase_label}] Failed to release transaction lock: {e}")
-            if operation_exact_window_lock:
-                try:
-                    operation_exact_window_lock.release()
-                except RuntimeError:
-                    logger.warning(
-                        "[%s] Failed to release operation exact apply window lock",
-                        phase_label,
-                        exc_info=True,
-                    )
 
     async def _resolve_supersedes(
         self,
