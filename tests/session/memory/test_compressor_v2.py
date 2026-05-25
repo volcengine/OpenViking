@@ -6,6 +6,7 @@ Test for SessionCompressorV2.
 Uses MockVikingFS and real VLM (from config).
 """
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -26,7 +27,11 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdater,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.merge_op.base import StrPatch
 from openviking.session.memory.merge_op.patch import PatchOp
@@ -105,6 +110,123 @@ def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
         compressor_v2_module._operation_conflict_reason(operation, registry)
         != "plain_string_patch"
     )
+
+
+@pytest.mark.asyncio
+async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.REPLACE,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(get=lambda memory_type: schema if memory_type == "experiences" else None)
+    exp_uri = "viking://agent/default/memories/experiences/debug.md"
+    old_content = "## Situation\n- old\n"
+    stale_replacement = "## Situation\n- old\n- learned from stale read\n"
+    latest_content = "## Situation\n- old\n- concurrent update\n"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content=old_content,
+        extra_fields={"experience_name": "debug"},
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="experiences",
+        uris=[exp_uri],
+        memory_fields={
+            "experience_name": "debug",
+            "content": stale_replacement,
+        },
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    conversions = compressor_v2_module._convert_plain_string_patches_to_structured(
+        operations,
+        registry,
+    )
+
+    assert conversions == [
+        {
+            "uri": exp_uri,
+            "memory_type": "experiences",
+            "field": "content",
+        }
+    ]
+    assert isinstance(operation.memory_fields["content"], StrPatch)
+    assert compressor_v2_module._operation_conflict_reason(operation, registry) == ""
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.files = {
+                exp_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=exp_uri,
+                        memory_type="experiences",
+                        content=latest_content,
+                        extra_fields={"experience_name": "debug"},
+                    )
+                )
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert result.edited_uris == [exp_uri]
+    final = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert final.content == "## Situation\n- old\n- learned from stale read\n- concurrent update"
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_queues_followers():
+    unique_path = "viking://agent/default/memories/experiences/window_test.md"
+    events: List[str] = []
+
+    async def worker(label: str):
+        lock = await compressor_v2_module._acquire_operation_exact_apply_window(
+            lock_paths=[unique_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+        )
+        try:
+            events.append(label)
+            await asyncio.sleep(0.005)
+        finally:
+            if lock:
+                lock.release()
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        await asyncio.gather(worker("first"), worker("second"))
+
+    assert events == ["first", "second"]
 
 
 class MockVikingFS:

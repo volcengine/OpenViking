@@ -24,6 +24,8 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -35,6 +37,12 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_structured_string_patch(value: Any) -> bool:
+    if hasattr(value, "blocks"):
+        return True
+    return isinstance(value, dict) and isinstance(value.get("blocks"), list)
 
 
 class ExtractContext:
@@ -453,8 +461,19 @@ class MemoryUpdater:
                             current_value = old_content.plain_content()
                         else:
                             current_value = old_content.extra_fields.get(field.name)
-                    # Use merge_op to process field value
-                    merge_op = MergeOpFactory.from_field(field)
+                    # Use merge_op to process field value. Operation-exact
+                    # extraction may normalize a full-string replacement into
+                    # a structured SEARCH/REPLACE patch even when the schema's
+                    # regular prompt uses merge_op=replace; apply that patch
+                    # against the latest on-disk content instead of replacing
+                    # the whole field from a stale LLM snapshot.
+                    if (
+                        field.field_type == FieldType.STRING
+                        and _is_structured_string_patch(patch_value)
+                    ):
+                        merge_op = PatchOp(field.field_type)
+                    else:
+                        merge_op = MergeOpFactory.from_field(field)
                     try:
                         new_value = merge_op.apply(current_value, patch_value)
                     except Exception as e:

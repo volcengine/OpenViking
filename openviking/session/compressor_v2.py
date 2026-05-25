@@ -157,6 +157,10 @@ class _OperationExactRetrySignal:
         self.next_attempt = next_attempt
 
 
+_OPERATION_EXACT_APPLY_WINDOW_LOCKS: dict[tuple[str, ...], asyncio.Lock] = {}
+_OPERATION_EXACT_APPLY_WINDOW_GUARD = asyncio.Lock()
+
+
 def _metric_label(value: str) -> str:
     label = str(value or "unknown").strip().lower()
     return "".join(char if char.isalnum() else "_" for char in label).strip("_") or "unknown"
@@ -302,12 +306,12 @@ def _convert_plain_string_patches_to_structured(
     operations: ResolvedOperations,
     registry: Any,
 ) -> list[dict[str, str]]:
-    """Turn full-string patch outputs into replayable SEARCH/REPLACE patches.
+    """Turn full-string updates into replayable SEARCH/REPLACE patches.
 
-    Some older memory prompts ask for full field text even when the schema says
-    merge_op=patch. Converting that old-vs-new text into structured patches lets
-    MemoryUpdater replay the change on the latest file content instead of
-    treating the operation as a conflict-sensitive full replacement.
+    Some memory prompts ask for complete field text even when the update is
+    logically a delta. Converting that old-vs-new text into structured patches
+    lets MemoryUpdater replay the change on the latest file content instead of
+    treating it as a conflict-sensitive full replacement.
     """
 
     getter = getattr(registry, "get", None)
@@ -322,7 +326,8 @@ def _convert_plain_string_patches_to_structured(
             field = fields.get(name)
             if field is None:
                 continue
-            if _merge_op_value(field) != "patch" or _field_type_value(field) != "string":
+            merge_op = _merge_op_value(field)
+            if merge_op not in {"patch", "replace"} or _field_type_value(field) != "string":
                 continue
             if _is_structured_string_patch(value) or not isinstance(value, str):
                 continue
@@ -358,6 +363,8 @@ def _operation_conflict_reason(operation: Any, registry: Any) -> str:
 
         merge_op = _merge_op_value(field)
         if merge_op == "replace":
+            if _field_type_value(field) == "string" and _is_structured_string_patch(value):
+                continue
             return "replace"
         if merge_op == "patch" and _field_type_value(field) == "string":
             # Structured SEARCH/REPLACE patches are replayed against the latest
@@ -404,6 +411,56 @@ def _collect_conflict_sensitive_operation_diagnostics(
         )
 
     return diagnostics
+
+
+async def _acquire_operation_exact_apply_window(
+    *,
+    lock_paths: list[str],
+    window_seconds: float,
+    phase_metric_key: str,
+) -> Optional[asyncio.Lock]:
+    if not lock_paths or window_seconds <= 0:
+        return None
+
+    key = tuple(sorted(dict.fromkeys(lock_paths)))
+    telemetry = get_current_telemetry()
+    acquired_under_guard = False
+    async with _OPERATION_EXACT_APPLY_WINDOW_GUARD:
+        lock = _OPERATION_EXACT_APPLY_WINDOW_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _OPERATION_EXACT_APPLY_WINDOW_LOCKS[key] = lock
+        is_leader = not lock.locked()
+        if is_leader:
+            await lock.acquire()
+            acquired_under_guard = True
+
+    wait_started_at = asyncio.get_running_loop().time()
+    if not acquired_under_guard:
+        await lock.acquire()
+    wait_ms = (asyncio.get_running_loop().time() - wait_started_at) * 1000
+    telemetry.count(
+        f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_entered",
+        1,
+    )
+    telemetry.add_duration(
+        f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_wait",
+        wait_ms,
+    )
+
+    if is_leader:
+        telemetry.count(
+            f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_leader",
+            1,
+        )
+        await asyncio.sleep(window_seconds)
+    else:
+        telemetry.count(
+            f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_apply_window_follower",
+            1,
+        )
+
+    return lock
 
 
 def _collect_conflict_sensitive_operation_uris(
@@ -1224,6 +1281,7 @@ class SessionCompressorV2:
         operation_exact_apply = not force_tree_lock and _operation_exact_lock_enabled(
             config, phase_label
         )
+        operation_exact_window_lock: Optional[asyncio.Lock] = None
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
@@ -1444,6 +1502,19 @@ class SessionCompressorV2:
                         f"memory.agent.extract.phase.{phase_metric_key}.operation_exact_lock_path_count",
                         len(exact_lock_paths),
                     )
+                window_seconds = float(
+                    getattr(config.memory, "operation_exact_apply_window_seconds", 0.0) or 0.0
+                )
+                if exact_lock_paths and window_seconds > 0:
+                    window_started_at = asyncio.get_running_loop().time()
+                    operation_exact_window_lock = await _acquire_operation_exact_apply_window(
+                        lock_paths=exact_lock_paths,
+                        window_seconds=window_seconds,
+                        phase_metric_key=phase_metric_key,
+                    )
+                    lock_wait_ms += (
+                        asyncio.get_running_loop().time() - window_started_at
+                    ) * 1000
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
                 last_lock_retry_warning_at = 0.0
@@ -1717,6 +1788,15 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"[{phase_label}] Failed to release transaction lock: {e}")
+            if operation_exact_window_lock:
+                try:
+                    operation_exact_window_lock.release()
+                except RuntimeError:
+                    logger.warning(
+                        "[%s] Failed to release operation exact apply window lock",
+                        phase_label,
+                        exc_info=True,
+                    )
 
     async def _resolve_supersedes(
         self,

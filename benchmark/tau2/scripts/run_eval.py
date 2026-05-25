@@ -129,6 +129,9 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
     long_term_apply_lock_mode = openviking.get("long_term_apply_lock_mode")
     long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
+    operation_exact_apply_window_seconds = openviking.get(
+        "operation_exact_apply_window_seconds"
+    )
     result: dict[str, Any] = {
         "expected_agent_experience_consolidation_mode": str(mode) if mode is not None else None,
         "expected_agent_experience_batch_max_trajectories": (
@@ -144,6 +147,11 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
             str(long_term_apply_lock_mode) if long_term_apply_lock_mode is not None else None
         ),
         "expected_long_term_extraction_enabled": _optional_bool(long_term_extraction_enabled),
+        "expected_operation_exact_apply_window_seconds": (
+            float(operation_exact_apply_window_seconds)
+            if operation_exact_apply_window_seconds is not None
+            else None
+        ),
     }
     if result["expected_agent_experience_consolidation_mode"] not in {
         None,
@@ -180,6 +188,11 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         "operation_exact",
     }:
         raise ValueError("openviking.long_term_apply_lock_mode must be 'tree' or 'operation_exact'")
+    if (
+        result["expected_operation_exact_apply_window_seconds"] is not None
+        and result["expected_operation_exact_apply_window_seconds"] < 0
+    ):
+        raise ValueError("openviking.operation_exact_apply_window_seconds must be >= 0")
     return result
 
 
@@ -285,6 +298,9 @@ def _openviking_server_memory_config_report(
         "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
         "long_term_apply_lock_mode": memory.get("long_term_apply_lock_mode", "tree"),
         "long_term_extraction_enabled": memory.get("long_term_extraction_enabled", True),
+        "operation_exact_apply_window_seconds": memory.get(
+            "operation_exact_apply_window_seconds", 0.0
+        ),
     }
     report["actual"] = actual
     report["checked"] = True
@@ -347,6 +363,17 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.long_term_extraction_enabled mismatch: "
             f"expected {expected_long_term_extraction_enabled!r}, actual "
             f"{actual['long_term_extraction_enabled']!r} in {config_path}"
+        )
+    expected_window_seconds = expected["expected_operation_exact_apply_window_seconds"]
+    try:
+        actual_window_seconds = float(actual["operation_exact_apply_window_seconds"])
+    except (TypeError, ValueError):
+        actual_window_seconds = None
+    if expected_window_seconds is not None and actual_window_seconds != expected_window_seconds:
+        errors.append(
+            "OpenViking server memory.operation_exact_apply_window_seconds mismatch: "
+            f"expected {expected_window_seconds!r}, actual "
+            f"{actual['operation_exact_apply_window_seconds']!r} in {config_path}"
         )
     if not strict:
         errors = []
@@ -681,6 +708,17 @@ def _tau2_command(
                 [
                     "--expected-long-term-extraction-enabled",
                     str(agent_experience_config["expected_long_term_extraction_enabled"]).lower(),
+                ]
+            )
+        if agent_experience_config["expected_operation_exact_apply_window_seconds"] is not None:
+            command.extend(
+                [
+                    "--expected-operation-exact-apply-window-seconds",
+                    str(
+                        agent_experience_config[
+                            "expected_operation_exact_apply_window_seconds"
+                        ]
+                    ),
                 ]
             )
         if budget["memory_inject_max_chars"] is not None:

@@ -182,6 +182,7 @@ server-side exact apply. Configure the running OpenViking server with:
 - `memory.agent_experience_apply_lock_mode="operation_exact"`
 - `memory.agent_trajectory_apply_lock_mode="operation_exact"`
 - `memory.long_term_apply_lock_mode="operation_exact"`
+- `memory.operation_exact_apply_window_seconds=0.05`
 - `memory.long_term_extraction_enabled=false`
 
 `--strict-preflight` checks `OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`)
@@ -190,7 +191,10 @@ config. OpenViking product defaults remain unchanged; these settings are the
 benchmark / Vaka corpus-prepare defaults for faster iteration. Batch experience
 consolidation remains available as a separate quality / latency ablation, but
 the main corpus-prepare acceleration path does not depend on batching multiple
-trajectories into one experience pass.
+trajectories into one experience pass. The small operation-exact apply window is
+a server-side ordering primitive: the first request for the same concrete target
+set briefly waits, then queued followers apply in order; it does not perform
+semantic reconcile or batch-level patch rewriting.
 
 ## Memory Adapter
 
