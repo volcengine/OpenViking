@@ -1135,6 +1135,8 @@ class SessionCompressorV2:
                     exp_dir=exp_dir,
                     traj_uri=traj_uri,
                 ) -> None:
+                    if getattr(exp_provider, "_source_links_attached_in_operations", False):
+                        return
                     all_exp_uris = await self._resolve_source_target_experience_uris(
                         result=result,
                         provider=exp_provider,
@@ -1502,6 +1504,17 @@ class SessionCompressorV2:
             memory_operations, skill_operations, unsupported_skill_deletes = (
                 self._split_operations_by_memory_type(operations)
             )
+            source_links_attached = self._attach_source_trajectory_links_to_operations(
+                memory_operations,
+                provider=provider,
+                inheritance_map=inheritance_map,
+                source_attribution_map=source_attribution_map,
+            )
+            if source_links_attached:
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.source_links_attached_to_operations",
+                    source_links_attached,
+                )
             if unsupported_skill_deletes:
                 logger.warning(
                     "[%s] Ignoring unsupported session skill deletes: %s",
@@ -2010,6 +2023,70 @@ class SessionCompressorV2:
                 operations.errors.append(message)
 
         return inheritance_map
+
+    def _attach_source_trajectory_links_to_operations(
+        self,
+        operations: ResolvedOperations,
+        *,
+        provider: Any,
+        inheritance_map: Dict[str, List[str]],
+        source_attribution_map: Dict[str, List[str]],
+    ) -> int:
+        """Attach system-managed exp→trajectory links before operation apply.
+
+        These links participate in the same exact-lock/window path as the
+        experience upsert/delete. This keeps supersedes replacement,
+        trajectory-source inheritance, and backlink updates as one graph update
+        instead of a post-apply best-effort append.
+        """
+
+        current_traj_uri = str(getattr(provider, "trajectory_uri", "") or "").strip()
+        existing = {
+            (link.from_uri, link.to_uri, link.link_type)
+            for link in (operations.resolved_links or [])
+        }
+        attached = 0
+        now = datetime.now(timezone.utc).isoformat()
+
+        def extend_unique(target: List[str], values: List[str]) -> None:
+            for value in values:
+                if value and value not in target:
+                    target.append(value)
+
+        for op in operations.upsert_operations:
+            if op.memory_type != "experiences":
+                continue
+            experience_name = str(op.memory_fields.get("experience_name") or "").strip()
+            for exp_uri in op.uris:
+                source_uris: List[str] = []
+                if current_traj_uri:
+                    source_uris.append(current_traj_uri)
+                extend_unique(source_uris, source_attribution_map.get(exp_uri, []))
+                if experience_name:
+                    extend_unique(source_uris, source_attribution_map.get(experience_name, []))
+                extend_unique(source_uris, inheritance_map.get(exp_uri, []))
+
+                for source_uri in source_uris:
+                    if not source_uri or source_uri == exp_uri:
+                        continue
+                    key = (exp_uri, source_uri, "derived_from")
+                    if key in existing:
+                        continue
+                    operations.resolved_links.append(
+                        StoredLink(
+                            from_uri=exp_uri,
+                            to_uri=source_uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                            created_at=now,
+                        )
+                    )
+                    existing.add(key)
+                    attached += 1
+
+        if attached:
+            setattr(provider, "_source_links_attached_in_operations", True)
+        return attached
 
     async def _append_trajectories_to_experiences(
         self,

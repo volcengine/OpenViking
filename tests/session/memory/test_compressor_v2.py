@@ -139,6 +139,46 @@ def test_operation_exact_lock_uris_include_deleted_link_endpoints():
     assert "viking://agent/default/memories/trajectories/.overview.md" in lock_uris
 
 
+def test_source_trajectory_links_attach_before_exact_lock():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_uri = "viking://agent/default/memories/experiences/new.md"
+    current_traj_uri = "viking://agent/default/memories/trajectories/current.md"
+    inherited_traj_uri = "viking://agent/default/memories/trajectories/old.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={"experience_name": "new"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    provider = SimpleNamespace(trajectory_uri=current_traj_uri)
+
+    attached = compressor._attach_source_trajectory_links_to_operations(
+        operations,
+        provider=provider,
+        inheritance_map={exp_uri: [inherited_traj_uri]},
+        source_attribution_map={},
+    )
+
+    assert attached == 2
+    assert getattr(provider, "_source_links_attached_in_operations") is True
+    assert {
+        (link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links
+    } == {
+        (exp_uri, current_traj_uri, "derived_from"),
+        (exp_uri, inherited_traj_uri, "derived_from"),
+    }
+    lock_uris = compressor_v2_module._collect_operation_lock_uris(operations)
+    assert exp_uri in lock_uris
+    assert current_traj_uri in lock_uris
+    assert inherited_traj_uri in lock_uris
+    assert "viking://agent/default/memories/trajectories/.overview.md" in lock_uris
+
+
 @pytest.mark.asyncio
 async def test_resolve_supersedes_consumes_field_only_after_resolved():
     compressor = SessionCompressorV2(vikingdb=None)
