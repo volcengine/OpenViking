@@ -8,6 +8,7 @@ import json
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -520,6 +521,64 @@ def _expected_openviking_memory_config(args: argparse.Namespace) -> dict[str, An
     }
 
 
+def _commit_train_session(
+    args: argparse.Namespace,
+    sim: dict[str, Any],
+    *,
+    input_index: int,
+    system_prompt_text: str,
+) -> dict[str, Any]:
+    started_at = time.time()
+    session_id = f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+    client = _client(args)
+    try:
+        created = client.create_session(session_id=session_id)
+        sid = created.get("session_id", session_id)
+        if system_prompt_text.strip():
+            client.add_message(
+                sid,
+                role="user",
+                parts=[{"type": "text", "text": f"system:\n{system_prompt_text}"}],
+            )
+        tool_calls_by_id: dict[str, dict[str, Any]] = {}
+        for msg in sim.get("messages") or []:
+            for role, text in _message_texts(
+                msg,
+                transcript_format=args.train_transcript_format,
+                tool_calls_by_id=tool_calls_by_id,
+                max_tool_output_chars=args.train_tool_output_max_chars,
+            ):
+                if not text.strip():
+                    continue
+                client.add_message(
+                    sid,
+                    role=role,
+                    parts=[{"type": "text", "text": text}],
+                    created_at=msg.get("timestamp"),
+                )
+        result = client.commit_session(sid, telemetry=True)
+        task = _wait_task(client, result.get("task_id"), args.openviking_wait_timeout)
+        task_result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        finished_at = time.time()
+        return {
+            "input_index": input_index,
+            "session_id": sid,
+            "task_id": sim.get("task_id"),
+            "trial": sim.get("trial", 0),
+            "reward": _reward(sim),
+            "db_match": _db_match(sim),
+            "commit_status": result.get("status"),
+            "openviking_task_id": result.get("task_id"),
+            "openviking_task_status": task.get("status"),
+            "openviking_task_telemetry": task_result.get("telemetry"),
+            "commit_started_at": started_at,
+            "commit_completed_at": finished_at,
+            "commit_duration_seconds": finished_at - started_at,
+        }
+    finally:
+        client.close()
+
+
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
     if corpus_manifest.is_file() and not args.force_train:
         manifest = json.loads(corpus_manifest.read_text())
@@ -563,6 +622,13 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 f"{cached_memory_config!r} != {requested_memory_config!r}; "
                 "use a distinct corpus_id or --force-train"
             )
+        cached_commit_concurrency = int(manifest.get("corpus_session_commit_concurrency") or 1)
+        if cached_commit_concurrency != int(args.corpus_session_commit_concurrency):
+            raise ValueError(
+                "cached corpus corpus_session_commit_concurrency mismatch: "
+                f"{cached_commit_concurrency!r} != {int(args.corpus_session_commit_concurrency)!r}; "
+                "use a distinct corpus_id or --force-train"
+            )
         return manifest
 
     if train_results.is_file() and not args.force_train:
@@ -590,74 +656,62 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         data = json.loads(train_results.read_text())
         assert_tau2_results_complete(data, context=f"{args.domain} train")
 
-    client = _client(args)
     committed = []
     system_prompt_text = ""
     if args.train_include_system_prompt:
         policy = _load_domain_policy(args.tau2_repo, args.domain)
         system_prompt_text = _build_system_prompt(policy)
     skipped_failed_sessions: list[dict[str, Any]] = []
-    try:
-        for sim in data.get("simulations") or []:
-            if args.train_skip_failed_sessions and not _task_success(sim):
-                skipped_failed_sessions.append(
-                    {
-                        "session_id": (
-                            f"tau2-{args.domain}-train-{sim.get('task_id')}-"
-                            f"trial-{sim.get('trial', 0)}"
-                        ),
-                        "task_id": sim.get("task_id"),
-                        "trial": sim.get("trial", 0),
-                        "reward": _reward(sim),
-                        "db_match": _db_match(sim),
-                    }
-                )
-                continue
-            session_id = (
-                f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
-            )
-            created = client.create_session(session_id=session_id)
-            sid = created.get("session_id", session_id)
-            if system_prompt_text.strip():
-                client.add_message(
-                    sid,
-                    role="user",
-                    parts=[{"type": "text", "text": f"system:\n{system_prompt_text}"}],
-                )
-            tool_calls_by_id: dict[str, dict[str, Any]] = {}
-            for msg in sim.get("messages") or []:
-                for role, text in _message_texts(
-                    msg,
-                    transcript_format=args.train_transcript_format,
-                    tool_calls_by_id=tool_calls_by_id,
-                    max_tool_output_chars=args.train_tool_output_max_chars,
-                ):
-                    if not text.strip():
-                        continue
-                    client.add_message(
-                        sid,
-                        role=role,
-                        parts=[{"type": "text", "text": text}],
-                        created_at=msg.get("timestamp"),
-                    )
-            result = client.commit_session(sid, telemetry=True)
-            task = _wait_task(client, result.get("task_id"), args.openviking_wait_timeout)
-            task_result = task.get("result") if isinstance(task.get("result"), dict) else {}
-            committed.append(
+    commit_inputs: list[tuple[int, dict[str, Any]]] = []
+    for input_index, sim in enumerate(data.get("simulations") or []):
+        if args.train_skip_failed_sessions and not _task_success(sim):
+            skipped_failed_sessions.append(
                 {
-                    "session_id": sid,
+                    "input_index": input_index,
+                    "session_id": (
+                        f"tau2-{args.domain}-train-{sim.get('task_id')}-"
+                        f"trial-{sim.get('trial', 0)}"
+                    ),
                     "task_id": sim.get("task_id"),
                     "trial": sim.get("trial", 0),
                     "reward": _reward(sim),
                     "db_match": _db_match(sim),
-                    "commit_status": result.get("status"),
-                    "openviking_task_id": result.get("task_id"),
-                    "openviking_task_status": task.get("status"),
-                    "openviking_task_telemetry": task_result.get("telemetry"),
                 }
             )
-    finally:
-        client.close()
+            continue
+        commit_inputs.append((input_index, sim))
+
+    commit_concurrency = max(1, int(args.corpus_session_commit_concurrency))
+    if commit_concurrency == 1 or len(commit_inputs) <= 1:
+        committed = [
+            _commit_train_session(
+                args,
+                sim,
+                input_index=input_index,
+                system_prompt_text=system_prompt_text,
+            )
+            for input_index, sim in commit_inputs
+        ]
+    else:
+        print(
+            f"[tau2] committing train sessions with concurrency={commit_concurrency}",
+            flush=True,
+        )
+        rows: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=commit_concurrency) as executor:
+            futures = {
+                executor.submit(
+                    _commit_train_session,
+                    args,
+                    sim,
+                    input_index=input_index,
+                    system_prompt_text=system_prompt_text,
+                ): input_index
+                for input_index, sim in commit_inputs
+            }
+            for future in as_completed(futures):
+                rows.append(future.result())
+        committed = sorted(rows, key=lambda row: int(row.get("input_index", 0)))
 
     client = _client(args)
     try:
@@ -679,6 +733,13 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         "train_include_system_prompt": bool(args.train_include_system_prompt),
         "train_skip_failed_sessions": bool(args.train_skip_failed_sessions),
         "train_tool_output_max_chars": args.train_tool_output_max_chars,
+        "corpus_prepare_mode": (
+            "concurrent_session_commit_wait"
+            if int(args.corpus_session_commit_concurrency) > 1
+            else "serial_commit_wait"
+        ),
+        "corpus_session_commit_concurrency": int(args.corpus_session_commit_concurrency),
+        "commit_order_policy": "input_order_manifest",
         "openviking_memory_config": _expected_openviking_memory_config(args),
         "committed_sessions": committed,
         "committed_session_count": len(committed),
@@ -994,6 +1055,15 @@ def main() -> int:
         default=DEFAULT_OPENVIKING_WAIT_TIMEOUT_SECONDS,
     )
     parser.add_argument(
+        "--corpus-session-commit-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Maximum train sessions to commit and wait concurrently within one corpus. "
+            "The manifest is still written in input order."
+        ),
+    )
+    parser.add_argument(
         "--expected-agent-experience-consolidation-mode",
         choices=["per_trajectory", "batch"],
         help=(
@@ -1101,6 +1171,8 @@ def main() -> int:
     )
     args = parser.parse_args()
     normalize_litellm_env()
+    if args.corpus_session_commit_concurrency <= 0:
+        parser.error("--corpus-session-commit-concurrency must be positive")
     if args.train_tool_output_max_chars <= 0:
         parser.error("--train-tool-output-max-chars must be positive")
     if (

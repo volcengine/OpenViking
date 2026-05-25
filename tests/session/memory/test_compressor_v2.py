@@ -28,6 +28,8 @@ from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.versioning import content_digest
 from openviking.telemetry import OperationTelemetry, bind_telemetry
@@ -41,6 +43,68 @@ for logger_name in ["openviking", "openviking.session.memory"]:
     logger.setLevel(logging.DEBUG)
 
 logger = logging.getLogger(__name__)
+
+
+def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
+    schema = MemoryTypeSchema(
+        memory_type="tools",
+        fields=[
+            MemoryField(
+                name="tool_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="guidelines",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(get=lambda memory_type: schema if memory_type == "tools" else None)
+    old_file = MemoryFile(
+        uri="viking://agent/default/memories/tools/search.md",
+        memory_type="tools",
+        extra_fields={"guidelines": "## Guidelines\n- Prefer specific queries.\n"},
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="tools",
+        uris=["viking://agent/default/memories/tools/search.md"],
+        memory_fields={
+            "tool_name": "search",
+            "guidelines": "## Guidelines\n- Prefer specific queries.\n- Add source qualifiers.\n",
+        },
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    conversions = compressor_v2_module._convert_plain_string_patches_to_structured(
+        operations,
+        registry,
+    )
+
+    assert conversions == [
+        {
+            "uri": "viking://agent/default/memories/tools/search.md",
+            "memory_type": "tools",
+            "field": "guidelines",
+        }
+    ]
+    assert isinstance(operation.memory_fields["guidelines"], StrPatch)
+    latest_guidelines = "## Guidelines\n- Prefer specific queries.\n- Keep user locale.\n"
+    assert (
+        PatchOp(FieldType.STRING).apply(latest_guidelines, operation.memory_fields["guidelines"])
+        == "## Guidelines\n- Prefer specific queries.\n- Add source qualifiers.\n"
+        "- Keep user locale.\n"
+    )
+    assert (
+        compressor_v2_module._operation_conflict_reason(operation, registry)
+        != "plain_string_patch"
+    )
 
 
 class MockVikingFS:
@@ -482,6 +546,9 @@ class TestCompressorV2:
             patch("openviking.session.compressor_v2.logger.warning") as warning_mock,
             patch("openviking.session.compressor_v2.logger.debug") as debug_mock,
         ):
+            initialize_openviking_config()
+            config = get_openviking_config()
+            config.memory.long_term_apply_lock_mode = "tree"
             result = await compressor.extract_long_term_memories(
                 messages=messages,
                 ctx=ctx,
@@ -552,6 +619,7 @@ class TestCompressorV2:
         ):
             initialize_openviking_config()
             config = get_openviking_config()
+            config.memory.long_term_apply_lock_mode = "tree"
             config.memory.v2_lock_max_retries = 2
             config.memory.v2_lock_retry_interval_seconds = 0.0
             result = await compressor.extract_long_term_memories(

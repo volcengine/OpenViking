@@ -8,6 +8,7 @@ Maintains the same interface as compressor.py for backward compatibility.
 """
 
 import asyncio
+import difflib
 import json
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -23,6 +24,7 @@ from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -236,6 +238,110 @@ def _is_structured_string_patch(value: Any) -> bool:
     if hasattr(value, "blocks"):
         return True
     return isinstance(value, dict) and isinstance(value.get("blocks"), list)
+
+
+def _memory_field_current_value(old_content: Any, field_name: str) -> Optional[str]:
+    if old_content is None:
+        return None
+    if field_name == "content":
+        return str(old_content.plain_content())
+    value = (old_content.extra_fields or {}).get(field_name)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _line_diff_to_patch_blocks(old_value: str, new_value: str) -> List[SearchReplaceBlock]:
+    if old_value == new_value:
+        return []
+    if not old_value:
+        return [SearchReplaceBlock(search="", replace=new_value)]
+
+    old_lines = old_value.splitlines(keepends=True)
+    new_lines = new_value.splitlines(keepends=True)
+    if not old_lines or not new_lines:
+        return [SearchReplaceBlock(search=old_value, replace=new_value)]
+
+    blocks: List[SearchReplaceBlock] = []
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+
+        if tag == "insert":
+            inserted = "".join(new_lines[j1:j2])
+            if i1 > 0 and i1 < len(old_lines):
+                search = old_lines[i1 - 1] + old_lines[i1]
+                replace = old_lines[i1 - 1] + inserted + old_lines[i1]
+                blocks.append(SearchReplaceBlock(search=search, replace=replace))
+            elif i1 > 0:
+                anchor = old_lines[i1 - 1]
+                blocks.append(SearchReplaceBlock(search=anchor, replace=anchor + inserted))
+            elif i1 < len(old_lines):
+                anchor = old_lines[i1]
+                blocks.append(SearchReplaceBlock(search=anchor, replace=inserted + anchor))
+            else:
+                return [SearchReplaceBlock(search=old_value, replace=new_value)]
+            continue
+
+        search_start = max(0, i1 - 1)
+        search_end = min(len(old_lines), i2 + 1)
+        search = "".join(old_lines[search_start:search_end])
+        replace = (
+            "".join(old_lines[search_start:i1])
+            + "".join(new_lines[j1:j2])
+            + "".join(old_lines[i2:search_end])
+        )
+        if search:
+            blocks.append(SearchReplaceBlock(search=search, replace=replace))
+
+    return blocks or [SearchReplaceBlock(search=old_value, replace=new_value)]
+
+
+def _convert_plain_string_patches_to_structured(
+    operations: ResolvedOperations,
+    registry: Any,
+) -> list[dict[str, str]]:
+    """Turn full-string patch outputs into replayable SEARCH/REPLACE patches.
+
+    Some older memory prompts ask for full field text even when the schema says
+    merge_op=patch. Converting that old-vs-new text into structured patches lets
+    MemoryUpdater replay the change on the latest file content instead of
+    treating the operation as a conflict-sensitive full replacement.
+    """
+
+    getter = getattr(registry, "get", None)
+    conversions: list[dict[str, str]] = []
+    for operation in operations.upsert_operations:
+        schema = getter(operation.memory_type) if callable(getter) else None
+        if schema is None or operation.old_memory_file_content is None:
+            continue
+
+        fields = {field.name: field for field in getattr(schema, "fields", []) or []}
+        for name, value in list((operation.memory_fields or {}).items()):
+            field = fields.get(name)
+            if field is None:
+                continue
+            if _merge_op_value(field) != "patch" or _field_type_value(field) != "string":
+                continue
+            if _is_structured_string_patch(value) or not isinstance(value, str):
+                continue
+
+            old_value = _memory_field_current_value(operation.old_memory_file_content, name)
+            if old_value is None:
+                continue
+
+            operation.memory_fields[name] = StrPatch(
+                blocks=_line_diff_to_patch_blocks(old_value, value)
+            )
+            conversions.append(
+                {
+                    "uri": operation.uris[0] if operation.uris else "",
+                    "memory_type": _metric_label(operation.memory_type),
+                    "field": _metric_label(name),
+                }
+            )
+    return conversions
 
 
 def _operation_conflict_reason(operation: Any, registry: Any) -> str:
@@ -529,7 +635,10 @@ class SessionCompressorV2:
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
-            transaction_handle = lock_manager.create_handle()
+            if lock_manager:
+                transaction_handle = lock_manager.create_handle()
+            else:
+                logger.debug("AGFS unavailable, running memory extraction without locks")
         else:
             logger.debug("AGFS unavailable, running memory extraction without locks")
 
@@ -1144,7 +1253,10 @@ class SessionCompressorV2:
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
-            transaction_handle = lock_manager.create_handle()
+            if lock_manager:
+                transaction_handle = lock_manager.create_handle()
+            else:
+                logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
             if lock_manager and not operation_exact_apply:
@@ -1245,9 +1357,31 @@ class SessionCompressorV2:
                 )
 
             candidate_uris = list(dict.fromkeys(getattr(provider, "prefetched_uris", []) or []))
-            operation_target_uris = _collect_operation_lock_uris(memory_operations)
             registry_getter = getattr(provider, "_get_registry", None)
             provider_registry = registry_getter() if callable(registry_getter) else None
+            structured_patch_conversions = _convert_plain_string_patches_to_structured(
+                memory_operations,
+                provider_registry,
+            )
+            for conversion in structured_patch_conversions:
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}."
+                    f"plain_string_patch_converted.{conversion['memory_type']}"
+                    f".{conversion['field']}",
+                    1,
+                )
+            if structured_patch_conversions:
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}."
+                    "plain_string_patch_converted",
+                    len(structured_patch_conversions),
+                )
+                tracer.info(
+                    f"[{phase_label}] converted plain string patches to structured "
+                    f"SEARCH/REPLACE patches: {structured_patch_conversions}"
+                )
+
+            operation_target_uris = _collect_operation_lock_uris(memory_operations)
             conflict_sensitive_diagnostics = _collect_conflict_sensitive_operation_diagnostics(
                 memory_operations,
                 provider_registry,
