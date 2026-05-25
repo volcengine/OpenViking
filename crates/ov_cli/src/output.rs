@@ -101,11 +101,6 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 return;
             }
 
-            if let Some(rendered) = value_to_table_with_profile(&value, compact) {
-                println!("{}", rendered);
-                return;
-            }
-
             // Rule 5: ComponentStatus (name + is_healthy + status)
             if obj.contains_key("name")
                 && obj.contains_key("is_healthy")
@@ -118,7 +113,10 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 };
                 let name = obj["name"].as_str().unwrap_or("");
                 let status = obj["status"].as_str().unwrap_or("");
-                println!("[{}] ({})\n{}", name, health, status);
+                println!(
+                    "{}",
+                    append_profile_section(format!("[{}] ({})\n{}", name, health, status), obj)
+                );
                 return;
             }
 
@@ -151,6 +149,11 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     }
                 }
                 println!("{}", append_profile_section(lines.join("\n"), obj));
+                return;
+            }
+
+            if let Some(rendered) = value_to_table_with_profile(&value, compact) {
+                println!("{}", rendered);
                 return;
             }
 
