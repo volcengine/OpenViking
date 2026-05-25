@@ -1946,16 +1946,19 @@ class SessionCompressorV2:
         if hasattr(provider, "_render_experience_dir"):
             exp_dir = provider._render_experience_dir(ctx) or ""
 
+        prefetched_uris = set(getattr(provider, "prefetched_uris", []) or [])
+        read_versions = getattr(provider, "read_file_versions", {}) or {}
+
         for op in operations.upsert_operations:
             if op.memory_type != "experiences":
                 continue
-            supersedes_name = (op.memory_fields.pop("supersedes", None) or "").strip()
+            supersedes_name = str(op.memory_fields.get("supersedes") or "").strip()
             if not supersedes_name:
                 continue
             if not exp_dir:
-                logger.warning(
-                    f"[supersedes] cannot resolve '{supersedes_name}': no experience dir"
-                )
+                message = f"[supersedes] cannot resolve '{supersedes_name}': no experience dir"
+                logger.warning(message)
+                operations.errors.append(message)
                 continue
 
             old_uri = f"{exp_dir.rstrip('/')}/{supersedes_name}.md"
@@ -1967,12 +1970,14 @@ class SessionCompressorV2:
             # Guard: never delete the file we are about to write (same-name edge case)
             if old_uri == new_uri or old_uri in (op.uris or []):
                 tracer.info(f"[supersedes] skipping self-reference: {old_uri}")
+                op.memory_fields.pop("supersedes", None)
                 continue
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
                 old_mf = MemoryFileUtils.read(raw, uri=old_uri)
                 operations.delete_file_contents.append(old_mf)
+                op.memory_fields.pop("supersedes", None)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
                 # Inherit traj URIs from old exp's links (exp→traj, derived_from) to the new URI only.
@@ -1985,7 +1990,24 @@ class SessionCompressorV2:
                     if inherited:
                         inheritance_map[new_uri] = inherited
             except Exception as e:
-                logger.warning(f"[supersedes] failed to read '{old_uri}': {e}")
+                if old_uri in prefetched_uris:
+                    base_digest = read_versions.get(old_uri) or "unknown"
+                    raise OperationExactVersionConflict(
+                        "experience_supersedes",
+                        [old_uri],
+                        [
+                            {
+                                "uri": old_uri,
+                                "base_digest": base_digest,
+                                "current_digest": MISSING_CONTENT_DIGEST,
+                                "base_state": _digest_state(base_digest),
+                                "current_state": _digest_state(MISSING_CONTENT_DIGEST),
+                            }
+                        ],
+                    ) from e
+                message = f"[supersedes] failed to resolve '{old_uri}': {e}"
+                logger.warning(message)
+                operations.errors.append(message)
 
         return inheritance_map
 

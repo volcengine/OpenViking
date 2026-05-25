@@ -140,6 +140,133 @@ def test_operation_exact_lock_uris_include_deleted_link_endpoints():
 
 
 @pytest.mark.asyncio
+async def test_resolve_supersedes_consumes_field_only_after_resolved():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert operations.delete_file_contents[0].uri == old_uri
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_retries_when_prefetched_target_disappears():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            raise FileNotFoundError(uri)
+
+    provider = SimpleNamespace(
+        _render_experience_dir=lambda _ctx: exp_dir,
+        prefetched_uris=[old_uri],
+        read_file_versions={old_uri: "base-digest"},
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises(compressor_v2_module.OperationExactVersionConflict) as exc_info:
+        await compressor._resolve_supersedes(operations, ctx, FakeVikingFS(), provider)
+
+    assert exc_info.value.conflicts == [old_uri]
+    assert operations.delete_file_contents == []
+    assert operations.errors == []
+    assert operations.upsert_operations[0].memory_fields["supersedes"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_unresolved_target_marks_operations_invalid():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/missing.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "missing"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            raise FileNotFoundError(uri)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert inheritance_map == {}
+    assert operations.delete_file_contents == []
+    assert len(operations.errors) == 1
+    assert "failed to resolve" in operations.errors[0]
+    assert operations.upsert_operations[0].memory_fields["supersedes"] == "missing"
+
+
+@pytest.mark.asyncio
 async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
     schema = MemoryTypeSchema(
         memory_type="experiences",
