@@ -47,7 +47,7 @@ These clients require OAuth 2.1 — API keys cannot be passed directly. OpenViki
 
 If you already have HTTPS configured for your OpenViking server, just connect to `https://your-server.com/mcp` — the client will walk you through the OAuth authorization flow automatically.
 
-See the [OAuth 2.1 Guide](../guides/11-oauth.md) for HTTPS setup, deployment templates, and the full authorization flow.
+See the [OAuth 2.1 Guide](../guides/11-oauth.md) and [Public Access Guide](../guides/12-public-access.md) for HTTPS setup, deployment templates, and the full authorization flow.
 
 ## Available tools
 

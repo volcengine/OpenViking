@@ -47,7 +47,7 @@ claude mcp add --transport http openviking \
 
 如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导你完成 OAuth 授权流程。
 
-HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../guides/11-oauth.md)。
+HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../guides/11-oauth.md) 和 [公网访问指南](../guides/12-public-access.md)。
 
 ## 可用工具
 
