@@ -91,6 +91,7 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": SimpleNamespace(
             extra_fields={"experience_name": "personal_experience_sharing_conversation_flow"},
             content="line one\nline two",
+            links=[],
         )
     }
 

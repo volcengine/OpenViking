@@ -656,26 +656,29 @@ class TestCompressorV2:
         exp_uri = "viking://agent/default/memories/experiences/debug.md"
         events: List[str] = []
 
+        traj_uri = "viking://agent/default/memories/trajectories/traj-1.md"
+
         class FakeVikingFS:
             def __init__(self):
-                self.content = MemoryFileUtils.write(
-                    MemoryFile(
-                        uri="viking://agent/default/memories/experiences/debug.md",
-                        content="debug login issue",
-                        extra_fields={"source_trajectories": ["traj-0"]},
-                    )
-                )
+                self.files = {
+                    exp_uri: MemoryFileUtils.write(
+                        MemoryFile(uri=exp_uri, content="debug login issue")
+                    ),
+                    traj_uri: MemoryFileUtils.write(
+                        MemoryFile(uri=traj_uri, content="traj content")
+                    ),
+                }
 
             def _uri_to_path(self, uri: str, ctx=None) -> str:
                 return f"/local/default/agent/default/memories/experiences/{uri.rsplit('/', 1)[-1]}"
 
             async def read_file(self, uri: str, ctx=None):
                 events.append("read")
-                return self.content
+                return self.files.get(uri, "")
 
             async def write_file(self, uri: str, content: str, ctx=None):
                 events.append("write")
-                self.content = content
+                self.files[uri] = content
 
         handle = SimpleNamespace(id="handle-1", locks=[])
 
@@ -696,17 +699,29 @@ class TestCompressorV2:
         with patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager):
             await compressor._append_trajectories_to_experiences(
                 [exp_uri],
-                ["traj-1"],
+                [traj_uri],
                 ctx,
                 viking_fs,
             )
 
-        mf = MemoryFileUtils.read(viking_fs.content, uri=exp_uri)
-        assert mf.extra_fields["source_trajectories"] == ["traj-0", "traj-1"]
+        # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
+        exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
+        assert "source_trajectories" not in exp_mf.extra_fields
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert exp_mf.backlinks == [], "exp should have no backlinks"
+
+        # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
+        traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
+        assert traj_mf.links == [], "traj should have no forward links"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+
+        # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",
-            "write",
+            "read",   # exp read
+            "write",  # exp write (exp.links)
+            "read",   # traj read  (write_stored_links)
+            "write",  # traj write (traj.backlinks)
             "release",
         ]
 
