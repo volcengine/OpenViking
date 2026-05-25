@@ -10,6 +10,7 @@ Maintains the same interface as compressor.py for backward compatibility.
 import asyncio
 import difflib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -1962,46 +1963,71 @@ class SessionCompressorV2:
         prefetched_uris = set(getattr(provider, "prefetched_uris", []) or [])
         read_versions = getattr(provider, "read_file_versions", {}) or {}
 
-        for op in operations.upsert_operations:
-            if op.memory_type != "experiences":
-                continue
-            supersedes_name = str(op.memory_fields.get("supersedes") or "").strip()
-            if not supersedes_name:
-                continue
-            if not exp_dir:
-                message = f"[supersedes] cannot resolve '{supersedes_name}': no experience dir"
-                logger.warning(message)
-                operations.errors.append(message)
-                continue
+        def normalize_supersedes_candidate(value: str) -> str:
+            name = value.strip().strip("`'\"")
+            if name.endswith(".md"):
+                name = name[:-3]
+            return name
 
-            old_uri = f"{exp_dir.rstrip('/')}/{supersedes_name}.md"
+        def supersedes_candidate_groups(raw_value: str) -> List[List[str]]:
+            raw_candidate = normalize_supersedes_candidate(raw_value)
+            if not raw_candidate:
+                return []
 
-            # Derive the new URI from experience_name (filename_template: "{{ experience_name }}.md")
-            new_name = (op.memory_fields.get("experience_name") or "").strip()
-            new_uri = f"{exp_dir.rstrip('/')}/{new_name}.md" if new_name else None
+            split_candidates: List[str] = []
+            for part in re.split(r"[,;\n]+", raw_value):
+                name = normalize_supersedes_candidate(part)
+                if name and name not in split_candidates:
+                    split_candidates.append(name)
+
+            if not split_candidates or split_candidates == [raw_candidate]:
+                return [[raw_candidate]]
+            # Try the exact raw name first so valid file names containing separators still work.
+            return [[raw_candidate], split_candidates]
+
+        def unique_append(candidates: List[str], value: str) -> None:
+            if value and value not in candidates:
+                candidates.append(value)
+
+        def collect_inherited_source_links(old_mf: Any) -> List[str]:
+            inherited: List[str] = []
+            for link in old_mf.links:
+                if link.get("link_type") == "derived_from":
+                    unique_append(inherited, link.get("to_uri", ""))
+            return inherited
+
+        def attach_inherited_source_links(new_uri: str, source_uris: List[str]) -> None:
+            current = inheritance_map.setdefault(new_uri, [])
+            for uri in source_uris:
+                unique_append(current, uri)
+
+        def append_delete_target(old_mf: Any) -> None:
+            if all(existing.uri != old_mf.uri for existing in operations.delete_file_contents):
+                operations.delete_file_contents.append(old_mf)
+
+        def should_warn_for_group(group_index: int, group_count: int) -> bool:
+            return group_index == group_count - 1
+
+        async def resolve_supersedes_candidate(
+            candidate: str,
+            *,
+            warn_on_failure: bool,
+        ) -> tuple[bool, bool, str | None]:
+            old_uri = render_supersedes_uri(candidate)
 
             # Guard: never delete the file we are about to write (same-name edge case)
             if old_uri == new_uri or old_uri in (op.uris or []):
                 tracer.info(f"[supersedes] skipping self-reference: {old_uri}")
-                op.memory_fields.pop("supersedes", None)
-                continue
+                return False, True, None
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
                 old_mf = MemoryFileUtils.read(raw, uri=old_uri)
-                operations.delete_file_contents.append(old_mf)
-                op.memory_fields.pop("supersedes", None)
-                tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
-
-                # Inherit traj URIs from old exp's links (exp→traj, derived_from) to the new URI only.
+                append_delete_target(old_mf)
+                tracer.info(f"[supersedes] '{candidate}' → queued for delete: {old_uri}")
                 if new_uri:
-                    inherited = [
-                        link.get("to_uri", "")
-                        for link in old_mf.links
-                        if link.get("link_type") == "derived_from" and link.get("to_uri", "")
-                    ]
-                    if inherited:
-                        inheritance_map[new_uri] = inherited
+                    attach_inherited_source_links(new_uri, collect_inherited_source_links(old_mf))
+                return True, False, None
             except Exception as e:
                 if old_uri in prefetched_uris:
                     base_digest = read_versions.get(old_uri) or "unknown"
@@ -2019,8 +2045,68 @@ class SessionCompressorV2:
                         ],
                     ) from e
                 message = f"[supersedes] failed to resolve '{old_uri}': {e}"
+                if warn_on_failure:
+                    logger.warning(message)
+                return False, False, message
+
+        def render_supersedes_uri(name: str) -> str:
+            if name.startswith("viking://"):
+                return name if name.endswith(".md") else f"{name}.md"
+            return f"{exp_dir.rstrip('/')}/{name}.md"
+
+        for op in operations.upsert_operations:
+            if op.memory_type != "experiences":
+                continue
+            supersedes_name = str(op.memory_fields.get("supersedes") or "").strip()
+            if not supersedes_name:
+                continue
+
+            if not exp_dir:
+                message = "[supersedes] could not resolve experience directory"
                 logger.warning(message)
                 operations.errors.append(message)
+                continue
+
+            # Derive the new URI from experience_name (filename_template: "{{ experience_name }}.md")
+            new_name = (op.memory_fields.get("experience_name") or "").strip()
+            new_uri = f"{exp_dir.rstrip('/')}/{new_name}.md" if new_name else None
+
+            resolved_any = False
+            unresolved_messages: List[str] = []
+            groups = supersedes_candidate_groups(supersedes_name)
+            for group_index, candidates in enumerate(groups):
+                group_resolved = False
+                group_self_references = 0
+                group_unresolved_messages: List[str] = []
+                warn_on_failure = should_warn_for_group(group_index, len(groups))
+                for candidate in candidates:
+                    (
+                        resolved,
+                        self_reference,
+                        unresolved_message,
+                    ) = await resolve_supersedes_candidate(
+                        candidate,
+                        warn_on_failure=warn_on_failure,
+                    )
+                    if resolved:
+                        group_resolved = True
+                    if self_reference:
+                        group_self_references += 1
+                    if unresolved_message:
+                        group_unresolved_messages.append(unresolved_message)
+
+                if group_resolved:
+                    resolved_any = True
+                    break
+                if group_self_references and group_self_references == len(candidates):
+                    resolved_any = True
+                    break
+                unresolved_messages = group_unresolved_messages
+
+            if resolved_any:
+                op.memory_fields.pop("supersedes", None)
+            else:
+                operations.errors.extend(unresolved_messages)
 
         return inheritance_map
 
@@ -2085,7 +2171,7 @@ class SessionCompressorV2:
                     attached += 1
 
         if attached:
-            setattr(provider, "_source_links_attached_in_operations", True)
+            provider._source_links_attached_in_operations = True
         return attached
 
     async def _append_trajectories_to_experiences(

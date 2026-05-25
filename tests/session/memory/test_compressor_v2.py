@@ -165,10 +165,8 @@ def test_source_trajectory_links_attach_before_exact_lock():
     )
 
     assert attached == 2
-    assert getattr(provider, "_source_links_attached_in_operations") is True
-    assert {
-        (link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links
-    } == {
+    assert provider._source_links_attached_in_operations is True
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
         (exp_uri, current_traj_uri, "derived_from"),
         (exp_uri, inherited_traj_uri, "derived_from"),
     }
@@ -225,6 +223,174 @@ async def test_resolve_supersedes_consumes_field_only_after_resolved():
 
     assert operations.errors == []
     assert operations.delete_file_contents[0].uri == old_uri
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_accepts_multiple_replaced_experiences():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri_1 = f"{exp_dir}/old_one.md"
+    old_uri_2 = f"{exp_dir}/old_two.md"
+    traj_uri_1 = "viking://agent/default/memories/trajectories/t1.md"
+    traj_uri_2 = "viking://agent/default/memories/trajectories/t2.md"
+    old_files = {
+        old_uri_1: MemoryFile(
+            uri=old_uri_1,
+            memory_type="experiences",
+            links=[
+                {
+                    "from_uri": old_uri_1,
+                    "to_uri": traj_uri_1,
+                    "link_type": "derived_from",
+                }
+            ],
+        ),
+        old_uri_2: MemoryFile(
+            uri=old_uri_2,
+            memory_type="experiences",
+            links=[
+                {
+                    "from_uri": old_uri_2,
+                    "to_uri": traj_uri_2,
+                    "link_type": "derived_from",
+                }
+            ],
+        ),
+    }
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old_one, old_two"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            return MemoryFileUtils.write(old_files[uri])
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert {item.uri for item in operations.delete_file_contents} == {old_uri_1, old_uri_2}
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri_1, traj_uri_2]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_keeps_partial_multi_target_resolution():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    missing_uri = f"{exp_dir}/missing.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old, missing"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            if uri == old_uri:
+                return MemoryFileUtils.write(old_file)
+            if uri == missing_uri:
+                raise FileNotFoundError(uri)
+            raise AssertionError(uri)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert [item.uri for item in operations.delete_file_contents] == [old_uri]
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_prefers_exact_name_before_splitting():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old, with comma.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old, with comma"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert [item.uri for item in operations.delete_file_contents] == [old_uri]
     assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
     assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
 
