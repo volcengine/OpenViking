@@ -12,8 +12,6 @@ source_trajectories as grounding material.
 
 from typing import Any, Dict, List, Optional
 
-import jinja2
-
 from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile

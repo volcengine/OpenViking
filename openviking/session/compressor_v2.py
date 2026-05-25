@@ -10,7 +10,7 @@ Maintains the same interface as compressor.py for backward compatibility.
 import asyncio
 import difflib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from openviking.core.context import Context
@@ -29,6 +29,7 @@ from openviking.session.memory.memory_updater import (
     write_stored_links,
 )
 from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
+from openviking.session.memory.merge_op.link_merge import merge_links
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -1922,9 +1923,6 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
     ) -> None:
-        from datetime import timezone
-        from openviking.session.memory.merge_op.link_merge import merge_links
-
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
         mf = MemoryFileUtils.read(raw, uri=exp_uri)
 
