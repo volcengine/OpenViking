@@ -690,11 +690,13 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
 
+Only add this section when the planner model is already available in your environment. For example, the Ollama model below must be pulled and served locally before use.
+
 ```json
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/qwen3.5:4b",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,

@@ -660,11 +660,13 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，但只影响 `search()` 的意图分析和 query expansion。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
 
+只有在环境里已经部署好 planner 模型时才需要添加这一段配置。例如下面的 Ollama 模型需要先在本地 pull 并启动后才能使用。
+
 ```json
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/qwen3.5:4b",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
