@@ -11,10 +11,10 @@ Usage:
 
 Outputs a comparison table of elapsed time and match count for each query.
 """
+
 import argparse
 import shlex
 import subprocess
-import sys
 import time
 
 BASE_URI = "viking://resources/benchmark"
@@ -26,37 +26,78 @@ TEST_CASES = [
     # --- Single keyword ---
     ("fs: single keyword (VikingDB)", "VikingDB", "fs", []),
     ("bm25: single keyword (VikingDB)", "VikingDB", "auto", ["--switch-to-remote-threshold", "0"]),
-
     ("fs: single keyword (FullText)", "FullText", "fs", []),
     ("bm25: single keyword (FullText)", "FullText", "auto", ["--switch-to-remote-threshold", "0"]),
-
     # --- Multi-keyword (regex alternation) ---
     ("fs: 2 keywords (VikingDB|FullText)", "VikingDB|FullText", "fs", []),
-    ("bm25: 2 keywords (VikingDB|FullText)", "VikingDB|FullText", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: 2 keywords (VikingDB|FullText)",
+        "VikingDB|FullText",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     ("fs: 3 keywords (VikingDB|FullText|bm25)", "VikingDB|FullText|bm25", "fs", []),
-    ("bm25: 3 keywords (VikingDB|FullText|bm25)", "VikingDB|FullText|bm25", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: 3 keywords (VikingDB|FullText|bm25)",
+        "VikingDB|FullText|bm25",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     # --- Rare keyword (lower hit count) ---
     ("fs: rare keyword (search_by_keywords)", "search_by_keywords", "fs", []),
-    ("bm25: rare keyword (search_by_keywords)", "search_by_keywords", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: rare keyword (search_by_keywords)",
+        "search_by_keywords",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     # --- Non-existent keyword (0 matches) ---
     ("fs: no-match 1 keyword (zzz_nonexistent)", "zzz_nonexistent", "fs", []),
-    ("bm25: no-match 1 keyword (zzz_nonexistent)", "zzz_nonexistent", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: no-match 1 keyword (zzz_nonexistent)",
+        "zzz_nonexistent",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     ("fs: no-match 2 keywords (zzz_a|zzz_b)", "zzz_a|zzz_b", "fs", []),
-    ("bm25: no-match 2 keywords (zzz_a|zzz_b)", "zzz_a|zzz_b", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: no-match 2 keywords (zzz_a|zzz_b)",
+        "zzz_a|zzz_b",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     ("fs: no-match 3 keywords (zzz_a|zzz_b|zzz_c)", "zzz_a|zzz_b|zzz_c", "fs", []),
-    ("bm25: no-match 3 keywords (zzz_a|zzz_b|zzz_c)", "zzz_a|zzz_b|zzz_c", "auto", ["--switch-to-remote-threshold", "0"]),
-
+    (
+        "bm25: no-match 3 keywords (zzz_a|zzz_b|zzz_c)",
+        "zzz_a|zzz_b|zzz_c",
+        "auto",
+        ["--switch-to-remote-threshold", "0"],
+    ),
     # --- Subdirectory scope (~8K files per level0 dir) ---
-    ("fs: subdir level0_00, VikingDB (~8K files)", "VikingDB", "fs", ["--uri", f"{BASE_URI}/level0_00"]),
-    ("bm25: subdir level0_00, VikingDB (~8K files)", "VikingDB", "auto", ["--uri", f"{BASE_URI}/level0_00", "--switch-to-remote-threshold", "0"]),
-
-    ("fs: subdir level0_00, no-match (~8K files)", "zzz_nonexistent", "fs", ["--uri", f"{BASE_URI}/level0_00"]),
-    ("bm25: subdir level0_00, no-match (~8K files)", "zzz_nonexistent", "auto", ["--uri", f"{BASE_URI}/level0_00", "--switch-to-remote-threshold", "0"]),
+    (
+        "fs: subdir level0_00, VikingDB (~8K files)",
+        "VikingDB",
+        "fs",
+        ["--uri", f"{BASE_URI}/level0_00"],
+    ),
+    (
+        "bm25: subdir level0_00, VikingDB (~8K files)",
+        "VikingDB",
+        "auto",
+        ["--uri", f"{BASE_URI}/level0_00", "--switch-to-remote-threshold", "0"],
+    ),
+    (
+        "fs: subdir level0_00, no-match (~8K files)",
+        "zzz_nonexistent",
+        "fs",
+        ["--uri", f"{BASE_URI}/level0_00"],
+    ),
+    (
+        "bm25: subdir level0_00, no-match (~8K files)",
+        "zzz_nonexistent",
+        "auto",
+        ["--uri", f"{BASE_URI}/level0_00", "--switch-to-remote-threshold", "0"],
+    ),
 ]
 
 
@@ -88,8 +129,12 @@ def run_grep(pattern: str, engine: str, extra_args: list) -> tuple[float, int, s
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark grep: fs vs bm25")
-    parser.add_argument("--runs", type=int, default=3, help="Number of runs per test case (default: 3)")
-    parser.add_argument("--warmup", type=int, default=1, help="Warmup runs before measuring (default: 1)")
+    parser.add_argument(
+        "--runs", type=int, default=3, help="Number of runs per test case (default: 3)"
+    )
+    parser.add_argument(
+        "--warmup", type=int, default=1, help="Warmup runs before measuring (default: 1)"
+    )
     args = parser.parse_args()
 
     print(f"{'Label':<50} {'Engine':<8} {'Avg(ms)':<10} {'Min(ms)':<10} {'Max(ms)':<10}")

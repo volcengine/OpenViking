@@ -14,6 +14,7 @@ If interrupted, re-run to automatically skip already-imported files.
 Usage:
   python3 step2_quick_add_resource.py [--no-resume] [--max-failures N]
 """
+
 import argparse
 import os
 import sys

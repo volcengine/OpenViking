@@ -12,6 +12,7 @@ directory tree:
 Target keywords appear in ~1% of files each, simulating a realistic
 large-scale codebase where bm25 recall dramatically reduces search scope.
 """
+
 import os
 import random
 
@@ -19,10 +20,10 @@ BASE_DIR = os.path.expanduser("~/.openviking/data/benchmark")
 
 # Directory tree — each level has independent dir count
 LEVEL0_DIRS = 10
-LEVEL1_DIRS = 10   # per level0 dir
-LEVEL2_DIRS = 10   # per level1 dir
-LEVEL3_DIRS = 8    # per level2 dir (flexible)
-FILES_PER_DIR = 10 # per level3 dir
+LEVEL1_DIRS = 10  # per level0 dir
+LEVEL2_DIRS = 10  # per level1 dir
+LEVEL3_DIRS = 8  # per level2 dir (flexible)
+FILES_PER_DIR = 10  # per level3 dir
 
 # Total: 10 * 10 * 10 * 8 * 10 = 80,000 files
 # Size:  80,000 * 50KB ≈ 4GB
@@ -33,14 +34,38 @@ TARGET_FILE_SIZE = 50000  # ~50KB
 TARGET_KEYWORDS = ["VikingDB", "FullText", "bm25", "search_by_keywords"]
 
 FILLER_WORDS = [
-    "configuration", "deployment", "architecture", "implementation",
-    "performance", "optimization", "integration", "middleware",
-    "authentication", "authorization", "encryption", "validation",
-    "monitoring", "logging", "caching", "serialization",
-    "concurrency", "scalability", "reliability", "observability",
-    "throughput", "latency", "availability", "consistency",
-    "partitioning", "replication", "failover", "loadbalancing",
-    "containerization", "orchestration", "provisioning", "lifecycle",
+    "configuration",
+    "deployment",
+    "architecture",
+    "implementation",
+    "performance",
+    "optimization",
+    "integration",
+    "middleware",
+    "authentication",
+    "authorization",
+    "encryption",
+    "validation",
+    "monitoring",
+    "logging",
+    "caching",
+    "serialization",
+    "concurrency",
+    "scalability",
+    "reliability",
+    "observability",
+    "throughput",
+    "latency",
+    "availability",
+    "consistency",
+    "partitioning",
+    "replication",
+    "failover",
+    "loadbalancing",
+    "containerization",
+    "orchestration",
+    "provisioning",
+    "lifecycle",
 ]
 
 random.seed(42)
@@ -103,11 +128,15 @@ def generate_file(file_idx):
 
 
 print(f"Generating {total_files} markdown files under {BASE_DIR}...")
-print(f"  Tree: level0={LEVEL0_DIRS} x level1={LEVEL1_DIRS} x level2={LEVEL2_DIRS} x level3={LEVEL3_DIRS}")
+print(
+    f"  Tree: level0={LEVEL0_DIRS} x level1={LEVEL1_DIRS} x level2={LEVEL2_DIRS} x level3={LEVEL3_DIRS}"
+)
 print(f"  Files per leaf dir: {FILES_PER_DIR}")
 print(f"  Target keywords: {TARGET_KEYWORDS}")
-print(f"  Each keyword appears in ~{keyword_hit_count} files out of {total_files} "
-      f"(~{keyword_hit_count / total_files * 100:.1f}%)")
+print(
+    f"  Each keyword appears in ~{keyword_hit_count} files out of {total_files} "
+    f"(~{keyword_hit_count / total_files * 100:.1f}%)"
+)
 print(f"  Estimated total size: ~{total_files * TARGET_FILE_SIZE / 1e9:.1f} GB")
 
 file_idx = 0

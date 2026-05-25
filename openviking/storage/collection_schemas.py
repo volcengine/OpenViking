@@ -286,7 +286,9 @@ async def init_context_collection(storage) -> bool:
         existing_schema_version = existing_embedding_meta.get("schema_version", "0.0.0")
         if _parse_version(existing_schema_version) < _parse_version(_FULLTEXT_MIN_VERSION):
             fields = existing_meta.get("Fields", [])
-            has_content = any(f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields)
+            has_content = any(
+                f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+            )
             fulltext = existing_meta.get("FullText") or []
             has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
             if not (has_content and has_content_fulltext):

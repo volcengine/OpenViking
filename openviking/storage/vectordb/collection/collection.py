@@ -377,8 +377,7 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.search_by_keywords(
-            index_name, keywords, query, limit, offset, filters, output_fields,
-            mode, fields
+            index_name, keywords, query, limit, offset, filters, output_fields, mode, fields
         )
 
     def search_by_id(

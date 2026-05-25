@@ -11,6 +11,7 @@ which gives fine-grained resume capability.
 Usage:
   python3 step3_build_index.py [--no-resume] [--mode MODE] [--max-failures N]
 """
+
 import argparse
 import os
 import shlex
@@ -123,7 +124,19 @@ def main():
             continue
 
         uri = f"{BENCHMARK_URI}/{rel_dir}"
-        cmd = ["ov", "reindex", "--account", "default", "--user", "default", "--mode", args.mode, "--wait", "true", uri]
+        cmd = [
+            "ov",
+            "reindex",
+            "--account",
+            "default",
+            "--user",
+            "default",
+            "--mode",
+            args.mode,
+            "--wait",
+            "true",
+            uri,
+        ]
         idx = count + skipped + 1
         cmd_str = shlex.join(cmd)
         print(f"[{idx}/{total}] $ {cmd_str}")
@@ -145,7 +158,7 @@ def main():
                 print(f"  OK ({elapsed:.1f}s)")
                 save_progress(rel_dir)
         except subprocess.TimeoutExpired:
-            print(f"  TIMEOUT (600s)")
+            print("  TIMEOUT (600s)")
             failed += 1
         except Exception as e:
             print(f"  ERROR: {e}")

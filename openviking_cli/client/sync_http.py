@@ -8,7 +8,6 @@ Wraps AsyncHTTPClient with synchronous methods.
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.storage.viking_fs import GrepEngine
-
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils import run_async
@@ -322,8 +321,14 @@ class SyncHTTPClient:
         """Content search with pattern."""
         return run_async(
             self._async_client.grep(
-                uri, pattern, case_insensitive, node_limit, exclude_uri,
-                engine, switch_to_remote_threshold, remote_return_limit,
+                uri,
+                pattern,
+                case_insensitive,
+                node_limit,
+                exclude_uri,
+                engine,
+                switch_to_remote_threshold,
+                remote_return_limit,
             )
         )
 
