@@ -62,7 +62,7 @@ def test_openviking_config_uses_vlm_when_query_planner_is_absent_or_empty():
 async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
     planner = RecordingModel(_query_plan_response("planned query"))
     vlm = RecordingModel(_query_plan_response("vlm query"))
-    config = SimpleNamespace(query_planner=planner, vlm=vlm)
+    config = SimpleNamespace(get_query_planner=lambda: planner)
 
     monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
 
@@ -80,7 +80,7 @@ async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
 @pytest.mark.asyncio
 async def test_intent_analyzer_falls_back_to_vlm_without_query_planner(monkeypatch):
     vlm = RecordingModel(_query_plan_response("vlm query"))
-    config = SimpleNamespace(query_planner=None, vlm=vlm)
+    config = SimpleNamespace(get_query_planner=lambda: vlm)
 
     monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
 

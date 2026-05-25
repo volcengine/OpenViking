@@ -63,10 +63,7 @@ class IntentAnalyzer:
 
         # Call the lightweight query planner when configured; otherwise keep using VLM.
         config = get_openviking_config()
-        if hasattr(config, "get_query_planner"):
-            query_planner = config.get_query_planner()
-        else:
-            query_planner = getattr(config, "query_planner", None) or config.vlm
+        query_planner = config.get_query_planner()
         response = await query_planner.get_completion_async(prompt)
 
         # Parse result
