@@ -27,6 +27,7 @@ from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import AuthMode, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
@@ -363,10 +364,15 @@ def create_app(
     )
 
     http_observability_middleware = create_http_observability_middleware()
+    profile_http_middleware = create_profile_http_middleware()
 
     @app.middleware("http")
     async def add_http_observability(request: Request, call_next: Callable):
         return await http_observability_middleware(request, call_next)
+
+    @app.middleware("http")
+    async def add_profile_output(request: Request, call_next: Callable):
+        return await profile_http_middleware(request, call_next)
 
     # Add request timing middleware last (so it executes first as the outermost layer)
     # This ensures X-Process-Time includes the full request duration including

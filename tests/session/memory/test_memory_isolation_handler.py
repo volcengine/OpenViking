@@ -236,33 +236,34 @@ class TestFillRoleIds:
 
 
 class TestPrepareMessages:
-    """Tests for prepare_messages with enable_role_id_memory_isolate toggle."""
+    """Tests for prepare_messages with role_id_memory_isolation_enabled toggle."""
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_prepare_messages_disabled_clears_role_ids(self, mock_config):
-        """开关关闭时，prepare_messages 清空所有 message 的 role_id。"""
+    def test_prepare_messages_disabled_fills_missing_role_ids(self, mock_config):
+        """开关关闭时，prepare_messages 用登录身份回填缺失的 role_id。"""
         mock_memory_config = MagicMock()
-        mock_memory_config.enable_role_id_memory_isolate = False
+        mock_memory_config.role_id_memory_isolation_enabled = False
         mock_config.return_value.memory = mock_memory_config
 
         ctx = create_ctx(user_id="login_user", agent_id="login_agent")
         messages = [
-            create_message("user", "user_a", "Hello"),
-            create_message("assistant", "agent_a", "Hi"),
+            create_message("user", None, "Hello"),
+            create_message("assistant", None, "Hi"),
             create_message("user", "user_b", "Hey"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         handler.prepare_messages()
 
-        for msg in messages:
-            assert msg.role_id is None
+        assert messages[0].role_id == "login_user"
+        assert messages[1].role_id == "login_agent"
+        assert messages[2].role_id == "user_b"
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_prepare_messages_enabled_keeps_role_ids(self, mock_config):
         """开关开启时，prepare_messages 不修改 role_id。"""
         mock_memory_config = MagicMock()
-        mock_memory_config.enable_role_id_memory_isolate = True
+        mock_memory_config.role_id_memory_isolation_enabled = True
         mock_config.return_value.memory = mock_memory_config
 
         ctx = create_ctx(user_id="login_user", agent_id="login_agent")
@@ -278,16 +279,16 @@ class TestPrepareMessages:
         assert messages[1].role_id == "agent_a"
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_get_read_scope_with_prepare_disabled(self, mock_config):
-        """开关关闭时，get_read_scope 只返回登录用户（因为 role_id 被清空）。"""
+    def test_get_read_scope_with_prepare_disabled_uses_ctx_for_missing_role_ids(self, mock_config):
+        """开关关闭时，get_read_scope 对缺失 role_id 的消息回退到登录身份。"""
         mock_memory_config = MagicMock()
-        mock_memory_config.enable_role_id_memory_isolate = False
+        mock_memory_config.role_id_memory_isolation_enabled = False
         mock_config.return_value.memory = mock_memory_config
 
         ctx = create_ctx(user_id="login_user", agent_id="login_agent")
         messages = [
-            create_message("user", "user_a", "Hello"),
-            create_message("assistant", "agent_a", "Hi"),
+            create_message("user", None, "Hello"),
+            create_message("assistant", None, "Hi"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -301,7 +302,7 @@ class TestPrepareMessages:
     def test_get_read_scope_with_prepare_enabled(self, mock_config):
         """开关开启时，get_read_scope 从 message role_id 提取参与者。"""
         mock_memory_config = MagicMock()
-        mock_memory_config.enable_role_id_memory_isolate = True
+        mock_memory_config.role_id_memory_isolation_enabled = True
         mock_config.return_value.memory = mock_memory_config
 
         ctx = create_ctx(user_id="login_user", agent_id="login_agent")
@@ -318,19 +319,19 @@ class TestPrepareMessages:
         assert set(scope.agent_ids) == {"agent_a"}
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_prepare_messages_no_config(self, mock_config):
-        """没有 memory 配置时，默认关闭，清空 role_id。"""
+    def test_prepare_messages_no_config_fills_missing_role_ids(self, mock_config):
+        """没有 memory 配置时，默认关闭，并用登录身份回填缺失的 role_id。"""
         mock_config.return_value.memory = None
 
         ctx = create_ctx(user_id="login_user", agent_id="login_agent")
         messages = [
-            create_message("user", "user_a", "Hello"),
+            create_message("user", None, "Hello"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         handler.prepare_messages()
 
-        assert messages[0].role_id is None
+        assert messages[0].role_id == "login_user"
 
 
 class TestCalculateMemoryUris:

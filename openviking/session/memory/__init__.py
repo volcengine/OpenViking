@@ -20,10 +20,7 @@ from openviking.session.memory.extract_loop import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
-from openviking.session.memory.schema_model_generator import (
-    SchemaModelGenerator,
-    SchemaPromptGenerator,
-)
+from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
@@ -55,7 +52,6 @@ __all__ = [
     "MemoryTypeRegistry",
     # Schema models
     "SchemaModelGenerator",
-    "SchemaPromptGenerator",
     # Updater
     "MemoryUpdater",
     "MemoryUpdateResult",

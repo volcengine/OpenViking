@@ -22,6 +22,7 @@ class Response(BaseModel):
     result: Optional[Any] = None
     error: Optional[ErrorInfo] = None
     telemetry: Optional[Dict[str, Any]] = None
+    profile: Optional[list[str]] = None
 
 
 # Error code to HTTP status code mapping

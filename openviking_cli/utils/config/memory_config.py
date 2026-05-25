@@ -91,7 +91,7 @@ class MemoryConfig(BaseModel):
             "default."
         ),
     )
-    enable_role_id_memory_isolate: bool = Field(
+    role_id_memory_isolation_enabled: bool = Field(
         default=False,
         description=(
             "When enabled, memory extraction uses role_id from messages to determine "

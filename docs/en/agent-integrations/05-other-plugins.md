@@ -2,6 +2,23 @@
 
 The repo also ships several community/experimental plugins beyond the headline Claude Code, Codex, and OpenClaw integrations. They differ in target runtime, integration depth, and maintenance status — read each one's README before adopting.
 
+## AstrBot plugin
+
+[AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ (AIOCQHTTP), Telegram, Discord, Lark, and 20+ other platforms.
+
+Source: [astrbot_plugin_openviking_memory](https://github.com/t0saki/astrbot_plugin_openviking_memory)
+
+Provides OpenViking long-term memory for AstrBot: auto-captures group/DM conversations, performs semantic recall before each LLM request, and supports configurable venue memory isolation.
+
+**Installation**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
+
+**Key features**:
+
+- Hooks-based auto-recall and auto-capture — the model doesn't need to invoke tools explicitly
+- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
+- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- Backfills platform message history on first venue encounter
+
 ## OpenCode plugins
 
 Two OpenCode plugin variants exist with different design choices. Pick whichever matches your usage — we don't make the decision for you.

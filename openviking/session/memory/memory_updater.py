@@ -26,6 +26,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -383,7 +384,12 @@ class MemoryUpdater:
         for op in operations.upsert_operations:
             for uri in op.uris:
                 uri_memory_type_map[uri] = op.memory_type
-        await self._vectorize_memories(result, ctx, uri_memory_type_map=uri_memory_type_map)
+        await self._vectorize_memories(
+            result,
+            ctx,
+            extract_context=extract_context,
+            uri_memory_type_map=uri_memory_type_map,
+        )
 
         # Apply links to endpoint files not covered by upsert_operations
         if operations.resolved_links:
@@ -636,19 +642,22 @@ class MemoryUpdater:
         self,
         result: MemoryUpdateResult,
         ctx: RequestContext,
-        uri_memory_type_map: Dict[str, str],
+        extract_context: Any = None,
+        uri_memory_type_map: Dict[str, str] = None,
     ) -> None:
         """Vectorize written and edited memory files.
 
         Args:
             result: MemoryUpdateResult with written_uris and edited_uris
             ctx: Request context
+            extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
             return
 
+        uri_memory_type_map = uri_memory_type_map or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
 
@@ -673,37 +682,33 @@ class MemoryUpdater:
 
                 mf = MemoryFileUtils.read(content, uri=uri)
                 abstract = mf.plain_content()
-
-                # Build embedding text from only searchable fields
-                embedding_parts = []
-                if abstract:
-                    embedding_parts.append(abstract)
+                embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)
-
                 if memory_type and self._registry:
                     schema = self._registry.get(memory_type)
-                    if schema:
-                        searchable_fields = {f.name for f in schema.fields if f.searchable}
-                        searchable_data = {}
-                        for field_name in searchable_fields:
-                            if field_name == "content":
-                                continue
-                            field_value = mf.extra_fields.get(field_name)
-                            if field_value is not None:
-                                field_str = (
-                                    str(field_value)
-                                    if not isinstance(field_value, str)
-                                    else field_value
+                    if schema and schema.embedding_template:
+                        template_vars = dict(mf.extra_fields)
+                        template_vars["content"] = abstract
+                        missing_vars = TemplateUtils.find_missing_variables(
+                            schema.embedding_template,
+                            template_vars,
+                        )
+                        if missing_vars:
+                            logger.warning(
+                                f"Missing embedding template variables for {uri}, falling back to plain content: {sorted(missing_vars)}"
+                            )
+                        else:
+                            try:
+                                embedding_text = render_template(
+                                    schema.embedding_template,
+                                    template_vars,
+                                    extract_context=extract_context,
                                 )
-                                if field_str.strip():
-                                    searchable_data[field_name] = field_str.strip()
-                        if searchable_data:
-                            import json
-
-                            embedding_parts.append(json.dumps(searchable_data, ensure_ascii=False))
-
-                embedding_text = "\n\n".join(embedding_parts) if embedding_parts else abstract
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
+                                )
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI

@@ -32,6 +32,7 @@ class OVCLIConfig(BaseModel):
     account: Optional[str] = None
     user: Optional[str] = None
     timeout: float = 60.0
+    profile: bool = False
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
 

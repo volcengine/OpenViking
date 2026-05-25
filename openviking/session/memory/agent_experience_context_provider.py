@@ -10,17 +10,17 @@ No tool calls — all context is prefetched. Top-3 candidates also include their
 source_trajectories as grounding material.
 """
 
-import jinja2
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import to_agent_space, to_user_space
-from openviking.server.identity import RequestContext, ToolContext
+from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -106,9 +106,12 @@ All memory content must be written in {output_language}.
             user_space = "default"
             agent_space = "default"
 
-        env = jinja2.Environment(autoescape=False)
-        return env.from_string(schema.directory).render(
-            user_space=user_space, agent_space=agent_space
+        return TemplateUtils.render(
+            schema.directory,
+            {
+                "user_space": user_space,
+                "agent_space": agent_space,
+            },
         )
 
     async def _load_source_trajectories(
