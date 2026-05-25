@@ -4,7 +4,6 @@
 Tests for MemoryUpdater.
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,8 +12,8 @@ from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.dataclass import (
-    MemoryFile,
     MemoryField,
+    MemoryFile,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -286,6 +285,7 @@ class TestMemoryUpdater:
             ctx,
             None,
         )
+
     @pytest.mark.asyncio
     async def test_apply_operations_skips_link_updates_for_deleted_uris(self, monkeypatch):
         deleted_uri = "viking://agent/agent_sample_3/memories/experiences/old.md"
@@ -307,7 +307,12 @@ class TestMemoryUpdater:
         updater.generate_overview = AsyncMock()
 
         mock_viking_fs = MagicMock()
-        mock_viking_fs.read_file = AsyncMock(side_effect=AssertionError("deleted URI should not be read"))
+
+        async def mock_read_file(uri, **kwargs):
+            assert uri == deleted_uri
+            return None
+
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
         mock_viking_fs.write_file = AsyncMock()
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
@@ -319,7 +324,9 @@ class TestMemoryUpdater:
                     uris=[written_uri],
                 )
             ],
-            delete_file_contents=[MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"})],
+            delete_file_contents=[
+                MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"})
+            ],
             errors=[],
             resolved_links=[
                 StoredLink(
@@ -328,7 +335,6 @@ class TestMemoryUpdater:
                 )
             ],
         )
-
 
         async def mock_apply_upsert(resolved_op, ctx, extract_context=None):
             return None
@@ -345,12 +351,166 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
-        mock_viking_fs.read_file.assert_not_awaited()
+        mock_viking_fs.read_file.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_apply_operations_cleans_peer_backlinks_before_delete(self):
+        old_exp_uri = "viking://agent/a/memories/experiences/old.md"
+        other_exp_uri = "viking://agent/a/memories/experiences/other.md"
+        traj_uri = "viking://agent/a/memories/trajectories/t1.md"
+        old_link = StoredLink(from_uri=old_exp_uri, to_uri=traj_uri, link_type="derived_from")
+        other_link = StoredLink(from_uri=other_exp_uri, to_uri=traj_uri, link_type="derived_from")
+
+        store = {
+            old_exp_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=old_exp_uri,
+                    content="old",
+                    links=[old_link.model_dump()],
+                    memory_type="experiences",
+                )
+            ),
+            traj_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=traj_uri,
+                    content="trajectory",
+                    backlinks=[old_link.model_dump(), other_link.model_dump()],
+                    memory_type="trajectories",
+                )
+            ),
+        }
+
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
+        mock_viking_fs.write_file = AsyncMock(side_effect=mock_write_file)
+
+        registry = MagicMock()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        async def mock_apply_delete(uri, ctx):
+            store.pop(uri, None)
+
+        updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        result = await updater.apply_operations(
+            operations=ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[
+                    MemoryFile(
+                        uri=old_exp_uri,
+                        links=[old_link.model_dump()],
+                        memory_type="experiences",
+                    )
+                ],
+                errors=[],
+            ),
+            ctx=ctx,
+        )
+
+        assert result.deleted_uris == [old_exp_uri]
+        assert old_exp_uri not in store
+        trajectory = MemoryFileUtils.read(store[traj_uri], uri=traj_uri)
+        assert trajectory.backlinks == [other_link.model_dump()]
+
+    @pytest.mark.asyncio
+    async def test_apply_operations_cleans_links_added_after_delete_snapshot(self):
+        old_exp_uri = "viking://agent/a/memories/experiences/old.md"
+        traj1_uri = "viking://agent/a/memories/trajectories/t1.md"
+        traj2_uri = "viking://agent/a/memories/trajectories/t2.md"
+        old_link_1 = StoredLink(from_uri=old_exp_uri, to_uri=traj1_uri, link_type="derived_from")
+        old_link_2 = StoredLink(from_uri=old_exp_uri, to_uri=traj2_uri, link_type="derived_from")
+
+        store = {
+            old_exp_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=old_exp_uri,
+                    content="old",
+                    links=[old_link_1.model_dump(), old_link_2.model_dump()],
+                    memory_type="experiences",
+                )
+            ),
+            traj1_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=traj1_uri,
+                    content="trajectory 1",
+                    backlinks=[old_link_1.model_dump()],
+                    memory_type="trajectories",
+                )
+            ),
+            traj2_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=traj2_uri,
+                    content="trajectory 2",
+                    backlinks=[old_link_2.model_dump()],
+                    memory_type="trajectories",
+                )
+            ),
+        }
+
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
+        mock_viking_fs.write_file = AsyncMock(side_effect=mock_write_file)
+
+        registry = MagicMock()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        async def mock_apply_delete(uri, ctx):
+            store.pop(uri, None)
+
+        updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        result = await updater.apply_operations(
+            operations=ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[
+                    MemoryFile(
+                        uri=old_exp_uri,
+                        links=[old_link_1.model_dump()],
+                        memory_type="experiences",
+                    )
+                ],
+                errors=[],
+            ),
+            ctx=ctx,
+        )
+
+        assert result.deleted_uris == [old_exp_uri]
+        assert old_exp_uri not in store
+        traj1 = MemoryFileUtils.read(store[traj1_uri], uri=traj1_uri)
+        traj2 = MemoryFileUtils.read(store[traj2_uri], uri=traj2_uri)
+        assert traj1.backlinks == []
+        assert traj2.backlinks == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
-        caroline_uri = "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
-        melanie_uri = "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        caroline_uri = (
+            "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
+        )
+        melanie_uri = (
+            "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        )
         profile_uri = "viking://user/Caroline/memories/profile.md"
 
         schema = MemoryTypeSchema(
@@ -769,7 +929,9 @@ class TestConsecutivePatchesSameURI:
         trace_info = MagicMock()
         patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr("openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning)
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
+        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(

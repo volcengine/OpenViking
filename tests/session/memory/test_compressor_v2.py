@@ -111,6 +111,34 @@ def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
     )
 
 
+def test_operation_exact_lock_uris_include_deleted_link_endpoints():
+    exp_uri = "viking://agent/default/memories/experiences/old.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    operations = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[
+            MemoryFile(
+                uri=exp_uri,
+                links=[
+                    {
+                        "from_uri": exp_uri,
+                        "to_uri": traj_uri,
+                        "link_type": "derived_from",
+                    }
+                ],
+            )
+        ],
+        errors=[],
+    )
+
+    lock_uris = compressor_v2_module._collect_operation_lock_uris(operations)
+
+    assert exp_uri in lock_uris
+    assert traj_uri in lock_uris
+    assert "viking://agent/default/memories/experiences/.overview.md" in lock_uris
+    assert "viking://agent/default/memories/trajectories/.overview.md" in lock_uris
+
+
 @pytest.mark.asyncio
 async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
     schema = MemoryTypeSchema(

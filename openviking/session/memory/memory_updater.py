@@ -414,6 +414,7 @@ class MemoryUpdater:
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
+        deleted_uris = {file_content.uri for file_content in operations.delete_file_contents}
         for file_content in operations.delete_file_contents:
             if file_content.uri in upserted_uris:
                 tracer.info(
@@ -422,6 +423,7 @@ class MemoryUpdater:
                 )
                 continue
             try:
+                await self._cleanup_links_for_delete(file_content, ctx, deleted_uris=deleted_uris)
                 await self._apply_delete(file_content.uri, ctx)
                 result.add_deleted(file_content.uri)
             except Exception as e:
@@ -629,6 +631,91 @@ class MemoryUpdater:
         upserted_uris = set(result.written_uris + result.edited_uris)
         skip = upserted_uris | (deleted_uris or set())
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+
+    async def _cleanup_links_for_delete(
+        self,
+        file_content: MemoryFile,
+        ctx: RequestContext,
+        deleted_uris: Optional[set[str]] = None,
+    ) -> None:
+        """Remove links/backlinks in peer files before deleting a memory file."""
+
+        deleted_uri = file_content.uri
+        if not deleted_uri:
+            return
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return
+
+        skipped = deleted_uris or set()
+        links_for_cleanup: List[Dict[str, Any]] = []
+        seen_links: set[tuple[str, str, str]] = set()
+
+        def add_links(mf: MemoryFile) -> None:
+            for link in [*(mf.links or []), *(mf.backlinks or [])]:
+                if not isinstance(link, dict):
+                    continue
+                key = (
+                    str(link.get("from_uri") or ""),
+                    str(link.get("to_uri") or ""),
+                    str(link.get("link_type") or ""),
+                )
+                if key in seen_links:
+                    continue
+                seen_links.add(key)
+                links_for_cleanup.append(link)
+
+        add_links(file_content)
+        try:
+            latest = await viking_fs.read_file(deleted_uri, ctx=ctx)
+            if latest:
+                add_links(MemoryFileUtils.read(latest, uri=deleted_uri))
+        except NotFoundError:
+            # Another concurrent replace/delete may have already removed this file.
+            # The pre-resolved snapshot still carries the links we know how to clean.
+            pass
+        except Exception as e:
+            tracer.error(f"Failed to read latest memory before delete cleanup: {deleted_uri}", e)
+
+        endpoint_uris: List[str] = []
+
+        def add_endpoint(uri: str) -> None:
+            if uri and uri != deleted_uri and uri not in skipped and uri not in endpoint_uris:
+                endpoint_uris.append(uri)
+
+        for link in links_for_cleanup:
+            from_uri = link.get("from_uri")
+            to_uri = link.get("to_uri")
+            if from_uri == deleted_uri:
+                add_endpoint(to_uri)
+            elif to_uri == deleted_uri:
+                add_endpoint(from_uri)
+
+        if not endpoint_uris:
+            return
+
+        def keep_link(link: Dict[str, Any]) -> bool:
+            return link.get("from_uri") != deleted_uri and link.get("to_uri") != deleted_uri
+
+        for endpoint_uri in endpoint_uris:
+            try:
+                content = await viking_fs.read_file(endpoint_uri, ctx=ctx)
+                if not content:
+                    continue
+                mf = MemoryFileUtils.read(content, uri=endpoint_uri)
+                new_links = [link for link in mf.links if keep_link(link)]
+                new_backlinks = [link for link in mf.backlinks if keep_link(link)]
+                if len(new_links) == len(mf.links) and len(new_backlinks) == len(mf.backlinks):
+                    continue
+                mf.links = new_links
+                mf.backlinks = new_backlinks
+                await viking_fs.write_file(endpoint_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            except Exception as e:
+                tracer.error(
+                    f"Failed to clean links for deleted memory {deleted_uri} from {endpoint_uri}",
+                    e,
+                )
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

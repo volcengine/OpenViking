@@ -237,6 +237,13 @@ def _collect_operation_lock_uris(operations: ResolvedOperations) -> list[str]:
             continue
         add_uri(file_content.uri)
         add_dir(file_content.uri)
+        for link in [*(file_content.links or []), *(file_content.backlinks or [])]:
+            from_uri = link.get("from_uri")
+            to_uri = link.get("to_uri")
+            add_uri(from_uri)
+            add_dir(from_uri or "")
+            add_uri(to_uri)
+            add_dir(to_uri or "")
 
     for link in operations.resolved_links or []:
         add_uri(link.from_uri)
@@ -263,6 +270,9 @@ def _collect_operation_write_uris(operations: ResolvedOperations) -> list[str]:
 
     for file_content in operations.delete_file_contents:
         add_uri(file_content.uri)
+        for link in [*(file_content.links or []), *(file_content.backlinks or [])]:
+            add_uri(link.get("from_uri"))
+            add_uri(link.get("to_uri"))
 
     return uris
 
