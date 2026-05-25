@@ -101,14 +101,14 @@ class MemoryConfig(BaseModel):
         ),
     )
     operation_exact_apply_window_seconds: float = Field(
-        default=0.0,
+        default=5.0,
         ge=0.0,
         description=(
-            "Optional server-side apply window for operation_exact phases. When greater than 0, "
-            "the first request for a concrete target set waits briefly before taking exact file "
-            "locks, allowing concurrent requests for the same target set to queue behind the same "
-            "in-process window lock. Followers apply later in order; this does not perform "
-            "semantic reconcile."
+            "Server-side apply window for operation_exact phases. The first request for a "
+            "concrete target set waits briefly before taking exact file locks, allowing "
+            "concurrent requests for the same target set to queue behind the same in-process "
+            "window lock. Followers apply later in order; this does not perform semantic "
+            "reconcile. Set to 0 to disable the window."
         ),
     )
     eager_prefetch: bool = Field(
