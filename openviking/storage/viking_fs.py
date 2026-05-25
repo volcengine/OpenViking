@@ -896,13 +896,8 @@ class VikingFS:
         if exclude_uri:
             candidate_uris = [u for u in candidate_uris if not u.startswith(exclude_uri)]
         if not candidate_uris:
-            # BM25 returned no candidates — fall back to fs to avoid missing matches
-            # (regex patterns may not work well as BM25 keywords)
-            return await self._grep_fs(
-                uri=uri, pattern=pattern, exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive, node_limit=node_limit,
-                level_limit=level_limit, ctx=ctx,
-            )
+            # BM25 returned no candidates — the index confirms no matching content
+            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
 
         # Step 2: local fs precise matching on candidate files
         return await self._grep_in_files(
