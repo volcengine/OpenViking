@@ -443,9 +443,13 @@ class MemoryUpdater:
         )
 
         # Apply links to endpoint files not covered by upsert_operations
-        if operations.resolved_links:
+        observed_links = await self._collect_links_from_upserted_files(result, ctx)
+        links_to_apply = self._dedupe_stored_links(
+            [*(operations.resolved_links or []), *observed_links]
+        )
+        if links_to_apply:
             await self._apply_links_to_existing_files(
-                operations.resolved_links,
+                links_to_apply,
                 result,
                 ctx,
                 deleted_uris=set(result.deleted_uris),
@@ -631,6 +635,59 @@ class MemoryUpdater:
         upserted_uris = set(result.written_uris + result.edited_uris)
         skip = upserted_uris | (deleted_uris or set())
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+
+    def _dedupe_stored_links(self, links: List[StoredLink]) -> List[StoredLink]:
+        deduped: List[StoredLink] = []
+        seen: set[tuple[str, str, str]] = set()
+        for link in links:
+            key = (link.from_uri, link.to_uri, link.link_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(link)
+        return deduped
+
+    async def _collect_links_from_upserted_files(
+        self,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> List[StoredLink]:
+        """Read final upserted files and return their persisted graph edges.
+
+        Some links are not newly produced by the current operation. For example,
+        an edit may preserve an existing system-managed source link from the old
+        file. Treating those final links as graph edges lets the updater repair
+        missing reciprocal links/backlinks in the same apply path.
+        """
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return []
+
+        upserted_uris = list(dict.fromkeys(result.written_uris + result.edited_uris))
+        links: List[StoredLink] = []
+        for uri in upserted_uris:
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if not content:
+                    continue
+                mf = MemoryFileUtils.read(content, uri=uri)
+            except Exception as e:
+                tracer.error(f"Failed to collect links from upserted memory {uri}: {e}")
+                continue
+
+            for raw_link in [*(mf.links or []), *(mf.backlinks or [])]:
+                if not isinstance(raw_link, dict):
+                    continue
+                from_uri = str(raw_link.get("from_uri") or "")
+                to_uri = str(raw_link.get("to_uri") or "")
+                if not from_uri or not to_uri:
+                    continue
+                try:
+                    links.append(StoredLink(**raw_link))
+                except Exception as e:
+                    tracer.error(f"Failed to parse stored link from upserted memory {uri}: {e}")
+        return links
 
     async def _cleanup_links_for_delete(
         self,
