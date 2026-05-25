@@ -92,27 +92,45 @@ pub async fn delete_session(
 }
 
 fn parse_messages(input: &str) -> Result<Vec<(String, String)>> {
-    let messages: Vec<(String, String)> =
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
-            if let Some(arr) = value.as_array() {
-                arr.iter()
-                    .map(|item| {
-                        let role = item["role"].as_str().unwrap_or("user").to_string();
-                        let content = item["content"].as_str().unwrap_or("").to_string();
-                        (role, content)
-                    })
-                    .collect()
-            } else if value.get("role").is_some() || value.get("content").is_some() {
-                let role = value["role"].as_str().unwrap_or("user").to_string();
-                let content = value["content"].as_str().unwrap_or("").to_string();
-                vec![(role, content)]
-            } else {
-                vec![("user".to_string(), input.to_string())]
-            }
-        } else {
-            vec![("user".to_string(), input.to_string())]
-        };
-    Ok(messages)
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
+        if let Some(arr) = value.as_array() {
+            let messages: std::result::Result<Vec<(String, String)>, _> = arr
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let role = item["role"].as_str().ok_or_else(|| {
+                        crate::error::Error::Api(format!(
+                            "messages[{}]: 'role' must be a string, got {:?}",
+                            i, item["role"]
+                        ))
+                    })?;
+                    let content = item["content"].as_str().ok_or_else(|| {
+                        crate::error::Error::Api(format!(
+                            "messages[{}]: 'content' must be a string, got {:?}",
+                            i, item["content"]
+                        ))
+                    })?;
+                    Ok((role.to_string(), content.to_string()))
+                })
+                .collect();
+            return messages;
+        } else if value.get("role").is_some() || value.get("content").is_some() {
+            let role = value["role"].as_str().ok_or_else(|| {
+                crate::error::Error::Api(format!(
+                    "'role' must be a string, got {:?}",
+                    value["role"]
+                ))
+            })?;
+            let content = value["content"].as_str().ok_or_else(|| {
+                crate::error::Error::Api(format!(
+                    "'content' must be a string, got {:?}",
+                    value["content"]
+                ))
+            })?;
+            return Ok(vec![(role.to_string(), content.to_string())]);
+        }
+    }
+    Ok(vec![("user".to_string(), input.to_string())])
 }
 
 pub async fn add_message(
