@@ -20,9 +20,9 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.dataclass import ResolvedOperations
+from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -38,7 +38,6 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
-MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
 _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
@@ -905,15 +904,13 @@ class SessionCompressorV2:
                 operations.delete_file_contents.append(old_mf)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
-                # Map inherited source_trajectories to the new (superseding) URI only.
+                # Inherit traj URIs from old exp's links (exp→traj, derived_from) to the new URI only.
                 if new_uri:
-                    existing = old_mf.extra_fields.get("source_trajectories", [])
-                    if isinstance(existing, list):
-                        inherited = list(existing)
-                    elif isinstance(existing, str) and existing.strip():
-                        inherited = [line.strip() for line in existing.splitlines() if line.strip()]
-                    else:
-                        inherited = []
+                    inherited = [
+                        link.get("to_uri", "")
+                        for link in old_mf.links
+                        if link.get("link_type") == "derived_from" and link.get("to_uri", "")
+                    ]
                     if inherited:
                         inheritance_map[new_uri] = inherited
             except Exception as e:
@@ -929,10 +926,10 @@ class SessionCompressorV2:
         viking_fs,
         lock_handle: Optional[Any] = None,
     ) -> None:
-        """Append traj_uris to the source_trajectories list of each experience file.
+        """Write bidirectional StoredLinks between traj_uris and each exp file.
 
-        This is the system-side management of source_trajectories — the LLM never
-        outputs this field; the pipeline appends the batch after a write or edit.
+        Called after experience write/edit. The LLM never outputs these links;
+        the pipeline appends them so the relationship is always system-managed.
         """
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:
@@ -976,34 +973,32 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
     ) -> None:
+        from datetime import timezone
+        from openviking.session.memory.merge_op.link_merge import merge_links
+
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
         mf = MemoryFileUtils.read(raw, uri=exp_uri)
 
-        existing = mf.extra_fields.get("source_trajectories", [])
-        if isinstance(existing, list):
-            uris = list(existing)
-        elif isinstance(existing, str) and existing.strip():
-            uris = [line.strip() for line in existing.splitlines() if line.strip()]
+        # exp→traj: one directed edge per trajectory.
+        # write_stored_links writes it to exp.links (forward) and traj.backlinks (reverse) automatically.
+        now = datetime.now(timezone.utc).isoformat()
+        links = [
+            StoredLink(from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now)
+            for t in traj_uris
+        ]
+
+        new_exp_links = merge_links(mf.links, [l.model_dump() for l in links])
+        links_changed = len(new_exp_links) != len(mf.links)
+        mf.links = new_exp_links
+
+        if links_changed:
+            await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            tracer.info(f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})")
         else:
-            uris = []
+            tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
-        changed = False
-        for traj_uri in traj_uris:
-            if traj_uri not in uris:
-                uris.append(traj_uri)
-                changed = True
-
-        if len(uris) > MAX_SOURCE_TRAJECTORIES:
-            uris = uris[-MAX_SOURCE_TRAJECTORIES:]
-            changed = True
-
-        if changed:
-            mf.extra_fields["source_trajectories"] = uris
-            new_raw = MemoryFileUtils.write(mf)
-            await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
-            tracer.info(f"[source_traj] appended {len(traj_uris)} trajectories -> {exp_uri}")
-        else:
-            tracer.info(f"[source_traj] already present, skip: {exp_uri}")
+        # Write traj.backlinks — exp_uri already handled above
+        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri})
 
     async def _build_memory_diff(
         self,

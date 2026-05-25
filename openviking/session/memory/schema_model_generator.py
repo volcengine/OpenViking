@@ -10,7 +10,6 @@ definitions, with discriminator support for polymorphic fields.
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-import jinja2
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
@@ -18,6 +17,7 @@ from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTy
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -47,7 +47,6 @@ class SchemaModelGenerator:
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
@@ -58,7 +57,11 @@ class SchemaModelGenerator:
             return description
         if "{{" not in description and "{%" not in description and "{#" not in description:
             return description
-        return self._template_env.from_string(description).render(**self._template_context)
+        return TemplateUtils.render(
+            description,
+            self._template_context,
+            strip=False,
+        )
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -348,115 +351,3 @@ class SchemaModelGenerator:
         """
         memory_model = self.create_discriminated_union_model()
         return memory_model.model_json_schema()
-
-
-class SchemaPromptGenerator:
-    """
-    Prompt generator that incorporates schema information into LLM prompts.
-
-    Generates descriptive text about memory types and their fields
-    based on the YAML schema definitions.
-    """
-
-    def __init__(
-        self,
-        schemas: List[MemoryTypeSchema],
-        template_context: Optional[Dict[str, Any]] = None,
-    ):
-        self.schemas = schemas
-        self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
-
-    def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        if "{{" not in description and "{%" not in description and "{#" not in description:
-            return description
-        return self._template_env.from_string(description).render(**self._template_context)
-
-    def generate_type_descriptions(self) -> str:
-        """
-        Generate descriptions of all memory types.
-
-        Returns:
-            Formatted string with all memory type descriptions
-        """
-        lines = ["## Available Memory Types"]
-
-        for mt in self.schemas:
-            lines.append(f"\n### {mt.memory_type}")
-            lines.append(f"{self._render_description(mt.description)}")
-
-            # Add URI format information
-            if mt.directory or mt.filename_template:
-                lines.append("\n**URI Format:**")
-                if mt.directory and mt.filename_template:
-                    lines.append(f"- URI: `{mt.directory}/{mt.filename_template}`")
-                elif mt.directory:
-                    lines.append(f"- Directory: `{mt.directory}`")
-                elif mt.filename_template:
-                    lines.append(f"- Filename: `{mt.filename_template}`")
-
-                # Add variable substitution info
-                lines.append("\n**Variable Substitution:**")
-                lines.append("- `{{ user_space }}` → 'default'")
-                lines.append("- `{{ agent_space }}` → 'default'")
-                if mt.fields:
-                    for field in mt.fields:
-                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
-
-            if mt.fields:
-                lines.append("\n**Fields:**")
-                for field in mt.fields:
-                    lines.append(
-                        f"- `{field.name}` ({field.field_type.value}): {self._render_description(field.description)}"
-                    )
-
-        return "\n".join(lines)
-
-    def generate_field_descriptions(self, memory_type: str) -> Optional[str]:
-        """
-        Generate descriptions for a specific memory type's fields.
-
-        Args:
-            memory_type: The memory type to describe
-
-        Returns:
-            Formatted string with field descriptions, or None if not found
-        """
-        mt = next((s for s in self.schemas if s.memory_type == memory_type), None)
-        if not mt:
-            return None
-
-        lines = [f"### {mt.memory_type} Fields"]
-        for field in mt.fields:
-            lines.append(f"- `{field.name}`: {self._render_description(field.description)}")
-
-        return "\n".join(lines)
-
-    def get_full_prompt_context(self) -> Dict[str, Any]:
-        """
-        Get the full prompt context including all schema information.
-
-        Returns:
-            Dictionary with all prompt context components
-        """
-        return {
-            "type_descriptions": self.generate_type_descriptions(),
-            "memory_types": [
-                {
-                    "memory_type": mt.memory_type,
-                    "description": mt.description,
-                    "fields": [
-                        {
-                            "name": f.name,
-                            "type": f.field_type.value,
-                            "description": f.description,
-                            "merge_op": f.merge_op.value,
-                        }
-                        for f in mt.fields
-                    ],
-                }
-                for mt in self.schemas
-            ],
-        }

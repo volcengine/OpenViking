@@ -40,6 +40,7 @@ class _DummyConfig:
         embedder: _DummyEmbedder,
         backend: str = "volcengine",
         volcengine_data_api_key: str | None = None,
+        max_input_tokens: int = 4096,
     ):
         self.storage = SimpleNamespace(
             vectordb=SimpleNamespace(
@@ -58,6 +59,7 @@ class _DummyConfig:
             ),
             sparse=None,
             hybrid=None,
+            max_input_tokens=max_input_tokens,
             circuit_breaker=SimpleNamespace(
                 failure_threshold=5,
                 reset_timeout=60.0,
@@ -392,6 +394,82 @@ async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
     await handler.on_dequeue(_build_queue_payload_for_account("acct-embed-error"))
 
     assert captured["account_id"] == "acct-embed-error"
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch):
+    class _CapturingVikingDB:
+        is_closing = False
+
+        async def upsert(self, _data, *, ctx):
+            return "rec-1"
+
+    class _CapturingEmbedder:
+        def __init__(self):
+            self.text = None
+
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            del is_query
+            self.text = text
+            return EmbedResult(dense_vector=[0.1, 0.2])
+
+    embedder = _CapturingEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder, max_input_tokens=10),
+    )
+
+    handler = TextEmbeddingHandler(_CapturingVikingDB())
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    queue_data["message"] = " ".join(f"token-{idx}" for idx in range(200))
+    payload["data"] = json.dumps(queue_data)
+
+    await handler.on_dequeue(payload)
+
+    assert embedder.text is not None
+    assert embedder.text.endswith("...(truncated for embedding)")
+    assert "token-199" not in embedder.text
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypatch):
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return None
+
+    class _OversizedInputEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            del text, is_query
+            raise RuntimeError("Malformed input request: expected maxLength: 50000, actual: 75000")
+
+    vikingdb = _QueueingVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_OversizedInputEmbedder()),
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result is None
+    assert vikingdb.enqueued == []
+    assert status == {"success": 0, "requeue": 0, "error": 1}
+    assert handler._circuit_breaker._failure_count == 0
 
 
 @pytest.mark.asyncio

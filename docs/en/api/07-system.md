@@ -17,7 +17,25 @@ Basic health check endpoint. No authentication required. Returns service version
 
 #### 2. Interface and Parameters
 
-No parameters.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| profile | string | No | - | When set to `1`, `true`, `yes`, or `on`, enables request-scoped `cProfile` and appends a `profile` field to JSON responses |
+
+**`profile` behavior**:
+- `profile` is implemented at the HTTP middleware layer and works for any OpenViking endpoint that returns JSON, not just `/health`.
+- The request flag only takes effect when the server enables `server.profile_enabled = true` in `ov.conf`; otherwise the server ignores `profile=1`.
+- `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
+- The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
+- The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
+- The `ov` CLI displays the returned `profile`. The Python HTTP client can trigger server-side profiling via `ovcli.conf.profile = true`, but most SDK methods still return only the business `result` and do not expose the top-level `profile` field directly.
+
+**`profile` column meanings**:
+- `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
+- `tottime`: Total time spent in the function body itself, excluding time in subcalls.
+- `percall` (first): `tottime / ncalls`, the average self time per call.
+- `cumtime`: Cumulative time including the current function and all of its subcalls.
+- `percall` (second): `cumtime / primitive calls`, the average cumulative time per primitive call.
+- `filename:lineno(function)`: Function location. Regular Python code shows the trimmed module path; entries like `~:0(...)` usually represent builtin or native-extension calls.
 
 #### 3. Usage Examples
 
@@ -29,6 +47,11 @@ GET /health
 
 ```bash
 curl -X GET http://localhost:1933/health
+```
+
+```bash
+curl -G http://localhost:1933/health \
+  --data-urlencode "profile=1"
 ```
 
 **Python SDK**
@@ -49,6 +72,10 @@ print(f"Healthy: {healthy}")
 ov system health
 ```
 
+```bash
+ov --profile health
+```
+
 **Response Example**
 
 ```json
@@ -57,6 +84,27 @@ ov system health
   "healthy": true,
   "version": "0.1.x",
   "auth_mode": "api_key"
+}
+```
+
+**Response Example With `profile`**
+
+```json
+{
+  "status": "ok",
+  "healthy": true,
+  "version": "0.1.x",
+  "profile": [
+    "         325 function calls (310 primitive calls) in 0.004 seconds",
+    "",
+    "   Ordered by: cumulative time",
+    "   List reduced from 87 to 87 due to restriction <100>",
+    "",
+    "   ncalls  tottime  percall  cumtime  percall filename:lineno(function)",
+    "        1    0.000    0.000    0.003    0.003 starlette/middleware/base.py:112(call_next)",
+    "        1    0.000    0.000    0.001    0.001 openviking/server/routers/system.py:39(health_check)",
+    "        3    0.000    0.000    0.000    0.000 ~:0(<method 'read' of 'builtins.RAGFSBindingClient' objects>)"
+  ]
 }
 ```
 

@@ -295,6 +295,26 @@ class BaseClient(ABC):
         """
         ...
 
+    @abstractmethod
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        ...
+
     # ============= Pack =============
 
     @abstractmethod

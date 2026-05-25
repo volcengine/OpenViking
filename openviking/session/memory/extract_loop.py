@@ -20,10 +20,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.merge_op import MergeOp
-from openviking.session.memory.schema_model_generator import (
-    SchemaModelGenerator,
-    SchemaPromptGenerator,
-)
+from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     add_tool_call_pair_to_messages,
@@ -86,7 +83,6 @@ class ExtractLoop:
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
-        self.schema_prompt_generator = None
 
         # 预计算：避免每次迭代重复计算
         self._tool_schemas: Optional[List[Dict[str, Any]]] = None
@@ -122,10 +118,6 @@ class ExtractLoop:
         # 初始化 schema 生成器（使用 schemas 而非 registry）
         output_language = self.context_provider.get_output_language()
         self.schema_model_generator = SchemaModelGenerator(
-            schemas,
-            template_context={"language": output_language},
-        )
-        self.schema_prompt_generator = SchemaPromptGenerator(
             schemas,
             template_context={"language": output_language},
         )
@@ -166,8 +158,6 @@ class ExtractLoop:
         import json
 
         schema_str = json.dumps(json_schema, ensure_ascii=False)
-        type_descriptions = self.schema_prompt_generator.generate_type_descriptions()
-
         messages = []
         page_id_rules = """
 ## Page ID Rules
@@ -188,7 +178,6 @@ class ExtractLoop:
                 "role": "system",
                 "content": f"""
 {self.context_provider.instruction()}
-{type_descriptions}
 {page_id_rules}
 {link_rules}
 ## Read Format Rules

@@ -8,6 +8,7 @@ import type { ServerMode } from './use-server-mode'
 
 export type ConnectionDraft = {
   accountId: string
+  agentId: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -33,6 +34,7 @@ const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: '',
+  agentId: 'web-studio',
   apiKey: '',
   baseUrl: ovClient.getOptions().baseUrl,
   userId: '',
@@ -82,6 +84,7 @@ function persistConnection(connection: ConnectionDraft): void {
 function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
+    agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
     userId: connection.userId.trim(),
@@ -94,6 +97,7 @@ function applyConnection(connection: ConnectionDraft): void {
   })
   ovClient.setConnection({
     accountId: connection.accountId,
+    agentId: connection.agentId,
     apiKey: connection.apiKey,
     userId: connection.userId,
   })
@@ -119,7 +123,11 @@ export function summarizeConnectionIdentity(
     return { labelKey: 'identitySummary.devImplicit' }
   }
 
-  const segments = [connection.accountId, connection.userId].filter(Boolean)
+  const segments = [
+    connection.accountId,
+    connection.userId,
+    connection.agentId,
+  ].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }
   }

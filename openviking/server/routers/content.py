@@ -62,6 +62,7 @@ async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
     limit: int = Query(-1, description="Number of lines to read, -1 means read to end"),
+    raw: bool = Query(False, description="Return raw stored content without memory-field cleanup"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Read file content (L2)."""
@@ -78,19 +79,20 @@ async def read(
             raise NotFoundError(uri, "file")
         raise
 
-    # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
-    if isinstance(result, bytes):
-        text = result.decode("utf-8")
-    elif isinstance(result, str):
-        text = result
-    else:
-        text = None
+    if not raw:
+        # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
+        if isinstance(result, bytes):
+            text = result.decode("utf-8")
+        elif isinstance(result, str):
+            text = result
+        else:
+            text = None
 
-    if text:
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+        if text:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-        mf = MemoryFileUtils.read(text)
-        result = mf.content
+            mf = MemoryFileUtils.read(text)
+            result = mf.content
 
     return Response(status="ok", result=result)
 

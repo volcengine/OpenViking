@@ -4,8 +4,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.uri import render_template
 from openviking.utils.time_utils import parse_iso_datetime
 
 # Regex patterns for MEMORY_FIELDS HTML comment
@@ -41,15 +41,9 @@ def _serialize_with_metadata(
 
     if content_template:
         try:
-            import jinja2
-            from jinja2 import Environment
-
-            env = Environment(autoescape=False, undefined=jinja2.DebugUndefined)
             template_vars = metadata.copy()
-            template_vars["extract_context"] = extract_context
-
-            jinja_template = env.from_string(content_template)
-            content = jinja_template.render(**template_vars).strip()
+            template_vars["content"] = content
+            content = render_template(content_template, template_vars, extract_context)
         except Exception:
             pass
 

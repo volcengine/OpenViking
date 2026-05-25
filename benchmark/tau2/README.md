@@ -63,6 +63,18 @@ benchmark/tau2/scripts/setup_tau2_repo.sh
 source benchmark/tau2/.env.tau2
 ```
 
+For PR-B-compatible reproduction, pin the TAU-2 checkout to a ref that includes
+the confirmation-aware text-user-simulator prompt. The original PR-B evidence
+used the open TAU-2 fix PR head (`79dbf0c18ac7637aedf869cb3122babcd57aaf17`):
+
+```bash
+benchmark/tau2/scripts/setup_tau2_repo.sh \
+  --ref refs/pull/297/head
+source benchmark/tau2/.env.tau2
+```
+
+Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297).
+
 Plan the default benchmark without running TAU-2:
 
 ```bash
@@ -119,8 +131,64 @@ benchmark/tau2/run_full_eval.sh \
 
 The PR-B headline and content-shape ablation use
 `config/prb_content_matrix_new_prompt.yaml`. It runs the no-memory control plus
-trajectory top4, experience top2, and representative 4000-character budget
-ablation routes across `retail + airline` with 8 repeats.
+trajectory first-user top4 / pre-write top2, experience top2, and representative
+4000-character budget ablation routes across `retail + airline` with 8 repeats.
+
+### 1. Bootstrap fixed-first-user fixtures
+
+The default PR-B configs require fixed-first-user fixtures, so a fresh checkout
+needs one live-user bootstrap pass before strict reproduction. This pass uses
+the same confirmation-aware simulator policy but does not require fixed fixtures.
+
+Run one bootstrap pass per domain:
+
+```bash
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/fixed_first_user_bootstrap.yaml \
+  --domain retail \
+  --run-id fixed_first_user_bootstrap_retail \
+  --strict-preflight \
+  --execute
+
+benchmark/tau2/run_full_eval.sh \
+  --config benchmark/tau2/config/fixed_first_user_bootstrap.yaml \
+  --domain airline \
+  --run-id fixed_first_user_bootstrap_airline \
+  --strict-preflight \
+  --execute
+```
+
+Then convert each bootstrap `results.json` into a fixture:
+
+```bash
+RETAIL_RESULTS=benchmark/tau2/result/fixed_first_user_bootstrap_retail/memory_cells/fixed_first_user_bootstrap_retail_retail_no_memory_r1/fixed_first_user_bootstrap_retail_retail_no_memory_r1.json
+AIRLINE_RESULTS=benchmark/tau2/result/fixed_first_user_bootstrap_airline/memory_cells/fixed_first_user_bootstrap_airline_airline_no_memory_r1/fixed_first_user_bootstrap_airline_airline_no_memory_r1.json
+
+python benchmark/tau2/scripts/build_fixed_first_user_fixture.py \
+  --repo "$TAU2_REPO" \
+  --results-json "$RETAIL_RESULTS" \
+  --domain retail \
+  --task-split-name test \
+  --output benchmark/tau2/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json \
+  --require-full-split
+
+python benchmark/tau2/scripts/build_fixed_first_user_fixture.py \
+  --repo "$TAU2_REPO" \
+  --results-json "$AIRLINE_RESULTS" \
+  --domain airline \
+  --task-split-name test \
+  --output benchmark/tau2/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json \
+  --require-full-split
+```
+
+Export the generated fixture paths for subsequent strict runs:
+
+```bash
+export TAU2_RETAIL_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json"
+export TAU2_AIRLINE_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json"
+```
+
+### 2. Run smoke and full PR-B matrix
 
 First run one tiny end-to-end smoke against a clean local OpenViking service:
 
@@ -148,8 +216,9 @@ benchmark/tau2/run_full_eval.sh \
 
 The main result is written to
 `benchmark/tau2/result/prb_content_matrix_new_prompt_full8/scoreboard.json`.
-Per-cell outputs live under `cell_results/`; corpus identity and generated
-memory checks live under `memory_corpora/`.
+Per-cell execution records live under `cell_results/`, raw TAU-2 result JSON
+lives under `memory_cells/`, and corpus identity / generated memory checks live
+under `memory_corpora/`.
 
 For a small E2E smoke, keep both the eval and train slices tiny:
 

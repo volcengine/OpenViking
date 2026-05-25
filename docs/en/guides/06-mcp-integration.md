@@ -2,6 +2,8 @@
 
 OpenViking server has a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) endpoint, allowing any MCP-compatible client to access its memory and resource capabilities over HTTP — no additional processes needed.
 
+> **Quick setup?** See [MCP Clients](../agent-integrations/06-mcp-clients.md) for client configuration snippets and platform-specific notes. This page covers the full tool reference and advanced configuration.
+
 ## Prerequisites
 
 1. OpenViking installed (`pip install openviking` or from source)
@@ -17,10 +19,12 @@ The following platforms have been successfully integrated with OpenViking MCP:
 | Platform | Integration Method |
 |----------|-------------------|
 | **Claude Code** | `type: http` |
-| **ChatGPT & Codex** | Standard MCP config |
-| **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
-| **Manus** | Standard MCP config |
 | **Trae** | Standard MCP config |
+| **Cursor** | Standard MCP config |
+| **ChatGPT & Codex** | Standard MCP config |
+| **OpenCode** | Standard MCP config |
+| **Manus** | Standard MCP config |
+| **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
 
 ## Authentication
 
@@ -78,20 +82,22 @@ Or in `.mcp.json`:
 
 Add `--scope user` to make the config global (shared across all projects).
 
-### Claude.ai / Claude Desktop / ChatGPT / Cursor (OAuth)
+### Claude.ai / Claude Desktop (OAuth)
 
 These clients only accept OAuth 2.1 — API Keys cannot be passed directly.
 OpenViking ships a native OAuth 2.1 implementation (DCR + PKCE + opaque
 tokens, backed by SQLite, with a console-driven OTP authorization page) so
 no external proxy is needed.
 
-**See the [OAuth 2.1 Guide](11-oauth.md)** for:
+If you already have HTTPS configured, just connect to `https://your-server.com/mcp` — the client will walk you through the authorization flow automatically.
+
+**See the [OAuth 2.1 Guide](11-oauth.md)** and **[Public Access Guide](12-public-access.md)** for:
 
 - End-to-end flow (device-flow style: page displays a 6-character code,
   user confirms in the OpenViking console)
 - HTTP (local) and HTTPS (production) deployment, including Caddy and nginx
   reverse-proxy templates plus a docker-compose example
-- Connecting Claude.ai / Claude Desktop / Cursor / ChatGPT step by step
+- Connecting Claude.ai / Claude Desktop step by step
 - `OPENVIKING_PUBLIC_BASE_URL` and the `oauth` config block
 - Token model (`ovat_` / `ovrt_` / `ovac_` prefixes) and revocation
 

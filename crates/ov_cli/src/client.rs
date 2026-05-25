@@ -23,6 +23,7 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         Self {
@@ -33,6 +34,7 @@ impl HttpClient {
                 account,
                 user,
                 timeout_secs,
+                profile_enabled,
                 extra_headers,
             ),
         }
@@ -66,7 +68,7 @@ impl HttpClient {
 
     // ============ HTTP Methods ============
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -74,7 +76,7 @@ impl HttpClient {
         self.base.get(path, params).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -82,7 +84,7 @@ impl HttpClient {
         self.base.post(path, body).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -90,7 +92,7 @@ impl HttpClient {
         self.base.put(path, body).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -98,7 +100,7 @@ impl HttpClient {
         self.base.delete(path, params).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -106,7 +108,7 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -115,7 +117,7 @@ impl HttpClient {
         self.base.patch(path, body, params).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -168,12 +170,27 @@ impl HttpClient {
         self.get("/api/v1/content/read", &params).await
     }
 
+    pub async fn read_profiled(&self, uri: &str) -> Result<Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/read", &params).await
+    }
+
     pub async fn abstract_content(&self, uri: &str) -> Result<String> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/abstract", &params).await
     }
 
+    pub async fn abstract_content_profiled(&self, uri: &str) -> Result<Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/abstract", &params).await
+    }
+
     pub async fn overview(&self, uri: &str) -> Result<String> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/overview", &params).await
+    }
+
+    pub async fn overview_profiled(&self, uri: &str) -> Result<Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/overview", &params).await
     }
@@ -225,7 +242,10 @@ impl HttpClient {
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
-        let params = vec![("uri".to_string(), uri.to_string())];
+        let params = vec![
+            ("uri".to_string(), uri.to_string()),
+            ("profile".to_string(), "0".to_string()),
+        ];
 
         let response = self
             .base
@@ -316,13 +336,12 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<serde_json::Value> {
         let body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
-        let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
-        Ok(())
+        self.post("/api/v1/fs/mkdir", &body).await
     }
 
     pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
@@ -333,13 +352,12 @@ impl HttpClient {
         self.delete("/api/v1/fs", &params).await
     }
 
-    pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<()> {
+    pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "from_uri": from_uri,
             "to_uri": to_uri,
         });
-        let _: serde_json::Value = self.post("/api/v1/fs/mv", &body).await?;
-        Ok(())
+        self.post("/api/v1/fs/mv", &body).await
     }
 
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
@@ -728,6 +746,7 @@ impl HttpClient {
             .post(&url)
             .headers(self.base.build_headers())
             .json(&body)
+            .query(&[("profile", "0")])
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -1175,6 +1194,7 @@ mod tests {
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            true,
             Some(extra_headers),
         );
 
@@ -1232,5 +1252,49 @@ mod tests {
             api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
             "[PROCESSING_ERROR] Parse error: boom"
         );
+    }
+
+    #[test]
+    fn unwrap_result_preserves_profile_for_non_object_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_result_drops_profile_for_scalar_typed_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
     }
 }
