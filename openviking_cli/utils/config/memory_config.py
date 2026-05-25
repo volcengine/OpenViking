@@ -101,7 +101,7 @@ class MemoryConfig(BaseModel):
         ),
     )
     operation_exact_apply_window_seconds: float = Field(
-        default=5.0,
+        default=10.0,
         ge=0.0,
         description=(
             "Server-side apply window for operation_exact phases. The first request for a "

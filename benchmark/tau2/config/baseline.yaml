@@ -56,7 +56,7 @@ openviking:
   agent_experience_apply_lock_mode: operation_exact
   agent_trajectory_apply_lock_mode: operation_exact
   long_term_apply_lock_mode: operation_exact
-  operation_exact_apply_window_seconds: 5.0
+  operation_exact_apply_window_seconds: 10.0
   long_term_extraction_enabled: false
   corpus_session_commit_concurrency: 4
   # Corpus prepare can legitimately take far longer than the low-level client
