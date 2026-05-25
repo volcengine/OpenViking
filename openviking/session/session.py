@@ -783,7 +783,7 @@ class Session:
             self._meta.total_message_count += len(messages)
         self._save_meta_sync()
 
-    def batch_add_messages(
+    def add_messages(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
@@ -843,7 +843,7 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        msgs = self.batch_add_messages([{
+        msgs = self.add_messages([{
             "role": role,
             "parts": parts,
             "role_id": role_id,

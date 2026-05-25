@@ -420,7 +420,7 @@ async def add_message(
         role_id = _ctx.resolve_role_id(request.role, request.role_id)
         parts = _resolve_message_parts(request)
 
-        session.batch_add_messages([{
+        session.add_messages([{
             "role": request.role,
             "parts": parts,
             "role_id": role_id,
@@ -464,7 +464,7 @@ async def batch_add_messages(
                 "role_id": role_id,
                 "created_at": msg_request.created_at,
             })
-        msgs = session.batch_add_messages(specs)
+        msgs = session.add_messages(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

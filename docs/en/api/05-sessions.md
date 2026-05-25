@@ -713,7 +713,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 - `batch_add_messages()`: Add multiple messages per request (max 100), reducing network round trips and file I/O
 
 **Code Entry Points**:
-- `openviking/session/session.py:Session.batch_add_messages()` - Core implementation
+- `openviking/session/session.py:Session.add_messages()` - Core implementation
 - `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
 - `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
 - `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
