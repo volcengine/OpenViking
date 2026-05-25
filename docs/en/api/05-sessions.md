@@ -700,6 +700,78 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 }
 ```
 
+### add_messages()
+
+#### 1. API Implementation Introduction
+
+Add multiple messages to the session in a single request. Each message follows the same format as `add_message()`, supporting both simple text mode and Parts mode. Batching replaces N round-trips with a single HTTP request and a single batched JSONL write. Missing sessions are auto-created on first add.
+
+**Code Entries:**
+- `openviking/session/session.py:Session.add_messages()` - Core implementation
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | str | Yes | - | Session ID |
+| messages | List[dict] | Yes | - | List of up to 100 messages. Each item accepts the same fields as `add_message()`: `role` (required), and `content`, `parts`, `created_at`, `role_id` (optional) |
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/messages/batch
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I authenticate users?"},
+      {"role": "assistant", "content": "You can configure OAuth in the settings."}
+    ]
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+await client.batch_add_messages(
+    session_id="a1b2c3d4",
+    messages=[
+        {"role": "user", "content": "How do I authenticate users?"},
+        {"role": "assistant", "content": "You can configure OAuth in the settings."},
+    ]
+)
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 2,
+    "added": 2
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ---
 
 ### used()
