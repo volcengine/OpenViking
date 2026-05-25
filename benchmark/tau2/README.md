@@ -174,10 +174,11 @@ Memory V2 baseline. For trajectory memory evidence, start the service from this
 branch and inspect generated trajectory files; changing `search_uri` alone does
 not prove the new trajectory prompt was used.
 Agent Harness / TAU-2 corpus preparation opts into the faster agent-memory
-write path. Configure the running OpenViking server with:
+write path. The default evidence path keeps experience consolidation on the
+normal per-trajectory route and relies on concurrent session commits plus
+server-side exact apply. Configure the running OpenViking server with:
 
-- `memory.agent_experience_consolidation_mode="batch"`
-- `memory.agent_experience_batch_max_trajectories=5`
+- `memory.agent_experience_consolidation_mode="per_trajectory"`
 - `memory.agent_experience_apply_lock_mode="operation_exact"`
 - `memory.agent_trajectory_apply_lock_mode="operation_exact"`
 - `memory.long_term_apply_lock_mode="operation_exact"`
@@ -186,7 +187,10 @@ write path. Configure the running OpenViking server with:
 `--strict-preflight` checks `OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`)
 and fails fast if the server-side memory config does not match the experiment
 config. OpenViking product defaults remain unchanged; these settings are the
-benchmark / Vaka corpus-prepare defaults for faster iteration.
+benchmark / Vaka corpus-prepare defaults for faster iteration. Batch experience
+consolidation remains available as a separate quality / latency ablation, but
+the main corpus-prepare acceleration path does not depend on batching multiple
+trajectories into one experience pass.
 
 ## Memory Adapter
 
