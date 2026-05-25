@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import json
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -69,6 +70,17 @@ class DiffResult:
             "modified": self.updated_files,
             "deleted": self.deleted_files + self.deleted_dirs,
         }
+
+
+@dataclass
+class FileSummaryBatchInput:
+    """Text-like file payload that can be summarized with other files."""
+
+    file_path: str
+    file_name: str
+    file_type: str
+    output_language: str
+    content: str
 
 
 class RequestQueueStats:
@@ -619,27 +631,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"(reused {len(file_paths) - len(pending_indices)} cached)"
                 )
 
-                async def _gen(idx: int, file_path: str) -> None:
-                    file_name = file_path.split("/")[-1]
-                    try:
-                        summary_dict = await self._generate_single_file_summary(
-                            file_path, llm_sem=llm_sem, ctx=ctx
-                        )
-                        file_summaries[idx] = summary_dict
-                        logger.debug(f"Generated summary for {file_name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to generate summary for {file_path}: {e}")
-                        file_summaries[idx] = {"name": file_name, "summary": ""}
-
-                batch_size = max(1, min(self.max_concurrent_llm, 10))
-                for batch_start in range(0, len(pending_indices), batch_size):
-                    batch = pending_indices[batch_start : batch_start + batch_size]
-                    logger.info(
-                        f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
-                        f"{(len(pending_indices) + batch_size - 1) // batch_size} "
-                        f"({len(batch)} files)"
+                pending_paths = [file_path for _, file_path in pending_indices]
+                generated_summaries = await self._generate_file_summaries(
+                    pending_paths, llm_sem=llm_sem, ctx=ctx
+                )
+                for idx, file_path in pending_indices:
+                    file_summaries[idx] = generated_summaries.get(
+                        file_path, self._empty_file_summary(file_path)
                     )
-                    await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
+                    logger.debug(f"Generated summary for {file_path.split('/')[-1]}")
 
             completed_summaries = [s for s in file_summaries if s is not None]
             # Incremental writes carry changes; full rebuild tasks do not.
@@ -948,6 +948,275 @@ class SemanticProcessor(DequeueHandlerBase):
             dir_name = child_uri.split("/")[-1]
             results.append({"name": dir_name, "abstract": abstract})
         return results
+
+    async def _generate_file_summaries(
+        self,
+        file_paths: List[str],
+        llm_sem: Optional[asyncio.Semaphore] = None,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Dict[str, str]]:
+        """Generate summaries for files, batching compatible text files when configured."""
+        if not file_paths:
+            return {}
+
+        config = get_openviking_config()
+        batch_size = max(1, int(getattr(config.semantic, "file_summary_batch_size", 1)))
+        if batch_size <= 1 or len(file_paths) == 1:
+            return await self._generate_file_summaries_individually(file_paths, llm_sem, ctx)
+
+        vlm = config.vlm
+        if not vlm.is_available():
+            logger.warning("VLM not available, using empty summaries")
+            return {path: self._empty_file_summary(path) for path in file_paths}
+
+        summaries: Dict[str, Dict[str, str]] = {}
+        batch_inputs: List[FileSummaryBatchInput] = []
+        fallback_paths: List[str] = []
+
+        for file_path in file_paths:
+            try:
+                prepared = await self._prepare_file_summary_batch_input(file_path, ctx=ctx)
+                if isinstance(prepared, dict):
+                    summaries[file_path] = prepared
+                elif isinstance(prepared, FileSummaryBatchInput):
+                    batch_inputs.append(prepared)
+                else:
+                    fallback_paths.append(file_path)
+            except Exception as e:
+                logger.debug(f"Falling back to single summary for {file_path}: {e}")
+                fallback_paths.append(file_path)
+
+        max_batch_chars = max(1, int(getattr(config.semantic, "max_file_summary_batch_chars", 1)))
+        batches, oversized_inputs = self._build_file_summary_batches(
+            batch_inputs,
+            max_batch_size=batch_size,
+            max_batch_chars=max_batch_chars,
+        )
+        fallback_paths.extend(item.file_path for item in oversized_inputs)
+
+        if batches:
+            logger.info(
+                "Generating %d file summaries in %d batched VLM request(s)",
+                sum(len(batch) for batch in batches),
+                len(batches),
+            )
+
+        if llm_sem is None:
+            llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
+
+        batch_results = await asyncio.gather(
+            *[self._generate_file_summary_batch(batch, llm_sem) for batch in batches],
+            return_exceptions=True,
+        )
+        for batch, result in zip(batches, batch_results, strict=False):
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to generate batched file summaries: {result}")
+                fallback_paths.extend(item.file_path for item in batch)
+                continue
+            summaries.update(result)
+            missing_paths = [item.file_path for item in batch if item.file_path not in result]
+            fallback_paths.extend(missing_paths)
+
+        if fallback_paths:
+            fallback_results = await self._generate_file_summaries_individually(
+                fallback_paths,
+                llm_sem,
+                ctx,
+            )
+            summaries.update(fallback_results)
+
+        return {path: summaries.get(path, self._empty_file_summary(path)) for path in file_paths}
+
+    async def _generate_file_summaries_individually(
+        self,
+        file_paths: List[str],
+        llm_sem: Optional[asyncio.Semaphore] = None,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Dict[str, str]]:
+        """Generate file summaries with the legacy one-file-per-request path."""
+        if not file_paths:
+            return {}
+
+        llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
+        summaries: Dict[str, Dict[str, str]] = {}
+
+        async def _gen(file_path: str) -> None:
+            try:
+                summaries[file_path] = await self._generate_single_file_summary(
+                    file_path, llm_sem=llm_sem, ctx=ctx
+                )
+            except Exception as e:
+                logger.warning(f"Failed to generate summary for {file_path}: {e}")
+                summaries[file_path] = self._empty_file_summary(file_path)
+
+        await asyncio.gather(*[_gen(path) for path in file_paths])
+        return summaries
+
+    async def _prepare_file_summary_batch_input(
+        self,
+        file_path: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[FileSummaryBatchInput | Dict[str, str]]:
+        """Prepare a text-like file for batched summary generation.
+
+        Returns a ready summary for no-LLM code AST mode, a batch input for
+        compatible text files, or None when the legacy single-file path is safer.
+        """
+        file_name = file_path.split("/")[-1]
+        if get_media_type(file_name, None) in {"image", "audio", "video"}:
+            return None
+
+        viking_fs = get_viking_fs()
+        active_ctx = ctx or self._current_ctx
+        content = await viking_fs.read_file(file_path, ctx=active_ctx)
+        if isinstance(content, bytes):
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
+                return self._empty_file_summary(file_path)
+
+        config = get_openviking_config()
+        max_chars = config.semantic.max_file_content_chars
+        if len(content) > max_chars:
+            content = content[:max_chars] + "\n...(truncated)"
+
+        file_type = self._detect_file_type(file_name)
+        if file_type == FILE_TYPE_CODE:
+            content_or_summary = await self._prepare_code_summary_content_for_batch(
+                file_path=file_path,
+                file_name=file_name,
+                content=content,
+                config=config,
+            )
+            if isinstance(content_or_summary, dict):
+                return content_or_summary
+            content = content_or_summary
+
+        from openviking.session.memory.utils.language import resolve_output_language
+
+        return FileSummaryBatchInput(
+            file_path=file_path,
+            file_name=file_name,
+            file_type=file_type,
+            output_language=resolve_output_language(content, config=config),
+            content=content,
+        )
+
+    async def _prepare_code_summary_content_for_batch(
+        self,
+        *,
+        file_path: str,
+        file_name: str,
+        content: str,
+        config: Any,
+    ) -> str | Dict[str, str]:
+        """Preserve AST code-summary behavior before optional batching."""
+        code_mode = config.code.code_summary_mode
+        if code_mode not in ("ast", "ast_llm") or len(content.splitlines()) < 100:
+            return content
+
+        from openviking.parse.parsers.code.ast import extract_skeleton
+
+        verbose = code_mode == "ast_llm"
+        skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
+        if skeleton_text:
+            max_skeleton_chars = config.semantic.max_skeleton_chars
+            if len(skeleton_text) > max_skeleton_chars:
+                skeleton_text = skeleton_text[:max_skeleton_chars]
+            if code_mode == "ast":
+                return {"name": file_name, "summary": skeleton_text}
+            return skeleton_text
+
+        if skeleton_text is None:
+            logger.info("AST unsupported language, fallback to LLM: %s", file_path)
+        else:
+            logger.info("AST empty skeleton, fallback to LLM: %s", file_path)
+        return content
+
+    def _build_file_summary_batches(
+        self,
+        inputs: List[FileSummaryBatchInput],
+        *,
+        max_batch_size: int,
+        max_batch_chars: int,
+    ) -> Tuple[List[List[FileSummaryBatchInput]], List[FileSummaryBatchInput]]:
+        batches: List[List[FileSummaryBatchInput]] = []
+        oversized: List[FileSummaryBatchInput] = []
+        current: List[FileSummaryBatchInput] = []
+        current_chars = 0
+
+        for item in inputs:
+            item_chars = len(item.content) + len(item.file_name) + len(item.file_type) + 64
+            if item_chars > max_batch_chars:
+                oversized.append(item)
+                continue
+            if current and (
+                len(current) >= max_batch_size or current_chars + item_chars > max_batch_chars
+            ):
+                batches.append(current)
+                current = []
+                current_chars = 0
+            current.append(item)
+            current_chars += item_chars
+
+        if current:
+            batches.append(current)
+        return batches, oversized
+
+    async def _generate_file_summary_batch(
+        self,
+        batch: List[FileSummaryBatchInput],
+        llm_sem: asyncio.Semaphore,
+    ) -> Dict[str, Dict[str, str]]:
+        if not batch:
+            return {}
+
+        id_to_item = {f"file_{idx + 1}": item for idx, item in enumerate(batch)}
+        files_payload = [
+            {
+                "id": file_id,
+                "name": item.file_name,
+                "file_type": item.file_type,
+                "output_language": item.output_language,
+                "content": item.content,
+            }
+            for file_id, item in id_to_item.items()
+        ]
+        prompt = render_prompt(
+            "semantic.file_summary_batch",
+            {"files_json": json.dumps(files_payload, ensure_ascii=False, indent=2)},
+        )
+
+        vlm = get_openviking_config().vlm
+        async with llm_sem:
+            with bind_telemetry_stage("resource_summarize"):
+                response = await vlm.get_completion_async(prompt)
+
+        from openviking.models.vlm.llm import parse_json_from_response
+
+        data = parse_json_from_response(response)
+        if not isinstance(data, dict) or not isinstance(data.get("summaries"), list):
+            raise ValueError("batched file summary response is not a JSON object with summaries")
+
+        summaries: Dict[str, Dict[str, str]] = {}
+        for item in data["summaries"]:
+            if not isinstance(item, dict):
+                continue
+            file_id = str(item.get("id") or "")
+            summary = item.get("summary")
+            batch_item = id_to_item.get(file_id)
+            if batch_item is None or not isinstance(summary, str):
+                continue
+            summaries[batch_item.file_path] = {
+                "name": batch_item.file_name,
+                "summary": summary.strip(),
+            }
+        return summaries
+
+    @staticmethod
+    def _empty_file_summary(file_path: str) -> Dict[str, str]:
+        return {"name": file_path.split("/")[-1], "summary": ""}
 
     async def _generate_text_summary(
         self,

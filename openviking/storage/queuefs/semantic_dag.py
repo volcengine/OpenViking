@@ -224,13 +224,11 @@ class SemanticDagExecutor:
                 self._schedule_overview(dir_uri)
                 return
 
-            for file_path in file_paths:
-                self._stats.total_nodes += 1
+            if file_paths:
+                self._stats.total_nodes += len(file_paths)
                 # File nodes are scheduled immediately: pending -> in_progress.
-                self._stats.pending_nodes += 1
-                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
-                self._stats.in_progress_nodes += 1
-                asyncio.create_task(self._file_summary_task(dir_uri, file_path))
+                self._stats.in_progress_nodes += len(file_paths)
+                asyncio.create_task(self._file_summary_batch_task(dir_uri, file_paths))
 
             if children_dirs:
                 if self._recursive:
@@ -425,52 +423,78 @@ class SemanticDagExecutor:
 
     async def _file_summary_task(self, parent_uri: str, file_path: str) -> None:
         """Generate file summary and notify parent completion."""
+        await self._file_summary_batch_task(parent_uri, [file_path])
 
-        file_name = file_path.split("/")[-1]
-        need_vectorize = True
+    async def _file_summary_batch_task(self, parent_uri: str, file_paths: List[str]) -> None:
+        """Generate file summaries for sibling files and notify parent completion."""
+        summary_by_path: Dict[str, Dict[str, str]] = {}
+        need_vectorize_by_path = dict.fromkeys(file_paths, True)
+        pending_paths: List[str] = []
         try:
-            summary_dict = None
-            if self._incremental_update:
-                content_changed = await self._check_file_content_changed(file_path)
-                self._file_change_status[file_path] = content_changed
+            for file_path in file_paths:
+                try:
+                    summary_dict = None
+                    if self._incremental_update:
+                        content_changed = await self._check_file_content_changed(file_path)
+                        self._file_change_status[file_path] = content_changed
 
-                if not content_changed:
-                    summary_dict = await self._read_existing_summary(file_path)
-                    if summary_dict is not None:
-                        need_vectorize = False
+                        if not content_changed:
+                            summary_dict = await self._read_existing_summary(file_path)
+                            if summary_dict is not None:
+                                need_vectorize_by_path[file_path] = False
+                            else:
+                                self._file_change_status[file_path] = True
                     else:
                         self._file_change_status[file_path] = True
-            else:
-                self._file_change_status[file_path] = True
-            if summary_dict is None:
-                summary_dict = await self._processor._generate_single_file_summary(
-                    file_path, llm_sem=self._llm_sem, ctx=self._ctx
-                )
-        except Exception as e:
-            logger.warning(f"Failed to generate summary for {file_path}: {e}")
-            summary_dict = {"name": file_name, "summary": ""}
-        finally:
-            self._stats.done_nodes += 1
-            self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
-        try:
-            if need_vectorize:
-                use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
-                task = VectorizeTask(
-                    task_type="file",
-                    uri=file_path,
-                    context_type=self._context_type,
-                    ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
-                    file_path=file_path,
-                    summary_dict=summary_dict,
-                    parent_uri=parent_uri,
-                    use_summary=use_summary,
+                    if summary_dict is None:
+                        pending_paths.append(file_path)
+                    else:
+                        summary_by_path[file_path] = summary_dict
+                except Exception as e:
+                    logger.warning(f"Failed to prepare summary for {file_path}: {e}")
+                    self._file_change_status[file_path] = True
+                    summary_by_path[file_path] = self._empty_file_summary(file_path)
+
+            if pending_paths:
+                generated_summaries = await self._processor._generate_file_summaries(
+                    pending_paths, llm_sem=self._llm_sem, ctx=self._ctx
                 )
-                await self._add_vectorize_task(task)
+                summary_by_path.update(generated_summaries)
         except Exception as e:
-            logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
-        await self._on_file_done(parent_uri, file_path, summary_dict)
+            logger.warning(f"Failed to generate summary batch under {parent_uri}: {e}")
+            for file_path in pending_paths:
+                summary_by_path.setdefault(file_path, self._empty_file_summary(file_path))
+        finally:
+            self._stats.done_nodes += len(file_paths)
+            self._stats.in_progress_nodes = max(
+                0, self._stats.in_progress_nodes - len(file_paths)
+            )
+
+        for file_path in file_paths:
+            summary_dict = summary_by_path.get(file_path, self._empty_file_summary(file_path))
+            try:
+                if need_vectorize_by_path.get(file_path, True):
+                    use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
+                    task = VectorizeTask(
+                        task_type="file",
+                        uri=file_path,
+                        context_type=self._context_type,
+                        ctx=self._ctx,
+                        semantic_msg_id=self._semantic_msg_id,
+                        file_path=file_path,
+                        summary_dict=summary_dict,
+                        parent_uri=parent_uri,
+                        use_summary=use_summary,
+                    )
+                    await self._add_vectorize_task(task)
+            except Exception as e:
+                logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
+            await self._on_file_done(parent_uri, file_path, summary_dict)
+
+    @staticmethod
+    def _empty_file_summary(file_path: str) -> Dict[str, str]:
+        return {"name": file_path.split("/")[-1], "summary": ""}
 
     async def _on_file_done(
         self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]

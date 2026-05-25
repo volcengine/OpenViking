@@ -560,6 +560,13 @@ class SemanticConfig:
     max_file_content_chars: int = 30000
     """Maximum characters of file content sent to LLM for summary generation."""
 
+    file_summary_batch_size: int = 10
+    """Maximum number of text files summarized in one LLM request.
+    Set to 1 to disable file-summary batching."""
+
+    max_file_summary_batch_chars: int = 60000
+    """Maximum combined file content characters sent in one batched summary prompt."""
+
     max_skeleton_chars: int = 12000
     """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
 

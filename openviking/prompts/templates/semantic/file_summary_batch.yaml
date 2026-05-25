@@ -1,0 +1,48 @@
+metadata:
+  id: "semantic.file_summary_batch"
+  name: "Batched File Summary Generation"
+  description: "Generate summaries for multiple files in one LLM request"
+  version: "1.0.0"
+  language: "en"
+  category: "semantic"
+
+variables:
+  - name: "files_json"
+    type: "string"
+    description: "JSON array of file summary inputs"
+    required: true
+
+template: |
+  Summarize each file in the following JSON array.
+
+  Each item has:
+  - id: stable identifier that must be copied to the output
+  - name: file name
+  - file_type: code, code_ast, documentation, or other
+  - output_language: language for that file's summary
+  - content: file content or extracted code skeleton
+
+  Files:
+  {{ files_json }}
+
+  Output requirements:
+  - Return only valid JSON. Do not use markdown fences.
+  - Preserve every input id exactly once.
+  - For code files, summarize purpose, key components, dependencies, and role.
+  - For documentation files, summarize purpose, main topics, key sections, and audience.
+  - For other files, summarize what the file is, what it covers, and what it is used for.
+  - Include core keywords useful for semantic search.
+  - Each summary should be 50-200 words.
+
+  JSON schema:
+  {
+    "summaries": [
+      {
+        "id": "same id from input",
+        "summary": "plain text summary"
+      }
+    ]
+  }
+
+llm_config:
+  temperature: 0.0
