@@ -21,6 +21,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
+    EmbeddingRebuildRequiredError,
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -276,14 +277,19 @@ async def init_context_collection(storage) -> bool:
             )
         return False
 
-    logger.warning(
+    if existing_count == 0 and hasattr(storage, "update_collection_description"):
+        await storage.update_collection_description(
+            _encode_collection_description(
+                base_description or "Unified context collection",
+                embedding_meta,
+            )
+        )
+        return False
+
+    raise EmbeddingRebuildRequiredError(
         "Existing collection embedding metadata does not match current configuration. "
-        "existing=%s, current=%s. Continuing anyway — search quality may degrade if "
-        "the embedding model actually changed.",
-        existing_embedding_meta,
-        embedding_meta,
+        "Rebuild is required before using the current embedding model."
     )
-    return False
 
 
 class TextEmbeddingHandler(DequeueHandlerBase):

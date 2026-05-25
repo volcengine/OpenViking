@@ -188,15 +188,13 @@ OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registr
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
 
 Docker 镜像默认会同时启动：
-- OpenViking HTTP 服务，端口 `1933`（绑定 `0.0.0.0`）
-- OpenViking Console，端口 `8020`
+- OpenViking HTTP 服务，端口 `1933`（绑定 `0.0.0.0`），同时在 `/studio` 提供 Web Studio 前端
 - `vikingbot` gateway
 
 由于容器内服务绑定 `0.0.0.0`（Docker 端口映射所必需），你**必须**在 `ov.conf` 中设置 `root_api_key`：
@@ -225,7 +223,6 @@ docker rm -f openviking
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest \
@@ -237,7 +234,6 @@ docker run -d \
   --name openviking \
   -e OPENVIKING_WITH_BOT=0 \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
@@ -253,7 +249,6 @@ docker run -d \
 docker run -d \
   --name openviking \
   -p 1933:1933 \
-  -p 8020:8020 \
   -e OPENVIKING_CONF_CONTENT="$(cat ~/.openviking/ov.conf)" \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
@@ -265,7 +260,7 @@ docker run -d \
 docker exec -it openviking openviking-server init
 ```
 
-`ov.conf` 出现后，entrypoint 会自动恢复并启动 server 与 console。
+`ov.conf` 出现后，entrypoint 会自动恢复并启动 server。
 
 也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
 
@@ -274,9 +269,9 @@ docker compose up -d
 ```
 
 启动后可以访问：
-- 聚合入口：`http://localhost:1934`（Caddy 合并 API + Console）
-- API 服务（直连）：`http://localhost:1933`
-- Console 界面（直连）：`http://localhost:8020`
+- API 服务：`http://localhost:1933`
+- Web Studio：`http://localhost:1933/studio`（与 API 同源）
+- 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
 
 如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 

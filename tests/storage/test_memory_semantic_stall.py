@@ -28,7 +28,6 @@ def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
         "agent_id": "test-agent",
         "telemetry_id": "",
         "target_uri": "",
-        "lifecycle_lock_handle_id": "",
         "changes": None,
         "is_code_repo": False,
     }

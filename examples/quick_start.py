@@ -6,9 +6,11 @@ client = ov.OpenViking(path="./data")
 try:
     client.initialize()
 
-    # Add resource (URL, file, or directory)
+    # Add resource (URL, file, or directory) and wait until it is ready to inspect
+    print("Wait for semantic processing...")
     res = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        wait=True,
     )
     root_uri = res["root_uri"]
     res = client.ls(root_uri)  # Explore resource tree
@@ -18,9 +20,6 @@ try:
     if res["matches"]:
         content = client.read(res["matches"][0])
         print(f"Content preview: {content[:200]}...\n")
-
-    print(" Wait for semantic processing...")
-    client.wait_processed()
 
     abstract = client.abstract(root_uri)  # Get abstract
     overview = client.overview(root_uri)  # Get overview

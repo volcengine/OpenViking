@@ -273,31 +273,22 @@ async def upload_directory(
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 
     # --- Phase 2: Pre-create all directories ---
-    # Memoized mkdir: each unique agfs path is created at most once.
+    # Memoized mkdir: each unique VikingFS path is created at most once.
     # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP calls
     # by tracking already-processed paths across all directories.
     _created: Set[str] = set()
 
-    def _mkdir_with_parents(agfs_path: str) -> None:
-        parts = agfs_path.lstrip("/").split("/")
-        for i in range(1, len(parts) + 1):
-            p = "/" + "/".join(parts[:i])
-            if p in _created:
-                continue
-            try:
-                viking_fs.agfs.mkdir(p)
-                _created.add(p)
-            except Exception as e:
-                if "already" in str(e).lower():
-                    _created.add(p)
-                else:
-                    logger.warning(f"Failed to create directory {p}: {e}")
-
-    def _create_all_dirs() -> None:
-        for dir_uri in sorted(parent_uris):
-            _mkdir_with_parents(viking_fs._uri_to_path(dir_uri))
-
-    await asyncio.to_thread(_create_all_dirs)
+    for dir_uri in sorted(parent_uris):
+        if dir_uri in _created:
+            continue
+        try:
+            await viking_fs.mkdir(dir_uri, exist_ok=True)
+            _created.add(dir_uri)
+        except Exception as e:
+            if "already" in str(e).lower():
+                _created.add(dir_uri)
+            else:
+                logger.warning(f"Failed to create directory {dir_uri}: {e}")
 
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)

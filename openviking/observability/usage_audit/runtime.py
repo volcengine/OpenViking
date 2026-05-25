@@ -24,6 +24,7 @@ from .worker import UsageAuditWorker
 logger = logging.getLogger(__name__)
 
 _SUBSCRIBER_NAME = "usage_audit"
+_DEFAULT_SQLITE_RELATIVE_PATH = Path("_system") / "usage_audit" / "usage_audit.sqlite3"
 
 
 @dataclass(slots=True)
@@ -45,7 +46,7 @@ def _resolve_sqlite_path(config: ServerConfig) -> Path:
         workspace = Path(ov_config.storage.workspace).expanduser().resolve()
     except Exception:  # noqa: BLE001
         workspace = DEFAULT_CONFIG_DIR
-    return workspace / "usage_audit.sqlite3"
+    return workspace / _DEFAULT_SQLITE_RELATIVE_PATH
 
 
 async def init_usage_audit_from_server_config(

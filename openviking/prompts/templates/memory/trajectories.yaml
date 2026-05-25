@@ -1,6 +1,6 @@
 memory_type: trajectories
 description: |
-  A record of agent execution in one business domain within a conversation.
+  A compact, reusable operation contract distilled from an agent task trajectory.
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
@@ -16,11 +16,10 @@ fields:
     type: string
     description: |
       Name the task directly and stably.
-      Choose ONE language and stick to it — do not create both a Chinese and an English version of the same concept.
-      If English: lowercase snake_case, max 5 words.
-      If Chinese: concise noun phrase, max 15 characters.
+      Must be written in {{ language }}.
+      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Do not create near-duplicate names for the same task.
-      Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix", "机票重复预订处理".
+      Good: "duplicate_request_resolution", "pytest_asyncio_cancel_hang_fix", "重复请求处理".
     merge_op: immutable
 
   - name: outcome
@@ -32,31 +31,48 @@ fields:
   - name: content
     type: string
     description: |
-      Execution trace in EXACTLY this format:
-      - Goal: <what the user wanted to achieve — one sentence>
-      - Trajectory:
-        1. <what the agent aimed to achieve>. 
-           Actions: <summarized interactions, tools used, and summarized responses>. 
-           Progress: <how this shifted the state>.
-        2. <...>. 
-           Actions: <...>. 
-           Progress: <...>.
-        3. <... continue sequentially to capture the entire execution>
-      - Result: <final outcome and any important side effects — one sentence>
-      - Fail reason: <If task succeeded, leave empty or write "None". If failed, provide a detailed analysis of why the failure occurred and suggest how the agent's approach could be improved.>
+      Procedure-like operation contract in EXACTLY this format:
 
-      Rules for 'Trajectory' section:
-      - STANDALONE COMPLETENESS: The trajectory must be comprehensive enough that a reader can fully understand exactly how the agent performed the task, what attempts it made, and what tools it used, entirely without the raw logs.
-      - EXHAUSTIVE TRACKING: Record every logical interaction, tool use, and system response in chronological order as a numbered list.
-      - SUMMARIZE LONG TEXTS: Do NOT record exact tool responses, raw JSON payloads, or verbatim user/agent messages, especially when they are very long. You MUST use a concise, summarized version that captures the core meaning without losing any key information, constraints, or data points critical to the task.
-      - CAPTURE ALL MISTAKES: You MUST explicitly detail any errors, false attempts, wrong function calls, or agent misunderstandings. Do not gloss over failures, dead ends, or retry loops.
-      - INTENT & PROGRESS TRACKING: Every step must clearly state the current agent intention, summarize the 'Actions/Events' taken, and conclude with 'Progress' (evaluating what was achieved or blocked).
-      - TOOL TRACKING (under 'Actions'): 
-        * Format (Success): "Called <tool_name(s)> -> Response: <summarized output retaining key info>."
-        * Format (Error/Mistake): "Called <tool_name(s)> -> Error/Issue: <summarized error> | Context: <why it failed or why it was the wrong call>."
+      # <trajectory_name>
+      - Domain: <task domain or product area, e.g. customer support, commerce operations, software tooling>
+      - Trigger: <the reusable user intent or task situation — one sentence>
+      - Operation Intent:
+        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, cancel_existing_object, replace_existing_object, attribute_append_remove, compensation_or_refund, read_then_transfer, final_response_only>
+        - Primary object: <the object whose state or lifecycle this record is about>
+        - Target object/lifecycle: <the intended final state, lifecycle transition, or handoff target>
+      - Preconditions:
+        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
+        2. <...>
+      - Immutable Object Boundary:
+        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
+      - Procedure:
+        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
+        2. <future-agent instruction for the next decision/action step>
+        3. <continue until the write/confirmation/final-response boundary is clear>
+      - Write Field Provenance:
+        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
+      - Anti-patterns:
+        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
+      - Applicability Boundary:
+        - <when this memory applies>
+        - <when this memory should not be used>
+      - Negative Applicability:
+        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
+      - Result: <final outcome and important side effects — one sentence>
+      - Evidence: <brief generalized source note from this session, including success/failure/partial status>
 
-      General Rules:
-      - Use exactly the 4 labels (Goal, Trajectory, Result, Fail reason) in this exact order.
-      - Goal and Result are ONE sentence each.
+      Rules:
+      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
+      - Extract one record per primary user intent, object, and lifecycle transition. Split separable intents, pivots, follow-ups, enabling writes, and final writes; omit low-value side work.
+      - Family must be exactly one listed enum value. Do not invent compound labels. Use read_then_transfer when the reusable path ends in handoff after verification.
+      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
+      - Stop each record at its family boundary: update_existing_object stops after update verification, cancel_existing_object after cancellation verification, create_new_object after creation verification, replace_existing_object after replacement verification, read_then_transfer after handoff verification.
+      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
+      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
+      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
+      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
+      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts, exact routes/locations, product names, and raw tool payloads. Keep tool names only when they are part of the reusable path.
+      - Use exactly the title, Domain line, and 11 labels above in this exact order.
+      - Trigger, Result, and Evidence are ONE sentence each.
       - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch

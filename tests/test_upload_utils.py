@@ -378,9 +378,7 @@ class TestUploadDirectory:
     @pytest.mark.asyncio
     async def test_creates_root_dir(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
         await upload_directory(tmp_dir, "viking://temp/root", viking_fs)
-        # _mkdir_with_parents strips leading slash then re-adds it, so the stored agfs
-        # path is the _uri_to_path() result with a "/" prefix.
-        assert any("temp/root" in d for d in viking_fs.agfs.dirs)
+        assert "viking://temp/root" in viking_fs.dirs
 
     @pytest.mark.asyncio
     async def test_custom_ignore_dirs(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:

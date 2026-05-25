@@ -93,7 +93,7 @@ class _FakeProcessor:
         return overview, abstract
 
     async def _sync_topdown_recursive(
-        self, root_uri, target_uri, ctx=None, file_change_status=None, lifecycle_lock_handle_id=""
+        self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None
     ):
         self.sync_calls.append((root_uri, target_uri))
         root_uri = self._fs._norm(root_uri)
@@ -208,6 +208,43 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+
+
+@pytest.mark.asyncio
+async def test_full_update_can_still_sync_temp_to_target(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://temp/root"
+    target_uri = "viking://resources/target"
+    tree = {
+        root_uri: [{"name": "a.txt", "isDir": False}],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "hello",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=False,
+        target_uri=target_uri,
+        sync_to_target=True,
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.sync_calls == [(root_uri, target_uri)]
+    assert fake_fs._file_contents[f"{target_uri}/a.txt"] == "hello"
 
 
 if __name__ == "__main__":

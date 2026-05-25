@@ -34,7 +34,10 @@ from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
-from openviking.server.oauth.provider import OpenVikingOAuthProvider
+from openviking.server.oauth.provider import (
+    FALLBACK_AUTHORIZE_PAGE,
+    OpenVikingOAuthProvider,
+)
 from openviking.server.oauth.router import router as oauth_router
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import OpenVikingError
@@ -74,7 +77,14 @@ async def app_with_oauth(tmp_path):
     store = OAuthStore(tmp_path / "oauth.db")
     await store.initialize()
     issuer = "http://127.0.0.1"
-    provider = OpenVikingOAuthProvider(store=store, issuer=issuer)
+    # Default authorize page is the /studio SPA consent route, which isn't
+    # mounted in this minimal test app. Pin to the server-rendered fallback
+    # so the existing full-flow test can drive the HTML page directly.
+    provider = OpenVikingOAuthProvider(
+        store=store,
+        issuer=issuer,
+        authorize_page_path=FALLBACK_AUTHORIZE_PAGE,
+    )
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
@@ -335,6 +345,62 @@ async def test_full_device_flow(app_with_oauth, client):
     assert record.account_id == "acct1"
     assert record.user_id == "alice"
     assert record.role == "user"
+
+
+@pytest.mark.asyncio
+async def test_oauth_pending_info_endpoint(app_with_oauth, client):
+    """Public GET endpoint returns minimum info for the Studio consent UI;
+    never exposes display_code or the full redirect_uri."""
+    _, store, _ = app_with_oauth
+    client_id, pending_id, _, _ = await _start_authorize(
+        client, redirect_uri="https://claude.ai/cb"
+    )
+
+    resp = await client.get(f"/api/v1/auth/oauth/pending/{pending_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["client_id"] == client_id
+    assert body["client_name"] == "Claude"
+    assert body["redirect_host"] == "claude.ai"
+    assert "display_code" not in body
+    assert "redirect_uri" not in body
+    # Sanity: the real display_code IS stored, we just don't return it.
+    record = await store.load_pending_authorization(pending_id)
+    assert record is not None and record["display_code"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_pending_info_404_when_missing(client):
+    resp = await client.get("/api/v1/auth/oauth/pending/doesnotexist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_by_pending_id(app_with_oauth, client):
+    """Studio consent path: verify with pending_id instead of display_code."""
+    _, store, _ = app_with_oauth
+    client_id, pending_id, _, _ = await _start_authorize(
+        client, redirect_uri="https://claude.ai/cb", state="abc"
+    )
+
+    verify = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"pending_id": pending_id, "decision": "approve"},
+    )
+    assert verify.status_code == 200, verify.text
+    body = verify.json()
+    assert body["status"] == "approved"
+    assert body["client_id"] == client_id
+
+    record = await store.load_pending_authorization(pending_id)
+    assert record is not None
+    assert record["verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_requires_pending_or_code(client):
+    resp = await client.post("/api/v1/auth/oauth-verify", json={"decision": "approve"})
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio

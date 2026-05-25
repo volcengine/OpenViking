@@ -17,9 +17,9 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog: 
+  {{ summary }}
+  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
   {{ extract_context.get_event_content(ranges, summary, 0) }}
-
 
 overview_template: |-
   # Events Overview
@@ -34,25 +34,28 @@ fields:
     description: |
       Output a concrete noun phrase representing a real-world activity or occurrence.
       Rules:
-      1. Can be Chinese or English;
-      2. If English: all lowercase, use underscore instead of space, maximum 3 words;
+      1. Must be written in {{ language }};
+      2. {% if language == 'en' %}Use lowercase with underscores instead of spaces, maximum 3 words;{% else %}Keep it concise and natural in {{ language }};{% endif %}
       3. Never include any date, time, year or number;
       4. Must name the real-world activity/occurrence, NOT the conversation about it;
       5. Names ending with _chat, _talk, _conversation, _catchup, _discussion are forbidden;
       6. Patterns like "person_chat", "chat_about_xxx", "daily_talk" are forbidden;
       7. Output only the event name, no extra explanation.
     merge_op: immutable
+    searchable: true
 
   - name: goal
     type: string
     description: |
       Summarize the purpose of the content in 5 words or less
+    searchable: true
 
   - name: summary
     type: string
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+    searchable: true
 
   - name: ranges
     type: string
