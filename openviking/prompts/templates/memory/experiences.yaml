@@ -37,24 +37,15 @@ fields:
       <markdown bullets: Hard Guardrails & Principles (The "DON'Ts")>
 
       Rules:
-      - MUTUAL EXCLUSIVITY (NO REDUNDANCY): Strictly separate active steps from constraints.
-        'Approach' is ONLY for actionable, positive execution steps.
-        'Reflect' is ONLY for negative boundaries and "what not to do."
-      - OPTIMIZED EXECUTION PATH: Aggressively trim conversational noise, redundant retries,
-        false starts. Outline only the essential, efficient path in 'Approach'.
-      - EXECUTION-FIRST PRINCIPLE: 'Approach' steps MUST describe direct tool invocations only.
-        Strip all "I will now do X" / "I have completed X" communication steps.
-      - CONDITIONAL BRANCH PRESERVATION: Capture full decision trees as explicit IF/THEN/ELSE
-        branches. NEVER collapse divergent user-driven branches into a single terminal action.
-      - ATOMIC SCOPE: Each experience MUST cover exactly ONE user intent and its associated
-        tool-invocation sequence. Multiple distinct user intents → SEPARATE experiences.
-        A 'Situation' listing more than one user goal is a violation: split immediately.
-        Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
-      - MACHINE READABILITY (IMPERATIVE VOICE): Use commanding imperatives ("Ask the user for X").
-      - ABSTRACTION MANDATE: Strip specific entities, IDs, user names. Use generalized descriptions.
-      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints in 'Reflect'.
-      - STRICT FORMATTING: Exactly 3 headings, concise markdown bullets, no numbered lists,
-        no introductory sentences, no closing paragraphs. Token efficiency is critical.
+      - MUTUAL EXCLUSIVITY (NO REDUNDANCY): Strictly separate active steps from constraints to eliminate redundant information. 'Approach' is ONLY for actionable, positive execution steps to advance the task. 'Reflect' is ONLY for negative boundaries, limits, and "what not to do." Do not repeat the same concept across both sections.
+      - OPTIMIZED EXECUTION PATH: You MUST critically analyze the original trajectory and aggressively trim away conversational noise, redundant retry loops, false starts, and irrelevant setup actions. Outline only the essential, efficient path in 'Approach'.
+      - MACHINE READABILITY (IMPERATIVE VOICE): Address the future agent directly using commanding imperatives (e.g., "Ask the user for X", "Call tool Y").
+      - ABSTRACTION MANDATE: Strip away specific entities, IDs, user names, or raw text from the past trajectory. Use generalized abstract descriptions so the rule applies universally.
+      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
+      - EXECUTION-FIRST PRINCIPLE: 'Approach' steps MUST describe direct tool invocations only. Strip all "I will now do X" / "I have completed X" communication steps.
+      - CONDITIONAL BRANCH PRESERVATION: Capture full decision trees as explicit IF/THEN/ELSE branches. NEVER collapse divergent user-driven branches into a single terminal action.
+      - ATOMIC SCOPE: Each experience MUST cover exactly ONE user intent and its associated tool-invocation sequence. Multiple distinct user intents → SEPARATE experiences. A 'Situation' listing more than one user goal is a violation: split immediately. Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
+      - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
     merge_op: replace
 

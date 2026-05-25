@@ -8,6 +8,7 @@ import threading
 import time
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     classify_api_error,
@@ -94,6 +95,10 @@ class CircuitBreaker:
     def record_failure(self, error: Exception) -> None:
         """Record a failed API call. May trip the breaker."""
         error_class = classify_api_error(error)
+        if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+            logger.info(f"Circuit breaker ignoring row-specific input error: {error}")
+            return
+
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.monotonic()

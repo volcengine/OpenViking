@@ -14,7 +14,6 @@ from openviking.utils.circuit_breaker import (
 )
 from openviking.utils.model_retry import (
     ERROR_CLASS_PERMANENT,
-    ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
 )
@@ -165,6 +164,15 @@ class TestCircuitBreaker:
 
         with pytest.raises(CircuitBreakerOpen):
             cb.check()
+
+    def test_input_too_large_does_not_trip_or_increment(self):
+        """Test row-specific input errors do not affect global circuit state."""
+        cb = CircuitBreaker(failure_threshold=1)
+
+        cb.record_failure(Exception("expected maxLength: 50000, actual: 75000"))
+
+        cb.check()
+        assert cb._failure_count == 0
 
     def test_success_resets_failure_count(self):
         """Test success resets failure count."""

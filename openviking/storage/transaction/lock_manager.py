@@ -16,7 +16,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
-_USE_MANAGER_DEFAULT_TIMEOUT = object()
+LOCK_TIMEOUT_DEFAULT = object()
 
 
 def _lock_bucket(path: str) -> str:
@@ -80,8 +80,8 @@ class LockManager:
     def redo_recovery_enabled(self) -> bool:
         return self._redo_recovery_enabled
 
-    def _resolve_timeout(self, timeout: Optional[float]) -> Optional[float]:
-        return self._lock_timeout if timeout is _USE_MANAGER_DEFAULT_TIMEOUT else timeout
+    def _resolve_timeout(self, timeout: Any) -> Optional[float]:
+        return self._lock_timeout if timeout is LOCK_TIMEOUT_DEFAULT else timeout
 
     def _mark_handle_active(self, handle: LockHandle) -> None:
         handle.last_active_at = time.time()
@@ -159,7 +159,7 @@ class LockManager:
         self,
         handle: LockHandle,
         path: str,
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         started_at = time.perf_counter()
         acquired = await self._path_lock.acquire_exact_path(
@@ -176,7 +176,7 @@ class LockManager:
         self,
         handle: LockHandle,
         path: str,
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         started_at = time.perf_counter()
         acquired = await self._path_lock.acquire_tree(
@@ -191,7 +191,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         """
         一次性对多个路径进行树锁加锁，使用有序加锁法防止死锁
@@ -249,7 +249,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         if not paths:
             self._mark_handle_active(handle)
@@ -289,7 +289,7 @@ class LockManager:
         handle: LockHandle,
         exact_paths: List[str],
         tree_paths: List[str],
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         exact_set = set(exact_paths)
         tree_set = set(tree_paths)
@@ -345,7 +345,7 @@ class LockManager:
         src: str,
         dst: str,
         src_is_dir: bool = True,
-        timeout: Optional[float] = _USE_MANAGER_DEFAULT_TIMEOUT,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> bool:
         acquired = await self._path_lock.acquire_mv(
             src,

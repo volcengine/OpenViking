@@ -20,7 +20,7 @@ strategies:
     scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
 
   - id: trajectory_top4_first_user_prewrite_generic_scope
-    label: Trajectory top4 first-user + pre-write with generic memory scope prompt
+    label: Trajectory top4 first-user + pre-write top2 with generic memory scope prompt
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_trajectory_view
@@ -29,6 +29,6 @@ strategies:
     retrieval_mode: first_user_prewrite
     retrieval_top_k: 4
     first_user_inject_top_k: 4
-    prewrite_retrieval_top_k: 4
-    prewrite_inject_top_k: 4
+    prewrite_retrieval_top_k: 2
+    prewrite_inject_top_k: 2
     scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md

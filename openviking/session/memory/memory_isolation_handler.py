@@ -36,13 +36,14 @@ class MemoryIsolationHandler:
         self.ctx = ctx
         self._extract_context = extract_context
         config = get_openviking_config()
-        self.enable_role_id_memory_isolate = (
-            config.memory.enable_role_id_memory_isolate if config.memory else False
+        memory_config = getattr(config, "memory", None)
+        self.role_id_memory_isolation_enabled = bool(
+            getattr(memory_config, "role_id_memory_isolation_enabled", False)
         )
 
     def prepare_messages(self) -> None:
-        """开关关闭时，清空 messages 中的 role_id，使下游统一使用登录用户。"""
-        if self.enable_role_id_memory_isolate:
+        """开关关闭时，规范化 messages 中的 role_id，缺失时回退到登录身份。"""
+        if self.role_id_memory_isolation_enabled:
             return
         messages = self._extract_context.messages if self._extract_context else []
         for msg in messages:

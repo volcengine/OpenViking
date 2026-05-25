@@ -33,7 +33,8 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
-from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
+from openviking.utils.embedding_input import truncate_embedding_input
+from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -322,6 +323,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         config = get_openviking_config()
         self._collection_name = config.storage.vectordb.name
         self._vector_dim = config.embedding.dimension
+        self._max_input_tokens = int(getattr(config.embedding, "max_input_tokens", 4096) or 4096)
         self._initialize_embedder(config)
         breaker_cfg = config.embedding.circuit_breaker
         self._circuit_breaker = CircuitBreaker(
@@ -498,8 +500,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
+                        embedding_input = truncate_embedding_input(
+                            embedding_msg.message,
+                            self._max_input_tokens,
+                        )
                         result: EmbedResult = await embed_compat(
-                            self._embedder, embedding_msg.message, is_query=False
+                            self._embedder, embedding_input, is_query=False
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
@@ -526,6 +532,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             )
                         except Exception:
                             pass
+
+                        if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+                            logger.error(error_msg)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
+                            report_error_args = (error_msg, data)
+                            return None
 
                         if error_class == ERROR_CLASS_PERMANENT:
                             logger.critical(error_msg)

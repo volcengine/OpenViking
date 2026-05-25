@@ -186,9 +186,16 @@ class TestCommit:
         assert result2.get("task_id") is not None
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = False
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="latest_overview_threading_test")
 
         session.add_message("user", [TextPart("First round message")])
@@ -265,8 +272,17 @@ class TestCommit:
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
 
-    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
+    async def test_commit_blocks_after_failed_archive(
+        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
+    ):
         """A failed archive should block the next commit until it is resolved."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = False
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="failed_archive_blocks_new_commit")
 
         async def failing_extract(*args, **kwargs):

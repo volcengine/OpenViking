@@ -551,6 +551,62 @@ class LocalClient(BaseClient):
             "message_count": len(session.messages),
         }
 
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single local operation."""
+        execution = await run_with_telemetry(
+            operation="session.batch_add_messages",
+            telemetry=telemetry,
+            fn=lambda: self._batch_add_messages_impl(session_id, messages),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _batch_add_messages_impl(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        from openviking.message.part import Part, TextPart, part_from_dict
+
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
+
+        specs: list[dict[str, Any]] = []
+        for message in messages:
+            role = message["role"]
+            parts = message.get("parts")
+            content = message.get("content")
+
+            message_parts: list[Part]
+            if parts is not None:
+                message_parts = [part_from_dict(p) for p in parts]
+            elif content is not None:
+                message_parts = [TextPart(text=content)]
+            else:
+                raise ValueError("Each message must include either content or parts")
+
+            specs.append(
+                {
+                    "role": role,
+                    "parts": message_parts,
+                    "role_id": self._ctx.resolve_role_id(role, message.get("role_id")),
+                    "created_at": message.get("created_at"),
+                }
+            )
+
+        added_messages = session.add_messages(specs)
+        return {
+            "session_id": session_id,
+            "message_count": len(session.messages),
+            "added": len(added_messages),
+        }
+
     # ============= Pack =============
 
     async def export_ovpack(

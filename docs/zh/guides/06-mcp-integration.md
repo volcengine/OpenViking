@@ -2,6 +2,8 @@
 
 OpenViking 服务器内置 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 端点，任何兼容 MCP 的客户端都可以通过 HTTP 直接访问其记忆和资源能力，无需部署额外进程。
 
+> **快速接入？** 见 [MCP 客户端](../agent-integrations/06-mcp-clients.md) 获取各平台配置片段和注意事项。本页面覆盖完整的工具参考和高级配置。
+
 ## 前提条件
 
 1. 已安装 OpenViking（`pip install openviking` 或从源码安装）
@@ -17,10 +19,12 @@ MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口
 | 平台 | 接入方式 |
 |------|----------|
 | **Claude Code** | `type: http` 接入 |
-| **ChatGPT & Codex** | 标准 MCP 配置 |
-| **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
-| **Manus** | 标准 MCP 配置 |
 | **Trae** | 标准 MCP 配置 |
+| **Cursor** | 标准 MCP 配置 |
+| **ChatGPT & Codex** | 标准 MCP 配置 |
+| **OpenCode** | 标准 MCP 配置 |
+| **Manus** | 标准 MCP 配置 |
+| **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
 
 ## 鉴权方式
 
@@ -78,15 +82,17 @@ claude mcp add --transport http openviking \
 
 加 `--scope user` 可将配置设为全局（所有项目共享）。
 
-### Claude.ai / Claude Desktop / ChatGPT / Cursor（OAuth）
+### Claude.ai / Claude Desktop（OAuth）
 
 这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 console 驱动的 OTP 授权页），不再需要外部代理。
 
-**详见 [OAuth 2.1 接入指南](11-oauth.md)**：
+如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导完成 OAuth 授权流程。
+
+**详见 [OAuth 2.1 接入指南](11-oauth.md)** 和 **[公网访问指南](12-public-access.md)**：
 
 - 端到端流程（device-flow 风格：authorize 页显示 6 字符码，用户在 console 确认）
 - HTTP（本地）与 HTTPS（生产）两阶段部署，包含 Caddy / nginx 反代模板和 docker-compose 示例
-- Claude.ai / Claude Desktop / Cursor / ChatGPT 接入步骤
+- Claude.ai / Claude Desktop 接入步骤
 - `OPENVIKING_PUBLIC_BASE_URL` 与 `oauth` 配置项
 - Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 

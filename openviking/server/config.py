@@ -162,6 +162,7 @@ class ServerConfig(BaseModel):
     workers: int = 1
     auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)

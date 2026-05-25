@@ -13,9 +13,27 @@ T = TypeVar("T")
 
 # Error classification categories returned by classify_api_error()
 ERROR_CLASS_PERMANENT = "permanent"
+ERROR_CLASS_INPUT_TOO_LARGE = "input_too_large"
 ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
 ERROR_CLASS_TRANSIENT = "transient"
 ERROR_CLASS_UNKNOWN = "unknown"
+
+INPUT_TOO_LARGE_PATTERNS = (
+    "413",
+    "payload too large",
+    "request entity too large",
+    "content too large",
+    "contextwindowexceeded",
+    "context window exceeded",
+    "maximum context length",
+    "max input tokens",
+    "too many input tokens",
+    "input length exceeds",
+    "exceeds the context length",
+    "exceeds the max input length",
+    "is too large to process",
+    "expected maxlength",
+)
 
 PERMANENT_API_ERROR_PATTERNS = (
     "400",
@@ -27,7 +45,7 @@ PERMANENT_API_ERROR_PATTERNS = (
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
-    "quotaexceeded", # also 429
+    "quotaexceeded",  # also 429
     "quota limit",
     "quota exceed",
     "usage quota",
@@ -66,6 +84,13 @@ def classify_api_error(error: Exception) -> str:
     texts = [str(error)]
     if error.__cause__ is not None:
         texts.append(str(error.__cause__))
+
+    for text in texts:
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in INPUT_TOO_LARGE_PATTERNS:
+            if pattern in text_lower or pattern in text_compact:
+                return ERROR_CLASS_INPUT_TOO_LARGE
 
     for text in texts:
         text_lower = text.lower()
@@ -261,9 +286,7 @@ class PrimaryBackupSwitcher:
         if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
             with self._lock:
                 if not self._using_backup:
-                    logger.warning(
-                        f"Primary failed with {error_class}, switching to backup"
-                    )
+                    logger.warning(f"Primary failed with {error_class}, switching to backup")
                     self._using_backup = True
                 # Always reset timer and counter when we fail (whether initial fail or failback fail)
                 self._switch_to_backup_time = time.monotonic()
