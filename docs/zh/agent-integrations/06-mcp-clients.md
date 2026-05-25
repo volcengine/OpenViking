@@ -45,7 +45,9 @@ claude mcp add --transport http openviking \
 
 这些客户端要求 OAuth 2.1——无法直接传 API Key。OpenViking 自带原生 OAuth 2.1 实现，无需外部代理。
 
-详见 [OAuth 2.1 指南](../guides/11-oauth.md)。
+如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导你完成 OAuth 授权流程。
+
+HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../guides/11-oauth.md)。
 
 ## 可用工具
 

@@ -45,7 +45,9 @@ Standard `mcpServers` config as shown above — all verified with API key auth.
 
 These clients require OAuth 2.1 — API keys cannot be passed directly. OpenViking ships a native OAuth 2.1 implementation, so no external proxy is needed.
 
-See the [OAuth 2.1 Guide](../guides/11-oauth.md) for the end-to-end flow and deployment templates.
+If you already have HTTPS configured for your OpenViking server, just connect to `https://your-server.com/mcp` — the client will walk you through the OAuth authorization flow automatically.
+
+See the [OAuth 2.1 Guide](../guides/11-oauth.md) for HTTPS setup, deployment templates, and the full authorization flow.
 
 ## Available tools
 
