@@ -16,7 +16,7 @@ class MemoryConfig(BaseModel):
         default="user+agent",
         description=(
             "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
-            "Agent/user namespace behavior is now controlled by per-account namespace policy."
+            "User is the only data-plane namespace."
         ),
     )
 
@@ -43,7 +43,7 @@ class MemoryConfig(BaseModel):
     agent_memory_enabled: bool = Field(
         default=False,
         description=(
-            "Enable agent-scope trajectory/experience memory extraction. When true, "
+            "Enable trajectory/experience memory extraction. When true, "
             "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
             "execution trajectories from the conversation; Phase 2 consolidates them "
             "into higher-level experience memories."
@@ -87,7 +87,7 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "When enabled, session commit also extracts reusable skills from the archived "
-            "conversation and writes them into the agent skill directory. Disabled by "
+            "conversation and writes them into the current user's skill directory. Disabled by "
             "default."
         ),
     )
@@ -95,7 +95,7 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "When enabled, memory extraction uses role_id from messages to determine "
-            "which user/agent the memory belongs to. When disabled (default), role_id "
+            "which user the memory belongs to. When disabled (default), role_id "
             "is ignored and the login user from the request context is used instead."
         ),
     )

@@ -8,6 +8,8 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace import canonical_user_root
+from openviking.core.peer_id import normalize_peer_id
 from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
@@ -23,6 +25,32 @@ logger = get_logger(__name__)
 def _ensure_non_empty_query(query: str) -> None:
     if not query.strip():
         raise InvalidArgumentError("Search query must not be empty.")
+
+
+def _is_empty_target_uri(target_uri: Union[str, List[str]]) -> bool:
+    if isinstance(target_uri, list):
+        return not any(target_uri)
+    return not target_uri
+
+
+def _target_uri_for_peer(
+    target_uri: Union[str, List[str]],
+    ctx: RequestContext,
+    peer_id: Optional[str],
+) -> Union[str, List[str]]:
+    try:
+        normalized_peer_id = normalize_peer_id(peer_id)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+    if not normalized_peer_id or not _is_empty_target_uri(target_uri):
+        return target_uri
+
+    user_root = canonical_user_root(ctx)
+    return [
+        f"{user_root}/memories",
+        f"{user_root}/peers/{normalized_peer_id}/memories",
+    ]
 
 
 class SearchService:
@@ -46,6 +74,7 @@ class SearchService:
         query: str,
         ctx: RequestContext,
         target_uri: Union[str, List[str]] = "",
+        peer_id: Optional[str] = None,
         session: Optional["Session"] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -68,6 +97,7 @@ class SearchService:
         """
         _ensure_non_empty_query(query)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
+        target_uri = _target_uri_for_peer(target_uri, ctx, peer_id)
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -91,6 +121,7 @@ class SearchService:
         query: str,
         ctx: RequestContext,
         target_uri: Union[str, List[str]] = "",
+        peer_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -111,6 +142,7 @@ class SearchService:
         """
         _ensure_non_empty_query(query)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
+        target_uri = _target_uri_for_peer(target_uri, ctx, peer_id)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

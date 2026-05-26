@@ -190,18 +190,25 @@ def create_app(
                 "APIKeyManager initialized with api_key_hashing_enabled=%s",
                 config.api_key_hashing_enabled,
             )
+            if effective_auth_mode == AuthMode.TRUSTED:
+                logger.info(
+                    "Trusted mode enabled: authentication trusts X-OpenViking-Account/User "
+                    "headers and requires the configured server API key on each request. "
+                    "Only expose this server behind a trusted network boundary or "
+                    "identity-injecting gateway."
+                )
         elif effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None
             if config.root_api_key and config.root_api_key != "":
                 logger.info(
-                    "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
+                    "Trusted mode enabled: authentication trusts X-OpenViking-Account/User "
                     "headers and requires the configured server API key on each request. "
                     "Only expose this server behind a trusted network boundary or "
                     "identity-injecting gateway."
                 )
             else:
                 logger.warning(
-                    "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
+                    "Trusted mode enabled: authentication uses X-OpenViking-Account/User "
                     "headers without API keys. This is only allowed on localhost. "
                     "Only expose this server behind a trusted network boundary or "
                     "identity-injecting gateway after configuring server.root_api_key."

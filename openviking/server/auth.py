@@ -129,7 +129,6 @@ async def _try_resolve_oauth_token(
     *,
     x_openviking_account: Optional[str],
     x_openviking_user: Optional[str],
-    x_openviking_agent: Optional[str],
 ) -> Optional[ResolvedIdentity]:
     """Attempt to verify the bearer as an OAuth-issued opaque access token.
 
@@ -192,9 +191,9 @@ async def _try_resolve_oauth_token(
     user_id = record.user_id
 
     # Header overrides mirror the API-key path: ROOT may override identity;
-    # ADMIN may override user and agent (within its own account); USER may
-    # override only agent. The OAuth claims pin the issuing identity, so any
-    # cross-account/user override beyond what each role can do is a 403.
+    # ADMIN may override user within its own account. The OAuth claims pin the
+    # issuing identity, so any cross-account/user override beyond what each role
+    # can do is a 403.
     if role == Role.ROOT:
         effective_account = x_openviking_account or account_id
         effective_user = x_openviking_user or user_id
@@ -217,8 +216,6 @@ async def _try_resolve_oauth_token(
         effective_account = account_id
         effective_user = user_id
 
-    effective_agent = x_openviking_agent or "default"
-
     namespace_policy = AccountNamespacePolicy()
     if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
         try:
@@ -230,7 +227,6 @@ async def _try_resolve_oauth_token(
         role=role,
         account_id=effective_account,
         user_id=effective_user,
-        agent_id=effective_agent,
         namespace_policy=namespace_policy,
         from_oauth=True,
     )
@@ -242,7 +238,6 @@ async def resolve_identity(
     authorization: Optional[str] = Header(None),
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
-    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
 ) -> ResolvedIdentity:
     """Resolve API key to identity.
 
@@ -255,7 +250,6 @@ async def resolve_identity(
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
-    x_openviking_agent = _normalize_header_value(x_openviking_agent)
     api_key = _extract_api_key(x_api_key, authorization)
 
     if auth_mode == AuthMode.DEV:
@@ -264,7 +258,6 @@ async def resolve_identity(
             role=Role.ROOT,
             account_id=x_openviking_account or "default",
             user_id=x_openviking_user or "default",
-            agent_id=x_openviking_agent or "default",
         )
 
     if auth_mode == AuthMode.TRUSTED:
@@ -295,15 +288,21 @@ async def resolve_identity(
         effective_account_id = explicit_account_id or x_openviking_account
         effective_user_id = explicit_user_id or x_openviking_user
 
-        # Check if this is an admin path without identity
+        # Admin paths may omit identity completely, but partial identity is rejected.
         is_admin_path = request.url.path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
         if is_admin_path:
-            return ResolvedIdentity(
-                role=Role.ROOT,
-                account_id="trusted",
-                user_id="trusted",
-                agent_id=x_openviking_agent or "default",
-            )
+            if bool(effective_account_id) != bool(effective_user_id):
+                raise InvalidArgumentError(
+                    "Trusted mode requests must include "
+                    "X-OpenViking-Account or explicit account_id in the URL and "
+                    "X-OpenViking-User or explicit user_id in the URL."
+                )
+            if not effective_account_id and not effective_user_id:
+                return ResolvedIdentity(
+                    role=Role.ROOT,
+                    account_id="trusted",
+                    user_id="trusted",
+                )
 
         if _trusted_request_requires_explicit_identity(request.url.path):
             missing_fields = []
@@ -324,7 +323,6 @@ async def resolve_identity(
             role=trusted_role,
             account_id=effective_account_id or "trusted",
             user_id=effective_user_id or "trusted",
-            agent_id=x_openviking_agent or "default",
         )
 
     # AuthMode.API_KEY
@@ -345,7 +343,6 @@ async def resolve_identity(
         api_key,
         x_openviking_account=x_openviking_account,
         x_openviking_user=x_openviking_user,
-        x_openviking_agent=x_openviking_agent,
     )
     if oauth_identity is not None:
         return oauth_identity
@@ -354,7 +351,6 @@ async def resolve_identity(
     if identity.role == Role.ROOT:
         identity.account_id = x_openviking_account or identity.account_id or "default"
         identity.user_id = x_openviking_user or identity.user_id or "default"
-        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
         return identity
 
     identity.account_id = identity.account_id or "default"
@@ -365,7 +361,6 @@ async def resolve_identity(
 
     if identity.role == Role.ADMIN:
         identity.user_id = x_openviking_user or identity.user_id or "default"
-        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
         return identity
 
     identity.user_id = identity.user_id or "default"
@@ -374,7 +369,6 @@ async def resolve_identity(
             "USER API keys cannot override X-OpenViking-User; the effective user is derived "
             "from the key."
         )
-    identity.agent_id = x_openviking_agent or identity.agent_id or "default"
     return identity
 
 
@@ -420,7 +414,6 @@ async def get_request_context(
         user=UserIdentifier(
             identity.account_id or "default",
             identity.user_id or "default",
-            identity.agent_id or "default",
         ),
         role=identity.role,
         namespace_policy=(
@@ -435,7 +428,7 @@ async def get_request_context(
         request_state=request.state,
         account_id=identity.account_id,
         user_id=identity.user_id,
-        agent_id=identity.agent_id,
+        agent_id=None,
     )
 
     return ctx

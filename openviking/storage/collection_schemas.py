@@ -78,7 +78,7 @@ class CollectionSchemas:
             # context_type 字段：区分上下文的大类
             # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
             # 推导规则：
-            #   - URI 以 viking://agent/skills 开头 → "skill"
+            #   - URI 位于 user skills 目录下 → "skill"
             #   - URI 包含 "memories" → "memory"
             #   - 其他情况 → "resource"
             {"FieldName": "context_type", "FieldType": "string"},
@@ -633,7 +633,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     user = UserIdentifier(
                         account_id=account_id,
                         user_id="default",
-                        agent_id="default",
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
                     record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)

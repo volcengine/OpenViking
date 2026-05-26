@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
@@ -107,13 +108,28 @@ class SessionService:
             tool_output_externalization_config=self._tool_output_externalization_config,
         )
 
-    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+    @staticmethod
+    def _assert_session_owner(session: Session, ctx: RequestContext) -> None:
+        meta = session.meta
+        if (
+            meta.created_by_account_id != ctx.account_id
+            or meta.created_by_user_id != ctx.user.user_id
+        ):
+            raise NotFoundError(session.session_id, "session")
+
+    async def create(
+        self,
+        ctx: RequestContext,
+        session_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Session:
         """Create a session and persist its root path.
 
         Args:
             ctx: Request context
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
 
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
@@ -125,6 +141,9 @@ class SessionService:
                 if await existing.exists():
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
+            if memory_policy is not None:
+                policy = MemoryPolicy.from_dict(memory_policy)
+                session.meta.memory_policy = policy.to_dict()
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
@@ -150,6 +169,7 @@ class SessionService:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
             await session.load()
+            self._assert_session_owner(session, ctx)
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -171,6 +191,12 @@ class SessionService:
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
+                    continue
+                try:
+                    session = self.session(ctx, name)
+                    await session.load()
+                    self._assert_session_owner(session, ctx)
+                except Exception:
                     continue
                 sessions.append(
                     {
@@ -216,6 +242,7 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -228,13 +255,19 @@ class SessionService:
         Returns:
             Commit result
         """
-        return await self.commit_async(session_id, ctx, keep_recent_count=keep_recent_count)
+        return await self.commit_async(
+            session_id,
+            ctx,
+            keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy,
+        )
 
     async def commit_async(
         self,
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -252,7 +285,10 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async(keep_recent_count=keep_recent_count)
+        result = await session.commit_async(
+            keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy,
+        )
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result

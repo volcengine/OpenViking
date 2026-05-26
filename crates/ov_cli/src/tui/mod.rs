@@ -1,8 +1,8 @@
 mod app;
 mod event;
+mod image_preview;
 mod tree;
 mod ui;
-mod image_preview;
 
 use std::io;
 
@@ -13,7 +13,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Block, Borders};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::client::HttpClient;
 use crate::error::Result;
@@ -77,7 +77,8 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
         let mut captured_content_area = None;
 
         // Track if we had an image in the previous iteration
-        static PREV_HAD_IMAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static PREV_HAD_IMAGE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         let had_image = PREV_HAD_IMAGE.load(std::sync::atomic::Ordering::Relaxed);
         let has_image = app.current_preview_image.is_some();
 
@@ -100,8 +101,11 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
                     .take(usize::from(frame.area().height.saturating_sub(2)))
                     .map(|s| Line::from(s.as_str()))
                     .collect();
-                let paragraph = Paragraph::new(text)
-                    .block(Block::default().borders(Borders::ALL).title(" Debug Logs (Press L to hide) "));
+                let paragraph = Paragraph::new(text).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Debug Logs (Press L to hide) "),
+                );
                 frame.render_widget(paragraph, frame.area());
             } else {
                 // Normal UI

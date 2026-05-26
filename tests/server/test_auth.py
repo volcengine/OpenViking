@@ -3,8 +3,6 @@
 
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
-import io
-import logging
 import uuid
 
 import httpx
@@ -15,7 +13,6 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from openviking.server import app as server_app_module
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
@@ -380,8 +377,8 @@ async def test_user_key_cannot_access_admin_api(auth_client: httpx.AsyncClient, 
     assert resp.status_code == 403
 
 
-async def test_agent_id_header_forwarded(auth_client: httpx.AsyncClient):
-    """X-OpenViking-Agent header should be captured in identity."""
+async def test_legacy_agent_header_is_ignored(auth_client: httpx.AsyncClient):
+    """Legacy X-OpenViking-Agent should not affect request identity."""
     resp = await auth_client.get(
         "/api/v1/system/status",
         headers={"X-API-Key": ROOT_KEY, "X-OpenViking-Agent": "my-agent"},
@@ -389,8 +386,8 @@ async def test_agent_id_header_forwarded(auth_client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
-async def test_admin_key_can_switch_effective_user_and_agent_within_account(auth_app):
-    """ADMIN keys may reuse X-OpenViking-User/Agent within their own account."""
+async def test_admin_key_can_switch_effective_user_within_account(auth_app):
+    """ADMIN keys may reuse X-OpenViking-User within their own account."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     admin_key = await manager.create_account(account_id, "admin_user")
@@ -402,7 +399,6 @@ async def test_admin_key_can_switch_effective_user_and_agent_within_account(auth
             "X-API-Key": admin_key,
             "X-OpenViking-Account": account_id,
             "X-OpenViking-User": "alice",
-            "X-OpenViking-Agent": "assistant-2",
         },
         auth_enabled=True,
         api_key_manager=manager,
@@ -413,13 +409,11 @@ async def test_admin_key_can_switch_effective_user_and_agent_within_account(auth
         x_api_key=admin_key,
         x_openviking_account=account_id,
         x_openviking_user="alice",
-        x_openviking_agent="assistant-2",
     )
 
     assert identity.role == Role.ADMIN
     assert identity.account_id == account_id
     assert identity.user_id == "alice"
-    assert identity.agent_id == "assistant-2"
 
 
 async def test_admin_key_cannot_switch_account_via_header(auth_app):
@@ -446,8 +440,8 @@ async def test_admin_key_cannot_switch_account_via_header(auth_app):
         )
 
 
-async def test_user_key_can_switch_agent_but_not_user(auth_app):
-    """USER keys may set agent context but may not impersonate another user."""
+async def test_user_key_resolves_to_key_user_and_cannot_switch_user(auth_app):
+    """USER keys resolve to their owner and may not impersonate another user."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     await manager.create_account(account_id, "admin_user")
@@ -457,7 +451,6 @@ async def test_user_key_can_switch_agent_but_not_user(auth_app):
         "/api/v1/resources",
         headers={
             "X-API-Key": user_key,
-            "X-OpenViking-Agent": "assistant-7",
         },
         auth_enabled=True,
         api_key_manager=manager,
@@ -466,13 +459,11 @@ async def test_user_key_can_switch_agent_but_not_user(auth_app):
     identity = await resolve_identity(
         request,
         x_api_key=user_key,
-        x_openviking_agent="assistant-7",
     )
 
     assert identity.role == Role.USER
     assert identity.account_id == account_id
     assert identity.user_id == "alice"
-    assert identity.agent_id == "assistant-7"
 
     forbidden_request = _make_request(
         "/api/v1/resources",
@@ -715,7 +706,6 @@ async def test_trusted_mode_allows_header_identity_without_api_key():
         headers={
             "X-OpenViking-Account": "acme",
             "X-OpenViking-User": "alice",
-            "X-OpenViking-Agent": "assistant-1",
         },
         auth_enabled=False,
         auth_mode="trusted",
@@ -725,13 +715,11 @@ async def test_trusted_mode_allows_header_identity_without_api_key():
         request,
         x_openviking_account="acme",
         x_openviking_user="alice",
-        x_openviking_agent="assistant-1",
     )
 
     assert identity.role == Role.USER
     assert identity.account_id == "acme"
     assert identity.user_id == "alice"
-    assert identity.agent_id == "assistant-1"
 
 
 async def test_trusted_mode_defaults_role_to_user():
@@ -890,7 +878,6 @@ async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
             "X-API-Key": ROOT_KEY,
             "X-OpenViking-Account": "acme",
             "X-OpenViking-User": "alice",
-            "X-OpenViking-Agent": "assistant-1",
         },
         auth_enabled=False,
         auth_mode="trusted",
@@ -902,13 +889,11 @@ async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
         x_api_key=ROOT_KEY,
         x_openviking_account="acme",
         x_openviking_user="alice",
-        x_openviking_agent="assistant-1",
     )
 
     assert identity.role == Role.USER
     assert identity.account_id == "acme"
     assert identity.user_id == "alice"
-    assert identity.agent_id == "assistant-1"
 
 
 async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers():
@@ -942,7 +927,6 @@ async def test_trusted_mode_tenant_http_routes_accept_explicit_identity_headers(
             headers={
                 "X-OpenViking-Account": "acme",
                 "X-OpenViking-User": "alice",
-                "X-OpenViking-Agent": "assistant-1",
             },
         )
 
@@ -1030,33 +1014,11 @@ async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured(
                 "X-API-Key": ROOT_KEY,
                 "X-OpenViking-Account": "acme",
                 "X-OpenViking-User": "alice",
-                "X-OpenViking-Agent": "assistant-1",
             },
         )
 
     assert response.status_code == 200
     assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
-
-
-@pytest.mark.asyncio
-async def test_trusted_mode_startup_log_mentions_root_key_requirement_when_configured(
-    auth_service,
-):
-    """Trusted mode startup warning should mention the configured server API key requirement."""
-    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
-    app = create_app(config=config, service=auth_service)
-    log_stream = io.StringIO()
-    handler = logging.StreamHandler(log_stream)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    server_app_module.logger.addHandler(handler)
-
-    try:
-        async with app.router.lifespan_context(app):
-            pass
-    finally:
-        server_app_module.logger.removeHandler(handler)
-
-    assert "configured server API key" in log_stream.getvalue()
 
 
 # ---- _is_localhost tests ----
@@ -1124,11 +1086,10 @@ async def test_trusted_mode_admin_api_without_identity_defaults_to_root():
     assert identity.role == Role.ROOT
     assert identity.account_id == "trusted"
     assert identity.user_id == "trusted"
-    assert identity.agent_id == "default"
 
 
-async def test_trusted_mode_admin_api_without_identity_accepts_agent_header():
-    """Trusted mode admin APIs without identity should still respect X-OpenViking-Agent."""
+async def test_trusted_mode_admin_api_without_identity_ignores_agent_header():
+    """Trusted mode admin APIs without identity should ignore legacy agent headers."""
     request = _make_request(
         "/api/v1/admin/accounts",
         headers={"X-OpenViking-Agent": "my-admin-agent"},
@@ -1136,15 +1097,11 @@ async def test_trusted_mode_admin_api_without_identity_accepts_agent_header():
         auth_mode="trusted",
     )
 
-    identity = await resolve_identity(
-        request,
-        x_openviking_agent="my-admin-agent",
-    )
+    identity = await resolve_identity(request)
 
     assert identity.role == Role.ROOT
     assert identity.account_id == "trusted"
     assert identity.user_id == "trusted"
-    assert identity.agent_id == "my-admin-agent"
 
 
 async def test_trusted_mode_admin_api_with_partial_identity_still_requires_full_identity():

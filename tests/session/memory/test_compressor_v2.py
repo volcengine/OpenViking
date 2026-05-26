@@ -17,7 +17,13 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
+)
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
@@ -585,7 +591,21 @@ class TestCompressorV2:
                 pass
 
             async def run(self):
-                return SimpleNamespace(upsert_operations=[], delete_file_contents=[]), []
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                old_memory_file_content=None,
+                                memory_fields={},
+                                memory_type="experiences",
+                                uris=["viking://user/default/memories/experiences/debug.md"],
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
 
         class DummyUpdater:
             async def apply_operations(self, operations, ctx, **kwargs):
@@ -626,10 +646,6 @@ class TestCompressorV2:
         with (
             patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
             patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
-            patch(
-                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
-                return_value=config,
-            ),
             patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
             patch("openviking.storage.transaction.init_lock_manager"),
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
@@ -707,20 +723,24 @@ class TestCompressorV2:
         # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
         exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
         assert "source_trajectories" not in exp_mf.extra_fields
-        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), (
+            "exp.links should point to traj"
+        )
         assert exp_mf.backlinks == [], "exp should have no backlinks"
 
         # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
         traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
         assert traj_mf.links == [], "traj should have no forward links"
-        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), (
+            "traj.backlinks should reference exp"
+        )
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",   # exp read
+            "read",  # exp read
             "write",  # exp write (exp.links)
-            "read",   # traj read  (write_stored_links)
+            "read",  # traj read  (write_stored_links)
             "write",  # traj write (traj.backlinks)
             "release",
         ]
@@ -787,7 +807,7 @@ class TestExtractLoopPatchRepair:
 
         class DummyIsolationHandler:
             def get_read_scope(self):
-                return RoleScope(user_ids=["default"], agent_ids=["default"])
+                return RoleScope(user_ids=["default"])
 
             def fill_role_ids(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")
@@ -885,7 +905,7 @@ class TestExtractLoopPatchRepair:
 
         class DummyIsolationHandler:
             def get_read_scope(self):
-                return RoleScope(user_ids=["default"], agent_ids=["default"])
+                return RoleScope(user_ids=["default"])
 
             def fill_role_ids(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")
@@ -982,7 +1002,7 @@ class TestExtractLoopPatchRepair:
 
         class DummyIsolationHandler:
             def get_read_scope(self):
-                return RoleScope(user_ids=["default"], agent_ids=["default"])
+                return RoleScope(user_ids=["default"])
 
             def fill_role_ids(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")

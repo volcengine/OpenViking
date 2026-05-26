@@ -57,7 +57,10 @@ class OpenVikingConfig(BaseModel):
         default="default", description="Default account identifier"
     )
     default_user: Optional[str] = Field(default="default", description="Default user identifier")
-    default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
+    default_agent: Optional[str] = Field(
+        default=None,
+        description="Deprecated and ignored. User is the only data-plane identity.",
+    )
 
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Storage configuration"
@@ -260,8 +263,7 @@ class OpenVikingConfig(BaseModel):
                 ):
                     _get_config_warning_logger().warning(
                         "memory.agent_scope_mode is deprecated and ignored. "
-                        "User/agent namespace behavior is now controlled by per-account "
-                        "namespace policy."
+                        "User is the only data-plane namespace."
                     )
                 instance.memory = MemoryConfig.from_dict(memory_config_data)
 
@@ -488,7 +490,6 @@ def initialize_openviking_config(
         # Set user if provided, like a email address or a account_id
         config.default_account = user._account_id
         config.default_user = user._user_id
-        config.default_agent = user._agent_id
 
     # Configure storage based on provided parameters
     if path:

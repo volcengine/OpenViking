@@ -15,20 +15,25 @@ from openviking.session.memory.memory_isolation_handler import (
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def create_message(role: str, role_id: str, content: str = "test") -> Message:
+def create_message(
+    role: str,
+    role_id: str | None,
+    content: str = "test",
+    peer_id: str | None = None,
+) -> Message:
     """Helper to create a test message."""
     return Message(
         id=f"msg_{role}_{role_id}",
         role=role,
         parts=[TextPart(text=content)],
         role_id=role_id,
+        peer_id=peer_id,
     )
 
 
 def create_ctx(
     account_id: str = "test_account",
     user_id: str = "user_a",
-    agent_id: str = "agent_a",
     isolate_user_by_agent: bool = False,
     isolate_agent_by_user: bool = False,
 ) -> RequestContext:
@@ -36,7 +41,6 @@ def create_ctx(
     user = UserIdentifier(
         account_id=account_id,
         user_id=user_id,
-        agent_id=agent_id,
     )
     policy = AccountNamespacePolicy(
         isolate_user_scope_by_agent=isolate_user_by_agent,
@@ -55,8 +59,8 @@ def create_mock_extract_context(messages):
 class TestGetReadScope:
     """Tests for get_read_scope."""
 
-    def test_single_user_single_agent(self):
-        """Test extracting single user and agent."""
+    def test_single_user_scope(self):
+        """Test extracting the authenticated user scope."""
         ctx = create_ctx()
         messages = [
             create_message("user", "user_a", "Hello"),
@@ -68,10 +72,9 @@ class TestGetReadScope:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["user_a"]
-        assert scope.agent_ids == ["agent_a"]
 
-    def test_multiple_users(self):
-        """Test extracting multiple users."""
+    def test_message_role_ids_do_not_expand_user_scope(self):
+        """Message role_id does not change the authenticated user scope."""
         ctx = create_ctx()
         messages = [
             create_message("user", "user_a", "Hello from A"),
@@ -83,11 +86,10 @@ class TestGetReadScope:
 
         scope = handler.get_read_scope()
 
-        assert set(scope.user_ids) == {"user_a", "user_b"}
-        assert scope.agent_ids == ["agent_a"]
+        assert scope.user_ids == ["user_a"]
 
-    def test_multiple_agents(self):
-        """Test extracting multiple agents."""
+    def test_assistant_role_ids_do_not_create_agent_scope(self):
+        """Assistant role_id does not create a separate write scope."""
         ctx = create_ctx()
         messages = [
             create_message("user", "user_a", "Hello"),
@@ -100,7 +102,21 @@ class TestGetReadScope:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["user_a"]
-        assert set(scope.agent_ids) == {"agent_a", "agent_b"}
+
+    def test_collects_peer_ids_without_authorizing_them(self):
+        """peer_id is observable for extraction grouping, not a write owner."""
+        ctx = create_ctx()
+        messages = [
+            create_message("user", "visitor_a", peer_id="web:visitor:alice"),
+            create_message("user", "visitor_b", peer_id="web:visitor:bob"),
+        ]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(ctx, extract_ctx)
+
+        scope = handler.get_read_scope()
+
+        assert scope.user_ids == ["user_a"]
+        assert set(scope.peer_ids) == {"web:visitor:alice", "web:visitor:bob"}
 
     def test_deduplicate_users(self):
         """Test that duplicate users are deduplicated."""
@@ -119,7 +135,9 @@ class TestGetReadScope:
 
     def test_empty_messages_uses_ctx_defaults(self):
         """Test that empty messages fall back to ctx defaults."""
-        ctx = create_ctx(user_id="default_user", agent_id="default_agent")
+        ctx = create_ctx(
+            user_id="default_user",
+        )
         messages = []
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -127,11 +145,12 @@ class TestGetReadScope:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["default_user"]
-        assert scope.agent_ids == ["default_agent"]
 
     def test_messages_without_role_id_uses_ctx_defaults(self):
         """Test that messages without role_id fall back to ctx defaults."""
-        ctx = create_ctx(user_id="default_user", agent_id="default_agent")
+        ctx = create_ctx(
+            user_id="default_user",
+        )
 
         # Message without role_id
         msg = Message(
@@ -148,14 +167,13 @@ class TestGetReadScope:
 
         # Should use ctx defaults because no valid role_id found in messages
         assert scope.user_ids == ["default_user"]
-        assert scope.agent_ids == ["default_agent"]
 
 
 class TestFillRoleIds:
     """Tests for fill_role_ids."""
 
     def test_fill_role_ids_with_specified_values(self):
-        """Test fill_role_ids with specified user_id and agent_id."""
+        """Test fill_role_ids ignores deprecated agent_id."""
         ctx = create_ctx()
         messages = [
             create_message("user", "user_a"),
@@ -169,7 +187,7 @@ class TestFillRoleIds:
         handler.fill_role_ids(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
-        assert item_dict["agent_id"] == "agent_a"
+        assert "agent_id" not in item_dict
 
     def test_fill_role_ids_without_values_uses_default(self):
         """Test fill_role_ids without values uses first in scope."""
@@ -187,8 +205,8 @@ class TestFillRoleIds:
         item_dict = {}
         handler.fill_role_ids(item_dict, role_scope)
 
-        assert item_dict["user_id"] in ["user_a", "user_b"]
-        assert item_dict["agent_id"] in ["agent_a", "agent_b"]
+        assert item_dict["user_id"] == "user_a"
+        assert "agent_id" not in item_dict
 
     def test_fill_role_ids_invalid_user_id_ignored(self):
         """Test invalid user_id is ignored, uses default."""
@@ -205,7 +223,7 @@ class TestFillRoleIds:
         handler.fill_role_ids(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"  # fallback to default
-        assert item_dict["agent_id"] == "agent_a"
+        assert "agent_id" not in item_dict
 
     def test_fill_role_ids_with_ranges(self):
         """Test fill_role_ids with ranges extracts from messages."""
@@ -230,22 +248,38 @@ class TestFillRoleIds:
         handler.fill_role_ids(item_dict, role_scope)
 
         assert "user_ids" in item_dict
-        assert "agent_ids" in item_dict
-        assert set(item_dict["user_ids"]) == {"user_a", "user_b"}
-        assert set(item_dict["agent_ids"]) == {"agent_a", "agent_b"}
+        assert item_dict["user_ids"] == ["user_a"]
+        assert "agent_ids" not in item_dict
+
+    def test_fill_role_ids_adds_target_peer_only_when_explicit(self):
+        ctx = create_ctx()
+        messages = [create_message("user", "user_a", peer_id="web:visitor:alice")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            target_peer_id="web:visitor:alice",
+        )
+        role_scope = handler.get_read_scope()
+
+        item_dict = {}
+        handler.fill_role_ids(item_dict, role_scope)
+
+        assert item_dict["user_id"] == "user_a"
+        assert "agent_id" not in item_dict
+        assert item_dict["peer_id"] == "web:visitor:alice"
 
 
 class TestPrepareMessages:
-    """Tests for prepare_messages with role_id_memory_isolation_enabled toggle."""
+    """Tests for prepare_messages under the user/peer model."""
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_prepare_messages_disabled_fills_missing_role_ids(self, mock_config):
-        """开关关闭时，prepare_messages 用登录身份回填缺失的 role_id。"""
         mock_memory_config = MagicMock()
         mock_memory_config.role_id_memory_isolation_enabled = False
         mock_config.return_value.memory = mock_memory_config
 
-        ctx = create_ctx(user_id="login_user", agent_id="login_agent")
+        ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", None, "Hello"),
             create_message("assistant", None, "Hi"),
@@ -256,19 +290,18 @@ class TestPrepareMessages:
         handler.prepare_messages()
 
         assert messages[0].role_id == "login_user"
-        assert messages[1].role_id == "login_agent"
+        assert messages[1].role_id == "login_user"
         assert messages[2].role_id == "user_b"
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_prepare_messages_enabled_keeps_role_ids(self, mock_config):
-        """开关开启时，prepare_messages 不修改 role_id。"""
         mock_memory_config = MagicMock()
         mock_memory_config.role_id_memory_isolation_enabled = True
         mock_config.return_value.memory = mock_memory_config
 
-        ctx = create_ctx(user_id="login_user", agent_id="login_agent")
+        ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", "user_a", "Hello"),
+            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
             create_message("assistant", "agent_a", "Hi"),
         ]
         extract_ctx = create_mock_extract_context(messages)
@@ -276,16 +309,16 @@ class TestPrepareMessages:
         handler.prepare_messages()
 
         assert messages[0].role_id == "user_a"
+        assert messages[0].peer_id == "web:visitor:alice"
         assert messages[1].role_id == "agent_a"
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_get_read_scope_with_prepare_disabled_uses_ctx_for_missing_role_ids(self, mock_config):
-        """开关关闭时，get_read_scope 对缺失 role_id 的消息回退到登录身份。"""
         mock_memory_config = MagicMock()
         mock_memory_config.role_id_memory_isolation_enabled = False
         mock_config.return_value.memory = mock_memory_config
 
-        ctx = create_ctx(user_id="login_user", agent_id="login_agent")
+        ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", None, "Hello"),
             create_message("assistant", None, "Hi"),
@@ -296,18 +329,16 @@ class TestPrepareMessages:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["login_user"]
-        assert scope.agent_ids == ["login_agent"]
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_get_read_scope_with_prepare_enabled(self, mock_config):
-        """开关开启时，get_read_scope 从 message role_id 提取参与者。"""
         mock_memory_config = MagicMock()
         mock_memory_config.role_id_memory_isolation_enabled = True
         mock_config.return_value.memory = mock_memory_config
 
-        ctx = create_ctx(user_id="login_user", agent_id="login_agent")
+        ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", "user_a", "Hello"),
+            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
             create_message("assistant", "agent_a", "Hi"),
         ]
         extract_ctx = create_mock_extract_context(messages)
@@ -315,15 +346,14 @@ class TestPrepareMessages:
         handler.prepare_messages()
         scope = handler.get_read_scope()
 
-        assert set(scope.user_ids) == {"user_a"}
-        assert set(scope.agent_ids) == {"agent_a"}
+        assert scope.user_ids == ["login_user"]
+        assert scope.peer_ids == ["web:visitor:alice"]
 
     @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
     def test_prepare_messages_no_config_fills_missing_role_ids(self, mock_config):
-        """没有 memory 配置时，默认关闭，并用登录身份回填缺失的 role_id。"""
         mock_config.return_value.memory = None
 
-        ctx = create_ctx(user_id="login_user", agent_id="login_agent")
+        ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", None, "Hello"),
         ]
@@ -338,8 +368,8 @@ class TestCalculateMemoryUris:
     """Tests for calculate_memory_uris (integration with URI generation)."""
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
-    def test_calculate_memory_uris_single_user_agent(self, mock_generate_uri):
-        """Test calculate_memory_uris with single user and agent."""
+    def test_calculate_memory_uris_single_user(self, mock_generate_uri):
+        """Test calculate_memory_uris with a single user."""
         mock_generate_uri.return_value = "viking://user/user_a/memories/preferences"
 
         ctx = create_ctx()
@@ -368,8 +398,8 @@ class TestCalculateMemoryUris:
         assert "user_a" in uris[0]
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
-    def test_calculate_memory_uris_multiple_users_agents(self, mock_generate_uri):
-        """Test calculate_memory_uris with multiple users and agents."""
+    def test_calculate_memory_uris_ignores_extracted_user_ids(self, mock_generate_uri):
+        """LLM-extracted user_ids cannot redirect memory writes."""
         mock_generate_uri.side_effect = lambda **kwargs: (
             f"viking://user/{kwargs.get('user_space')}/memories/test"
         )
@@ -396,4 +426,45 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert len(uris) == 4  # 2 users * 2 agents
+        assert uris == ["viking://user/user_a/memories/test"]
+        assert operation.memory_fields["user_id"] == "user_a"
+        assert "agent_id" not in operation.memory_fields
+        assert "agent_ids" not in operation.memory_fields
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_calculate_memory_uris_routes_peer_memory_to_target_peer(self, mock_generate_uri):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/preferences"
+        )
+
+        ctx = create_ctx(
+            user_id="support_bot",
+        )
+        messages = [create_message("user", "visitor_a", peer_id="web:visitor:alice")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            target_peer_id="web:visitor:alice",
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            filename_template="preferences.md",
+            directory="viking://user/{user_space}/memories",
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"user_id": "alice", "agent_id": "other_agent"},
+            memory_type="preferences",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert uris == ["viking://user/support_bot/peers/web:visitor:alice/memories/preferences"]
+        assert operation.memory_fields["user_id"] == "support_bot"
+        assert "agent_id" not in operation.memory_fields
+        assert operation.memory_fields["peer_id"] == "web:visitor:alice"

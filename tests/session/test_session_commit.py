@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking import AsyncOpenViking
+from openviking.core.context import Context
+from openviking.core.namespace import canonical_user_root
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -113,6 +115,117 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
+    async def test_commit_routes_self_and_peer_memory_by_policy(
+        self,
+        client: AsyncOpenViking,
+        monkeypatch,
+    ):
+        """Commit routes self memory and peer memory as separate extraction targets."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session = client.session(session_id="peer_memory_commit_routing_test")
+        user_root = canonical_user_root(session.ctx)
+        self_uri = f"{user_root}/memories/patterns/invoice-follow-up.md"
+        peer_uri = f"{user_root}/peers/web:visitor:alice/memories/preferences/invoice-contact.md"
+        calls: list[dict] = []
+
+        async def fake_summary(messages, latest_archive_overview=""):
+            del messages, latest_archive_overview
+            return "Invoice support summary"
+
+        async def fake_extract(
+            *,
+            messages,
+            ctx,
+            allowed_memory_types,
+            target_peer_id=None,
+            **kwargs,
+        ):
+            del kwargs
+            calls.append(
+                {
+                    "target_peer_id": target_peer_id,
+                    "allowed_memory_types": set(allowed_memory_types or set()),
+                    "message_peer_ids": [message.peer_id for message in messages],
+                }
+            )
+
+            if target_peer_id:
+                assert allowed_memory_types == {"preferences"}
+                await session._viking_fs.write_file(
+                    peer_uri,
+                    "Alice prefers email for invoice follow-up.",
+                    ctx=ctx,
+                )
+                return [Context(uri=peer_uri, category="preferences", context_type="memory")]
+
+            assert allowed_memory_types == {"patterns"}
+            await session._viking_fs.write_file(
+                self_uri,
+                "For invoice issues, check tax number and delivery logs first.",
+                ctx=ctx,
+            )
+            return [Context(uri=self_uri, category="patterns", context_type="memory")]
+
+        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
+        monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", fake_extract)
+
+        session.add_message(
+            "user",
+            [TextPart("发票未收到时，先检查税号和发送日志。")],
+        )
+        session.add_message(
+            "user",
+            [TextPart("我是 Alice，后续发票问题请优先邮件联系我，邮箱是 alice@example.com。")],
+            peer_id="web:visitor:alice",
+        )
+        session.add_message(
+            "assistant",
+            [TextPart("收到，我会优先通过邮件联系你，并继续跟进发票问题。")],
+            peer_id="web:visitor:alice",
+        )
+
+        result = await session.commit_async(
+            memory_policy={
+                "self": {"enabled": True, "types": ["patterns"]},
+                "peer": {"enabled": True, "types": ["preferences"]},
+            }
+        )
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {
+            "patterns": 1,
+            "preferences": 1,
+        }
+        assert calls == [
+            {
+                "target_peer_id": None,
+                "allowed_memory_types": {"patterns"},
+                "message_peer_ids": [None, "web:visitor:alice", "web:visitor:alice"],
+            },
+            {
+                "target_peer_id": "web:visitor:alice",
+                "allowed_memory_types": {"preferences"},
+                "message_peer_ids": ["web:visitor:alice", "web:visitor:alice"],
+            },
+        ]
+        assert (
+            await session._viking_fs.read_file(self_uri, ctx=session.ctx)
+            == "For invoice issues, check tax number and delivery logs first."
+        )
+        assert (
+            await session._viking_fs.read_file(peer_uri, ctx=session.ctx)
+            == "Alice prefers email for invoice follow-up."
+        )
+        assert not await session._viking_fs.exists(
+            "viking://user/alice/memories/preferences/invoice-contact.md",
+            ctx=session.ctx,
+        )
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

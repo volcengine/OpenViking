@@ -343,7 +343,6 @@ curl -X POST "http://127.0.0.1:1933/api/v1/search/find" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -H "X-OpenViking-Account: default" \
   -H "X-OpenViking-User: default" \
-  -H "X-OpenViking-Agent: default" \
   -H "Content-Type: application/json" \
   -d '{"query":"hello","limit":3}'
 ```
@@ -355,7 +354,6 @@ curl "http://127.0.0.1:1933/api/v1/console/dashboard/summary" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -H "X-OpenViking-Account: default" \
   -H "X-OpenViking-User: default" \
-  -H "X-OpenViking-Agent: default"
 ```
 
 如果使用 Console server，则访问 `/console/api/v1/ov/console/*` 代理路径。

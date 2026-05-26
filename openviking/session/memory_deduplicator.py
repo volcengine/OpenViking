@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.namespace import canonical_user_root
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
@@ -71,17 +71,12 @@ class MemoryDeduplicator:
     SIMILARITY_THRESHOLD = 0.0  # Vector similarity threshold for pre-filtering
     MAX_PROMPT_SIMILAR_MEMORIES = 5  # Number of similar memories sent to LLM
 
-    _USER_CATEGORIES = {"preferences", "entities", "events"}
-    _AGENT_CATEGORIES = {"cases", "patterns", "tools", "skills"}
-
     @staticmethod
     def _category_uri_prefix(category: str, ctx: RequestContext) -> str:
         """Build category URI prefix with space segment."""
-        if category in MemoryDeduplicator._USER_CATEGORIES:
-            return f"{canonical_user_root(ctx)}/memories/{category}/"
-        elif category in MemoryDeduplicator._AGENT_CATEGORIES:
-            return f"{canonical_agent_root(ctx)}/memories/{category}/"
-        return ""
+        if not category:
+            return ""
+        return f"{canonical_user_root(ctx)}/memories/{category}/"
 
     def __init__(
         self,

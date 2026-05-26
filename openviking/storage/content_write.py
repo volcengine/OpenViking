@@ -380,7 +380,7 @@ class ContentWriteCoordinator:
             context_type=context_type,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
+            agent_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -390,7 +390,7 @@ class ContentWriteCoordinator:
                     uri=root_uri,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    agent_id=ctx.user.agent_id,
+                    agent_id=ctx.user.user_id,
                 )
                 if context_type in {"resource", "skill"}
                 else ""
@@ -421,7 +421,7 @@ class ContentWriteCoordinator:
             context_type="memory",
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
+            agent_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -430,7 +430,7 @@ class ContentWriteCoordinator:
                 uri=root_uri,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                agent_id=ctx.user.agent_id,
+                agent_id=ctx.user.user_id,
             ),
             changes={"modified": [modified_uri]},
         )

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from openviking.core.namespace import canonical_agent_root
+from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryFile
@@ -97,7 +97,7 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         if not self._ctx or not self._viking_fs:
             return pre_fetch_messages
 
-        skill_root_uri = f"{canonical_agent_root(self._ctx)}/skills"
+        skill_root_uri = f"{canonical_user_root(self._ctx)}/skills"
         try:
             entries = await self._viking_fs.ls(
                 skill_root_uri,

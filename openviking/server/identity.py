@@ -30,24 +30,22 @@ class AuthMode(str, Enum):
 
 @dataclass(frozen=True)
 class AccountNamespacePolicy:
-    """Account-level namespace isolation policy."""
+    """Account-level namespace isolation policy.
+
+    Agent-scoped namespace flags are accepted only for old configs and ignored.
+    """
 
     isolate_user_scope_by_agent: bool = False
     isolate_agent_scope_by_user: bool = False
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "AccountNamespacePolicy":
-        if not isinstance(data, dict):
-            return cls()
-        return cls(
-            isolate_user_scope_by_agent=bool(data.get("isolate_user_scope_by_agent", False)),
-            isolate_agent_scope_by_user=bool(data.get("isolate_agent_scope_by_user", False)),
-        )
+        return cls()
 
     def to_dict(self) -> dict:
         return {
-            "isolate_user_scope_by_agent": self.isolate_user_scope_by_agent,
-            "isolate_agent_scope_by_user": self.isolate_agent_scope_by_user,
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
         }
 
 
@@ -58,7 +56,6 @@ class ResolvedIdentity:
     role: Role
     account_id: Optional[str] = None
     user_id: Optional[str] = None
-    agent_id: Optional[str] = None
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
     # True when this identity was minted from an OAuth-issued bearer token;
     # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
@@ -92,15 +89,14 @@ class RequestContext:
 
         - If `override` is truthy, returns it as-is (caller-supplied wins).
         - For message_role="user", falls back to `user.user_id`.
-        - For message_role="assistant", falls back to `user.agent_id`.
+        - For message_role="assistant", falls back to `user.user_id` because
+          agent_id is no longer an OpenViking identity dimension.
         - Any other message_role returns None when no override is given.
         """
         if override:
             return override
-        if message_role == "user":
+        if message_role in {"user", "assistant"}:
             return self.user.user_id
-        if message_role == "assistant":
-            return self.user.agent_id
         return None
 
 

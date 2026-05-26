@@ -135,7 +135,7 @@ class SessionCompressor:
                     context_type="memory",
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    agent_id=ctx.user.agent_id,
+                    agent_id=ctx.user.user_id,
                     role=ctx.role.value,
                     changes=changes_dict,
                     telemetry_id=telemetry.telemetry_id,
@@ -323,6 +323,8 @@ class SessionCompressor:
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
         archive_uri: str = "",
+        allowed_memory_types: Optional[set[str]] = None,
+        target_peer_id: Optional[str] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
@@ -350,9 +352,21 @@ class SessionCompressor:
                 if strict_extract_errors:
                     # Intentionally let extraction errors bubble up so caller (task tracker)
                     # can mark background commit tasks as failed with an explicit error.
-                    candidates = await self.extractor.extract_strict(context, user, session_id)
+                    candidates = await self.extractor.extract_strict(
+                        context,
+                        user,
+                        session_id,
+                        allowed_memory_types=allowed_memory_types,
+                        target_peer_id=target_peer_id,
+                    )
                 else:
-                    candidates = await self.extractor.extract(context, user, session_id)
+                    candidates = await self.extractor.extract(
+                        context,
+                        user,
+                        session_id,
+                        allowed_memory_types=allowed_memory_types,
+                        target_peer_id=target_peer_id,
+                    )
 
                 if not candidates:
                     return []

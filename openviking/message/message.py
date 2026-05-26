@@ -21,6 +21,7 @@ class Message:
     role: Literal["user", "assistant"]
     parts: List[Part]
     role_id: Optional[str] = None
+    peer_id: Optional[str] = None
     created_at: str = None
 
     @property
@@ -71,13 +72,16 @@ class Message:
                 .isoformat(timespec="milliseconds")
                 .replace("+00:00", "Z")
             )
-        return {
+        data = {
             "id": self.id,
             "role": self.role,
             "role_id": self.role_id,
             "parts": [self._part_to_dict(p) for p in self.parts],
             "created_at": created_at_val,
         }
+        if self.peer_id is not None:
+            data["peer_id"] = self.peer_id
+        return data
 
     def _part_to_dict(self, part: Part) -> dict:
         if isinstance(part, TextPart):
@@ -203,6 +207,7 @@ class Message:
             role=data["role"],
             parts=parts,
             role_id=data.get("role_id"),
+            peer_id=data.get("peer_id") or data.get("agent_id"),
             created_at=data.get("created_at"),
         )
 
@@ -212,6 +217,7 @@ class Message:
         content: str,
         msg_id: str = None,
         role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> "Message":
         """Create user message."""
         from uuid import uuid4
@@ -221,6 +227,7 @@ class Message:
             role="user",
             parts=[TextPart(text=content)],
             role_id=role_id,
+            peer_id=peer_id,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -232,6 +239,7 @@ class Message:
         tool_calls: List[dict] = None,
         msg_id: str = None,
         role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> "Message":
         """Create assistant message."""
         from uuid import uuid4
@@ -266,6 +274,7 @@ class Message:
             role="assistant",
             parts=parts,
             role_id=role_id,
+            peer_id=peer_id,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 

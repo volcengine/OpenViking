@@ -92,7 +92,6 @@ pub async fn handle_add_resource(
     let client = client::HttpClient::new(
         &ctx.config.url,
         ctx.config.api_key.clone(),
-        ctx.config.agent_id.clone(),
         ctx.config.account.clone(),
         ctx.config.user.clone(),
         effective_timeout,
@@ -339,12 +338,14 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             session_id,
             role,
             content,
+            peer_id,
         } => {
             commands::session::add_message(
                 &client,
                 &session_id,
                 &role,
                 &content,
+                peer_id.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -956,6 +957,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -966,8 +968,14 @@ pub async fn handle_find(
     if let Some(ref l) = level {
         params.push(format!(
             "--level {}",
-            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+            l.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
+    }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -982,6 +990,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -997,6 +1006,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1010,8 +1020,14 @@ pub async fn handle_search(
     if let Some(ref l) = level {
         params.push(format!(
             "--level {}",
-            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+            l.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
+    }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1027,6 +1043,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )

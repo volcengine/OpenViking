@@ -18,6 +18,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory_policy import DEFAULT_SELF_MEMORY_TYPES, MemoryPolicy
 from openviking.session.tool_result_store import ToolResultStore, make_preview, sha256_text
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -41,6 +42,24 @@ _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 def _wm_debug(msg: str) -> None:
     """Log a WM v2 debug message via the standard logger."""
     logger.debug("wm_v2: %s", msg)
+
+
+def _known_memory_types() -> set[str]:
+    """Return memory types accepted by commit memory_policy."""
+    names = set(DEFAULT_SELF_MEMORY_TYPES)
+    try:
+        from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+
+        names.update(MemoryTypeRegistry().list_names())
+    except Exception:
+        logger.debug("Failed to load v2 memory type registry", exc_info=True)
+    return names
+
+
+def _default_memory_counts() -> Dict[str, int]:
+    counts = dict.fromkeys(sorted(DEFAULT_SELF_MEMORY_TYPES), 0)
+    counts["total"] = 0
+    return counts
 
 
 # =====================================================================
@@ -162,25 +181,13 @@ class SessionMeta:
     session_id: str = ""
     created_at: str = ""
     updated_at: str = ""
+    created_by_account_id: str = ""
     created_by_user_id: str = ""
     participant_user_ids: List[str] = field(default_factory=list)
-    participant_agent_ids: List[str] = field(default_factory=list)
     message_count: int = 0
     total_message_count: Optional[int] = 0
     commit_count: int = 0
-    memories_extracted: Dict[str, int] = field(
-        default_factory=lambda: {
-            "profile": 0,
-            "preferences": 0,
-            "entities": 0,
-            "events": 0,
-            "cases": 0,
-            "patterns": 0,
-            "tools": 0,
-            "skills": 0,
-            "total": 0,
-        }
-    )
+    memories_extracted: Dict[str, int] = field(default_factory=_default_memory_counts)
     last_commit_at: str = ""
     llm_token_usage: Dict[str, int] = field(
         default_factory=lambda: {
@@ -204,15 +211,16 @@ class SessionMeta:
     # add_message calls can maintain pending_tokens consistently across
     # process restarts.
     keep_recent_count: int = 0
+    memory_policy: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
             "session_id": self.session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "created_by_account_id": self.created_by_account_id,
             "created_by_user_id": self.created_by_user_id,
             "participant_user_ids": list(self.participant_user_ids),
-            "participant_agent_ids": list(self.participant_agent_ids),
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -221,6 +229,7 @@ class SessionMeta:
             "embedding_token_usage": dict(self.embedding_token_usage),
             "pending_tokens": self.pending_tokens,
             "keep_recent_count": self.keep_recent_count,
+            "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -232,27 +241,24 @@ class SessionMeta:
         embedding_token_usage = data.get("embedding_token_usage", {})
         memories = data.get("memories_extracted", {})
 
+        memory_counts = _default_memory_counts()
+        for key, value in memories.items():
+            try:
+                memory_counts[key] = int(value or 0)
+            except (TypeError, ValueError):
+                memory_counts[key] = 0
+
         return cls(
             session_id=data.get("session_id", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
+            created_by_account_id=data.get("created_by_account_id", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
             participant_user_ids=list(data.get("participant_user_ids", [])),
-            participant_agent_ids=list(data.get("participant_agent_ids", [])),
             message_count=data.get("message_count", 0),
             total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
-            memories_extracted={
-                "profile": memories.get("profile", 0),
-                "preferences": memories.get("preferences", 0),
-                "entities": memories.get("entities", 0),
-                "events": memories.get("events", 0),
-                "cases": memories.get("cases", 0),
-                "patterns": memories.get("patterns", 0),
-                "tools": memories.get("tools", 0),
-                "skills": memories.get("skills", 0),
-                "total": memories.get("total", 0),
-            },
+            memories_extracted=memory_counts,
             last_commit_at=data.get("last_commit_at", ""),
             llm_token_usage={
                 "prompt_tokens": llm_token_usage.get("prompt_tokens", 0),
@@ -264,6 +270,7 @@ class SessionMeta:
             },
             pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
             keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
+            memory_policy=data.get("memory_policy"),
         )
 
 
@@ -311,6 +318,7 @@ class Session:
         self._meta = SessionMeta(
             session_id=self.session_id,
             created_at=get_current_timestamp(),
+            created_by_account_id=self.ctx.account_id,
             created_by_user_id=self.ctx.user.user_id,
             participant_user_ids=[self.ctx.user.user_id],
         )
@@ -367,6 +375,8 @@ class Session:
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
 
+        if not self._meta.created_by_account_id:
+            self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
         if not self._meta.participant_user_ids:
@@ -622,7 +632,7 @@ class Session:
                     tool_id=part.tool_id,
                     tool_name=part.tool_name,
                     message_id=msg.id,
-                    agent_id=msg.role_id,
+                    user_id=msg.role_id,
                     created_at=msg.created_at,
                     preview_chars=preview_chars,
                     mime_type=part.tool_output_mime_type or "text/plain",
@@ -798,7 +808,13 @@ class Session:
             role = spec["role"]
             parts = spec["parts"]
             role_id = spec.get("role_id")
+            peer_id = spec.get("peer_id")
             created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+            if peer_id and ("/" in peer_id or "\\" in peer_id):
+                from openviking_cli.exceptions import InvalidArgumentError
+
+                raise InvalidArgumentError("peer_id must not contain path separators")
 
             if self._is_tool_result_aggregate(role, parts):
                 msgs = [
@@ -807,6 +823,7 @@ class Session:
                         role=role,
                         parts=[part],
                         role_id=role_id,
+                        peer_id=peer_id,
                         created_at=created_at,
                     )
                     for part in parts
@@ -819,6 +836,7 @@ class Session:
                     role=role,
                     parts=parts,
                     role_id=role_id,
+                    peer_id=peer_id,
                     created_at=created_at,
                 )
                 self._externalize_large_tool_outputs(msg)
@@ -832,6 +850,7 @@ class Session:
         role: str,
         parts: List[Part],
         role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
         created_at: str = None,
     ) -> Message:
         """Add a message.
@@ -839,21 +858,23 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        msgs = self.add_messages([{
-            "role": role,
-            "parts": parts,
-            "role_id": role_id,
-            "created_at": created_at,
-        }])
+        msgs = self.add_messages(
+            [
+                {
+                    "role": role,
+                    "parts": parts,
+                    "role_id": role_id,
+                    "peer_id": peer_id,
+                    "created_at": created_at,
+                }
+            ]
+        )
         return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:
-        if msg.role == "user" and msg.role_id:
+        if msg.role in {"user", "assistant"} and msg.role_id:
             if msg.role_id not in self._meta.participant_user_ids:
                 self._meta.participant_user_ids.append(msg.role_id)
-        if msg.role == "assistant" and msg.role_id:
-            if msg.role_id not in self._meta.participant_agent_ids:
-                self._meta.participant_agent_ids.append(msg.role_id)
 
     def update_tool_part(
         self,
@@ -941,12 +962,25 @@ class Session:
             return {"tool_results": []}
         return await store.list(tool_name=tool_name, limit=limit)
 
-    def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
+    def commit(
+        self,
+        keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
-        return run_async(self.commit_async(keep_recent_count=keep_recent_count))
+        return run_async(
+            self.commit_async(
+                keep_recent_count=keep_recent_count,
+                memory_policy=memory_policy,
+            )
+        )
 
     @tracer("session.commit.phase1")
-    async def commit_async(self, keep_recent_count: int = 0) -> Dict[str, Any]:
+    async def commit_async(
+        self,
+        keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
@@ -962,6 +996,8 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            memory_policy: Optional per-commit extraction policy. When omitted,
+                the session default policy is used.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -971,6 +1007,12 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
+        effective_policy = MemoryPolicy.merge(
+            session_policy=self._meta.memory_policy,
+            commit_policy=memory_policy,
+        )
+        effective_policy.validate_types(_known_memory_types())
+        effective_memory_policy = effective_policy.to_dict()
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
             f"keep_recent_count={keep_recent_count}"
@@ -1080,6 +1122,11 @@ class Session:
         self._meta.message_count = len(self._messages)
         self._meta.pending_tokens = 0
         self._meta.keep_recent_count = keep_recent_count
+        self._meta.commit_count = max(
+            self._meta.commit_count,
+            self._compression.compression_index,
+        )
+        self._meta.last_commit_at = get_current_timestamp()
         await self._save_meta()
 
         self._compression.original_count += len(messages_to_archive)
@@ -1108,6 +1155,7 @@ class Session:
                 usage_records=usage_snapshot,
                 first_message_id=messages_to_archive[0].id if messages_to_archive else "",
                 last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
+                memory_policy=effective_memory_policy,
             )
         )
 
@@ -1129,6 +1177,7 @@ class Session:
         usage_records: List["Usage"],
         first_message_id: str,
         last_message_id: str,
+        memory_policy: Optional[Dict[str, Any]],
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         import uuid
@@ -1190,7 +1239,6 @@ class Session:
                                 "session_uri": self._session_uri,
                                 "account_id": self.ctx.account_id,
                                 "user_id": self.ctx.user.user_id,
-                                "agent_id": self.ctx.user.agent_id,
                                 "role": self.ctx.role.value,
                             },
                         )
@@ -1234,9 +1282,22 @@ class Session:
                     session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
-                    if self._session_compressor and (
-                        memory_extraction_enabled or session_skill_extraction_enabled
-                    ):
+                    effective_policy = MemoryPolicy.from_dict(memory_policy)
+                    registered_memory_types = _known_memory_types()
+                    self_allowed_types = (
+                        effective_policy.self_allowed_types(registered_memory_types)
+                        if effective_policy.self_memory.enabled and memory_extraction_enabled
+                        else set()
+                    )
+                    peer_allowed_types = (
+                        effective_policy.peer_allowed_types(registered_memory_types)
+                        if effective_policy.peer_memory.enabled and memory_extraction_enabled
+                        else set()
+                    )
+                    has_policy_work = bool(
+                        self_allowed_types or peer_allowed_types or session_skill_extraction_enabled
+                    )
+                    if self._session_compressor and has_policy_work:
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
@@ -1245,93 +1306,143 @@ class Session:
                         has_agent_memory = hasattr(
                             self._session_compressor, "extract_agent_memories"
                         )
+                        agent_phase_types = {"trajectories", "experiences"}
 
-                        async def _noop_list():
-                            return []
+                        async def _extract_target(
+                            target_messages: List[Message],
+                            allowed_types: set[str],
+                            target_peer_id: Optional[str] = None,
+                        ) -> Dict[str, List[Any]]:
+                            extracted_contexts: List[Any] = []
+                            extracted_skills: List[Dict[str, Any]] = []
+                            long_term_types = allowed_types - agent_phase_types
+                            agent_types = allowed_types & agent_phase_types
 
-                        async def _noop_agent_result():
-                            return {"contexts": [], "session_skills": []}
+                            if long_term_types:
+                                extracted_contexts.extend(
+                                    await self._session_compressor.extract_long_term_memories(
+                                        messages=target_messages,
+                                        user=self.user,
+                                        session_id=self.session_id,
+                                        ctx=self.ctx,
+                                        latest_archive_overview=latest_archive_overview,
+                                        archive_uri=archive_uri,
+                                        allowed_memory_types=long_term_types,
+                                        target_peer_id=target_peer_id,
+                                    )
+                                )
 
-                        async def _run_long_term_memories():
-                            if not memory_extraction_enabled:
-                                return []
-                            return await self._session_compressor.extract_long_term_memories(
-                                messages=extraction_messages,
-                                user=self.user,
-                                session_id=self.session_id,
-                                ctx=self.ctx,
-                                latest_archive_overview=latest_archive_overview,
-                                archive_uri=archive_uri,
+                            if (
+                                target_peer_id is None
+                                and has_agent_memory
+                                and (agent_types or session_skill_extraction_enabled)
+                            ):
+                                try:
+                                    agent_result = (
+                                        await self._session_compressor.extract_agent_memories(
+                                            messages=target_messages,
+                                            ctx=self.ctx,
+                                            latest_archive_overview=latest_archive_overview,
+                                            archive_uri=archive_uri,
+                                            allowed_memory_types=agent_types,
+                                        )
+                                    )
+                                except Exception as exc:
+                                    logger.error(
+                                        "Agent memory extraction failed: %s",
+                                        exc,
+                                        exc_info=exc,
+                                    )
+                                else:
+                                    extracted_contexts.extend(agent_result.get("contexts", []))
+                                    extracted_skills.extend(agent_result.get("session_skills", []))
+
+                            return {
+                                "contexts": extracted_contexts,
+                                "session_skills": extracted_skills,
+                            }
+
+                        extraction_tasks: List[Any] = [_run_archive_summary()]
+                        extraction_labels = ["archive_summary"]
+
+                        if self_allowed_types or session_skill_extraction_enabled:
+                            extraction_tasks.append(
+                                _extract_target(extraction_messages, self_allowed_types)
                             )
+                            extraction_labels.append("self")
 
-                        async def _run_agent_memories():
-                            if not has_agent_memory:
-                                return {"contexts": [], "session_skills": []}
-                            if not (memory_extraction_enabled or session_skill_extraction_enabled):
-                                return {"contexts": [], "session_skills": []}
-                            return await self._session_compressor.extract_agent_memories(
-                                messages=extraction_messages,
-                                ctx=self.ctx,
-                                latest_archive_overview=latest_archive_overview,
-                                archive_uri=archive_uri,
-                            )
+                        if peer_allowed_types:
+                            peer_message_groups: Dict[str, List[Message]] = {}
+                            for msg in extraction_messages:
+                                peer_id = getattr(msg, "peer_id", None)
+                                if not peer_id or "/" in peer_id or "\\" in peer_id:
+                                    continue
+                                peer_message_groups.setdefault(peer_id, []).append(msg)
+                            for peer_id, peer_messages in peer_message_groups.items():
+                                extraction_tasks.append(
+                                    _extract_target(
+                                        peer_messages,
+                                        peer_allowed_types,
+                                        target_peer_id=peer_id,
+                                    )
+                                )
+                                extraction_labels.append(f"peer:{peer_id}")
 
                         _results = await asyncio.gather(
-                            _run_archive_summary(),
-                            _run_long_term_memories(),
-                            _run_agent_memories() if has_agent_memory else _noop_agent_result(),
+                            *extraction_tasks,
                             return_exceptions=True,
                         )
-                        summary_result, extracted_result, agent_result = _results
+                        summary_result = _results[0]
 
                         if isinstance(summary_result, Exception):
                             logger.error(
                                 f"Archive summary generation failed: {summary_result}",
                                 exc_info=summary_result,
                             )
-                        if isinstance(extracted_result, Exception):
-                            logger.error(
-                                f"User memory extraction failed: {extracted_result}",
-                                exc_info=extracted_result,
-                            )
-                            raise extracted_result
-                        else:
-                            extracted = extracted_result
 
-                        if isinstance(agent_result, Exception):
-                            logger.error(
-                                f"Agent memory extraction failed: {agent_result}",
-                                exc_info=agent_result,
-                            )
-                            agent_extracted = []
-                            session_skills = []
-                        else:
-                            agent_extracted = list(agent_result.get("contexts", []))
-                            session_skills = list(agent_result.get("session_skills", []))
+                        total_extracted = 0
+                        extraction_errors: list[BaseException] = []
+                        for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
+                            if isinstance(result, Exception):
+                                logger.error(
+                                    "Memory extraction failed for %s: %s",
+                                    label,
+                                    result,
+                                    exc_info=result,
+                                )
+                                extraction_errors.append(result)
+                                continue
 
-                        if memory_extraction_enabled:
-                            logger.info(f"Extracted {len(extracted)} memories")
-                            for ctx_item in extracted:
+                            target_contexts = list(result.get("contexts", []))
+                            target_skills = list(result.get("session_skills", []))
+                            logger.info(
+                                "Extracted %s memories for %s",
+                                len(target_contexts),
+                                label,
+                            )
+                            total_extracted += len(target_contexts)
+                            for ctx_item in target_contexts:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
                                 memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                            self._stats.memories_extracted += len(extracted)
-                            get_current_telemetry().set("memory.extracted", len(extracted))
+                            if target_skills:
+                                extracted_skill_results.extend(target_skills)
 
-                        if agent_extracted:
-                            logger.info(f"Extracted {len(agent_extracted)} agent memories")
-                            for ctx_item in agent_extracted:
-                                cat = getattr(ctx_item, "category", "") or "unknown"
-                                memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                            self._stats.memories_extracted += len(agent_extracted)
-                        if session_skills:
-                            logger.info(f"Extracted {len(session_skills)} session skills")
-                            extracted_skill_results = session_skills
+                        if extraction_errors:
+                            raise extraction_errors[0]
+
+                        if total_extracted:
+                            self._stats.memories_extracted += total_extracted
+                        if extracted_skill_results:
+                            logger.info(
+                                "Extracted %s session skills",
+                                len(extracted_skill_results),
+                            )
+                        get_current_telemetry().set("memory.extracted", total_extracted)
                     else:
                         if self._session_compressor:
                             logger.info(
-                                "Memory and session skill extraction are disabled by config "
-                                "(memory.extraction_enabled=false, "
-                                "memory.session_skill_extraction_enabled=false)"
+                                "Memory and session skill extraction skipped "
+                                "(disabled by config or memory_policy)"
                             )
                         await _run_archive_summary()
 
@@ -1823,12 +1934,12 @@ class Session:
 
     async def _get_pending_archive_messages(self) -> List[Message]:
         """Return messages from incomplete archives newer than the latest completed archive."""
-        latest_completed_index = 0
+        latest_completed_index = max(0, self._meta.commit_count)
         incomplete_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:
                 await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                latest_completed_index = archive["index"]
+                latest_completed_index = max(latest_completed_index, archive["index"])
             except Exception:
                 incomplete_archives.append(archive)
 

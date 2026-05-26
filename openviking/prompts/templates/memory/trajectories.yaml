@@ -5,7 +5,7 @@ description: |
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
 
-directory: "viking://agent/{{ agent_space }}/memories/trajectories"
+directory: "viking://user/{{ user_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
 operation_mode: "add_only"

@@ -341,10 +341,7 @@ pub fn render_profiled_scalar_result(value: &serde_json::Value) -> Option<String
     Some(append_profile_section(result.to_string(), obj))
 }
 
-pub fn append_profile_to_rendered(
-    rendered: String,
-    value: &serde_json::Value,
-) -> String {
+pub fn append_profile_to_rendered(rendered: String, value: &serde_json::Value) -> String {
     let Some(obj) = value.as_object() else {
         return rendered;
     };
@@ -696,8 +693,8 @@ fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
 }
 
 struct ColumnInfo {
-    max_width: usize,    // Max width for alignment (capped at 120)
-    is_numeric: bool,    // True if all values in column are numeric
+    max_width: usize,          // Max width for alignment (capped at 120)
+    is_numeric: bool,          // True if all values in column are numeric
     is_unbounded_column: bool, // True if column should respect server-side length
 }
 
@@ -1022,17 +1019,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Some(
-                [
-                    "content",
-                    "",
-                    "profile",
-                    "line one",
-                    "line two",
-                    "",
-                ]
-                .join("\n")
-            )
+            Some(["content", "", "profile", "line one", "line two", "",].join("\n"))
         );
     }
 }

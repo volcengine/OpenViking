@@ -30,7 +30,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "config-key"
-    assert client._agent_id == "config-agent"
+    assert not hasattr(client, "_agent_id")
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5
@@ -85,7 +85,6 @@ async def test_async_http_client_user_id_sets_openviking_user_header(tmp_path, m
         api_key="explicit-key",
         account="explicit-account",
         user_id="explicit-user",
-        agent_id="explicit-agent",
         timeout=33.0,
         extra_headers={},
     )
@@ -94,7 +93,6 @@ async def test_async_http_client_user_id_sets_openviking_user_header(tmp_path, m
     assert client._user_id == "explicit-user"
     assert captured["headers"] == {
         "X-API-Key": "explicit-key",
-        "X-OpenViking-Agent": "explicit-agent",
         "X-OpenViking-Account": "explicit-account",
         "X-OpenViking-User": "explicit-user",
     }

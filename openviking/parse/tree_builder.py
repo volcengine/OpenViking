@@ -75,8 +75,8 @@ class TreeBuilder:
         if scope == "user":
             # user resources go to memories (no separate resources dir)
             return "viking://user"
-        # Agent scope
-        return "viking://agent"
+        # Deprecated agent scope maps to the current user namespace.
+        return "viking://user"
 
     # ============================================================================
     # v5.0 Methods (temporary directory + SemanticQueue architecture)

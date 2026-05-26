@@ -28,7 +28,6 @@ class OVCLIConfig(BaseModel):
 
     url: Optional[str] = None
     api_key: Optional[str] = None
-    agent_id: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
     timeout: float = 60.0
@@ -42,6 +41,7 @@ class OVCLIConfig(BaseModel):
     @classmethod
     def handle_extra_headers_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != "agent_id"}
             # 支持 extra_header 作为 extra_headers 的别名
             if "extra_header" in data and "extra_headers" not in data:
                 # 复制字典并移除 extra_header，避免 extra: "forbid" 报错

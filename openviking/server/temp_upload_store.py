@@ -223,7 +223,6 @@ class TempUploadStore:
             "temp_file_id": temp_file_id,
             "account": ctx.account_id,
             "user": ctx.user.user_id,
-            "agent": ctx.user.agent_id,
             "original_filename": upload_file.filename or "",
             "content_type": getattr(upload_file, "content_type", None),
             "file_ext": Path(upload_file.filename or "").suffix,

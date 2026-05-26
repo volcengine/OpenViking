@@ -96,14 +96,18 @@ pub async fn add_message(
     session_id: &str,
     role: &str,
     content: &str,
+    peer_id: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/messages", url_encode(session_id));
-    let body = json!({
+    let mut body = json!({
         "role": role,
         "content": content
     });
+    if let Some(peer_id) = peer_id {
+        body["peer_id"] = json!(peer_id);
+    }
 
     let response: serde_json::Value = client.post(&path, &body).await?;
     output_success(&response, output_format, compact);
@@ -168,10 +172,7 @@ pub async fn add_memory(
     })?;
 
     // 2. Add messages (batch)
-    let path = format!(
-        "/api/v1/sessions/{}/messages/batch",
-        url_encode(session_id)
-    );
+    let path = format!("/api/v1/sessions/{}/messages/batch", url_encode(session_id));
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
         .map(|(role, content)| json!({"role": role, "content": content}))
@@ -230,17 +231,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Some(
-                [
-                    "OK",
-                    "",
-                    "profile",
-                    "create session 1ms",
-                    "commit 2ms",
-                    "",
-                ]
-                .join("\n")
-            )
+            Some(["OK", "", "profile", "create session 1ms", "commit 2ms", "",].join("\n"))
         );
     }
 }

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.core.namespace import user_space_fragment
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
@@ -132,12 +132,12 @@ class MemoryTypeRegistry:
             return list(self._types.keys())
         return [mt.memory_type for mt in self._types.values() if mt.enabled]
 
-    def list_search_uris(self, user_space: str, agent_space: str) -> List[str]:
+    def list_search_uris(self, user_space: str, agent_space: str = "") -> List[str]:
         """List all directory URIs for search scope.
 
         Args:
             user_space: User space name
-            agent_space: Agent space name
+            agent_space: Deprecated compatibility value. User space is authoritative.
 
         Returns:
             List of directory URIs from enabled schemas
@@ -149,7 +149,7 @@ class MemoryTypeRegistry:
                     schema.directory,
                     {
                         "user_space": user_space,
-                        "agent_space": agent_space,
+                        "agent_space": user_space,
                     },
                 )
                 uris.append(dir_path)
@@ -243,17 +243,16 @@ class MemoryTypeRegistry:
         Skip templates like entities.yaml where filename requires external parameters.
 
         Args:
-            ctx: Request context (must have user with user_space_name and agent_space_name)
+            ctx: Request context.
         """
         from openviking.storage.viking_fs import get_viking_fs
 
         logger = get_logger(__name__)
 
         user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
-        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         logger.info(
-            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"
+            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}"
         )
 
         viking_fs = get_viking_fs()
@@ -280,14 +279,14 @@ class MemoryTypeRegistry:
                     schema.directory,
                     {
                         "user_space": user_space,
-                        "agent_space": agent_space,
+                        "agent_space": user_space,
                     },
                 )
                 filename = TemplateUtils.render(
                     schema.filename_template,
                     {
                         "user_space": user_space,
-                        "agent_space": agent_space,
+                        "agent_space": user_space,
                     },
                 )
             except Exception:

@@ -15,9 +15,14 @@ from typing import List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context, ContextType, Vectorize
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.namespace import canonical_user_root, user_space_fragment
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
+from openviking.session.memory.memory_isolation_handler import (
+    is_peer_memory_type,
+    peer_user_space,
+    safe_peer_id,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, get_current_telemetry
 from openviking_cli.exceptions import NotFoundError
@@ -67,6 +72,7 @@ class CandidateMemory:
     source_session: str
     user: str
     language: str = "auto"
+    peer_id: Optional[str] = None
 
 
 @dataclass
@@ -123,12 +129,6 @@ class MemoryExtractor:
         MemoryCategory.EVENTS,
     }
 
-    # Categories that belong to agent space
-    _AGENT_CATEGORIES = {
-        MemoryCategory.CASES,
-        MemoryCategory.PATTERNS,
-    }
-
     def __init__(self):
         """Initialize memory extractor."""
         self._tool_desc_cache: dict[str, str] = {}
@@ -138,12 +138,17 @@ class MemoryExtractor:
     def _get_owner_space(category: MemoryCategory, ctx: RequestContext) -> str:
         """Derive owner_space from memory category.
 
-        PROFILE / PREFERENCES / ENTITIES / EVENTS → user_space
-        CASES / PATTERNS → agent_space
+        All memories are owned by the current User space.
         """
-        if category in MemoryExtractor._USER_CATEGORIES:
-            return ctx.user.user_id
-        return ctx.user.agent_id
+        return user_space_fragment(ctx)
+
+    @staticmethod
+    def _get_memory_root(candidate: CandidateMemory, ctx: RequestContext) -> str:
+        user_space = user_space_fragment(ctx)
+        peer_id = safe_peer_id(candidate.peer_id)
+        if peer_id and is_peer_memory_type(candidate.category.value):
+            user_space = peer_user_space(user_space, peer_id)
+        return f"viking://user/{user_space}"
 
     @staticmethod
     def _detect_output_language(messages: List, fallback_language: str = "en") -> str:
@@ -201,6 +206,8 @@ class MemoryExtractor:
         session_id: str,
         *,
         strict: bool = False,
+        allowed_memory_types: Optional[set[str]] = None,
+        target_peer_id: Optional[str] = None,
     ) -> List[CandidateMemory]:
         """Extract memory candidates from messages.
 
@@ -230,6 +237,12 @@ class MemoryExtractor:
         formatted_messages = ""
         output_language = "en"
         prompt = ""
+        allowed_memory_types = (
+            {str(item) for item in allowed_memory_types}
+            if allowed_memory_types is not None
+            else None
+        )
+        default_peer_id = safe_peer_id(target_peer_id)
 
         with telemetry.measure("memory.extract.stage.prepare_inputs"):
             for msg in messages:
@@ -241,7 +254,8 @@ class MemoryExtractor:
             for m in messages:
                 msg_content = self._format_message_with_parts(m)
                 if msg_content:
-                    formatted_lines.append(f"[{m.role}]: {msg_content}")
+                    speaker = getattr(m, "peer_id", None) or getattr(m, "role_id", None) or m.role
+                    formatted_lines.append(f"[{m.role}][{speaker}]: {msg_content}")
 
             formatted_messages = "\n".join(formatted_lines)
 
@@ -317,6 +331,8 @@ class MemoryExtractor:
                     category = MemoryCategory(category_str)
                 except ValueError:
                     category = MemoryCategory.PATTERNS
+                if allowed_memory_types is not None and category.value not in allowed_memory_types:
+                    continue
 
                 # 只在 tools/skills 时使用 ToolSkillCandidateMemory
                 if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
@@ -357,6 +373,9 @@ class MemoryExtractor:
                                 source_session=session_id,
                                 user=user,
                                 language=output_language,
+                                peer_id=(
+                                    default_peer_id if is_peer_memory_type(category.value) else None
+                                ),
                                 tool_name=tool_name,
                                 skill_name=skill_name,
                                 call_time=call_time,
@@ -396,6 +415,9 @@ class MemoryExtractor:
                                 source_session=session_id,
                                 user=user,
                                 language=output_language,
+                                peer_id=(
+                                    default_peer_id if is_peer_memory_type(category.value) else None
+                                ),
                             )
                         )
 
@@ -415,9 +437,19 @@ class MemoryExtractor:
         context: dict,
         user: UserIdentifier,
         session_id: str,
+        *,
+        allowed_memory_types: Optional[set[str]] = None,
+        target_peer_id: Optional[str] = None,
     ) -> List[CandidateMemory]:
         """Compatibility wrapper: strict mode delegates to ``extract``."""
-        return await self.extract(context, user, session_id, strict=True)
+        return await self.extract(
+            context,
+            user,
+            session_id,
+            strict=True,
+            allowed_memory_types=allowed_memory_types,
+            target_peer_id=target_peer_id,
+        )
 
     async def create_memory(
         self,
@@ -439,7 +471,7 @@ class MemoryExtractor:
             payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
-            user_root = canonical_user_root(ctx)
+            user_root = self._get_memory_root(candidate, ctx)
             memory_uri = f"{user_root}/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
@@ -459,14 +491,7 @@ class MemoryExtractor:
 
         # Determine parent URI based on category
         cat_dir = self.CATEGORY_DIRS[candidate.category]
-        if candidate.category in [
-            MemoryCategory.PREFERENCES,
-            MemoryCategory.ENTITIES,
-            MemoryCategory.EVENTS,
-        ]:
-            parent_uri = f"{canonical_user_root(ctx)}/{cat_dir}"
-        else:  # CASES, PATTERNS
-            parent_uri = f"{canonical_agent_root(ctx)}/{cat_dir}"
+        parent_uri = f"{self._get_memory_root(candidate, ctx)}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -504,7 +529,7 @@ class MemoryExtractor:
         ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = f"{canonical_user_root(ctx)}/memories/profile.md"
+        uri = f"{self._get_memory_root(candidate, ctx)}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
@@ -612,8 +637,8 @@ class MemoryExtractor:
             logger.warning("Tool name is empty, skipping tool memory merge")
             return None
 
-        agent_root = canonical_agent_root(ctx)
-        uri = f"{agent_root}/memories/tools/{tool_name}.md"
+        user_root = canonical_user_root(ctx)
+        uri = f"{user_root}/memories/tools/{tool_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1124,10 +1149,9 @@ class MemoryExtractor:
         abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Tool Memory 的 Context 对象"""
-        agent_root = canonical_agent_root(ctx)
         return Context(
             uri=uri,
-            parent_uri=f"{agent_root}/memories/tools",
+            parent_uri=f"{canonical_user_root(ctx)}/memories/tools",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1135,7 +1159,7 @@ class MemoryExtractor:
             session_id=candidate.source_session,
             user=candidate.user,
             account_id=ctx.account_id,
-            owner_space=ctx.user.agent_id,
+            owner_space=user_space_fragment(ctx),
         )
 
     def _extract_tool_guidelines(self, content: str) -> str:
@@ -1166,8 +1190,8 @@ class MemoryExtractor:
             logger.warning("Skill name is empty, skipping skill memory merge")
             return None
 
-        agent_root = canonical_agent_root(ctx)
-        uri = f"{agent_root}/memories/skills/{skill_name}.md"
+        user_root = canonical_user_root(ctx)
+        uri = f"{user_root}/memories/skills/{skill_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1452,10 +1476,9 @@ class MemoryExtractor:
         abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Skill Memory 的 Context 对象"""
-        agent_root = canonical_agent_root(ctx)
         return Context(
             uri=uri,
-            parent_uri=f"{agent_root}/memories/skills",
+            parent_uri=f"{canonical_user_root(ctx)}/memories/skills",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1463,7 +1486,7 @@ class MemoryExtractor:
             session_id=candidate.source_session,
             user=candidate.user,
             account_id=ctx.account_id,
-            owner_space=ctx.user.agent_id,
+            owner_space=user_space_fragment(ctx),
         )
 
     def _extract_skill_guidelines(self, content: str) -> str:

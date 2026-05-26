@@ -66,9 +66,7 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
-        self._user = user or UserIdentifier(
-            config.default_account, config.default_user, config.default_agent
-        )
+        self._user = user or UserIdentifier(config.default_account, config.default_user)
 
         # Infrastructure
         self._agfs_client: Optional[Any] = None

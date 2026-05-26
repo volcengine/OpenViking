@@ -32,7 +32,6 @@ pub struct Config {
     pub account: Option<String>,
     #[serde(alias = "user_id")]
     pub user: Option<String>,
-    pub agent_id: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: f64,
     #[serde(default = "default_output_format")]
@@ -83,7 +82,6 @@ impl Default for Config {
             root_api_key: None,
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -192,15 +190,13 @@ mod tests {
                 "url": "http://localhost:1933",
                 "api_key": "test-key",
                 "account": "acme",
-                "user": "alice",
-                "agent_id": "assistant-1"
+                "user": "alice"
             }"#,
         )
         .expect("config should deserialize");
 
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
-        assert_eq!(config.agent_id.as_deref(), Some("assistant-1"));
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
@@ -318,9 +314,17 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]
@@ -361,8 +365,16 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 }

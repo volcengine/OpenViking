@@ -1,20 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Memory Isolation Handler - 处理记忆的隔离机制
+"""Memory isolation helpers for resolving session memory write targets."""
 
-根据 account namespace policy 和 session 参与者列表，
-计算记忆的写入目录并校验 role_id。
-"""
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.namespace import to_agent_space, to_user_space
+from openviking.core.namespace import to_user_space
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
-from openviking.session.memory.utils.uri import generate_uri
+from openviking.session.memory.utils.uri import generate_uri, render_template
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -23,25 +18,57 @@ logger = get_logger(__name__)
 
 @dataclass
 class RoleScope:
-    """Role 作用范围 - 从 messages 推断的可访问范围"""
+    """Participant scope inferred from session messages."""
 
-    user_ids: List[str]  # 参与者中的 user_id 列表
-    agent_ids: List[str]  # 参与者中的 agent_id 列表
+    user_ids: List[str]
+    peer_ids: List[str] = field(default_factory=list)
+
+
+PEER_MEMORY_TYPES = {"profile", "preferences", "entities", "events"}
+
+
+def peer_user_space(user_space: str, peer_id: str) -> str:
+    """Return the user-space fragment for memory about a stable peer."""
+    return f"{user_space}/peers/{peer_id}"
+
+
+def is_peer_memory_type(memory_type: str) -> bool:
+    return memory_type in PEER_MEMORY_TYPES
+
+
+def safe_peer_id(peer_id: Optional[str]) -> Optional[str]:
+    if not peer_id:
+        return None
+    if "/" in peer_id or "\\" in peer_id:
+        return None
+    return peer_id
 
 
 class MemoryIsolationHandler:
     """Memory isolation handler."""
 
-    def __init__(self, ctx: RequestContext, extract_context: Any):
+    def __init__(
+        self,
+        ctx: RequestContext,
+        extract_context: Any,
+        target_peer_id: Optional[str] = None,
+        allowed_memory_types: Optional[Set[str]] = None,
+    ):
         self.ctx = ctx
         self._extract_context = extract_context
+        self.target_peer_id = safe_peer_id(target_peer_id)
+        self.allowed_memory_types = (
+            {str(item) for item in allowed_memory_types}
+            if allowed_memory_types is not None
+            else None
+        )
         config = get_openviking_config()
         self.role_id_memory_isolation_enabled = (
             config.memory.role_id_memory_isolation_enabled if config.memory else False
         )
 
     def prepare_messages(self) -> None:
-        """开关关闭时，规范化 messages 中的 role_id，缺失时回退到登录身份。"""
+        """Normalize missing role_id values when role_id memory isolation is disabled."""
         if self.role_id_memory_isolation_enabled:
             return
         messages = self._extract_context.messages if self._extract_context else []
@@ -50,37 +77,29 @@ class MemoryIsolationHandler:
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
-        agent_ids = set()
+        peer_ids = set()
 
-        # 先从 messages 中提取 role_id
-        messages = self._extract_context.messages if self._extract_context else []
-        for msg in messages:
-            role = msg.role
-            role_id = msg.role_id
-            if not role_id:
-                continue
-            if role == "user":
-                user_ids.add(role_id)
-            elif role == "assistant":
-                agent_ids.add(role_id)
-
-        # 只有当 messages 中没有提取到 user_ids/agent_ids 时，才添加 ctx 中的 userid/agentid
         if self.ctx and self.ctx.user:
             user_id = self.ctx.user.user_id
-            agent_id = self.ctx.user.agent_id
-            if not user_ids and user_id:
+            if user_id:
                 user_ids.add(user_id)
-            if not agent_ids and agent_id:
-                agent_ids.add(agent_id)
+
+        messages = self._extract_context.messages if self._extract_context else []
+        for msg in messages:
+            peer_id = safe_peer_id(getattr(msg, "peer_id", None))
+            if peer_id:
+                peer_ids.add(peer_id)
+        if self.target_peer_id:
+            peer_ids.add(self.target_peer_id)
 
         return RoleScope(
             user_ids=list(user_ids),
-            agent_ids=list(agent_ids),
+            peer_ids=list(peer_ids),
         )
 
     def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
         user_ids = set()
-        agent_ids = set()
+        peer_ids = set()
 
         def add_role_id(role_ids, role_id, scope_ids):
             if role_id is None:
@@ -92,21 +111,20 @@ class MemoryIsolationHandler:
         def add_user_id(user_id):
             add_role_id(user_ids, user_id, role_scope.user_ids)
 
-        def add_agent_id(agent_id):
-            add_role_id(agent_ids, agent_id, role_scope.agent_ids)
-
         def check_set_default():
-            if not user_ids:
+            if not user_ids and role_scope.user_ids:
                 user_ids.add(role_scope.user_ids[0])
-            if not agent_ids:
-                agent_ids.add(role_scope.agent_ids[0])
 
         if item_dict.get("ranges") is None:
             add_user_id(item_dict.get("user_id"))
-            add_agent_id(item_dict.get("agent_id"))
+            if self.target_peer_id:
+                peer_ids.add(self.target_peer_id)
             check_set_default()
-            item_dict["user_id"] = list(user_ids)[0]
-            item_dict["agent_id"] = list(agent_ids)[0]
+            if user_ids:
+                item_dict["user_id"] = list(user_ids)[0]
+            item_dict.pop("agent_id", None)
+            if len(peer_ids) == 1:
+                item_dict["peer_id"] = list(peer_ids)[0]
 
         else:
             # 使用 ExtractContext 的方法解析 ranges
@@ -116,26 +134,42 @@ class MemoryIsolationHandler:
                 for msg in msg_group:
                     if msg.role == "user":
                         add_user_id(msg.role_id)
-                    elif msg.role == "assistant":
-                        add_agent_id(msg.role_id)
+            if self.target_peer_id:
+                peer_ids.add(self.target_peer_id)
             check_set_default()
             item_dict["user_ids"] = list(user_ids)
-            item_dict["agent_ids"] = list(agent_ids)
+            item_dict.pop("agent_ids", None)
+            if len(peer_ids) == 1:
+                item_dict["peer_id"] = list(peer_ids)[0]
 
-    def _extract_role_ids_from_messages_range(
-        self, ranges: Optional[str], user_ids: Set[str], agent_ids: Set[str]
-    ):
-        """
-        从 events 的 ranges 字段提取涉及的 role_id。
+    def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
+        memory_type = getattr(memory_type_schema, "memory_type", "")
+        if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
+            return False
+        if self.target_peer_id and not is_peer_memory_type(memory_type):
+            return False
+        return True
 
-        解析 ranges 格式，提取范围内的所有 user 角色的消息参与者。
-        """
-        if not ranges or not self._extract_context:
-            return
+    def _template_vars(self, user_id: str, memory_type: str) -> Dict[str, str]:
+        policy = self.ctx.namespace_policy
+        user_space = to_user_space(policy, user_id)
+        if self.target_peer_id and is_peer_memory_type(memory_type):
+            user_space = peer_user_space(user_space, self.target_peer_id)
+        return {
+            "user_space": user_space,
+            "agent_space": user_space,
+        }
 
-        messages = self._extract_context.messages
-        if not messages:
-            return []
+    def render_schema_directory(self, memory_type_schema: MemoryTypeSchema) -> str:
+        user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
+        return render_template(
+            memory_type_schema.directory,
+            self._template_vars(
+                user_id,
+                getattr(memory_type_schema, "memory_type", ""),
+            ),
+            self._extract_context,
+        )
 
     def calculate_memory_uris(
         self,
@@ -143,27 +177,31 @@ class MemoryIsolationHandler:
         operation: ResolvedOperation,
         extract_context: ExtractContext,
     ):
+        if not self.allows_schema(memory_type_schema):
+            return []
         policy = self.ctx.namespace_policy
 
-        user_ids = operation.memory_fields.get("user_ids") or [
-            operation.memory_fields.get("user_id")
-        ]
-        agent_ids = operation.memory_fields.get("agent_ids") or [
-            operation.memory_fields.get("agent_id")
-        ]
+        if not self.ctx or not self.ctx.user:
+            return []
+
+        user_id = self.ctx.user.user_id
+        operation.memory_fields["user_id"] = user_id
+        operation.memory_fields.pop("agent_id", None)
+        operation.memory_fields.pop("agent_ids", None)
+
         # 文件
         uris = set()
-        for user_id in user_ids:
-            for agent_id in agent_ids:
-                user_space = to_user_space(policy, user_id, agent_id)
-                agent_space = to_agent_space(policy, user_id, agent_id)
-                uri = generate_uri(
-                    memory_type=memory_type_schema,
-                    fields=operation.memory_fields,
-                    user_space=user_space,
-                    agent_space=agent_space,
-                    extract_context=extract_context,
-                )
-                uris.add(uri)
+        user_space = to_user_space(policy, user_id)
+        if self.target_peer_id and is_peer_memory_type(memory_type_schema.memory_type):
+            operation.memory_fields["peer_id"] = self.target_peer_id
+            user_space = peer_user_space(user_space, self.target_peer_id)
+        uri = generate_uri(
+            memory_type=memory_type_schema,
+            fields=operation.memory_fields,
+            user_space=user_space,
+            agent_space=user_space,
+            extract_context=extract_context,
+        )
+        uris.add(uri)
 
         return list(uris)

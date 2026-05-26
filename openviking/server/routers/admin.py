@@ -16,7 +16,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    # Deprecated compatibility fields. Agent-scoped namespace isolation is ignored.
     isolate_user_scope_by_agent: bool = False
     isolate_agent_scope_by_user: bool = False
 
@@ -91,10 +92,7 @@ async def create_account(
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
-    policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=body.isolate_user_scope_by_agent,
-        isolate_agent_scope_by_user=body.isolate_agent_scope_by_user,
-    )
+    policy = AccountNamespacePolicy()
     user_key = await manager.create_account(
         body.account_id,
         body.admin_user_id,
@@ -102,7 +100,7 @@ async def create_account(
     )
     service = get_service()
     account_ctx = RequestContext(
-        user=UserIdentifier(body.account_id, body.admin_user_id, "default"),
+        user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
         namespace_policy=policy,
     )
@@ -142,7 +140,7 @@ async def delete_account(
 
     # Build a ROOT-level context scoped to the target account for cleanup
     cleanup_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system", "system"),
+        user=UserIdentifier(account_id, "system"),
         role=Role.ROOT,
     )
 
@@ -150,7 +148,6 @@ async def delete_account(
     viking_fs = get_viking_fs()
     account_prefixes = [
         "viking://user/",
-        "viking://agent/",
         "viking://session/",
         "viking://resources/",
     ]
@@ -192,7 +189,7 @@ async def register_user(
     user_key = await manager.register_user(account_id, body.user_id, resolved_role.value)
     service = get_service()
     user_ctx = RequestContext(
-        user=UserIdentifier(account_id, body.user_id, "default"),
+        user=UserIdentifier(account_id, body.user_id),
         role=Role.USER,
         namespace_policy=manager.get_account_policy(account_id),
     )
@@ -233,39 +230,11 @@ async def list_agents(
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List agent namespaces that have data under an account."""
+    """Deprecated compatibility endpoint. Agent namespaces no longer exist."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     manager.get_users(account_id, limit=1, expose_key=False)
-    policy = manager.get_account_policy(account_id)
-    viking_fs = get_viking_fs()
-    list_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system", "system"),
-        role=Role.ROOT,
-        namespace_policy=policy,
-    )
-
-    try:
-        entries = await viking_fs.ls("viking://agent", ctx=list_ctx, output="original")
-    except NotFoundError:
-        entries = []
-
-    agents = []
-    for entry in entries:
-        if not entry.get("isDir", False):
-            continue
-        agent_id = str(entry.get("name", "")).strip()
-        if not agent_id:
-            continue
-        agents.append(
-            {
-                "agent_id": agent_id,
-                "uri": f"viking://agent/{agent_id}",
-            }
-        )
-
-    agents.sort(key=lambda item: item["agent_id"])
-    return Response(status="ok", result=agents)
+    return Response(status="ok", result=[])
 
 
 @router.delete("/accounts/{account_id}/users/{user_id}")

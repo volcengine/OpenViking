@@ -80,7 +80,10 @@ pub async fn rm(
 ) -> Result<()> {
     let result = client.rm(uri, recursive).await?;
 
-    let message = if let Some(count) = result.get("estimated_deleted_count").and_then(|v| v.as_u64()) {
+    let message = if let Some(count) = result
+        .get("estimated_deleted_count")
+        .and_then(|v| v.as_u64())
+    {
         format!("Removed: {} ({} items)", uri, count)
     } else {
         format!("Removed: {}", uri)
@@ -128,7 +131,10 @@ fn output_message_result(
     match output_format {
         OutputFormat::Json => output_success(result, output_format, compact),
         OutputFormat::Table => {
-            println!("{}", crate::output::append_profile_to_rendered(message, &result));
+            println!(
+                "{}",
+                crate::output::append_profile_to_rendered(message, &result)
+            );
         }
     }
 }
