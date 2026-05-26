@@ -359,6 +359,26 @@ def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
     assert instances[0].closed is True
 
 
+def test_in_memory_openviking_client_batch_add_messages_records_messages():
+    client = InMemoryOpenVikingClient()
+
+    result = client.batch_add_messages(
+        "batch-session",
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+        ],
+    )
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert [message["role"] for message in client.sessions["batch-session"]] == [
+        "user",
+        "assistant",
+    ]
+    assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
+    assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
+
+
 def test_chat_message_history_preserves_tool_parts():
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(session_id="history-session", client=client)

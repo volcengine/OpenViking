@@ -77,6 +77,46 @@ async def test_local_client_reindex_forwards_to_service():
     client._service.reindex.assert_awaited_once()
 
 
+async def test_local_client_batch_add_messages_forwards_to_session():
+    class FakeSession:
+        def __init__(self):
+            self.messages = []
+
+        def add_messages(self, specs):
+            self.messages.extend(specs)
+            return specs
+
+    fake_session = FakeSession()
+
+    class FakeSessions:
+        async def get(self, session_id, ctx, auto_create=False):
+            assert session_id == "batch-session"
+            assert ctx is client._ctx
+            assert auto_create is True
+            return fake_session
+
+    client = LocalClient.__new__(LocalClient)
+    client._service = SimpleNamespace(sessions=FakeSessions())
+    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1", agent_id="agent-1"))
+
+    result = await LocalClient.batch_add_messages(
+        client,
+        "batch-session",
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+        ],
+    )
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert fake_session.messages[0]["role"] == "user"
+    assert fake_session.messages[0]["role_id"] == "user-1"
+    assert fake_session.messages[0]["parts"][0].text == "hello"
+    assert fake_session.messages[1]["role"] == "assistant"
+    assert fake_session.messages[1]["role_id"] == "agent-1"
+    assert fake_session.messages[1]["parts"][0].text == "hi"
+
+
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
