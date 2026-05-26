@@ -50,6 +50,55 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+_OPENGAUSS_MODES = {"standalone", "distributed"}
+
+
+class OpenGaussConfig(BaseModel):
+    """Configuration for openGauss vector database (via psycopg2 + pgvector).
+
+    Driver: openGauss-connector-python-psycopg2
+      pip install git+https://gitcode.com/opengauss/openGauss-connector-python-psycopg2.git
+
+    ``mode`` controls the deployment topology:
+
+    * ``"standalone"`` (default): single-node openGauss instance.
+    * ``"distributed"``: openGauss cluster with spq_plugin_v2 (Citus) extension.
+      Point ``host``/``port`` to the CN (coordinator node).
+      ``shard_count`` takes effect only in this mode.
+    """
+
+    host: str = Field(default="127.0.0.1", description="openGauss host address (CN node when mode=distributed)")
+    port: int = Field(default=5432, description="openGauss port")
+    user: str = Field(default="gaussdb", description="Database user")
+    password: str = Field(default="", description="Database password")
+    db_name: str = Field(default="openviking", description="Database name")
+    mode: str = Field(
+        default="standalone",
+        description=(
+            "Deployment mode: 'standalone' (single node) or 'distributed' "
+            "(cluster via spq_plugin_v2/Citus, connect to CN node)."
+        ),
+    )
+    shard_count: int = Field(
+        default=32,
+        description="Number of shards per distributed table (only used when mode='distributed')",
+    )
+
+    @property
+    def is_distributed(self) -> bool:
+        return self.mode == "distributed"
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode not in _OPENGAUSS_MODES:
+            raise ValueError(
+                f"Invalid openGauss mode: '{self.mode}'. Must be one of: {sorted(_OPENGAUSS_MODES)}"
+            )
+        return self
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -117,6 +166,11 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    opengauss: Optional[OpenGaussConfig] = Field(
+        default_factory=lambda: OpenGaussConfig(),
+        description="openGauss configuration for 'opengauss' type",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -127,7 +181,7 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb"]
+        standard_backends = ["local", "http", "volcengine", "vikingdb", "opengauss"]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -175,5 +229,11 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "opengauss":
+            if not self.opengauss:
+                raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
+            if not self.opengauss.host:
+                raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
 
         return self
