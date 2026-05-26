@@ -26,7 +26,7 @@ bash "${SCRIPT_DIR}/run_full_test.sh" \
 log ">>> Epoch 0 done"
 
 # Wait for OpenViking server to finish async memory processing
-WAIT_SECS=300
+WAIT_SECS=9000
 log ">>> Waiting ${WAIT_SECS}s for server async memory commit to finish..."
 sleep "${WAIT_SECS}"
 log ">>> Wait done, starting Epoch 1"
