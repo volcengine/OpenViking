@@ -226,6 +226,8 @@ class InMemoryOpenVikingClient:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
+        role_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         message_parts = list(parts or [{"type": "text", "text": content or ""}])
@@ -233,8 +235,10 @@ class InMemoryOpenVikingClient:
             "id": f"msg_{uuid.uuid4().hex}",
             "role": role,
             "parts": message_parts,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at or datetime.now(timezone.utc).isoformat(),
         }
+        if role_id is not None:
+            message["role_id"] = role_id
         self.sessions.setdefault(session_id, []).append(message)
         self.pending_tokens[session_id] += max(1, len(_message_text(message)) // 4)
         return {
@@ -256,6 +260,8 @@ class InMemoryOpenVikingClient:
                 role=message["role"],
                 content=message.get("content"),
                 parts=message.get("parts"),
+                created_at=message.get("created_at"),
+                role_id=message.get("role_id"),
             )
             added += 1
         return {

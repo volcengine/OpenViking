@@ -366,7 +366,12 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
         "batch-session",
         [
             {"role": "user", "content": "hello"},
-            {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "text": "hi"}],
+                "role_id": "agent-1",
+                "created_at": "2026-05-26T00:00:00+00:00",
+            },
         ],
     )
 
@@ -377,6 +382,8 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
     ]
     assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
     assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
+    assert client.sessions["batch-session"][1]["role_id"] == "agent-1"
+    assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
 def test_chat_message_history_preserves_tool_parts():
