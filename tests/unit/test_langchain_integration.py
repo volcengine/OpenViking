@@ -354,9 +354,7 @@ def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
     retriever = OpenVikingRetriever(url="http://localhost:1933")
     docs = retriever.invoke("recover")
 
-    assert [doc.metadata["openviking_uri"] for doc in docs] == [
-        "viking://resources/recovered.md"
-    ]
+    assert [doc.metadata["openviking_uri"] for doc in docs] == ["viking://resources/recovered.md"]
     assert len(instances) == 2
     assert instances[0].closed is True
 

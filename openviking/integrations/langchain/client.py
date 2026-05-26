@@ -271,9 +271,7 @@ def _is_recoverable_client_error(exc: BaseException) -> bool:
         return True
     if isinstance(exc, RuntimeError):
         message = str(exc).lower()
-        return any(
-            fragment in message for fragment in _RECOVERABLE_RUNTIME_MESSAGE_FRAGMENTS
-        )
+        return any(fragment in message for fragment in _RECOVERABLE_RUNTIME_MESSAGE_FRAGMENTS)
     try:
         import httpx
     except Exception:  # pragma: no cover - httpx is available in HTTP installs
