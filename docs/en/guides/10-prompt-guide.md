@@ -108,6 +108,8 @@ fields:
 filename_template: "profile.md"
 content_template: |
   ...
+embedding_template: |
+  ...
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
@@ -125,6 +127,8 @@ Field meanings:
   - The template used to generate the file name
 - `content_template`
   - The body template used when writing the memory file
+- `embedding_template`
+  - The template used to render the text that is embedded for semantic retrieval; when unset, a default representation is used
 - `directory`
   - The directory where this memory type is stored
 - `enabled`

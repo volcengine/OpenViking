@@ -94,6 +94,13 @@ class PathLockEngine:
             return stat.get("isDir") is True
         return getattr(stat, "isDir", None) is True
 
+    async def _is_existing_path_async(self, path: str) -> bool:
+        try:
+            await self._async_agfs.stat(path.rstrip("/") or "/")
+            return True
+        except Exception:
+            return False
+
     def _get_prefixed_exact_lock_path(self, path: str) -> str:
         path = path.rstrip("/") or "/"
         parent = self._get_parent_path(path)
@@ -402,8 +409,12 @@ class PathLockEngine:
     async def _scan_descendants_for_locks(self, path: str, exclude_owner_id: str) -> Optional[str]:
         try:
             try:
-                await self._async_agfs.stat(path)
+                stat = await self._async_agfs.stat(path)
             except Exception:
+                return None
+            if isinstance(stat, dict) and not stat.get("isDir", False):
+                return None
+            if not isinstance(stat, dict) and getattr(stat, "isDir", None) is not True:
                 return None
             entries = await self._async_agfs.ls(path)
             if not isinstance(entries, list):
@@ -600,8 +611,12 @@ class PathLockEngine:
         self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
     ) -> bool:
         owner_id = owner.id
-        lock_path = self._get_lock_path(path)
-        owned_lock_type = await self._owned_lock_type(path, owner)
+        default_lock_path = self._get_lock_path(path)
+        lock_path = await self._get_exact_lock_path_async(path)
+        if lock_path != default_lock_path and not await self._is_existing_path_async(path):
+            lock_path = default_lock_path
+
+        owned_lock_type = await self._owned_lock_type_for_lock_path(lock_path, owner)
         if owned_lock_type == LOCK_TYPE_TREE:
             owner.add_lock(lock_path)
             logger.debug(f"[TREE] Reusing owned TREE lock on: {path}")

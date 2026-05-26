@@ -223,7 +223,7 @@ runtimeContext.agentId
 | `memory_forget` | 按 URI 删除，或 query 搜索后高置信度自动删除 |
 | `add_resource` | 导入文档 / URL / Git 仓库到 viking://resources |
 | `add_skill` | 导入 SKILL.md 到 viking://agent/skills |
-| `memory_search` | 搜索 resources + agent/skills |
+| `ov_search` | 搜索 resources + agent/skills |
 | `ov_archive_search` | 关键词 grep 当前 session 所有归档原始消息 |
 | `ov_archive_expand` | 按 archive_id 展开归档原始消息列表 |
 
@@ -255,4 +255,3 @@ runtimeContext.agentId
 | `recallMaxInjectedChars` | `4000` | 自动召回注入的最大总字符数 |
 | `recallPreferAbstract` | `false` | 优先使用摘要而非读取全文 |
 | `bypassSessionPatterns` | `[]` | 完全跳过 OV 的 session key 模式 |
-

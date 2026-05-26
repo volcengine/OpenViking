@@ -702,6 +702,101 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 ---
 
+### batch_add_messages()
+
+#### 1. API Implementation Introduction
+
+Add multiple messages to a session in a single request. Suitable for scenarios that require writing a large number of messages at once (e.g., importing conversation history, memory extraction), offering significantly better performance than calling `add_message()` repeatedly.
+
+**Difference from `add_message()`**:
+- `add_message()`: Add 1 message per request
+- `batch_add_messages()`: Add multiple messages per request (max 100), reducing network round trips and file I/O
+
+**Code Entry Points**:
+- `openviking/session/session.py:Session.add_messages()` - Core implementation
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|------|------|------|--------|------|
+| session_id | str | Yes | - | Session ID |
+| messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
+| telemetry | bool | No | False | Whether to attach operation telemetry data |
+
+> **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/messages/batch
+```
+
+```bash
+# Add multiple messages in batch
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I authenticate users?"},
+      {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+      {"role": "user", "content": "Any specific recommendations?"}
+    ]
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+# Add messages in batch
+result = await client.batch_add_messages(
+    session_id="a1b2c3d4",
+    messages=[
+        {"role": "user", "content": "How do I authenticate users?"},
+        {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+        {"role": "user", "content": "Any specific recommendations?"},
+    ],
+)
+print(f"Added: {result['added']}, Total: {result['message_count']}")
+```
+
+**CLI**
+
+```bash
+# Add multiple messages to a session
+ov session add-messages a1b2c3d4 '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+
+# ov add-memory also uses the batch interface internally
+ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 5,
+    "added": 3
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### used()
 
 #### 1. API Implementation Introduction

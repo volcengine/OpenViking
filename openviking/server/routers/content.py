@@ -16,6 +16,7 @@ from openviking.server.auth import (
     require_role,
 )
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
@@ -73,10 +74,9 @@ async def read(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
 
     if not raw:
@@ -110,10 +110,9 @@ async def abstract(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -131,10 +130,9 @@ async def overview(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -152,10 +150,9 @@ async def download(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
 
     # Try to get filename from stat
