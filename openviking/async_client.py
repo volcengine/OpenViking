@@ -647,6 +647,20 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.check_consistency(uri)
 
+    async def memory_graph_health(
+        self,
+        uri: str,
+        node_limit: int = 5000,
+        sample_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Inspect memory link/backlink graph health for a memory root URI."""
+        await self._ensure_initialized()
+        return await self._client.memory_graph_health(
+            uri,
+            node_limit=node_limit,
+            sample_limit=sample_limit,
+        )
+
     def get_status(self) -> Union[SystemStatus, Dict[str, Any]]:
         """Get system status.
 
