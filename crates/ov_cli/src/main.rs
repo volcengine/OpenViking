@@ -26,6 +26,7 @@ pub struct CliContext {
     pub show_progress: Option<bool>,
     /// Whether to enable verbose output (override config)
     pub verbose: Option<bool>,
+    pub profile: Option<bool>,
 }
 
 impl CliContext {
@@ -38,6 +39,7 @@ impl CliContext {
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
+        profile: Option<bool>,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -50,6 +52,7 @@ impl CliContext {
             sudo,
             show_progress,
             verbose,
+            profile,
         ))
     }
 
@@ -63,6 +66,7 @@ impl CliContext {
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
+        profile: Option<bool>,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -80,6 +84,7 @@ impl CliContext {
             sudo,
             show_progress,
             verbose,
+            profile,
         }
     }
 
@@ -110,6 +115,7 @@ impl CliContext {
             self.config.account.clone(),
             self.config.user.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
+            self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
         )
     }
@@ -144,6 +150,10 @@ struct Cli {
     /// Use root API key for admin commands
     #[arg(long)]
     sudo: bool,
+
+    /// Enable HTTP request profiling for this command
+    #[arg(long, global = true)]
+    profile: bool,
 
     /// Show upload progress (legacy pre-command placement; prefer command-local --progress)
     #[arg(long, hide = true)]
@@ -807,6 +817,13 @@ enum SessionCommands {
         #[arg(long)]
         content: String,
     },
+    /// Add multiple messages to a session
+    AddMessages {
+        /// Session ID
+        session_id: String,
+        /// Messages as JSON array of {role, content} objects
+        messages: String,
+    },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID
@@ -1157,6 +1174,7 @@ async fn main() {
         cli.sudo,
         None,
         None,
+        if cli.profile { Some(true) } else { None },
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -1657,6 +1675,7 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             git_credentials: None,
+            profile: false,
         };
 
         let ctx = CliContext::from_config(
@@ -1667,6 +1686,7 @@ mod tests {
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
             false,
+            None,
             None,
             None,
         );
@@ -1690,6 +1710,7 @@ mod tests {
             echo_command: true,
             show_progress: false,
             verbose: false,
+            profile: false,
             upload: Default::default(),
             extra_headers: None,
             git_credentials: None,
@@ -1706,6 +1727,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
@@ -1719,6 +1741,7 @@ mod tests {
             None,
             None,
             true,
+            None,
             None,
             None,
         );

@@ -98,12 +98,12 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         client = self._get_client()
-        added = 0
         pending_context_parts = (
             list(self.context_parts_provider(self.session_id))
             if self.context_parts_provider
             else []
         )
+        batch = []
         for message in messages:
             for payload in langchain_message_to_openviking(
                 message,
@@ -112,15 +112,15 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 if pending_context_parts and payload["role"] == "assistant":
                     payload["parts"].extend(pending_context_parts)
                     pending_context_parts = []
-                call_openviking(
-                    client,
-                    "add_message",
-                    session_id=self.session_id,
-                    role=payload["role"],
-                    parts=payload["parts"],
-                )
-                added += 1
-        if added:
+                batch.append(payload)
+
+        if batch:
+            call_openviking(
+                client,
+                "batch_add_messages",
+                session_id=self.session_id,
+                messages=batch,
+            )
             maybe_commit_session(client, self.session_id, self.commit_policy)
 
     def clear(self) -> None:

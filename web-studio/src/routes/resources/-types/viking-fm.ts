@@ -41,6 +41,7 @@ export interface VikingTreeQueryOptions {
 export interface VikingReadQueryOptions {
   offset?: number
   limit?: number
+  raw?: boolean
 }
 
 export interface VikingListResult {

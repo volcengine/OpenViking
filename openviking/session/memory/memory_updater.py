@@ -26,6 +26,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -35,6 +36,47 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+async def write_stored_links(
+    links: List[StoredLink],
+    ctx: RequestContext,
+    viking_fs: Any,
+    skip_uris: Optional[set] = None,
+) -> None:
+    """Write StoredLinks to their endpoint files' links/backlinks fields.
+
+    For each link: from_uri's ``links`` receives the forward link;
+    to_uri's ``backlinks`` receives the reverse reference.
+    Files listed in skip_uris are skipped (caller handles them in the same write).
+    """
+    from openviking.session.memory.merge_op.link_merge import merge_links
+
+    skip = skip_uris or set()
+    file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
+    for link in links:
+        if link.from_uri not in skip:
+            file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
+            file_links[link.from_uri]["links"].append(link)
+        if link.to_uri not in skip:
+            file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
+            file_links[link.to_uri]["backlinks"].append(link)
+
+    for uri, link_groups in file_links.items():
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+            if not content:
+                continue
+            mf = MemoryFileUtils.read(content, uri=uri)
+            if link_groups["links"]:
+                mf.links = merge_links(mf.links, [l.model_dump() for l in link_groups["links"]])
+            if link_groups["backlinks"]:
+                mf.backlinks = merge_links(
+                    mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
+                )
+            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+        except Exception as e:
+            tracer.error(f"Failed to apply links to {uri}: {e}")
 
 
 class ExtractContext:
@@ -383,7 +425,12 @@ class MemoryUpdater:
         for op in operations.upsert_operations:
             for uri in op.uris:
                 uri_memory_type_map[uri] = op.memory_type
-        await self._vectorize_memories(result, ctx, uri_memory_type_map=uri_memory_type_map)
+        await self._vectorize_memories(
+            result,
+            ctx,
+            extract_context=extract_context,
+            uri_memory_type_map=uri_memory_type_map,
+        )
 
         # Apply links to endpoint files not covered by upsert_operations
         if operations.resolved_links:
@@ -469,9 +516,9 @@ class MemoryUpdater:
                     metadata[field.name] = new_value
 
             # Preserve system-managed metadata from the old file that is not
-            # covered by the schema (e.g. source_trajectories). These fields
-            # are written by the system, never by the LLM, so they would be
-            # silently dropped on every Update without this copy.
+            # covered by the schema. These fields are written by the system,
+            # never by the LLM, so they would be silently dropped on every
+            # Update without this copy.
             if old_content and old_content.extra_fields:
                 schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
                 for key, val in old_content.extra_fields.items():
@@ -557,66 +604,13 @@ class MemoryUpdater:
         ctx: RequestContext,
         deleted_uris: Optional[set[str]] = None,
     ) -> None:
-        """Apply links to endpoint files that are NOT in the current upsert batch.
-
-        Links go into from_uri's "links" field; backlinks go into to_uri's "backlinks" field.
-        """
-        from openviking.session.memory.merge_op.link_merge import merge_links
-
+        """Apply links to endpoint files that are NOT in the current upsert batch."""
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             return
-
-        # Collect URIs of files being upserted (links handled in _apply_upsert)
-        upserted_uris = set()
-        deleted_uris = deleted_uris or set()
-        for op in result.written_uris + result.edited_uris:
-            upserted_uris.add(op)
-
-        skipped_uris = upserted_uris | deleted_uris
-
-        # Group remaining links by target file and field
-        # file_links[uri]["links"] = forward links, file_links[uri]["backlinks"] = backlinks
-        file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
-        for link in resolved_links:
-            # Forward link -> from_uri's "links"
-            if link.from_uri not in skipped_uris:
-                file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
-                file_links[link.from_uri]["links"].append(link)
-            # Backlink -> to_uri's "backlinks"
-            if link.to_uri not in skipped_uris:
-                file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
-                file_links[link.to_uri]["backlinks"].append(link)
-
-        # Apply links to each remaining file
-        for uri, link_groups in file_links.items():
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if not content:
-                    continue
-                mf = MemoryFileUtils.read(content, uri=uri)
-
-                # Merge links
-                if link_groups["links"]:
-                    merged_links = merge_links(
-                        mf.links,
-                        [link.model_dump() for link in link_groups["links"]],
-                    )
-                    mf.links = merged_links
-
-                # Merge backlinks
-                if link_groups["backlinks"]:
-                    merged_backlinks = merge_links(
-                        mf.backlinks,
-                        [link.model_dump() for link in link_groups["backlinks"]],
-                    )
-                    mf.backlinks = merged_backlinks
-
-                # Re-serialize with updated links
-                new_full_content = MemoryFileUtils.write(mf)
-                await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-            except Exception as e:
-                tracer.error(f"Failed to apply links to existing file {uri}: {e}")
+        upserted_uris = set(result.written_uris + result.edited_uris)
+        skip = upserted_uris | (deleted_uris or set())
+        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""
@@ -636,19 +630,22 @@ class MemoryUpdater:
         self,
         result: MemoryUpdateResult,
         ctx: RequestContext,
-        uri_memory_type_map: Dict[str, str],
+        extract_context: Any = None,
+        uri_memory_type_map: Dict[str, str] = None,
     ) -> None:
         """Vectorize written and edited memory files.
 
         Args:
             result: MemoryUpdateResult with written_uris and edited_uris
             ctx: Request context
+            extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
             return
 
+        uri_memory_type_map = uri_memory_type_map or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
 
@@ -673,37 +670,33 @@ class MemoryUpdater:
 
                 mf = MemoryFileUtils.read(content, uri=uri)
                 abstract = mf.plain_content()
-
-                # Build embedding text from only searchable fields
-                embedding_parts = []
-                if abstract:
-                    embedding_parts.append(abstract)
+                embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)
-
                 if memory_type and self._registry:
                     schema = self._registry.get(memory_type)
-                    if schema:
-                        searchable_fields = {f.name for f in schema.fields if f.searchable}
-                        searchable_data = {}
-                        for field_name in searchable_fields:
-                            if field_name == "content":
-                                continue
-                            field_value = mf.extra_fields.get(field_name)
-                            if field_value is not None:
-                                field_str = (
-                                    str(field_value)
-                                    if not isinstance(field_value, str)
-                                    else field_value
+                    if schema and schema.embedding_template:
+                        template_vars = dict(mf.extra_fields)
+                        template_vars["content"] = abstract
+                        missing_vars = TemplateUtils.find_missing_variables(
+                            schema.embedding_template,
+                            template_vars,
+                        )
+                        if missing_vars:
+                            logger.warning(
+                                f"Missing embedding template variables for {uri}, falling back to plain content: {sorted(missing_vars)}"
+                            )
+                        else:
+                            try:
+                                embedding_text = render_template(
+                                    schema.embedding_template,
+                                    template_vars,
+                                    extract_context=extract_context,
                                 )
-                                if field_str.strip():
-                                    searchable_data[field_name] = field_str.strip()
-                        if searchable_data:
-                            import json
-
-                            embedding_parts.append(json.dumps(searchable_data, ensure_ascii=False))
-
-                embedding_text = "\n\n".join(embedding_parts) if embedding_parts else abstract
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
+                                )
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI

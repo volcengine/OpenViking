@@ -90,17 +90,13 @@ class _FakeLockManager:
 class _FakeVikingFS:
     def __init__(self, *, exists_result=False, existing_uris=None):
         self.agfs = SimpleNamespace(
-            cat=MagicMock(return_value=b"content"),
-            ls=MagicMock(return_value=[{"name": "content.md", "isDir": False}]),
-            mkdir=MagicMock(return_value={"status": "ok"}),
-            mv=MagicMock(return_value={"status": "ok"}),
-            stat=MagicMock(return_value={"isDir": True}),
             write=MagicMock(return_value={"status": "ok"}),
         )
-        self.mv = AsyncMock(return_value={})
         self._exists_result = exists_result
         self._existing_uris = set(existing_uris or [])
         self.exists_calls = []
+        self.persist_calls = []
+        self.delete_temp_calls = []
 
     def bind_request_context(self, ctx):
         return _CtxMgr()
@@ -115,9 +111,11 @@ class _FakeVikingFS:
         return None
 
     async def delete_temp(self, temp_dir_path, ctx=None):
+        self.delete_temp_calls.append(temp_dir_path)
         return None
 
     async def persist_temp_tree(self, temp_uri, target_uri, ctx=None):
+        self.persist_calls.append((temp_uri, target_uri))
         self.agfs.write(self._uri_to_path(target_uri, ctx=ctx), b"content")
 
     def _uri_to_path(self, uri, ctx=None):
@@ -125,11 +123,12 @@ class _FakeVikingFS:
 
 
 @pytest.mark.asyncio
-async def test_resource_processor_first_add_persist_does_not_await_agfs_mv(monkeypatch):
+async def test_resource_processor_first_add_summarizes_from_committed_uri(monkeypatch):
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
     fake_lock_manager = _FakeLockManager()
+    summarize_calls = []
 
     monkeypatch.setattr(
         "openviking.utils.resource_processor.get_current_telemetry",
@@ -152,22 +151,27 @@ async def test_resource_processor_first_add_persist_does_not_await_agfs_mv(monke
             warnings=[],
         )
     )
-
-    context_tree = SimpleNamespace(
-        root=SimpleNamespace(uri="viking://resources/root", temp_uri="viking://temp/root_tmp")
+    rp.tree_builder.finalize_from_temp = AsyncMock(
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(uri="viking://resources/root", temp_uri="viking://temp/root_tmp")
+        )
     )
-    rp.tree_builder.finalize_from_temp = AsyncMock(return_value=context_tree)
+    rp._summarizer = SimpleNamespace(
+        summarize=AsyncMock(
+            side_effect=lambda *args, **kwargs: (
+                summarize_calls.append(kwargs) or {"status": "success"}
+            )
+        )
+    )
 
-    ctx = object()
-    result = await rp.process_resource(path="x", ctx=ctx, build_index=False, summarize=False)
+    result = await rp.process_resource(path="x", ctx=object(), build_index=True)
 
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
-    fake_fs.agfs.mv.assert_not_called()
-    fake_fs.agfs.write.assert_called_once()
-    fake_fs.mv.assert_not_awaited()
-    assert fake_lock_manager.acquired_exact_paths == []
-    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]
+    assert fake_fs.persist_calls == [("viking://temp/root_tmp", "viking://resources/root")]
+    assert fake_fs.delete_temp_calls == ["viking://temp/tmpdir"]
+    assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
+    assert summarize_calls[0]["target_preexisting"] is False
 
 
 @pytest.mark.asyncio
@@ -218,11 +222,7 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
     assert summarize_calls[0]["target_preexisting"] is True
-    fake_fs.agfs.mv.assert_not_called()
-    fake_fs.agfs.write.assert_not_called()
-    fake_fs.mv.assert_not_awaited()
-    assert fake_lock_manager.acquired_exact_paths == []
-    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]
+    assert fake_fs.persist_calls == []
 
 
 @pytest.mark.asyncio
@@ -283,5 +283,6 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     ]
     assert fake_lock_manager.acquired_exact_paths == []
     assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root_2"]
-    assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
+    assert summarize_calls[0]["temp_uris"] == ["viking://resources/root_2"]
     assert summarize_calls[0]["target_preexisting"] is False
+    assert fake_fs.persist_calls == [("viking://temp/root_tmp", "viking://resources/root_2")]

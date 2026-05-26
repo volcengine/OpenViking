@@ -159,7 +159,7 @@
         "version": "v2",
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
-        "enable_role_id_memory_isolate": false,
+        "role_id_memory_isolation_enabled": false,
     },
     "log": {
         "level": "INFO",

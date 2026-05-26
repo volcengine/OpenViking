@@ -204,6 +204,12 @@ Console 前端通过 Console server 的 allowlist proxy 访问：
 GET /api/v1/console/dashboard/summary
 ```
 
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，用于确定"今日"的时区边界 |
+
 返回示例：
 
 ```json
@@ -262,9 +268,10 @@ GET /api/v1/console/tokens?start_date=2026-05-01&end_date=2026-05-12&bucket=day
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD` |
-| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD` |
+| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
+| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
 | `bucket` | 否 | 当前仅支持 `day` |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，返回的 `date` 分桶按该时区 |
 
 返回中会补齐日期范围内没有数据的日期。
 
@@ -278,9 +285,10 @@ GET /api/v1/console/context-commits?start_date=2026-05-01&end_date=2026-05-12&bu
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD` |
-| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD` |
+| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
+| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
 | `bucket` | 否 | `hour` 或 `4h`，默认 `hour` |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，返回的 `date` / `hour` 分桶按该时区 |
 
 返回中会补齐日期和小时段范围内没有数据的 bucket。
 

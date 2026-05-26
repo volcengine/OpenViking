@@ -5,10 +5,10 @@
 import pytest
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
-    ERROR_CLASS_UNKNOWN,
     classify_api_error,
     is_quota_exceeded_api_error,
     retry_async,
@@ -125,3 +125,27 @@ def test_quota_exceeded_case_insensitive():
     """Quota detection is case-insensitive."""
     assert classify_api_error(RuntimeError("QUOTA LIMIT")) == ERROR_CLASS_QUOTA_EXCEEDED
     assert classify_api_error(RuntimeError("Quota Exceed")) == ERROR_CLASS_QUOTA_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "BadRequestError: 400 maximum context length is 8192 tokens",
+        "Error code: 413 - Payload Too Large",
+    ],
+)
+def test_classify_input_too_large_errors(message):
+    assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_INPUT_TOO_LARGE
+
+
+def test_retry_sync_does_not_retry_input_too_large():
+    attempts = {"count": 0}
+
+    def _call():
+        attempts["count"] += 1
+        raise RuntimeError("expected maxLength: 50000, actual: 75000")
+
+    with pytest.raises(RuntimeError, match="expected maxLength"):
+        retry_sync(_call, max_retries=5)
+
+    assert attempts["count"] == 1

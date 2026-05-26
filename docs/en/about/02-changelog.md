@@ -3,6 +3,47 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.19 (2026-05-22)
+
+### Highlights
+
+- **Breaking Console BFF timezone semantics**: `/api/v1/console/dashboard/summary`, `/tokens`, and `/context-commits` now accept an IANA `timezone` query parameter and return viewer-timezone buckets from the server. Consumers should treat returned `date` and `hour` fields as already localized instead of shifting them again on the client.
+- **Usage/Audit UTC persistence**: Token, retrieval, context-commit, agent-activity, and audit rollups now persist UTC `date_utc`, `hour_utc`, and `created_at` values, with read-time re-bucketing through `zoneinfo` for DST and half-hour timezone support.
+- **Local Usage/Audit schema reset**: The SQLite store tracks schema version v3 and resets incompatible local Usage/Audit tables on upgrade, avoiding mixed local/UTC rows and partial daily/hourly migrations for short-retention pre-GA data.
+- **Web Studio heatmap alignment**: Web Studio injects the browser timezone into Console BFF requests and the heatmap now uses server-returned bucket dates directly, fixing the UTC+ viewer double-shift that could push today's commits into tomorrow.
+- **Adjacent updates**: Added session skill extraction behind `memory.session_skill_extraction_enabled`, Hermes OpenViking LoCoMo benchmark scripts, an OAuth docs correction for the new Studio OAuth setup entry, and a LiteLLM dependency refresh.
+
+### Upgrade Notes
+
+- This release has a breaking BFF behavior change: custom Console clients, generated SDKs, or dashboards using `/api/v1/console/*` should send `timezone=<IANA name>` where appropriate and remove client-side UTC-to-local bucket shifting.
+- Returned `date` / `hour` buckets from `tokens` and `context-commits` are viewer-timezone buckets. `audit.created_at` remains UTC ISO and should only be formatted for display.
+- On first boot with the new Usage/Audit SQLite schema, incompatible local usage/audit tables are dropped and recreated. Existing short-retention usage rollups and request audit rows may be discarded.
+- Regenerate any pinned OpenAPI clients or static Console API types so the new `timezone` parameter is available.
+- If `timezone` is omitted, Console BFF falls back to `server.observability.usage_audit.timezone` (default `local`); set it explicitly for server-side integrations that need stable user-facing day boundaries.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.18...v0.3.19)
+
+## v0.3.18 (2026-05-22)
+
+### Highlights
+
+- **Web Studio as the default console**: Added the `web-studio` console workspace, shipped it in Docker and pip distributions, served it at `/studio`, moved OAuth authorize UI into it, and retired the legacy console while keeping favicon compatibility routes.
+- **MCP, API, and CLI automation**: Added Watch Management across REST, `ov`, and MCP; added progressive single-entrypoint local-file upload; added `code_outline`, `code_search`, and `code_expand`; and tightened upload-only and zip `--ignore-dirs` handling.
+- **Agent and OpenClaw ecosystem**: OpenClaw setup helper now supports npm plugin installs, plugin docs align with ClawHub package metadata, `ov_dream` was added as an OpenClaw skill, and oversized OpenClaw tool results can be externalized to OpenViking.
+- **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing `role_id` retrieval, and parallelized hierarchical child search.
+- **Storage, VectorDB, and model reliability**: Async storage locks/IO and loop-isolated async clients reduce contention; fixes cover semantic lock ownership, false `mv not found`, URI remapping, S3 grep performance, VectorDB Unicode recovery, oversized byte rows, embedding error surfacing, and VLM LiteLLM native routes.
+- **Observability, docs, and deployment polish**: Added VikingBot feedback observability, centralized the metric registry, moved usage audit SQLite into system data, refreshed Helm chart defaults, updated brand assets and QR code, and documented public base URL, signed upload TTLs, Watch APIs, MCP code tools, readiness probes, and the `/studio` migration.
+
+### Upgrade Notes
+
+- Legacy console and `8020` references should migrate to Web Studio at `/studio`; update custom reverse proxies, bookmarks, and deployment docs.
+- Docker and pip packages now include Web Studio assets; deployments with custom Dockerfile, Caddy, or Helm overlays should review the refreshed defaults before rolling forward.
+- Usage audit SQLite now lives under system data; deployments with hand-managed local audit files should confirm the new path and retention expectations.
+- Embedding upstream failures are no longer hidden behind silent timeouts; callers and health probes should expect explicit provider errors.
+- Watch Management, MCP upload, and code-navigation tools expand public integration surfaces; regenerate clients or static API/MCP schema snapshots where applicable.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.17...v0.3.18)
+
 ## v0.3.17 (2026-05-15)
 
 ### Highlights

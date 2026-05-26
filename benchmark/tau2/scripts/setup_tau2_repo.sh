@@ -60,7 +60,12 @@ else
 fi
 
 if [[ -n "$REF" ]]; then
-  git -C "$REPO_DIR" checkout "$REF"
+  if git -C "$REPO_DIR" rev-parse --verify --quiet "$REF^{commit}" >/dev/null; then
+    git -C "$REPO_DIR" checkout "$REF"
+  else
+    git -C "$REPO_DIR" fetch "$REPO_URL" "$REF"
+    git -C "$REPO_DIR" checkout FETCH_HEAD
+  fi
 fi
 
 TAU2_CLI="tau2"

@@ -391,6 +391,41 @@ function escapeHtml(raw: string): string {
   return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+const MEMORY_FIELDS_RE = /<!--\s*MEMORY_FIELDS\s*([\s\S]*?)\s*-->/
+
+function parseMemoryFields(content: string): Record<string, unknown> | null {
+  const match = MEMORY_FIELDS_RE.exec(content)
+  if (!match?.[1]) return null
+
+  try {
+    const parsed = JSON.parse(match[1].trim()) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function stripMemoryFields(content: string): string {
+  return content.replace(MEMORY_FIELDS_RE, '').trim()
+}
+
+function memoryFieldsDisplayContent(content: string): string {
+  const fields = parseMemoryFields(content)
+  if (!fields) return content
+
+  const body = stripMemoryFields(content)
+  if (body) return body
+
+  const fieldContent = fields.content
+  if (typeof fieldContent === 'string' && fieldContent.trim()) {
+    return fieldContent.trim()
+  }
+
+  return JSON.stringify(fields, null, 2)
+}
+
 function textFromReactNode(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') {
     return String(node)
@@ -861,11 +896,21 @@ export function FilePreview({
   showCloseButton = true,
 }: FilePreviewProps) {
   const { t } = useTranslation('resources')
-  const previewQuery = useVikingFilePreview(file, {
-    maxAutoReadBytes: 2 * 1024 * 1024,
-    defaultReadLimit: -1,
-  })
+  const previewQuery = useVikingFilePreview(
+    file,
+    {
+      maxAutoReadBytes: 2 * 1024 * 1024,
+      defaultReadLimit: -1,
+    },
+    {
+      raw: true,
+    },
+  )
   const preview = previewQuery.preview
+  const displayContent = useMemo(
+    () => memoryFieldsDisplayContent(preview?.content || ''),
+    [preview?.content],
+  )
   const directoryPreview = useDirectoryPreview(file)
   const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>(
     'preview',
@@ -918,7 +963,7 @@ export function FilePreview({
       return
     }
 
-    const content = preview.content || ''
+    const content = displayContent || ''
     if (!content) {
       setHighlightedCodeHtml('')
       return
@@ -945,7 +990,7 @@ export function FilePreview({
     return () => {
       cancelled = true
     }
-  }, [preview, file?.name, needsHighlight])
+  }, [preview, file?.name, needsHighlight, displayContent])
 
   useEffect(() => {
     let alive = true
@@ -1316,7 +1361,7 @@ export function FilePreview({
                     },
                   }}
                 >
-                  {preview.content || emptyFileText}
+                  {displayContent || emptyFileText}
                 </ReactMarkdown>
               </article>
             ) : null}
@@ -1331,7 +1376,7 @@ export function FilePreview({
                   dangerouslySetInnerHTML={{
                     __html:
                       highlightedCodeHtml ||
-                      escapeHtml(preview.content || emptyFileText),
+                      escapeHtml(displayContent || emptyFileText),
                   }}
                 />
               </pre>
@@ -1344,7 +1389,9 @@ export function FilePreview({
                 <code
                   className="hljs block"
                   dangerouslySetInnerHTML={{
-                    __html: highlightedCodeHtml || escapeHtml(emptyFileText),
+                    __html:
+                      highlightedCodeHtml ||
+                      escapeHtml(displayContent || emptyFileText),
                   }}
                 />
               </pre>
@@ -1353,7 +1400,7 @@ export function FilePreview({
             {!previewQuery.isLoading &&
             preview?.fileType === 'jsonl' &&
             preview.shouldAutoRead ? (
-              <JsonlPreview content={preview.content || ''} />
+              <JsonlPreview content={displayContent || ''} />
             ) : null}
 
             {!previewQuery.isLoading &&
@@ -1364,7 +1411,7 @@ export function FilePreview({
             preview.fileType !== 'code' &&
             preview.shouldAutoRead ? (
               <pre className="whitespace-pre-wrap break-words text-xs leading-6">
-                {preview.content || emptyFileText}
+                {displayContent || emptyFileText}
               </pre>
             ) : null}
           </div>

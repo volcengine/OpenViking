@@ -95,7 +95,7 @@ export function ConnectionDialog() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="grid flex-1 content-start gap-3">
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-3 md:grid-cols-3">
                       <Field>
                         <FieldLabel htmlFor="ov-account-id">
                           {t('fields.accountId.label', { ns: 'connection' })}
@@ -131,6 +131,26 @@ export function ConnectionDialog() {
                               setDraft((current) => ({
                                 ...current,
                                 userId: event.target.value,
+                              }))
+                            }
+                          />
+                        </FieldContent>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="ov-agent-id">
+                          {t('fields.agentId.label', { ns: 'connection' })}
+                        </FieldLabel>
+                        <FieldContent>
+                          <Input
+                            id="ov-agent-id"
+                            placeholder={t('fields.agentId.placeholder', {
+                              ns: 'connection',
+                            })}
+                            value={draft.agentId}
+                            onChange={(event) =>
+                              setDraft((current) => ({
+                                ...current,
+                                agentId: event.target.value,
                               }))
                             }
                           />
@@ -209,4 +229,3 @@ export function ConnectionDialog() {
     </Dialog>
   )
 }
-

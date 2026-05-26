@@ -7,6 +7,7 @@ Converts Word documents to Markdown then parses using MarkdownParser.
 Inspired by microsoft/markitdown approach.
 """
 
+import asyncio
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -46,7 +47,7 @@ class WordParser(BaseParser):
         if path.exists():
             import docx
 
-            markdown_content = self._convert_to_markdown(path, docx)
+            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path, docx)
             result = await self._md_parser.parse_content(
                 markdown_content, source_path=str(path), instruction=instruction, **kwargs
             )

@@ -65,6 +65,11 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
         "env_key": "GEMINI_API_KEY",
         "litellm_prefix": "gemini",
     },
+    "nvidia_nim": {
+        "keywords": ("nvidia_nim", "nemotron"),
+        "env_key": "NVIDIA_NIM_API_KEY",
+        "litellm_prefix": "nvidia_nim",
+    },
     "openai": {
         "keywords": ("gpt", "o1", "o3", "o4"),
         "env_key": "OPENAI_API_KEY",
@@ -175,6 +180,8 @@ class LiteLLMVLMProvider(VLMBase):
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider prefixes."""
         if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+            return model
+        if model.lower().startswith("openai/"):
             return model
 
         provider = self._detected_provider or detect_provider_by_model(model)
