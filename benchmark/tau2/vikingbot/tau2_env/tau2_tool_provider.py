@@ -24,32 +24,9 @@ class Tau2BenchToolProvider:
         env = Tau2BenchEnv(self.domain, self.task_id)
         env.reset()
         self.env = env
-        # Tau2BenchEnv exposes raw tool schemas from tau2
+        # Tau2BenchEnv.tool_schemas already includes tau2's native tools plus
+        # communicate_with_user.
         self._openai_tools = list(env.tool_schemas)
-        # Add communicate_with_user tool schema (custom tool in env)
-        self._openai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "communicate_with_user",
-                    "description": (
-                        "say something to the user. Note that the customer cannot see the "
-                        "answer returned in `final_answer`. You must communicate with the "
-                        "customer exclusively through this tool."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "the content to say to the user",
-                            }
-                        },
-                        "required": ["content"],
-                    },
-                },
-            }
-        )
 
     @property
     def user_query(self) -> str:

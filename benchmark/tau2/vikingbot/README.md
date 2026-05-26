@@ -26,42 +26,35 @@ The pipeline is: **run tasks → evaluate reward → commit train trajectories t
 
 ## Install & Config
 
-Install everything into one Python environment (e.g. create and activate `./.venv` first).
-
-### 1) tau2-bench (external dependency)
-
-tau2-bench is **not vendored** here, and it must be installed first — `setup_env.sh` derives
-`TAU2_DATA_ROOT` from it. Clone it into this folder (`./tau2-bench`, gitignored, which is where
-`setup_env.sh` looks by default) and install it:
+One step sets up everything. `setup_env.sh` creates a fresh `.venv` at the OpenViking repo
+root, clones tau2-bench into `./tau2-bench` (external dependency, gitignored), installs
+openviking + vikingbot (`pip install -e .`, which also runs the Cargo build) and tau2-bench,
+installs smolagents, then activates the venv and exports the runtime env vars:
 
 ```bash
-git clone https://github.com/sierra-research/tau2-bench benchmark/tau2/vikingbot/tau2-bench
-pip install -e benchmark/tau2/vikingbot/tau2-bench
+source benchmark/tau2/vikingbot/setup_env.sh              # first run: install, then activate + export
+source benchmark/tau2/vikingbot/setup_env.sh --reinstall  # rebuild the .venv from scratch
 ```
 
-The tau2 **user simulator** talks to an OpenAI-compatible endpoint. Provide credentials via
-`OPENAI_API_KEY` / `OPENAI_API_BASE` (e.g. Doubao through volcengine ARK — set `ARK_API_KEY`,
-which `setup_env.sh` maps to `OPENAI_API_KEY`). The user-simulator model is configured in
-[`tau2_env/tau2_environment.py`](tau2_env/tau2_environment.py).
+Safe to `source` in every new shell: the install phase runs only when the venv is missing;
+later sources just activate and re-export.
+
+It exports `PYTHONPATH` for `openviking` + `bot/vikingbot`, `TAU2_DATA_ROOT`
+(defaults to `./tau2-bench/data/tau2`), `OPENVIKING_CONFIG_FILE`, and the user-simulator LLM
+env vars. Override any of these by exporting before sourcing:
+
+- `TAU2_BENCH_ROOT` — tau2-bench checkout location (if it lives elsewhere)
+- `TAU2_BENCH_REPO` / `TAU2_BENCH_REF` — git URL / ref to clone (e.g. pin a specific checkout)
+- `VIKINGBOT_ROOT`
+- `ARK_API_KEY` (mapped to `OPENAI_API_KEY`), `OPENAI_API_BASE`
+
+The tau2 **user simulator** talks to an OpenAI-compatible endpoint — set `ARK_API_KEY` (e.g.
+Doubao through volcengine ARK) before sourcing, or the simulator will fail. The user-simulator
+model is configured in [`tau2_env/tau2_environment.py`](tau2_env/tau2_environment.py).
 
 > Note: the sibling `llm/` harness ([`../llm/README.md`](../llm/README.md)) pins a tau2-bench ref
-> with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Use a comparable
-> checkout if you want results aligned with that protocol.
-
-### 2) OpenViking + VikingBot
-
-The runner imports both `openviking` and `vikingbot`; `setup_env.sh` puts the OpenViking repo
-root and its `bot/` directory on `PYTHONPATH` (no pip install of `bot` needed). Source it
-**after** tau2-bench is in place, so `TAU2_DATA_ROOT` resolves to a real directory:
-
-```bash
-source benchmark/tau2/vikingbot/setup_env.sh
-```
-
-`setup_env.sh` activates `./.venv` if present, exports `PYTHONPATH` for `openviking` + `bot/vikingbot`,
-and sets `TAU2_DATA_ROOT` (defaults to `./tau2-bench/data/tau2`), `OPENVIKING_CONFIG_FILE`, and the
-user-simulator LLM env vars. Override any of them by exporting before sourcing (e.g.
-`TAU2_BENCH_ROOT` if tau2-bench lives elsewhere, `VIKINGBOT_ROOT`, `ARK_API_KEY`).
+> with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Set
+> `TAU2_BENCH_REF` to a comparable checkout if you want results aligned with that protocol.
 
 Then start the OpenViking server with the bot enabled:
 
