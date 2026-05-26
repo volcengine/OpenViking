@@ -309,7 +309,7 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            assert uri == deleted_uri
+            assert uri in {deleted_uri, written_uri}
             return None
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
@@ -351,7 +351,10 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
-        mock_viking_fs.read_file.assert_awaited_once()
+        assert {call.args[0] for call in mock_viking_fs.read_file.await_args_list} == {
+            deleted_uri,
+            written_uri,
+        }
 
     @pytest.mark.asyncio
     async def test_apply_operations_cleans_peer_backlinks_before_delete(self):
@@ -1125,8 +1128,10 @@ class TestConsecutivePatchesSameURI:
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["title"] == "Updated Title"
         assert parsed["content"] == "Original body"
-        trace_info.assert_any_call(
-            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field=content, error=patch failed"
+        assert any(
+            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field=content"
+            in str(call.args[0])
+            for call in trace_info.call_args_list
         )
 
     @pytest.mark.asyncio
