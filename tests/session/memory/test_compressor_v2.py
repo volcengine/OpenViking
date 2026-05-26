@@ -232,6 +232,78 @@ async def test_resolve_supersedes_consumes_field_only_after_resolved():
 
 
 @pytest.mark.asyncio
+async def test_resolve_supersedes_tracks_deleted_file_version_for_exact_retry():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    new_uri = f"{exp_dir}/new.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_link = StoredLink(from_uri=old_uri, to_uri=traj_uri, link_type="derived_from")
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[old_link.model_dump()],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[new_uri],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    old_content = MemoryFileUtils.write(old_file)
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.content = old_content
+
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return self.content
+
+    read_versions: dict[str, str] = {}
+    provider = SimpleNamespace(
+        _render_experience_dir=lambda _ctx: exp_dir,
+        _track_read_file_versions=True,
+        _read_file_versions=read_versions,
+        read_file_versions=read_versions,
+        _get_registry=lambda: None,
+    )
+    viking_fs = FakeVikingFS()
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await compressor._resolve_supersedes(operations, ctx, viking_fs, provider)
+
+    assert read_versions[old_uri] == content_digest(old_content)
+
+    changed_link = StoredLink(
+        from_uri=old_uri,
+        to_uri="viking://agent/default/memories/trajectories/t2.md",
+        link_type="derived_from",
+    )
+    viking_fs.content = MemoryFileUtils.write(
+        MemoryFile(
+            uri=old_uri,
+            memory_type="experiences",
+            links=[old_link.model_dump(), changed_link.model_dump()],
+        )
+    )
+
+    conflicts = await compressor._find_operation_version_conflicts(
+        operations=operations,
+        provider=provider,
+        ctx=ctx,
+        viking_fs=viking_fs,
+    )
+
+    assert [conflict["uri"] for conflict in conflicts] == [old_uri]
+
+
+@pytest.mark.asyncio
 async def test_resolve_supersedes_migrates_peer_links_to_replacement_uri():
     compressor = SessionCompressorV2(vikingdb=None)
     exp_dir = "viking://agent/default/memories/experiences"

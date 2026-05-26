@@ -211,6 +211,18 @@ def _short_digest(digest: str) -> str:
     return digest[:12]
 
 
+def _record_provider_read_version(provider: Any, uri: str, content: str) -> None:
+    """Track an operation-time read so exact apply can detect stale cleanup plans."""
+    if not uri or not getattr(provider, "_track_read_file_versions", False):
+        return
+
+    digest = content_digest(content)
+    for attr in ("read_file_versions", "_read_file_versions"):
+        read_versions = getattr(provider, attr, None)
+        if isinstance(read_versions, dict):
+            read_versions[uri] = digest
+
+
 def _parent_uri(uri: str) -> str:
     return uri.rsplit("/", 1)[0] if "/" in uri else uri
 
@@ -2097,6 +2109,7 @@ class SessionCompressorV2:
 
             try:
                 raw = await viking_fs.read_file(old_uri, ctx=ctx) or ""
+                _record_provider_read_version(provider, old_uri, raw)
                 old_mf = MemoryFileUtils.read(raw, uri=old_uri)
                 append_delete_target(old_mf)
                 tracer.info(f"[supersedes] '{candidate}' → queued for delete: {old_uri}")
