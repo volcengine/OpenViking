@@ -4,31 +4,17 @@
 # ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
 FROM rust:1.91.1-trixie AS rust-toolchain
 
-# Stage 2: build web-studio static bundle (Vite SPA). Runs before py-builder so
-# the dist can be copied into openviking/web_studio/dist/ and included in the
-# python wheel via package-data — no separate runtime COPY required.
-#
-# WEB_STUDIO_BASE_PATH is passed to `vite build --base=...` and is also
-# consumed at runtime by getRouterBasePath() through import.meta.env.BASE_URL,
-# so the SPA's asset URLs and TanStack Router basepath stay in sync.
-FROM node:20-bookworm-slim AS web-studio-builder
-WORKDIR /web-studio
-ARG TARGETPLATFORM
-ARG WEB_STUDIO_BASE_PATH=/studio/
-
-COPY web-studio/package.json web-studio/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} \
-    npm ci
-
-COPY web-studio/ ./
-RUN npm run build -- --base="${WEB_STUDIO_BASE_PATH}"
-
-# Stage 3: build Python environment with uv (builds Rust CLI + C++ extension from source)
+# Stage 2: build Python environment with uv (builds Rust CLI + C++ extension + web-studio from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
 
 # Reuse Rust toolchain from stage 1 so setup.py can compile ov CLI in-place.
 COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
+# Provide Node.js so setup.py build_py can build web-studio SPA in-tree.
+COPY --from=node:24-trixie-slim /usr/local/bin/node /usr/local/bin/
+COPY --from=node:24-trixie-slim /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:${PATH}"
@@ -67,17 +53,15 @@ COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
 COPY src/ src/
 COPY third_party/ third_party/
+COPY web-studio/ web-studio/
 
-# Bundle the prebuilt web-studio dist into the openviking python package so the
-# wheel produced by `uv sync` ships /studio assets out of the box (parallel to
-# the legacy openviking/console/static layout, just for the new SPA).
-COPY --from=web-studio-builder /web-studio/dist /app/openviking/web_studio/dist
-
-# Install project and dependencies (triggers setup.py artifact builds + build_extension).
+# Install project and dependencies (triggers setup.py build_py → web-studio
+# SPA build + build_ext → native extensions).
 # Default to auto-refreshing uv.lock inside the ephemeral build context when it is
 # stale, so Docker builds stay unblocked after dependency changes. Set
 # UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} \
     --mount=type=cache,target=/cargo-target,id=cargo-target-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETPLATFORM} \
@@ -106,7 +90,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             ;; \
     esac
 
-# Stage 4: runtime
+# Stage 3: runtime
 FROM python:3.13-slim-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

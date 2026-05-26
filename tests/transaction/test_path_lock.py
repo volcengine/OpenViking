@@ -241,6 +241,67 @@ class TestPathLockBehavior:
 
         await lock.release(tx)
 
+    async def test_acquire_tree_existing_file_uses_parent_sidecar_lock(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-file")
+        file_path = f"{test_dir}/profile.md"
+        agfs_client.write(file_path, b"# Profile\n")
+
+        ok = await lock.acquire_tree(file_path, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = _single_lock_path(tx)
+        assert lock_path.startswith(f"{test_dir}/{EXACT_LOCK_FILE_PREFIX}profile.md.")
+        assert lock_path != f"{file_path}/{LOCK_FILE_NAME}"
+        content = agfs_client.cat(lock_path)
+        token = content.decode("utf-8") if isinstance(content, bytes) else content
+        assert ":T" in token
+        assert "tx-tree-file" in token
+
+        await lock.release(tx)
+        try:
+            agfs_client.stat(lock_path)
+            raise AssertionError("file tree lock should have been removed")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+    async def test_acquire_tree_existing_file_sidecar_sanitizes_name(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-file-special")
+        file_path = f"{test_dir}/profile with spaces \u4e2d.md"
+        agfs_client.write(file_path, b"# Profile\n")
+
+        ok = await lock.acquire_tree(file_path, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = _single_lock_path(tx)
+        assert lock_path.startswith(f"{test_dir}/{EXACT_LOCK_FILE_PREFIX}profile_with_spaces")
+        assert lock_path.endswith(lock._get_prefixed_exact_lock_path(file_path).rsplit(".", 1)[-1])
+        content = agfs_client.cat(lock_path)
+        token = content.decode("utf-8") if isinstance(content, bytes) else content
+        assert ":T" in token
+
+        await lock.release(tx)
+
+    async def test_acquire_tree_existing_file_blocks_second_owner_until_release(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        tx1 = LockHandle(id="tx-tree-file-hold")
+        tx2 = LockHandle(id="tx-tree-file-wait")
+        file_path = f"{test_dir}/blocked.md"
+        agfs_client.write(file_path, b"# Blocked\n")
+
+        assert await lock.acquire_tree(file_path, tx1, timeout=3.0) is True
+        assert await lock.acquire_tree(file_path, tx2, timeout=0.0) is False
+
+        await lock.release(tx1)
+
+        assert await lock.acquire_tree(file_path, tx2, timeout=3.0) is True
+        await lock.release(tx2)
+
     async def test_acquire_tree_creates_missing_directory_after_conflict_check(
         self, agfs_client, test_dir
     ):

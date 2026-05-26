@@ -18,10 +18,10 @@ benchmark:
 paths:
   tau2_repo: ${TAU2_REPO:-data/external_benchmarks/tau2-bench}
   tau2_cli: ${TAU2_CLI:-tau2}
-  output_dir: benchmark/tau2/result
+  output_dir: benchmark/tau2/llm/result
   # Corpus writes are expensive and should be reused across eval run ids when
   # the train split and memory prompt/config did not change.
-  corpus_cache_dir: benchmark/tau2/result/memory_corpora
+  corpus_cache_dir: benchmark/tau2/llm/result/memory_corpora
 
 eval:
   # Default OpenViking TAU-2 memory evidence uses the fixed-first-user full8

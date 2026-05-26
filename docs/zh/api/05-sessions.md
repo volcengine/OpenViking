@@ -702,6 +702,101 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 ---
 
+### batch_add_messages()
+
+#### 1. API 实现介绍
+
+向会话中批量添加多条消息。适用于需要一次性写入大量消息的场景（如历史对话导入、记忆抽取），相比逐条调用 `add_message()` 可显著提升性能。
+
+**与 `add_message()` 的区别**：
+- `add_message()`：单次请求添加 1 条消息
+- `batch_add_messages()`：单次请求添加多条消息（上限 100 条），减少网络往返和文件 I/O
+
+**代码入口**：
+- `openviking/session/session.py:Session.add_messages()` - 核心实现
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP 路由
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI 命令
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+| messages | List[AddMessageRequest] | 是 | - | 消息列表，每条消息格式与 `add_message()` 相同，最多 100 条 |
+| telemetry | bool | 否 | False | 是否附加操作遥测数据 |
+
+> **注意**：每条消息的格式与 `add_message()` 完全一致，支持 `content`（简单模式）和 `parts`（Parts 模式）。超过 100 条需分批调用。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/messages/batch
+```
+
+```bash
+# 批量添加多条消息
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I authenticate users?"},
+      {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+      {"role": "user", "content": "Any specific recommendations?"}
+    ]
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+# 批量添加消息
+result = await client.batch_add_messages(
+    session_id="a1b2c3d4",
+    messages=[
+        {"role": "user", "content": "How do I authenticate users?"},
+        {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+        {"role": "user", "content": "Any specific recommendations?"},
+    ],
+)
+print(f"Added: {result['added']}, Total: {result['message_count']}")
+```
+
+**CLI**
+
+```bash
+# 向会话中批量添加消息
+ov session add-messages a1b2c3d4 '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+
+# ov add-memory 内部也自动使用批量接口
+ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 5,
+    "added": 3
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### used()
 
 #### 1. API 实现介绍

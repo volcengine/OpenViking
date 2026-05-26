@@ -108,6 +108,8 @@ fields:
 filename_template: "profile.md"
 content_template: |
   ...
+embedding_template: |
+  ...
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
@@ -125,6 +127,8 @@ operation_mode: "upsert"
   - 生成文件名时使用的模板
 - `content_template`
   - 落盘时使用的正文模板
+- `embedding_template`
+  - 用于渲染参与语义检索的向量化（embedding）文本的模板；未设置时使用默认表示
 - `directory`
   - 该类记忆写入的目录
 - `enabled`

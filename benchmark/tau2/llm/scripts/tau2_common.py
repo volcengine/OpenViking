@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 TAU2_DIR = Path(__file__).resolve().parents[1]
-REPO_ROOT = TAU2_DIR.parents[1]
+REPO_ROOT = TAU2_DIR.parents[2]
 CONFIRMATION_AWARE_UPSTREAM_PR = "https://github.com/sierra-research/tau2-bench/pull/297"
 CONFIRMATION_AWARE_APPENDIX = """
 

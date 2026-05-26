@@ -37,10 +37,10 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'EOF'
 Usage:
-  benchmark/tau2/scripts/setup_tau2_repo.sh [--repo-url URL] [--repo-dir DIR] [--venv DIR] [--ref REF] [--no-install]
+  benchmark/tau2/llm/scripts/setup_tau2_repo.sh [--repo-url URL] [--repo-dir DIR] [--venv DIR] [--ref REF] [--no-install]
 
 Clones TAU-2 into a local ignored directory and optionally installs it into a
-local virtualenv. The script writes benchmark/tau2/.env.tau2 with TAU2_REPO and
+local virtualenv. The script writes benchmark/tau2/llm/.env.tau2 with TAU2_REPO and
 TAU2_CLI for the benchmark runner.
 EOF
       exit 0
