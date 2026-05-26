@@ -4,10 +4,14 @@
 # Does everything in a single step:
 #   1. creates a fresh .venv at the OpenViking repo root (if missing)
 #   2. clones tau2-bench into ./tau2-bench (if missing; external dependency)
-#   3. installs openviking + vikingbot  (pip install -e .  -> runs the Cargo build)
-#   4. installs tau2-bench              (pip install -e ./tau2-bench)
-#   5. installs smolagents
-#   6. activates the venv and exports the runtime env vars
+#   3. installs openviking + vikingbot  (pip install -e .[bot]  -> runs the Cargo build;
+#      the [bot] extra provides prompt_toolkit/gradio/mcp/... needed by the runner and
+#      `openviking-server --with-bot`)
+#   4. ensures the ragfs_python native binding is built (via maturin) and bundled into
+#      openviking/lib/ (the editable install can skip it under pip build isolation)
+#   5. installs tau2-bench with the gym extra (pip install -e ./tau2-bench[gym] -> gymnasium)
+#   6. installs smolagents
+#   7. activates the venv and exports the runtime env vars
 #
 # Usage:
 #   source setup_env.sh              # install on first run, then activate + export
@@ -88,11 +92,59 @@ _setup_install() {
   if ! command -v cargo >/dev/null 2>&1; then
     echo "[setup_env] WARNING: 'cargo' not found on PATH; the openviking Rust build may fail." >&2
   fi
-  echo "[setup_env] Installing openviking + vikingbot (pip install -e ${REPO_ROOT})"
-  "${PY}" -m pip install -e "${REPO_ROOT}" || { echo "[setup_env] openviking install failed"; return 1; }
+  # Install with the [bot] extra: the vikingbot runner imports vikingbot.cli and
+  # `openviking-server --with-bot` needs the bot deps (prompt_toolkit, gradio, mcp, ...).
+  echo "[setup_env] Installing openviking + vikingbot with bot extras (pip install -e ${REPO_ROOT}[bot])"
+  "${PY}" -m pip install -e "${REPO_ROOT}[bot]" || { echo "[setup_env] openviking install failed"; return 1; }
 
-  echo "[setup_env] Installing tau2-bench (pip install -e ${TAU2_BENCH_ROOT})"
-  "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}" || { echo "[setup_env] tau2-bench install failed"; return 1; }
+  # Ensure the ragfs_python native (PyO3) binding is bundled. The editable install
+  # can skip the maturin build under pip build isolation, leaving the server unable
+  # to load RAGFS ("ragfs_python native library is not available"). If it's not
+  # importable, build it via maturin and copy the extension into openviking/lib/.
+  if ! "${PY}" -c "from openviking.pyagfs import get_binding_client; get_binding_client()" >/dev/null 2>&1; then
+    echo "[setup_env] ragfs_python native binding missing; building via maturin..."
+    "${PY}" -m pip install "maturin>=1.0,<2.0" || { echo "[setup_env] maturin install failed"; return 1; }
+    _ragfs_out="$(mktemp -d)"
+    if "${PY}" -m maturin build --release -m "${REPO_ROOT}/crates/ragfs-python/Cargo.toml" --out "${_ragfs_out}"; then
+      "${PY}" - "${_ragfs_out}" "${REPO_ROOT}/openviking/lib" <<'PYEOF'
+import sys, os, glob, zipfile
+from pathlib import Path
+out_dir, lib_dir = sys.argv[1], Path(sys.argv[2])
+whls = sorted(glob.glob(os.path.join(out_dir, "ragfs_python-*.whl")))
+if not whls:
+    sys.exit("maturin produced no ragfs_python wheel")
+lib_dir.mkdir(parents=True, exist_ok=True)
+for pat in ("ragfs_python*.so", "ragfs_python*.pyd", "ragfs_python*.dylib"):
+    for stale in lib_dir.glob(pat):
+        stale.unlink()
+with zipfile.ZipFile(whls[0]) as zf:
+    for name in zf.namelist():
+        base = Path(name).name
+        if base == "ragfs_python.pyd" or (base.startswith("ragfs_python.abi3.") and base.endswith((".so", ".pyd"))):
+            target = lib_dir / base
+            with zf.open(name) as src, open(target, "wb") as dst:
+                dst.write(src.read())
+            if not sys.platform.startswith("win"):
+                os.chmod(target, 0o755)
+            print(f"[setup_env] ragfs_python: bundled {base} -> {target}")
+            break
+    else:
+        sys.exit("ragfs_python native extension not found in wheel")
+PYEOF
+      _ragfs_rc=$?
+      rm -rf "${_ragfs_out}"
+      [[ "${_ragfs_rc}" -eq 0 ]] || { echo "[setup_env] ragfs_python bundling failed"; return 1; }
+    else
+      rm -rf "${_ragfs_out}"
+      echo "[setup_env] maturin build of ragfs_python failed"; return 1
+    fi
+  else
+    echo "[setup_env] ragfs_python native binding present"
+  fi
+
+  # tau2-bench: install the [gym] extra so tau2.gym (gymnasium) is available to the runner.
+  echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
+  "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench install failed"; return 1; }
 
   echo "[setup_env] Installing smolagents"
   "${PY}" -m pip install smolagents || { echo "[setup_env] smolagents install failed"; return 1; }
