@@ -171,6 +171,9 @@ class _OperationExactApplyWindowItem:
     future: asyncio.Future
     telemetry: Any
     enqueued_at: float
+    coalesce_key: Optional[tuple[str, ...]] = None
+    coalesce_payload: Any = None
+    coalesce_func: Optional[Callable[[list[Any], Any], Awaitable[list[Any]]]] = None
 
 
 @dataclass
@@ -483,6 +486,9 @@ async def _enqueue_operation_exact_apply_window(
     window_seconds: float,
     phase_metric_key: str,
     apply_func: Callable[[Any], Awaitable[Any]],
+    coalesce_key: Optional[tuple[str, ...]] = None,
+    coalesce_payload: Any = None,
+    coalesce_func: Optional[Callable[[list[Any], Any], Awaitable[list[Any]]]] = None,
 ) -> Any:
     if not lock_manager or not lock_paths or window_seconds <= 0:
         return await apply_func(None)
@@ -499,6 +505,9 @@ async def _enqueue_operation_exact_apply_window(
         future=future,
         telemetry=telemetry,
         enqueued_at=loop.time(),
+        coalesce_key=coalesce_key,
+        coalesce_payload=coalesce_payload,
+        coalesce_func=coalesce_func,
     )
     is_leader = False
     async with _OPERATION_EXACT_APPLY_WINDOW_GUARD:
@@ -605,9 +614,72 @@ async def _drain_operation_exact_apply_window(
                     item.future.set_exception(error)
             return
 
-        for item in items:
+        pending_items = list(items)
+        while pending_items:
+            item = pending_items.pop(0)
             if item.future.done():
                 continue
+
+            coalesced_items = [item]
+            if item.coalesce_key and item.coalesce_func:
+                item_lock_paths = set(item.lock_paths)
+                remaining_items: list[_OperationExactApplyWindowItem] = []
+                for candidate_index, candidate in enumerate(pending_items):
+                    if candidate.future.done():
+                        remaining_items.append(candidate)
+                        continue
+
+                    same_coalesce_group = (
+                        candidate.coalesce_key == item.coalesce_key
+                        and candidate.coalesce_func is not None
+                        and candidate.phase_metric_key == item.phase_metric_key
+                    )
+                    if same_coalesce_group:
+                        coalesced_items.append(candidate)
+                        continue
+
+                    # Do not move a later item ahead of an overlapping write
+                    # that cannot join this coalesced timeline. That preserves
+                    # FIFO semantics for the same locked file while still
+                    # allowing independent same-key payloads in the window to
+                    # share one apply.
+                    if item_lock_paths & set(candidate.lock_paths):
+                        remaining_items.append(candidate)
+                        remaining_items.extend(pending_items[candidate_index + 1 :])
+                        break
+
+                    remaining_items.append(candidate)
+                pending_items = remaining_items
+
+            if len(coalesced_items) > 1 and item.coalesce_func:
+                try:
+                    results = await item.coalesce_func(
+                        [entry.coalesce_payload for entry in coalesced_items],
+                        owner_handle,
+                    )
+                    if len(results) != len(coalesced_items):
+                        raise RuntimeError(
+                            "operation-exact apply-window coalescer returned "
+                            f"{len(results)} results for {len(coalesced_items)} items"
+                        )
+                    prefix = f"memory.agent.extract.phase.{item.phase_metric_key}"
+                    item.telemetry.count(
+                        f"{prefix}.operation_exact_apply_window_coalesced_groups",
+                        1,
+                    )
+                    item.telemetry.count(
+                        f"{prefix}.operation_exact_apply_window_coalesced_items",
+                        len(coalesced_items),
+                    )
+                    for entry, result in zip(coalesced_items, results):
+                        if not entry.future.done():
+                            entry.future.set_result(result)
+                except Exception as exc:
+                    for entry in coalesced_items:
+                        if not entry.future.done():
+                            entry.future.set_exception(exc)
+                continue
+
             try:
                 item.future.set_result(await item.apply_func(owner_handle))
             except Exception as exc:
@@ -1714,6 +1786,108 @@ class SessionCompressorV2:
                     skill_results,
                 )
 
+            def _window_coalesce_uri() -> Optional[str]:
+                """Return the single write URI if this phase is safe to coalesce."""
+
+                archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
+                if archive_uri:
+                    return None
+                if skill_operations.upsert_operations:
+                    return None
+                if memory_operations.delete_file_contents or memory_operations.errors:
+                    return None
+                if post_apply and not getattr(provider, "_source_links_attached_in_operations", False):
+                    return None
+                if not memory_operations.upsert_operations:
+                    return None
+                write_uris = _collect_operation_write_uris(memory_operations)
+                if len(write_uris) != 1:
+                    return None
+                write_uri = write_uris[0]
+                for op in memory_operations.upsert_operations:
+                    if len(op.uris) != 1 or op.uris[0] != write_uri:
+                        return None
+                return write_uri
+
+            async def _apply_coalesced_window_operations(
+                payloads: list[dict[str, Any]],
+                lock_handle: Any,
+            ) -> list[Any]:
+                """Apply same-URI window payloads as one memory timeline."""
+
+                if not payloads:
+                    return []
+
+                combined_operations = ResolvedOperations(
+                    upsert_operations=[
+                        op
+                        for payload in payloads
+                        for op in payload["memory_operations"].upsert_operations
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                    resolved_links=[
+                        link
+                        for payload in payloads
+                        for link in (payload["memory_operations"].resolved_links or [])
+                    ],
+                )
+                registry = payloads[0]["provider"]._get_registry()
+                updater = self._get_or_create_updater(registry, lock_handle)
+                apply_started_at = asyncio.get_running_loop().time()
+                memory_result = await updater.apply_operations(
+                    combined_operations,
+                    payloads[0]["ctx"],
+                    extract_context=payloads[0]["extract_context"],
+                    isolation_handler=payloads[0]["isolation_handler"],
+                )
+                coalesced_apply_ms = (
+                    asyncio.get_running_loop().time() - apply_started_at
+                ) * 1000
+
+                written_set = set(memory_result.written_uris)
+                edited_set = set(memory_result.edited_uris)
+                results: list[Any] = []
+                for payload in payloads:
+                    payload_uris = _collect_operation_write_uris(payload["memory_operations"])
+                    edited_uris = [uri for uri in payload_uris if uri in edited_set]
+                    written_uris = [uri for uri in payload_uris if uri in written_set]
+
+                    payload["telemetry"].add_duration(
+                        f"memory.agent.extract.phase.{payload['phase_metric_key']}."
+                        "operation_exact_apply_window_coalesced_memory_apply",
+                        coalesced_apply_ms,
+                    )
+                    if payload["post_apply"]:
+                        await payload["post_apply"](
+                            memory_result,
+                            payload["inheritance_map"],
+                            lock_handle,
+                            payload["source_attribution_map"],
+                        )
+
+                    contexts: List[Context] = []
+                    for uri in written_uris:
+                        contexts.append(
+                            Context(uri=uri, category="memory_write", context_type="memory")
+                        )
+                    for uri in edited_uris:
+                        contexts.append(
+                            Context(uri=uri, category="memory_edit", context_type="memory")
+                        )
+
+                    results.append(
+                        (
+                            written_uris,
+                            edited_uris,
+                            contexts,
+                            payload["inheritance_map"],
+                            [],
+                        )
+                    )
+
+                return results
+
             if lock_manager and operation_exact_apply:
                 exact_lock_paths = self._render_operation_exact_paths(
                     memory_operations,
@@ -1752,6 +1926,7 @@ class SessionCompressorV2:
                         ctx,
                         viking_fs,
                     )
+                    coalesce_uri = _window_coalesce_uri()
                     return await _enqueue_operation_exact_apply_window(
                         lock_manager=lock_manager,
                         window_key_paths=window_key_paths or exact_lock_paths,
@@ -1759,6 +1934,22 @@ class SessionCompressorV2:
                         window_seconds=window_seconds,
                         phase_metric_key=phase_metric_key,
                         apply_func=_apply_generated_operations,
+                        coalesce_key=(coalesce_uri,) if coalesce_uri else None,
+                        coalesce_payload={
+                            "ctx": ctx,
+                            "extract_context": extract_context,
+                            "inheritance_map": inheritance_map,
+                            "isolation_handler": isolation_handler,
+                            "memory_operations": memory_operations,
+                            "phase_metric_key": phase_metric_key,
+                            "post_apply": post_apply,
+                            "provider": provider,
+                            "source_attribution_map": source_attribution_map,
+                            "telemetry": telemetry,
+                        },
+                        coalesce_func=_apply_coalesced_window_operations
+                        if coalesce_uri
+                        else None,
                     )
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries

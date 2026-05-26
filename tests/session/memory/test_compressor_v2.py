@@ -722,6 +722,214 @@ async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
 
 
 @pytest.mark.asyncio
+async def test_same_uri_upsert_timeline_writes_once():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    exp_uri = "viking://agent/default/memories/experiences/window.md"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content="## Situation\n- old\n",
+        extra_fields={"experience_name": "window"},
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- first update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- second update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.write_count = 0
+            self.files = {
+                exp_uri: MemoryFileUtils.write(old_file),
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.write_count += 1
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert fake_fs.write_count == 1
+    assert result.edited_uris == [exp_uri]
+    final = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert "- first update" in final.content
+    assert "- second update" in final.content
+
+
+@pytest.mark.asyncio
+async def test_same_uri_upsert_timeline_preserves_source_links():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    exp_uri = "viking://agent/default/memories/experiences/window.md"
+    traj_1 = "viking://agent/default/memories/trajectories/one.md"
+    traj_2 = "viking://agent/default/memories/trajectories/two.md"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content="## Situation\n- old\n",
+        extra_fields={"experience_name": "window"},
+    )
+    trajectory_file = MemoryFile(
+        memory_type="trajectories",
+        content="source",
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- first update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- first update\n",
+                                "replace": "- first update\n- second update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(from_uri=exp_uri, to_uri=traj_1, link_type="derived_from"),
+            StoredLink(from_uri=exp_uri, to_uri=traj_2, link_type="derived_from"),
+        ],
+    )
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.write_counts: Dict[str, int] = {}
+            self.files = {
+                exp_uri: MemoryFileUtils.write(old_file),
+                traj_1: MemoryFileUtils.write(trajectory_file),
+                traj_2: MemoryFileUtils.write(trajectory_file),
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.write_counts[uri] = self.write_counts.get(uri, 0) + 1
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert fake_fs.write_counts[exp_uri] == 1
+    assert result.edited_uris == [exp_uri]
+    final_exp = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert {link["to_uri"] for link in final_exp.links} == {traj_1, traj_2}
+    for traj_uri in [traj_1, traj_2]:
+        final_traj = MemoryFileUtils.read(await fake_fs.read_file(traj_uri), uri=traj_uri)
+        assert any(link["from_uri"] == exp_uri for link in final_traj.backlinks)
+
+
+@pytest.mark.asyncio
 async def test_operation_exact_apply_window_batches_followers():
     unique_path = "viking://agent/default/memories/experiences/window_test.md"
     events: List[str] = []
@@ -803,6 +1011,112 @@ async def test_operation_exact_apply_window_batches_overlapping_targets():
     lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
         handle,
         [first_path, shared_path, second_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_same_key_payloads():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str):
+        async def coalesce_func(payloads, lock_handle):
+            events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+            return [f"result:{payload}" for payload in payloads]
+
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=(shared_path,),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(worker("first"), worker("second"))
+
+    assert results == ["result:first", "result:second"]
+    assert events == ["coalesce:first,second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_preserves_order_across_overlapping_uncoalesced_item():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    other_path = "viking://agent/default/memories/experiences/other.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def coalesce_func(payloads, lock_handle):
+        events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+        return [f"result:{payload}" for payload in payloads]
+
+    async def worker(label: str, *, coalesce: bool):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path, other_path] if not coalesce else [shared_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=(shared_path,) if coalesce else None,
+            coalesce_payload=label if coalesce else None,
+            coalesce_func=coalesce_func if coalesce else None,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        first = asyncio.create_task(worker("first", coalesce=True))
+        await asyncio.sleep(0)
+        middle = asyncio.create_task(worker("middle", coalesce=False))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(worker("second", coalesce=True))
+        results = await asyncio.gather(first, middle, second)
+
+    assert results == ["first", "middle", "second"]
+    assert events == [
+        "apply:first:window-handle",
+        "apply:middle:window-handle",
+        "apply:second:window-handle",
+    ]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path, other_path],
         timeout=None,
     )
     lock_manager.release.assert_awaited_once_with(handle)
