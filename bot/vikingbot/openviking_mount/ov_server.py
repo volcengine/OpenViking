@@ -24,7 +24,6 @@ class VikingClient:
             raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
 
         self._apikey_manager = None
-        self.admin_user_client = None
         self._namespace_policy = {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
@@ -68,21 +67,6 @@ class VikingClient:
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
         await self._load_namespace_policy()
-
-        if self._is_root_key_mode() and self.admin_user_id:
-            user_exists = await self._check_user_exists(self.admin_user_id)
-            if not user_exists:
-                await self._initialize_user(self.admin_user_id, role="admin")
-            admin_user_api_key = await self._get_or_create_user_apikey(self.admin_user_id)
-            if admin_user_api_key:
-                self.admin_user_client = ov.AsyncHTTPClient(
-                    url=self.openviking_config.server_url,
-                    api_key=admin_user_api_key,
-                    agent_id=self.agent_id,
-                    account=self.account_id,
-                    user=self.admin_user_id,
-                )
-                await self.admin_user_client.initialize()
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
@@ -256,11 +240,22 @@ class VikingClient:
         return result
 
     async def search(
-        self, query: str, target_uri: str | list[str] | None = None, limit: int = 10
+        self,
+        query: str,
+        target_uri: str | list[str] | None = None,
+        limit: int = 10,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        # session = self.client.session()
+        client = self.client
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
 
-        result = await self.client.search(query, target_uri=target_uri, limit=limit)
+        try:
+            result = await client.search(query, target_uri=target_uri, limit=limit)
+        finally:
+            if should_close:
+                await client.close()
 
         # 将 FindResult 对象转换为 JSON map
         return {
@@ -330,28 +325,24 @@ class VikingClient:
             logger.warning(f"Failed to initialize user {user_id}: {e}")
             return False
 
-    async def _get_or_create_user_apikey(self, user_id: str) -> Optional[str]:
+    async def _get_or_create_user_apikey(self, user_id: str, role: str = "user") -> Optional[str]:
         """获取或创建用户的 API key。"""
         if self._is_user_key_mode() or not self._apikey_manager or not user_id:
             return None
 
-        # Step 1: Check local storage first
         api_key = self._apikey_manager.get_apikey(user_id)
         if api_key:
             return api_key
 
         try:
-            # 2a. Remove user if exists
             user_exists = await self._check_user_exists(user_id)
             if user_exists:
                 await self.client.admin_remove_user(self.account_id, user_id)
-            # 2b. Recreate user - this will save API key in _initialize_user
-            success = await self._initialize_user(user_id)
+            success = await self._initialize_user(user_id, role=role)
             if not success:
                 logger.warning(f"Failed to recreate user {user_id}")
                 return None
 
-            # 2c. Get API key from local storage (it was saved by _initialize_user)
             api_key = self._apikey_manager.get_apikey(user_id)
             if api_key:
                 return api_key
@@ -361,6 +352,41 @@ class VikingClient:
         except Exception as e:
             logger.error(f"Error getting or creating API key for user {user_id}: {e}")
             return None
+
+    async def _get_user_scoped_client(self, user_id: Optional[str]) -> tuple[Any, bool]:
+        effective_user_id = self._effective_user_id(user_id)
+        if not effective_user_id:
+            return self.client, False
+
+        if self._is_root_key_mode():
+            if not self._apikey_manager:
+                raise RuntimeError("User API key manager is unavailable for user-scoped client")
+
+            role = "admin" if effective_user_id == self.admin_user_id else "user"
+            user_exists = await self._check_user_exists(effective_user_id)
+            if not user_exists:
+                success = await self._initialize_user(effective_user_id, role=role)
+                if not success:
+                    raise RuntimeError(f"Failed to initialize user {effective_user_id}")
+
+            user_api_key = await self._get_or_create_user_apikey(effective_user_id, role=role)
+            if not user_api_key:
+                raise RuntimeError(f"Failed to get API key for user {effective_user_id}")
+
+            client_kwargs = {
+                "url": self.openviking_config.server_url,
+                "api_key": user_api_key,
+                "agent_id": self.agent_id,
+            }
+            if effective_user_id == self.admin_user_id:
+                client_kwargs["account"] = self.account_id
+                client_kwargs["user"] = self.admin_user_id
+
+            client = ov.AsyncHTTPClient(**client_kwargs)
+            await client.initialize()
+            return client, True
+
+        return self.client, False
 
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
@@ -423,19 +449,40 @@ class VikingClient:
         case_insensitive: bool = False,
         node_limit: Optional[int] = 10,
         exclude_uri: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(
-            uri,
-            pattern,
-            case_insensitive=case_insensitive,
-            node_limit=node_limit,
-            exclude_uri=exclude_uri,
-        )
+        client = self.client
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
 
-    async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            return await client.grep(
+                uri,
+                pattern,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                exclude_uri=exclude_uri,
+            )
+        finally:
+            if should_close:
+                await client.close()
+
+    async def glob(
+        self, pattern: str, uri: Optional[str] = None, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """通过 glob 模式匹配文件"""
-        return await self.client.glob(pattern, uri=uri)
+        client = self.client
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
+
+        try:
+            return await client.glob(pattern, uri=uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None):
         """提交会话"""

@@ -89,6 +89,7 @@ class VikingSearchTool(OVFileTool):
     def description(self) -> str:
         return (
             "Using query to search for resources (knowledge, code, files, workflow, etc.) in OpenViking. "
+            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
             "This operation performs semantic retrieval, not full character matching. Please avoid repeated calls with similar queries as much as possible."
             "bad-case: after searching with ‘Nate Joanna dog playdate 3:00 pm', another search was performed using 'Nate Joanna dog playdate'."
         )
@@ -244,42 +245,37 @@ class VikingSearchTool(OVFileTool):
         tool_context: "ToolContext",
         query: str,
         target_uri: Optional[str] = "",
-        min_score: float = 0.35,
+        min_score: float = 0.01,
         **kwargs: Any,
     ) -> str:
         try:
             client = await self._get_client(tool_context)
-            search_client = client.admin_user_client or client.client
+            admin_user_id = client.admin_user_id
 
-            # If no target_uri specified, use memory_user_ids to search specific user memories
             if not target_uri and tool_context.memory_user_ids:
-                all_results = []
-                user_ids = tool_context.memory_user_ids
-                if client._is_user_key_mode():
-                    user_ids = [None]
+                user_uri = client._memory_target_uri(admin_user_id)
+                results = await client.search(
+                    query,
+                    target_uri=user_uri,
+                    limit=20,
+                    user_id=admin_user_id,
+                )
 
-                for user_id in user_ids:
-                    user_uri = client._memory_target_uri(user_id)
-                    logger.info(f"openviking_search: searching {user_uri} for query: {query}")
-                    results = await search_client.search(query, target_uri=user_uri, limit=20)
-                    if results:
-                        memories = [
-                            item
-                            for item in self._extract_search_items(results)
-                            if item.get("type") == "memory"
-                        ]
-                        all_results.extend(memories)
-
-                if not all_results:
+                if not results:
                     return f"No results found for query: {query}"
 
-                grouped_items = self._filter_search_items(all_results, min_score=min_score)
+                grouped_items = self._filter_search_items(results, min_score=min_score)
                 total = sum(len(items) for items in grouped_items.values())
                 if total == 0:
                     return f"No results found for query: {query}"
                 return self._format_search_items_json(grouped_items, min_score=min_score)
 
-            results = await search_client.search(query, target_uri=target_uri, limit=20)
+            results = await client.search(
+                query,
+                target_uri=target_uri,
+                limit=20,
+                user_id=admin_user_id,
+            )
 
             if not results:
                 return f"No results found for query: {query}"
@@ -362,6 +358,7 @@ class VikingGrepTool(OVFileTool):
     def description(self) -> str:
         return (
             "Search Viking resources using regex patterns (like grep). Supports multiple patterns to search concurrently."
+            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
             "Please avoid repeated calls with similar queries as much as possible."
         )
 
@@ -407,7 +404,9 @@ class VikingGrepTool(OVFileTool):
             async def run_grep(p: str) -> tuple[str, list[Any]]:
                 async with semaphore:
                     try:
-                        result = await client.grep(uri, p, case_insensitive=case_insensitive)
+                        result = await client.grep(
+                            uri, p, case_insensitive=case_insensitive, user_id=client.admin_user_id
+                        )
                         if isinstance(result, dict):
                             matches = result.get("matches", [])
                         else:
@@ -473,7 +472,10 @@ class VikingGlobTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Find Viking resources using glob patterns (like **/*.md, *.py)."
+        return (
+            "Find Viking resources using glob patterns (like **/*.md, *.py)."
+            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -498,7 +500,7 @@ class VikingGlobTool(OVFileTool):
     ) -> str:
         try:
             client = await self._get_client(tool_context)
-            result = await client.glob(pattern, uri=uri or None)
+            result = await client.glob(pattern, uri=uri or None, user_id=client.admin_user_id)
 
             if isinstance(result, dict):
                 matches = result.get("matches", [])
