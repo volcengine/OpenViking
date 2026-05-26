@@ -5,6 +5,11 @@ description: |
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
 
+embedding_template: |-
+  {{ trajectory_name }}
+
+  {{ retrieval_anchor }}
+
 directory: "viking://agent/{{ agent_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
@@ -20,12 +25,27 @@ fields:
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Do not create near-duplicate names for the same task.
       Good: "duplicate_request_resolution", "async_task_hang_fix", "重复请求处理".
+      Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
       Use exactly one of: success, failure, partial, unfinished, unknown.
+    merge_op: immutable
+
+  - name: retrieval_anchor
+    type: string
+    description: |
+      Positive semantic retrieval text for this record, written for embedding rather than display.
+      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response>; Boundary: <verified reusable condition>; Capability: <operation, check, handoff, or response this record can guide>; Target: <primary object or sub-object>."
+
+      Rules:
+      - Keep it shorter and more retrieval-focused than content.
+      - Describe when the record should be retrieved using positive applies-when language only.
+      - Do not write negative examples, nearby intents, unrelated alternative requests, or broad exclusions here; keep those in Negative Applicability inside content.
+      - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
+      - Generalize identifiers, names, numbers, dates, places, amounts, and raw tool payloads as strictly as content.
     merge_op: immutable
 
   - name: content
@@ -76,6 +96,7 @@ fields:
       - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
       - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
       - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
+      - Keep retrieval-specific wording out of content. Use retrieval_anchor for positive indexed text, and keep nearby non-applicable intents only in Negative Applicability.
       - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads. Use semantic placeholders such as requested quantity, selected object, calculated amount, source object, target object, or applicable policy instead of copying concrete values. Keep tool names only when they are part of the reusable path. Evidence must also stay generalized and should not contain digits; do not use it to preserve instance-local ids, names, counts, amounts, locations, or dates.
       - Use exactly the title, Domain line, and 11 labels above in this exact order.
       - Trigger, Result, and Evidence are ONE sentence each.

@@ -5,7 +5,8 @@ evaluation. The scope is intentionally narrow:
 
 - fresh OpenViking Memory V2 experience-only baseline;
 - Memory V2 pre-write recall treatment.
-- trajectory memory retrieval treatment for the refined extraction prompt.
+- trajectory memory retrieval treatment for the refined extraction prompt and
+  retrieval-anchor embedding text.
 
 Category rerank and other harness-only diagnostics are intentionally left out.
 
@@ -133,6 +134,10 @@ The PR-B headline and content-shape ablation use
 `config/prb_content_matrix_new_prompt.yaml`. It runs the no-memory control plus
 trajectory first-user top4 / pre-write top2, experience top2, and representative
 4000-character budget ablation routes across `retail + airline` with 8 repeats.
+The current trajectory prompt indexes `trajectory_name + retrieval_anchor`
+instead of the full procedure body. This keeps retrieval focused on the positive
+operation boundary and reduces broad terminal-handoff / cancellation-like memory
+matches.
 
 ### 1. Bootstrap fixed-first-user fixtures
 
@@ -219,6 +224,11 @@ The main result is written to
 Per-cell execution records live under `cell_results/`, raw TAU-2 result JSON
 lives under `memory_cells/`, and corpus identity / generated memory checks live
 under `memory_corpora/`.
+
+For the strongest trajectory-only treatment, inspect the
+`new_traj_fixed_first_user_prewrite` row. It uses trajectory top4 at the first
+user turn, trajectory top4 retrieval before writes, pre-write injection top2,
+fixed-first-user fixtures, and the generic scope prompt.
 
 For a small E2E smoke, keep both the eval and train slices tiny:
 

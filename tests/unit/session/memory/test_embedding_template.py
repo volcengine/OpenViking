@@ -29,6 +29,7 @@ class TestEmbeddingTemplateYamlParsing:
         self.registry.load_from_yaml(str(memory_dir / "events.yaml"))
         self.registry.load_from_yaml(str(memory_dir / "preferences.yaml"))
         self.registry.load_from_yaml(str(memory_dir / "entities.yaml"))
+        self.registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
 
     def test_events_exposes_embedding_template(self):
         schema = self.registry.get("events")
@@ -41,6 +42,10 @@ class TestEmbeddingTemplateYamlParsing:
     def test_entities_exposes_embedding_template(self):
         schema = self.registry.get("entities")
         assert schema.embedding_template == "{{ category }}\n\n{{ name }}\n\n{{ content }}"
+
+    def test_trajectories_exposes_retrieval_anchor_template(self):
+        schema = self.registry.get("trajectories")
+        assert schema.embedding_template == "{{ trajectory_name }}\n\n{{ retrieval_anchor }}"
 
 
 class TestContentTemplateRendering:
