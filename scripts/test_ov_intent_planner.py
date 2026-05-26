@@ -96,10 +96,7 @@ def _load_config(config_path: Path, *, preserve_log_output: bool = False):
 
 def _load_intent_analyzer_class():
     module_path = (
-        Path(__file__).resolve().parents[1]
-        / "openviking"
-        / "retrieve"
-        / "intent_analyzer.py"
+        Path(__file__).resolve().parents[1] / "openviking" / "retrieve" / "intent_analyzer.py"
     )
     spec = importlib.util.spec_from_file_location("_ov_intent_analyzer_direct", module_path)
     if spec is None or spec.loader is None:
