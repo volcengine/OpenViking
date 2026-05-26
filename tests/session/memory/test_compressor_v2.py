@@ -292,9 +292,7 @@ async def test_resolve_supersedes_migrates_peer_links_to_replacement_uri():
         (peer_uri, new_uri, "evolved_from"),
     }
     assert old_uri not in {
-        uri
-        for link in operations.resolved_links
-        for uri in (link.from_uri, link.to_uri)
+        uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri)
     }
 
 
@@ -320,7 +318,7 @@ async def test_resolve_supersedes_accepts_multiple_replaced_experiences():
                     "from_uri": old_uri_1,
                     "to_uri": old_uri_2,
                     "link_type": "related_to",
-                }
+                },
             ],
         ),
         old_uri_2: MemoryFile(
