@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
+from openviking.parse.converter import DocumentConverter
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
@@ -50,9 +51,16 @@ class LegacyDocParser(BaseParser):
         path = Path(source)
 
         if path.exists():
+            converted = await self._parse_converted_pdf(path, instruction, kwargs)
+            if converted:
+                return converted
+
             text = await asyncio.to_thread(self._extract_text, path)
             result = await self._md_parser.parse_content(
-                text, source_path=str(path), instruction=instruction, **kwargs
+                text,
+                source_path=str(path),
+                instruction=instruction,
+                **kwargs,
             )
         else:
             result = await self._md_parser.parse_content(
@@ -61,6 +69,33 @@ class LegacyDocParser(BaseParser):
         result.source_format = "doc"
         result.parser_name = "LegacyDocParser"
         return result
+
+    async def _parse_converted_pdf(
+        self,
+        path: Path,
+        instruction: str,
+        kwargs: dict,
+    ) -> Optional[ParseResult]:
+        """Try LibreOffice conversion and reuse the PDF parser for richer .doc parsing."""
+        pdf_path = await self._convert_to_pdf(path)
+        if not pdf_path:
+            return None
+
+        result = await self._parse_pdf(pdf_path, instruction=instruction, **kwargs)
+        result.source_path = str(path)
+        result.source_format = "doc"
+        result.parser_name = "LegacyDocParser"
+        result.meta["converted_from"] = "doc"
+        result.meta["intermediate_format"] = "pdf"
+        return result
+
+    async def _convert_to_pdf(self, path: Path) -> Optional[Path]:
+        return await DocumentConverter().to_pdf(path)
+
+    async def _parse_pdf(self, path: Path, instruction: str = "", **kwargs) -> ParseResult:
+        from openviking.parse.parsers.pdf import PDFParser
+
+        return await PDFParser().parse(path, instruction=instruction, **kwargs)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

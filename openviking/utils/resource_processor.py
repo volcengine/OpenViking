@@ -10,6 +10,7 @@ as described in the OpenViking design document.
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.parse.base import RESOURCE_ROOT_PLACEHOLDER, RESOURCE_ROOT_PLACEHOLDER_META_KEY
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -27,6 +28,7 @@ from openviking.utils.summarizer import Summarizer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.storage import StoragePath
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
@@ -87,6 +89,68 @@ class ResourceProcessor:
                 storage=self.media_storage,
             )
         return self._media_processor
+
+    async def _rewrite_resource_root_placeholders(
+        self,
+        temp_uri: str,
+        root_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Replace parser placeholders in generated markdown with the final resource URI."""
+        viking_fs = get_viking_fs()
+        replacement = root_uri.rstrip("/")
+
+        async def _ls(uri: str) -> List[Dict[str, Any]]:
+            try:
+                return await viking_fs.ls(uri, show_all_hidden=True, ctx=ctx)
+            except TypeError:
+                try:
+                    return await viking_fs.ls(uri, ctx=ctx)
+                except TypeError:
+                    return await viking_fs.ls(uri)
+
+        async def _read(uri: str) -> str:
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+            except TypeError:
+                content = await viking_fs.read_file(uri)
+            if isinstance(content, bytes):
+                return content.decode("utf-8", errors="replace")
+            return content
+
+        async def _write(uri: str, content: str) -> None:
+            try:
+                await viking_fs.write_file(uri, content, ctx=ctx)
+            except TypeError:
+                await viking_fs.write_file(uri, content)
+
+        async def _rewrite_dir(uri: str) -> int:
+            rewritten = 0
+            for entry in await _ls(uri):
+                name = entry.get("name", "")
+                if not name or name in {".", ".."}:
+                    continue
+                child_uri = entry.get("uri") or VikingURI(uri).join(name).uri
+                if entry.get("isDir") or entry.get("type") == "directory":
+                    rewritten += await _rewrite_dir(child_uri)
+                    continue
+                if not name.endswith(".md"):
+                    continue
+
+                content = await _read(child_uri)
+                if RESOURCE_ROOT_PLACEHOLDER not in content:
+                    continue
+                await _write(child_uri, content.replace(RESOURCE_ROOT_PLACEHOLDER, replacement))
+                rewritten += 1
+            return rewritten
+
+        rewritten = await _rewrite_dir(temp_uri)
+        if rewritten:
+            logger.info(
+                "Rewrote resource root placeholders in %d markdown file(s) under %s",
+                rewritten,
+                temp_uri,
+            )
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -282,6 +346,8 @@ class ResourceProcessor:
                         resource_lock = await self._acquire_resource_lock(
                             lock_manager, dst_path, uri=root_uri
                         )
+                    if parse_result.meta.get(RESOURCE_ROOT_PLACEHOLDER_META_KEY) and temp_uri:
+                        await self._rewrite_resource_root_placeholders(temp_uri, root_uri, ctx)
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                         await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from openviking.parse.base import RESOURCE_ATTACHMENTS_META_KEY, RESOURCE_ROOT_PLACEHOLDER
 from openviking.parse.parsers.pdf import PDFParser
 
 
@@ -249,9 +250,7 @@ class TestConvertLocalBookmarks:
                 ],
             ),
         ):
-            markdown, meta = await parser._convert_local(
-                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
-            )
+            markdown, meta = parser._convert_local("dummy.pdf")
 
         assert "Broken Bookmark" not in markdown
         assert "\n# Chapter 2\n" in markdown
@@ -280,9 +279,7 @@ class TestConvertLocalBookmarks:
                 return_value=[{"level": 1, "title": "Font Heading", "page_num": 2}],
             ),
         ):
-            markdown, meta = await parser._convert_local(
-                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
-            )
+            markdown, meta = parser._convert_local("dummy.pdf")
 
         assert "Broken Bookmark" not in markdown
         assert "\n# Font Heading\n" in markdown
@@ -304,10 +301,67 @@ class TestConvertLocalBookmarks:
             patch.object(parser, "_extract_bookmarks", return_value=[]),
             patch.object(parser, "_detect_headings_by_font", return_value=[]),
         ):
-            await parser._convert_local("dummy.pdf", storage=MagicMock(), resource_name="dummy")
+            parser._convert_local("dummy.pdf")
 
         assert [page.close_count for page in pages] == [1, 1]
         assert [page.flush_count for page in pages] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_convert_local_extracts_images_as_resource_attachments(self):
+        parser = PDFParser()
+        page = _FakePage("Page one")
+        page.images = [{"name": "Im1"}]
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        image_data = b"\x89PNG\r\n\x1a\nimage-bytes"
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+            patch.object(parser, "_extract_image_from_page", return_value=image_data),
+        ):
+            markdown, meta = parser._convert_local("dummy.pdf")
+
+        media_path = "media/images/image-1.png"
+        assert f"{RESOURCE_ROOT_PLACEHOLDER}/{media_path}" in markdown
+        assert f"![image]({RESOURCE_ROOT_PLACEHOLDER}/{media_path})" in markdown
+        assert "Page 1 Image 1" not in markdown
+        assert meta["images_extracted"] == 1
+        assert meta["images_failed"] == 0
+        assert meta[RESOURCE_ATTACHMENTS_META_KEY] == [{"path": media_path, "content": image_data}]
+
+    @pytest.mark.asyncio
+    async def test_convert_local_renders_table_regions_as_resource_attachments(self):
+        parser = PDFParser()
+        page = _FakePage("Page one")
+        page.find_tables = lambda: [
+            SimpleNamespace(
+                extract=lambda: [["Name", "Value"], ["CXL", "42"]],
+                bbox=(1, 2, 3, 4),
+            )
+        ]
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        table_image = b"\x89PNG\r\n\x1a\ntable-image"
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(parser, "_extract_bookmarks", return_value=[]),
+            patch.object(parser, "_detect_headings_by_font", return_value=[]),
+            patch.object(parser, "_render_page_region_image", return_value=table_image),
+        ):
+            markdown, meta = parser._convert_local("dummy.pdf")
+
+        media_path = "media/images/image-1.png"
+        assert "| Name | Value |" in markdown
+        assert f"{RESOURCE_ROOT_PLACEHOLDER}/{media_path}" in markdown
+        assert f"![image]({RESOURCE_ROOT_PLACEHOLDER}/{media_path})" in markdown
+        assert "Page 1 Table 1" not in markdown
+        assert meta["tables_extracted"] == 1
+        assert meta["table_images_extracted"] == 1
+        assert meta["images_extracted"] == 1
+        assert meta[RESOURCE_ATTACHMENTS_META_KEY] == [{"path": media_path, "content": table_image}]
 
     def test_detect_headings_by_font_closes_pages(self):
         parser = PDFParser()

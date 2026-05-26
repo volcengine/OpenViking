@@ -171,6 +171,10 @@ async def test_legacy_doc_parser_offloads_doc_extraction(monkeypatch, tmp_path: 
     def extract(path: Path) -> str:
         return "# converted doc"
 
+    async def parse_converted_pdf(path, instruction, kwargs):
+        return None
+
+    monkeypatch.setattr(parser, "_parse_converted_pdf", parse_converted_pdf)
     monkeypatch.setattr(parser, "_extract_text", extract)
     source = tmp_path / "sample.doc"
     source.write_bytes(b"placeholder")

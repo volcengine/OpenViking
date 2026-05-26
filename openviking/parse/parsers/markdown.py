@@ -20,16 +20,31 @@ The parser handles scenarios:
 import hashlib
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote, urlparse
 
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
-from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
+from openviking.parse.base import (
+    RESOURCE_ROOT_PLACEHOLDER,
+    RESOURCE_ROOT_PLACEHOLDER_META_KEY,
+    NodeType,
+    ParseResult,
+    ResourceNode,
+    create_parse_result,
+)
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     IGNORE_EXTENSIONS,
+)
+from openviking.parse.parsers.image_attachments import (
+    SUPPORTED_IMAGE_EXTENSIONS,
+    image_attachment,
+    image_extension_from_name_type_or_data,
+    image_media_path,
+    markdown_image_reference,
 )
 from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
@@ -195,6 +210,25 @@ class MarkdownParser(BaseParser):
                         f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}"
                     )
 
+            attachments = list(kwargs.get("attachments") or [])
+            if base_dir:
+                content, local_attachments, image_warnings = self._attach_local_images(
+                    content,
+                    base_dir=Path(base_dir),
+                    start_index=self._next_image_index(attachments),
+                )
+                attachments.extend(local_attachments)
+                warnings.extend(image_warnings)
+                if local_attachments:
+                    meta["images_extracted"] = len(local_attachments)
+
+            if attachments:
+                meta[RESOURCE_ROOT_PLACEHOLDER_META_KEY] = RESOURCE_ROOT_PLACEHOLDER
+                meta.setdefault(
+                    "images_extracted",
+                    self._count_image_attachments(attachments),
+                )
+
             # Collect metadata
             # images = list(self._image_pattern.finditer(content))
             # image_count = len(images)
@@ -241,6 +275,7 @@ class MarkdownParser(BaseParser):
                 source_path,
                 doc_name=self._sanitize_for_path(doc_title),
             )
+            await self._write_attachments(root_dir, attachments)
 
             parse_time = time.time() - start_time
             logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
@@ -513,6 +548,135 @@ class MarkdownParser(BaseParser):
         # Process sections with merge logic
         await self._process_sections_with_merge(
             content, headings, root_dir, sections, doc_name, max_size, min_size
+        )
+
+    async def _write_attachments(self, root_dir: str, attachments: List[Dict[str, Any]]) -> None:
+        """Write parser-produced binary attachments into the same temp resource tree."""
+        if not attachments:
+            return
+
+        viking_fs = self._get_viking_fs()
+        written = 0
+        for attachment in attachments:
+            rel_path = str(attachment.get("path") or "").strip()
+            posix_path = PurePosixPath(rel_path)
+            if (
+                not rel_path
+                or posix_path.is_absolute()
+                or any(part in {"", ".", ".."} for part in posix_path.parts)
+            ):
+                logger.warning("[MarkdownParser] Skipping unsafe attachment path: %r", rel_path)
+                continue
+
+            content = attachment.get("content")
+            if not isinstance(content, (bytes, bytearray)):
+                logger.warning("[MarkdownParser] Skipping non-binary attachment: %s", rel_path)
+                continue
+
+            await viking_fs.write_file_bytes(
+                f"{root_dir}/{posix_path.as_posix()}",
+                bytes(content),
+            )
+            written += 1
+
+        if written:
+            logger.info("[MarkdownParser] Wrote %d attachment(s) into temp tree", written)
+
+    def _attach_local_images(
+        self,
+        content: str,
+        base_dir: Path,
+        start_index: int,
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        """Copy local Markdown image references into parser-produced attachments."""
+        attachments: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        copied: Dict[Path, str] = {}
+        next_index = start_index
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal next_index
+            alt_text = match.group(1) or "image"
+            raw_target = match.group(2)
+            image_path = self._resolve_local_image_path(raw_target, base_dir)
+            if not image_path:
+                return match.group(0)
+
+            try:
+                resolved_path = image_path.resolve()
+                if resolved_path in copied:
+                    media_path = copied[resolved_path]
+                else:
+                    image_bytes = resolved_path.read_bytes()
+                    extension = image_extension_from_name_type_or_data(
+                        name=resolved_path.name,
+                        data=image_bytes,
+                    )
+                    next_index += 1
+                    media_path = image_media_path(next_index, extension)
+                    attachments.append(image_attachment(media_path, image_bytes))
+                    copied[resolved_path] = media_path
+            except Exception as exc:
+                warnings.append(f"Failed to attach local image '{raw_target}': {exc}")
+                return match.group(0)
+
+            return markdown_image_reference(media_path, alt_text=alt_text)
+
+        return self._image_pattern.sub(replace, content), attachments, warnings
+
+    def _resolve_local_image_path(self, raw_target: str, base_dir: Path) -> Optional[Path]:
+        """Resolve a Markdown image target when it points to a supported local file."""
+        target = self._extract_markdown_link_destination(raw_target)
+        if not target or target.startswith("#"):
+            return None
+
+        parsed = urlparse(target)
+        if parsed.scheme and parsed.scheme != "file":
+            return None
+        if parsed.netloc:
+            return None
+
+        raw_path = unquote(parsed.path if parsed.scheme == "file" else target)
+        if not raw_path:
+            return None
+
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = base_dir / path
+
+        if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+            return None
+        if not path.is_file():
+            return None
+        return path
+
+    @staticmethod
+    def _extract_markdown_link_destination(raw_target: str) -> str:
+        target = raw_target.strip()
+        if target.startswith("<"):
+            end = target.find(">")
+            if end > 0:
+                return target[1:end].strip()
+        if " " not in target:
+            return target
+        return target.split(maxsplit=1)[0].strip()
+
+    @staticmethod
+    def _next_image_index(attachments: List[Dict[str, Any]]) -> int:
+        highest = 0
+        for attachment in attachments:
+            path = str(attachment.get("path") or "")
+            match = re.search(r"(?:^|/)image-(\d+)\.[^/]+$", path)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        return highest
+
+    @staticmethod
+    def _count_image_attachments(attachments: List[Dict[str, Any]]) -> int:
+        return sum(
+            1
+            for attachment in attachments
+            if str(attachment.get("path", "")).startswith("media/images/")
         )
 
     async def _process_sections_with_merge(

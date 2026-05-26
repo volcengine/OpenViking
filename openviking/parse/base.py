@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 # Common utility functions
 # ============================================================================
 
+RESOURCE_ROOT_PLACEHOLDER = "__OPENVIKING_RESOURCE_ROOT__"
+RESOURCE_ATTACHMENTS_META_KEY = "_attachments"
+RESOURCE_ROOT_PLACEHOLDER_META_KEY = "resource_root_placeholder"
+
 
 def calculate_media_strategy(image_count: int, line_count: int) -> str:
     """

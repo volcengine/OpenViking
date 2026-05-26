@@ -286,3 +286,66 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root_2"]
     assert summarize_calls[0]["target_preexisting"] is False
     assert fake_fs.persist_calls == [("viking://temp/root_tmp", "viking://resources/root_2")]
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_rewrites_resource_root_placeholders(monkeypatch):
+    from openviking.parse.base import RESOURCE_ROOT_PLACEHOLDER
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    class FakeTreeFS:
+        def __init__(self):
+            self.files = {
+                "viking://temp/root/doc.md": (
+                    f"![image]({RESOURCE_ROOT_PLACEHOLDER}/media/images/image-1.png)"
+                ),
+                "viking://temp/root/media/images/image-1.png": b"image",
+            }
+            self.dirs = {
+                "viking://temp/root",
+                "viking://temp/root/media",
+                "viking://temp/root/media/images",
+            }
+
+        async def ls(self, uri, show_all_hidden=False, ctx=None):
+            prefix = uri.rstrip("/") + "/"
+            names = {}
+            for item in list(self.dirs) + list(self.files):
+                if not item.startswith(prefix):
+                    continue
+                rest = item[len(prefix) :]
+                if not rest:
+                    continue
+                name = rest.split("/", 1)[0]
+                child_uri = f"{uri.rstrip('/')}/{name}"
+                names[name] = child_uri in self.dirs
+            return [
+                {
+                    "name": name,
+                    "uri": f"{uri.rstrip('/')}/{name}",
+                    "isDir": is_dir,
+                    "type": "directory" if is_dir else "file",
+                }
+                for name, is_dir in sorted(names.items())
+            ]
+
+        async def read_file(self, uri, ctx=None):
+            return self.files[uri]
+
+        async def write_file(self, uri, content, ctx=None):
+            self.files[uri] = content
+
+    fake_fs = FakeTreeFS()
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    await rp._rewrite_resource_root_placeholders(
+        "viking://temp/root",
+        "viking://resources/papers/demo",
+        ctx=object(),
+    )
+
+    assert fake_fs.files["viking://temp/root/doc.md"] == (
+        "![image](viking://resources/papers/demo/media/images/image-1.png)"
+    )
+    assert fake_fs.files["viking://temp/root/media/images/image-1.png"] == b"image"

@@ -12,14 +12,19 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
-    def __init__(self, tree):
+    def __init__(self, tree, files=None):
         self._tree = tree
+        self.files = dict(files or {})
         self.writes = []
 
     async def ls(self, uri, ctx=None):
         return self._tree.get(uri, [])
 
+    async def read_file(self, path, ctx=None):
+        return self.files[path]
+
     async def write_file(self, path, content, ctx=None):
+        self.files[path] = content
         self.writes.append((path, content))
 
     def _uri_to_path(self, uri, ctx=None):
@@ -30,8 +35,14 @@ class _FakeProcessor:
     def __init__(self):
         self.vectorized_dirs = []
         self.vectorized_files = []
+        self.vectorized_file_summaries = {}
 
     async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+        if file_path.endswith(".png"):
+            return {
+                "name": file_path.split("/")[-1],
+                "summary": "A CXL memory pool diagram -- with GPU allocation details.\nSecond line.",
+            }
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
@@ -59,6 +70,7 @@ class _FakeProcessor:
         use_summary=False,
     ):
         self.vectorized_files.append(file_path)
+        self.vectorized_file_summaries[file_path] = summary_dict["summary"]
 
     async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
         await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
@@ -186,6 +198,59 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
     assert tracker.register_calls == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_embeds_image_summaries_in_markdown_before_vectorizing(monkeypatch):
+    root_uri = "viking://resources/root"
+    image_uri = f"{root_uri}/media/images/image-2.png"
+    markdown_uri = f"{root_uri}/doc.md"
+    tree = {
+        root_uri: [
+            {"name": "doc.md", "isDir": False},
+            {"name": "media", "isDir": True},
+        ],
+        f"{root_uri}/media": [
+            {"name": "images", "isDir": True},
+        ],
+        f"{root_uri}/media/images": [
+            {"name": "image-2.png", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(
+        tree,
+        files={
+            markdown_uri: f"Intro\n\n![image]({image_uri})\n\nText\n",
+            image_uri: b"image",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+    )
+    await executor.run(root_uri)
+    await asyncio.sleep(0)
+
+    assert fake_fs.files[markdown_uri] == (
+        f"Intro\n\n![image]({image_uri})\n"
+        "<!-- image-summary: A CXL memory pool diagram - with GPU allocation details. "
+        "Second line. -->\n\nText\n"
+    )
+    assert markdown_uri in processor.vectorized_files
+    assert processor.vectorized_file_summaries[image_uri] == (
+        "A CXL memory pool diagram -- with GPU allocation details.\nSecond line.\n\n"
+        f"Referenced from: {markdown_uri}"
+    )
 
 
 if __name__ == "__main__":

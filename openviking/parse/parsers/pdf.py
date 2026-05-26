@@ -13,6 +13,7 @@ to the MarkdownParser after conversion.
 """
 
 import asyncio
+import io
 import re
 import time
 from collections import Counter, defaultdict
@@ -20,6 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.parse.base import (
+    RESOURCE_ATTACHMENTS_META_KEY,
+    RESOURCE_ROOT_PLACEHOLDER,
+    RESOURCE_ROOT_PLACEHOLDER_META_KEY,
     NodeType,
     ParseResult,
     ResourceNode,
@@ -27,6 +31,12 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.image_attachments import (
+    detect_image_extension,
+    image_attachment,
+    image_media_path,
+    markdown_image_reference,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
@@ -125,6 +135,7 @@ class PDFParser(BaseParser):
                 pdf_path,
                 resource_name=resource_name,
             )
+            attachments = conversion_meta.pop(RESOURCE_ATTACHMENTS_META_KEY, [])
 
             # Step 2: Parse Markdown using MarkdownParser, pass through resource name
             md_parser = self._get_markdown_parser()
@@ -133,6 +144,7 @@ class PDFParser(BaseParser):
                 source_path=str(pdf_path),
                 resource_name=resource_name,
                 source_name=resource_name,
+                attachments=attachments,
             )
 
             # Step 3: Update metadata for PDF origin
@@ -174,7 +186,7 @@ class PDFParser(BaseParser):
 
         Args:
             pdf_path: Path to PDF file
-            resource_name: Optional resource name for organizing saved images
+            resource_name: Optional resource name for conversion strategies that need it
 
         Returns:
             Tuple of (markdown_content, metadata_dict)
@@ -183,7 +195,7 @@ class PDFParser(BaseParser):
             ValueError: If all conversion strategies fail
         """
         if self.config.strategy == "local":
-            return await self._convert_local(pdf_path, resource_name=resource_name)
+            return await asyncio.to_thread(self._convert_local, pdf_path)
 
         elif self.config.strategy == "mineru":
             return await self._convert_mineru(pdf_path, resource_name=resource_name)
@@ -191,7 +203,7 @@ class PDFParser(BaseParser):
         elif self.config.strategy == "auto":
             # Try local first
             try:
-                return await self._convert_local(pdf_path, resource_name=resource_name)
+                return await asyncio.to_thread(self._convert_local, pdf_path)
             except Exception as e:
                 logger.warning(f"Local conversion failed: {e}")
 
@@ -207,38 +219,21 @@ class PDFParser(BaseParser):
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
 
-    async def _convert_local(
-        self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
-    ) -> tuple[str, Dict[str, Any]]:
-        # pdfplumber / pdfminer 的解析与图片/表格提取通常是 CPU/IO 密集且为同步实现，
-        # 放到线程池中执行，避免阻塞事件循环。
-        return await asyncio.to_thread(self._convert_local_sync, pdf_path, storage, resource_name)
-
-    def _convert_local_sync(
-        self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
-    ) -> tuple[str, Dict[str, Any]]:
-        """同步版：用 pdfplumber 将 PDF 转 Markdown。
-
-        该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
-        """
+    def _convert_local(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+        """Convert PDF to Markdown with local pdfplumber extraction."""
         pdfplumber = lazy_import("pdfplumber")
 
-        # Import storage utilities
-        if storage is None:
-            from openviking_cli.utils.storage import get_storage
-
-            storage = get_storage()
-
-        if resource_name is None:
-            resource_name = pdf_path.stem
-
         parts = []
+        attachments: List[Dict[str, Any]] = []
         meta = {
             "strategy": "local",
             "library": "pdfplumber",
             "pages_processed": 0,
             "images_extracted": 0,
+            "images_failed": 0,
             "tables_extracted": 0,
+            "table_images_extracted": 0,
+            "table_images_failed": 0,
             "bookmarks_found": 0,
             "bookmarks_resolved": 0,
             "bookmarks_unresolved": 0,
@@ -297,6 +292,7 @@ class PDFParser(BaseParser):
                         continue
                     bookmarks_by_page[page].append(bm)
 
+                image_count = 0
                 for page_num, page in enumerate(pdf.pages, 1):
                     try:
                         # Inject headings before page text
@@ -312,16 +308,45 @@ class PDFParser(BaseParser):
                             parts.append(f"<!-- Page {page_num} -->\n{text.strip()}")
                             meta["pages_processed"] += 1
 
-                        # Extract tables
-                        tables = page.extract_tables()
-                        for table_idx, table in enumerate(tables or []):
-                            if table and len(table) > 0:
-                                md_table = self._format_table_markdown(table)
-                                if md_table:
-                                    parts.append(
-                                        f"<!-- Page {page_num} Table {table_idx + 1} -->\n{md_table}"
-                                    )
-                                    meta["tables_extracted"] += 1
+                        # Extract tables and render their visual regions when available.
+                        table_items = self._extract_table_items(page)
+                        for table_idx, table_item in enumerate(table_items):
+                            table = table_item["table"]
+                            if not table or len(table) == 0:
+                                continue
+
+                            md_table = self._format_table_markdown(table)
+                            if not md_table:
+                                continue
+
+                            parts.append(md_table)
+                            meta["tables_extracted"] += 1
+
+                            bbox = table_item.get("bbox")
+                            if not bbox:
+                                continue
+
+                            try:
+                                table_image = self._render_page_region_image(page, bbox)
+                            except Exception as table_img_err:
+                                table_image = None
+                                meta["table_images_failed"] += 1
+                                logger.warning(
+                                    "Failed to render table %d on page %d: %s",
+                                    table_idx + 1,
+                                    page_num,
+                                    table_img_err,
+                                )
+
+                            if not table_image:
+                                continue
+
+                            image_count += 1
+                            media_path = image_media_path(image_count, ".png")
+                            attachments.append(image_attachment(media_path, table_image))
+                            parts.append(markdown_image_reference(media_path))
+                            meta["images_extracted"] += 1
+                            meta["table_images_extracted"] += 1
 
                         # Extract images
                         images = page.images
@@ -330,20 +355,16 @@ class PDFParser(BaseParser):
                                 # Extract image using underlying PDF object
                                 image_obj = self._extract_image_from_page(page, img)
                                 if image_obj:
-                                    # Save image
-                                    filename = f"page{page_num}_img{img_idx + 1}"
-                                    image_path = storage.save_image(
-                                        resource_name, image_obj, filename=filename
-                                    )
-
-                                    # Generate relative path for markdown
-                                    rel_path = image_path.relative_to(Path.cwd())
-                                    parts.append(
-                                        f"<!-- Page {page_num} Image {img_idx + 1} -->\n"
-                                        f"![Page {page_num} Image {img_idx + 1}]({rel_path})"
-                                    )
+                                    extension = self._detect_image_extension(image_obj)
+                                    image_count += 1
+                                    media_path = image_media_path(image_count, extension)
+                                    attachments.append(image_attachment(media_path, image_obj))
+                                    parts.append(markdown_image_reference(media_path))
                                     meta["images_extracted"] += 1
+                                else:
+                                    meta["images_failed"] += 1
                             except Exception as img_err:
+                                meta["images_failed"] += 1
                                 logger.warning(
                                     f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
                                 )
@@ -355,12 +376,17 @@ class PDFParser(BaseParser):
                 return "", meta
 
             markdown_content = "\n\n".join(parts)
+            if attachments:
+                meta[RESOURCE_ATTACHMENTS_META_KEY] = attachments
+                meta[RESOURCE_ROOT_PLACEHOLDER_META_KEY] = RESOURCE_ROOT_PLACEHOLDER
             logger.info(
                 f"Local conversion: {meta['pages_processed']}/{meta['total_pages']} pages, "
                 f"{meta['headings_found']} headings ({meta['heading_source']}, "
                 f"bookmarks={meta['bookmarks_found']}, "
                 f"resolved={meta['bookmarks_resolved']}), "
-                f"{meta['images_extracted']} images, {meta['tables_extracted']} tables → "
+                f"{meta['images_extracted']} images "
+                f"({meta['table_images_extracted']} rendered table images), "
+                f"{meta['tables_extracted']} tables → "
                 f"{len(markdown_content)} chars"
             )
 
@@ -387,6 +413,73 @@ class PDFParser(BaseParser):
                 flush_cache()
             except Exception:
                 pass
+
+    def _extract_table_items(self, page: Any) -> List[Dict[str, Any]]:
+        """Extract table contents and best-effort visual regions from a pdfplumber page."""
+        find_tables = getattr(page, "find_tables", None)
+        if callable(find_tables):
+            try:
+                table_items = []
+                for table_obj in find_tables() or []:
+                    extract = getattr(table_obj, "extract", None)
+                    table = extract() if callable(extract) else None
+                    if table:
+                        table_items.append(
+                            {
+                                "table": table,
+                                "bbox": getattr(table_obj, "bbox", None),
+                            }
+                        )
+                if table_items:
+                    return table_items
+            except Exception as e:
+                logger.debug("Failed to extract table objects with bboxes: %s", e)
+
+        try:
+            return [{"table": table, "bbox": None} for table in page.extract_tables() or []]
+        except Exception as e:
+            logger.debug("Failed to extract tables: %s", e)
+            return []
+
+    @staticmethod
+    def _render_page_region_image(page: Any, bbox: Any) -> Optional[bytes]:
+        """Render a PDF page region to PNG bytes for downstream image parsing."""
+        crop_bbox = PDFParser._clamp_bbox(bbox, getattr(page, "bbox", None))
+        if crop_bbox is None:
+            return None
+
+        cropped_page = page.crop(crop_bbox)
+        page_image = cropped_page.to_image(resolution=144)
+        image = getattr(page_image, "original", page_image)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _clamp_bbox(bbox: Any, page_bbox: Any) -> Optional[tuple[float, float, float, float]]:
+        """Clamp a pdfplumber bbox to the page bounds."""
+        if not bbox or len(bbox) != 4:
+            return None
+
+        try:
+            x0, top, x1, bottom = (float(value) for value in bbox)
+        except (TypeError, ValueError):
+            return None
+
+        if page_bbox and len(page_bbox) == 4:
+            try:
+                px0, ptop, px1, pbottom = (float(value) for value in page_bbox)
+            except (TypeError, ValueError):
+                px0 = ptop = px1 = pbottom = None
+            if px0 is not None:
+                x0 = max(x0, px0)
+                top = max(top, ptop)
+                x1 = min(x1, px1)
+                bottom = min(bottom, pbottom)
+
+        if x1 <= x0 or bottom <= top:
+            return None
+        return (x0, top, x1, bottom)
 
     def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
         """Extract bookmark structure from PDF outlines.
@@ -633,6 +726,11 @@ class PDFParser(BaseParser):
         except Exception as e:
             logger.debug(f"Image extraction error: {e}")
             return None
+
+    @staticmethod
+    def _detect_image_extension(image_data: bytes) -> str:
+        """Detect a stable image extension from file signatures."""
+        return detect_image_extension(image_data)
 
     async def _convert_mineru(
         self,

@@ -3,9 +3,11 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from openviking.parse.parsers.media.utils import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -20,6 +22,42 @@ logger = get_logger(__name__)
 # These are canonical archives (e.g. session transcripts) whose content provides
 # no additional retrieval value and would only waste tokens and add latency.
 _SKIP_FILENAMES = frozenset({"messages.jsonl"})
+_MARKDOWN_EXTENSIONS = (".md", ".markdown", ".mdown", ".mkd")
+_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+_IMAGE_SUMMARY_COMMENT_PATTERN = re.compile(r"<!--\s*image-summary:.*?-->", re.DOTALL)
+_SKIP_IMAGE_SUMMARIES = frozenset({"", "Image summary generation failed"})
+_REFERENCED_FROM_MARKER = "Referenced from:"
+
+
+def _format_image_summary_comment(summary: str, max_chars: int = 500) -> str:
+    text = " ".join(str(summary or "").split())
+    text = text.replace("--", "-")
+    if len(text) > max_chars:
+        text = text[: max_chars - 3].rstrip() + "..."
+    return f"<!-- image-summary: {text} -->"
+
+
+def _append_referenced_from(summary: str, markdown_uris: List[str]) -> str:
+    base_summary = _strip_referenced_from(summary)
+    refs = [uri for uri in dict.fromkeys(markdown_uris) if uri]
+    if not refs:
+        return base_summary
+
+    if len(refs) == 1:
+        reference_block = f"{_REFERENCED_FROM_MARKER} {refs[0]}"
+    else:
+        reference_block = "\n".join([_REFERENCED_FROM_MARKER, *[f"- {uri}" for uri in refs]])
+    return f"{base_summary}\n\n{reference_block}" if base_summary else reference_block
+
+
+def _strip_referenced_from(summary: str) -> str:
+    text = str(summary or "").strip()
+    marker_index = text.find(f"\n\n{_REFERENCED_FROM_MARKER}")
+    if marker_index >= 0:
+        return text[:marker_index].rstrip()
+    if text.startswith(_REFERENCED_FROM_MARKER):
+        return ""
+    return text
 
 
 @dataclass
@@ -129,6 +167,7 @@ class SemanticDagExecutor:
         try:
             await self._dispatch_dir(root_uri, parent_uri=None)
             await self._root_done.wait()
+            await self._embed_image_summaries_in_markdown()
         except Exception:
             await self._lock.close()
             raise
@@ -282,6 +321,127 @@ class SemanticDagExecutor:
             )
             return None
         return current_uri
+
+    async def _embed_image_summaries_in_markdown(self) -> None:
+        """Write generated image summaries next to markdown image references."""
+        image_summary_dicts: Dict[str, Dict[str, str]] = {}
+        image_summaries: Dict[str, str] = {}
+        markdown_files: List[str] = []
+
+        for node in self._nodes.values():
+            for file_path, summary_dict in zip(node.file_paths, node.file_summaries, strict=False):
+                if not summary_dict:
+                    continue
+
+                file_name = file_path.rsplit("/", 1)[-1]
+                if get_media_type(file_name, None) == "image":
+                    summary = str(summary_dict.get("summary") or "").strip()
+                    if summary not in _SKIP_IMAGE_SUMMARIES:
+                        image_summary_dicts[file_path] = summary_dict
+                        image_summaries[file_path] = summary
+                    continue
+
+                if file_name.lower().endswith(_MARKDOWN_EXTENSIONS):
+                    markdown_files.append(file_path)
+
+        if not image_summaries or not markdown_files:
+            return
+
+        markdown_refs: Dict[str, List[str]] = {image_uri: [] for image_uri in image_summaries}
+        for markdown_uri in markdown_files:
+            try:
+                content = await self._viking_fs.read_file(markdown_uri, ctx=self._ctx)
+                if isinstance(content, bytes):
+                    content = content.decode("utf-8", errors="replace")
+                for image_uri in self._image_uris_in_markdown(content, image_summaries):
+                    markdown_refs.setdefault(image_uri, []).append(markdown_uri)
+                updated = self._insert_image_summary_comments(content, image_summaries)
+                if updated != content:
+                    await self._viking_fs.write_file(markdown_uri, updated, ctx=self._ctx)
+                    logger.info("Embedded image summaries into markdown: %s", markdown_uri)
+            except Exception as e:
+                logger.warning(
+                    "Failed to embed image summaries into markdown %s: %s",
+                    markdown_uri,
+                    e,
+                )
+
+        for image_uri, refs in markdown_refs.items():
+            if refs and image_uri in image_summary_dicts:
+                summary_dict = image_summary_dicts[image_uri]
+                summary_dict["summary"] = _append_referenced_from(
+                    str(summary_dict.get("summary") or ""),
+                    refs,
+                )
+
+    @classmethod
+    def _insert_image_summary_comments(cls, content: str, image_summaries: Dict[str, str]) -> str:
+        lines = content.splitlines()
+        trailing_newline = content.endswith("\n")
+        updated_lines: List[str] = []
+        changed = False
+        idx = 0
+
+        while idx < len(lines):
+            line = lines[idx]
+            updated_lines.append(line)
+            comments = cls._comments_for_markdown_image_line(line, image_summaries)
+
+            if not comments:
+                idx += 1
+                continue
+
+            next_idx = idx + 1
+            if next_idx < len(lines) and _IMAGE_SUMMARY_COMMENT_PATTERN.fullmatch(
+                lines[next_idx].strip()
+            ):
+                replacement = comments[0]
+                if lines[next_idx] != replacement:
+                    changed = True
+                updated_lines.append(replacement)
+                for extra_comment in comments[1:]:
+                    updated_lines.append(extra_comment)
+                    changed = True
+                idx += 2
+                continue
+
+            updated_lines.extend(comments)
+            changed = True
+            idx += 1
+
+        if not changed:
+            return content
+
+        updated = "\n".join(updated_lines)
+        if trailing_newline:
+            updated += "\n"
+        return updated
+
+    @staticmethod
+    def _image_uris_in_markdown(content: str, image_summaries: Dict[str, str]) -> List[str]:
+        image_uris = []
+        for match in _MARKDOWN_IMAGE_PATTERN.finditer(content):
+            image_uri = match.group(1).strip()
+            if image_uri.startswith("<") and image_uri.endswith(">"):
+                image_uri = image_uri[1:-1].strip()
+            if image_uri in image_summaries:
+                image_uris.append(image_uri)
+        return image_uris
+
+    @staticmethod
+    def _comments_for_markdown_image_line(
+        line: str,
+        image_summaries: Dict[str, str],
+    ) -> List[str]:
+        comments = []
+        for match in _MARKDOWN_IMAGE_PATTERN.finditer(line):
+            image_uri = match.group(1).strip()
+            if image_uri.startswith("<") and image_uri.endswith(">"):
+                image_uri = image_uri[1:-1].strip()
+            summary = image_summaries.get(image_uri)
+            if summary:
+                comments.append(_format_image_summary_comment(summary))
+        return comments
 
     def _is_direct_incremental_update(self) -> bool:
         return (

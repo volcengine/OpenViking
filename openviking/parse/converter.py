@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class DocumentConverter:
-    """Converts documents to PDF for consistent rendering (DOCX/MD/PPTX -> PDF)."""
+    """Converts documents to PDF for consistent rendering."""
 
     def __init__(self, temp_dir: Optional[Path] = None):
         self.temp_dir = temp_dir
@@ -24,7 +24,7 @@ class DocumentConverter:
 
         if ext == ".pdf":
             return file_path
-        elif ext in (".docx", ".pptx"):
+        elif ext in (".doc", ".docx", ".pptx"):
             return await self._convert_with_libreoffice(file_path)
         elif ext in (".md", ".markdown"):
             return await self._convert_markdown_to_pdf(file_path)
