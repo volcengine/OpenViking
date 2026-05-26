@@ -62,20 +62,6 @@ Then start the OpenViking server with the bot enabled:
 openviking-server --config "${OPENVIKING_CONFIG_FILE}" --with-bot
 ```
 
-> **Port — why no `--port` is needed.** The OpenViking HTTP server's bind port is a
-> *separate* setting from `bot.ov_server.server_url`: the server binds to `server.port`,
-> which **defaults to `1933`**, while `server_url` is the URL the VikingBot runner and the
-> memory-commit step use to *reach* the server (`VikingClient` → `ov.AsyncHTTPClient(url=server_url)`).
-> So the two only line up if they point at the same port. The simplest setup is to leave the
-> server on its default and set `server_url` to match it:
->
-> ```jsonc
-> "bot": { "ov_server": { "server_url": "http://127.0.0.1:1933" } }
-> ```
->
-> With `server_url` = `1933`, the command above works as-is (no `--port`). If you instead want
-> the server on another port, pass `openviking-server ... --port <P>` **and** set `server_url`
-> to the same `<P>` — otherwise the runner/commit client will dial a port nothing is listening on.
 
 ---
 
