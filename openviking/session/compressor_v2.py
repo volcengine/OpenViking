@@ -691,7 +691,7 @@ async def _drain_operation_exact_apply_window(
                         f"{prefix}.operation_exact_apply_window_coalesced_items",
                         len(coalesced_items),
                     )
-                    for entry, result in zip(coalesced_items, results):
+                    for entry, result in zip(coalesced_items, results, strict=True):
                         if not entry.future.done():
                             entry.future.set_result(result)
                 except Exception as exc:
@@ -1826,7 +1826,9 @@ class SessionCompressorV2:
                 if memory_operations.delete_file_contents or memory_operations.errors:
                     _skip("delete_or_error")
                     return None
-                if post_apply and not getattr(provider, "_source_links_attached_in_operations", False):
+                if post_apply and not getattr(
+                    provider, "_source_links_attached_in_operations", False
+                ):
                     _skip("post_apply")
                     return None
                 if not memory_operations.upsert_operations:
@@ -1879,9 +1881,7 @@ class SessionCompressorV2:
                     extract_context=payloads[0]["extract_context"],
                     isolation_handler=payloads[0]["isolation_handler"],
                 )
-                coalesced_apply_ms = (
-                    asyncio.get_running_loop().time() - apply_started_at
-                ) * 1000
+                coalesced_apply_ms = (asyncio.get_running_loop().time() - apply_started_at) * 1000
 
                 written_set = set(memory_result.written_uris)
                 edited_set = set(memory_result.edited_uris)
@@ -1985,9 +1985,7 @@ class SessionCompressorV2:
                             "source_attribution_map": source_attribution_map,
                             "telemetry": telemetry,
                         },
-                        coalesce_func=_apply_coalesced_window_operations
-                        if coalesce_key
-                        else None,
+                        coalesce_func=_apply_coalesced_window_operations if coalesce_key else None,
                     )
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
                 max_retries = config.memory.v2_lock_max_retries
