@@ -67,6 +67,21 @@ class MemoryConfig(BaseModel):
             "safe behavior."
         ),
     )
+    agent_experience_consolidation_mode: str = Field(
+        default="per_trajectory",
+        description=(
+            "Deprecated and ignored. Kept only for backward compatibility with older "
+            "ov.conf files that enabled the removed batch experience consolidation mode."
+        ),
+    )
+    agent_experience_batch_max_trajectories: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Deprecated and ignored. Kept only for backward compatibility with older "
+            "ov.conf files that configured the removed batch experience consolidation mode."
+        ),
+    )
     agent_experience_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
         default="tree",
         description=(

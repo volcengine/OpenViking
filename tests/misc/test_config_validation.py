@@ -11,6 +11,7 @@ import pytest
 from openviking.utils.agfs_utils import _generate_plugin_config, mount_agfs_backend
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.memory_config import MemoryConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -279,6 +280,25 @@ def test_mount_agfs_backend_creates_queue_sqlite_dirs_for_sqlite_backend(tmp_pat
     queuefs_mount = next(call for call in client.mount_calls if call[0] == "queuefs")
     assert queuefs_mount[2]["backend"] == "sqlite"
     assert queuefs_mount[2]["db_path"] == str(queue_db_path.resolve())
+
+
+def test_memory_config_accepts_deprecated_batch_experience_keys():
+    config = MemoryConfig.from_dict(
+        {
+            "agent_memory_enabled": True,
+            "agent_experience_consolidation_mode": "batch",
+            "agent_experience_batch_max_trajectories": 8,
+        }
+    )
+
+    assert config.agent_memory_enabled is True
+    assert config.agent_experience_consolidation_mode == "batch"
+    assert config.agent_experience_batch_max_trajectories == 8
+
+
+def test_memory_config_still_rejects_unknown_fields():
+    with pytest.raises(ValueError, match="extra_forbidden"):
+        MemoryConfig.from_dict({"agent_experience_batch_size": 8})
 
 
 def test_vectordb_validation():
