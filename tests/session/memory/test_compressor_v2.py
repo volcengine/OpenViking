@@ -51,6 +51,25 @@ for logger_name in ["openviking", "openviking.session.memory"]:
 logger = logging.getLogger(__name__)
 
 
+def test_coalesced_window_order_groups_same_uri_timelines():
+    exp_a = "viking://agent/default/memories/experiences/a.md"
+    exp_b = "viking://agent/default/memories/experiences/b.md"
+    op_a1 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_b = ResolvedOperation(memory_type="experiences", uris=[exp_b], memory_fields={})
+    op_a2 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_multi = ResolvedOperation(
+        memory_type="experiences",
+        uris=[exp_a, exp_b],
+        memory_fields={},
+    )
+
+    ordered = compressor_v2_module._order_upserts_for_coalesced_timeline(
+        [op_a1, op_b, op_a2, op_multi]
+    )
+
+    assert ordered == [op_a1, op_a2, op_b, op_multi]
+
+
 def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
     schema = MemoryTypeSchema(
         memory_type="tools",
@@ -1055,6 +1074,57 @@ async def test_operation_exact_apply_window_coalesces_same_key_payloads():
 
     assert results == ["result:first", "result:second"]
     assert events == ["coalesce:first,second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_same_key_across_phases():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def coalesce_func(payloads, lock_handle):
+        events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+        return [f"result:{payload}" for payload in payloads]
+
+    async def worker(label: str, phase: str):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path],
+            window_seconds=0.01,
+            phase_metric_key=phase,
+            apply_func=apply_func,
+            coalesce_key=("memory-upsert-window",),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(
+            worker("trajectory", "trajectory"),
+            worker("experience", "experience_single"),
+        )
+
+    assert results == ["result:trajectory", "result:experience"]
+    assert events == ["coalesce:trajectory,experience:window-handle"]
     lock_manager.create_handle.assert_called_once()
     lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
         handle,

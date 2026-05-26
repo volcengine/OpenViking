@@ -23,7 +23,7 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
+from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
     ExtractContext,
@@ -291,6 +291,27 @@ def _collect_operation_write_uris(operations: ResolvedOperations) -> list[str]:
             add_uri(link.get("to_uri"))
 
     return uris
+
+
+def _order_upserts_for_coalesced_timeline(
+    upsert_operations: list[ResolvedOperation],
+) -> list[ResolvedOperation]:
+    """Keep same-URI updates adjacent while preserving per-URI arrival order."""
+
+    ordered_keys: list[tuple[str, str, str]] = []
+    grouped: dict[tuple[str, str, str], list[ResolvedOperation]] = {}
+    unique_index = 0
+    for op in upsert_operations:
+        if len(op.uris) == 1:
+            key = ("uri", op.memory_type, op.uris[0])
+        else:
+            key = ("unique", str(unique_index), "")
+            unique_index += 1
+        if key not in grouped:
+            grouped[key] = []
+            ordered_keys.append(key)
+        grouped[key].append(op)
+    return [op for key in ordered_keys for op in grouped[key]]
 
 
 def _merge_op_value(field: Any) -> str:
@@ -632,7 +653,6 @@ async def _drain_operation_exact_apply_window(
                     same_coalesce_group = (
                         candidate.coalesce_key == item.coalesce_key
                         and candidate.coalesce_func is not None
-                        and candidate.phase_metric_key == item.phase_metric_key
                     )
                     if same_coalesce_group:
                         coalesced_items.append(candidate)
@@ -1786,28 +1806,44 @@ class SessionCompressorV2:
                     skill_results,
                 )
 
-            def _window_coalesce_uri() -> Optional[str]:
-                """Return the single write URI if this phase is safe to coalesce."""
+            def _window_coalesce_key() -> Optional[tuple[str, ...]]:
+                """Return a coalesce key if this phase can join a window timeline."""
+
+                def _skip(reason: str) -> None:
+                    telemetry.count(
+                        f"memory.agent.extract.phase.{phase_metric_key}."
+                        f"operation_exact_apply_window_coalesce_skipped.{reason}",
+                        1,
+                    )
 
                 archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
                 if archive_uri:
+                    _skip("archive")
                     return None
                 if skill_operations.upsert_operations:
+                    _skip("skill_operation")
                     return None
                 if memory_operations.delete_file_contents or memory_operations.errors:
+                    _skip("delete_or_error")
                     return None
                 if post_apply and not getattr(provider, "_source_links_attached_in_operations", False):
+                    _skip("post_apply")
                     return None
                 if not memory_operations.upsert_operations:
+                    _skip("empty")
                     return None
-                write_uris = _collect_operation_write_uris(memory_operations)
-                if len(write_uris) != 1:
-                    return None
-                write_uri = write_uris[0]
-                for op in memory_operations.upsert_operations:
-                    if len(op.uris) != 1 or op.uris[0] != write_uri:
-                        return None
-                return write_uri
+                # The queue already groups requests by overlapping exact lock
+                # paths. At the window owner, coalesce safe memory-only payloads
+                # for this phase and let MemoryUpdater replay same-URI patches
+                # as a timeline. Delete/supersedes graph rewrites stay on the
+                # ordinary FIFO path for now because endpoint cleanup has stricter
+                # ordering constraints.
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}."
+                    "operation_exact_apply_window_coalesce_eligible",
+                    1,
+                )
+                return ("memory-upsert-window",)
 
             async def _apply_coalesced_window_operations(
                 payloads: list[dict[str, Any]],
@@ -1819,11 +1855,13 @@ class SessionCompressorV2:
                     return []
 
                 combined_operations = ResolvedOperations(
-                    upsert_operations=[
-                        op
-                        for payload in payloads
-                        for op in payload["memory_operations"].upsert_operations
-                    ],
+                    upsert_operations=_order_upserts_for_coalesced_timeline(
+                        [
+                            op
+                            for payload in payloads
+                            for op in payload["memory_operations"].upsert_operations
+                        ]
+                    ),
                     delete_file_contents=[],
                     errors=[],
                     resolved_links=[
@@ -1926,7 +1964,7 @@ class SessionCompressorV2:
                         ctx,
                         viking_fs,
                     )
-                    coalesce_uri = _window_coalesce_uri()
+                    coalesce_key = _window_coalesce_key()
                     return await _enqueue_operation_exact_apply_window(
                         lock_manager=lock_manager,
                         window_key_paths=window_key_paths or exact_lock_paths,
@@ -1934,7 +1972,7 @@ class SessionCompressorV2:
                         window_seconds=window_seconds,
                         phase_metric_key=phase_metric_key,
                         apply_func=_apply_generated_operations,
-                        coalesce_key=(coalesce_uri,) if coalesce_uri else None,
+                        coalesce_key=coalesce_key,
                         coalesce_payload={
                             "ctx": ctx,
                             "extract_context": extract_context,
@@ -1948,7 +1986,7 @@ class SessionCompressorV2:
                             "telemetry": telemetry,
                         },
                         coalesce_func=_apply_coalesced_window_operations
-                        if coalesce_uri
+                        if coalesce_key
                         else None,
                     )
                 retry_interval = config.memory.v2_lock_retry_interval_seconds

@@ -78,6 +78,9 @@ class TelemetrySummaryBuilder:
         "operation_exact_apply_window_lock_wait_ms": (
             "operation_exact_apply_window_lock_wait.duration_ms"
         ),
+        "operation_exact_apply_window_coalesced_memory_apply_ms": (
+            "operation_exact_apply_window_coalesced_memory_apply.duration_ms"
+        ),
     }
 
     @staticmethod
@@ -380,6 +383,24 @@ class TelemetrySummaryBuilder:
                             ),
                             0,
                         ),
+                        "operation_exact_apply_window_coalesce_eligible": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesce_eligible"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_coalesced_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesced_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_coalesced_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesced_items"
+                            ),
+                            0,
+                        ),
                         "operation_exact_apply_window_lock_path_count_total": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_lock_path_count_total"
@@ -433,6 +454,12 @@ class TelemetrySummaryBuilder:
                             cls._build_counter_suffix_summary(
                                 counters,
                                 f"{metric_prefix}.operation_exact_apply_window_batch_size",
+                            )
+                        ),
+                        "operation_exact_apply_window_coalesce_skipped_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_coalesce_skipped",
                             )
                         ),
                         "operation_exact_stale_base_states": (
