@@ -339,8 +339,12 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
+            cmd_str = " ".join(
+                mask_token_in_url(a) if a.startswith(("http://", "https://")) else a
+                for a in args[1:]
+            )
             raise RuntimeError(
-                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
+                f"{user_msg} Command: git {cmd_str}. Details: {error_msg}"
             )
         return stdout.decode().strip()
 
@@ -417,7 +421,7 @@ class GitAccessor(DataAccessor):
                     )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
+                        raise RuntimeError(f"Failed to fetch commit {commit} from {mask_token_in_url(url)}")
             await self._run_git(["git", "-C", target_dir, "checkout", commit])
 
         # Add .git_source_repo marker file with sanitized URL (no embedded token)
@@ -475,7 +479,7 @@ class GitAccessor(DataAccessor):
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
+            raise RuntimeError(f"Failed to download GitHub ZIP {mask_token_in_url(zip_url)}: {exc}")
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
@@ -579,7 +583,7 @@ class GitAccessor(DataAccessor):
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
+            raise RuntimeError(f"Failed to download GitLab ZIP {mask_token_in_url(zip_url)}: {exc}")
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
