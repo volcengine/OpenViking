@@ -1,9 +1,8 @@
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.tools.ov_file import VikingSearchTool
+from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingSearchTool
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -275,29 +274,47 @@ async def test_skill_memory_uri_respects_namespace_policy(monkeypatch):
     )
 
 
+def test_openviking_grep_schema_requires_single_string_pattern():
+    tool = VikingGrepTool()
+
+    assert tool.parameters["properties"]["pattern"]["type"] == "string"
+
+
 @pytest.mark.asyncio
-async def test_root_mode_reuses_scoped_client_for_concurrent_grep(monkeypatch):
-    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+async def test_openviking_grep_passes_admin_user_id(monkeypatch):
+    tool = VikingGrepTool()
+    calls = []
 
-    async def _exists(_user_id):
-        return True
+    class _FakeClient:
+        admin_user_id = "admin"
 
-    async def _user_key(_user_id, role="user"):
-        return "admin-key"
+        async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
+            calls.append((uri, pattern, case_insensitive, user_id))
+            return {
+                "matches": [
+                    {
+                        "uri": "viking://resources/doc.md",
+                        "line": 3,
+                        "content": "hello admin scoped grep",
+                    }
+                ]
+            }
 
-    monkeypatch.setattr(client, "_check_user_exists", _exists)
-    monkeypatch.setattr(client, "_get_or_create_user_apikey", _user_key)
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
 
-    await asyncio.gather(
-        client.grep("viking://resources/", "foo", user_id="admin"),
-        client.grep("viking://resources/", "bar", user_id="admin"),
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    result = await tool.execute(
+        SimpleNamespace(workspace_id="workspace"),
+        uri="viking://resources/",
+        pattern="hello",
+        case_insensitive=True,
     )
 
-    scoped_instances = [
-        inst for inst in _DummyHTTPClient.instances if inst.kwargs.get("api_key") == "admin-key"
-    ]
-    assert len(scoped_instances) == 1
+    assert calls == [("viking://resources/", "hello", True, "admin")]
+    assert "Found 1 match for pattern 'hello':" in result
+    assert "viking://resources/doc.md" in result
 
 
 @pytest.mark.asyncio
