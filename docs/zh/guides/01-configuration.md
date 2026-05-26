@@ -196,6 +196,7 @@ openviking-server doctor
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
+    "query_max_input_tokens": 2048,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -216,6 +217,7 @@ openviking-server doctor
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
+| `query_max_input_tokens` | int | 可选的搜索查询 embedding 最大估算 token 数。默认：`min(embedding.max_input_tokens, 2048)` |
 | `provider` | str | `"openai"`、`"azure"`、`"volcengine"`、`"vikingdb"`、`"jina"`、`"ollama"`、`"gemini"`、`"voyage"`、`"dashscope"`、`"minimax"`、`"cohere"`、`"litellm"` 或 `"local"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
@@ -1318,6 +1320,7 @@ openviking add-resource ./docs --exclude "*.tmp"
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
+    "query_max_input_tokens": 2048,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",

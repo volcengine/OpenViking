@@ -24,6 +24,10 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.embedding_input import (
+    estimate_embedding_input_tokens,
+    truncate_embedding_input,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -59,6 +63,7 @@ class HierarchicalRetriever:
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
         retrieval_config: Optional[RetrievalConfig] = None,
+        query_max_input_tokens: int = 2048,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
@@ -67,11 +72,13 @@ class HierarchicalRetriever:
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
             retrieval_config: Retrieval ranking configuration.
+            query_max_input_tokens: Maximum estimated tokens for query embeddings.
         """
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
         self.retrieval_config = retrieval_config or RetrievalConfig()
+        self.query_max_input_tokens = max(0, int(query_max_input_tokens or 0))
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
 
@@ -136,7 +143,8 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+            embedding_query = self._bounded_query_for_embedding(query.query)
+            result: EmbedResult = await embed_compat(self.embedder, embedding_query, is_query=True)
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 
@@ -232,6 +240,23 @@ class HierarchicalRetriever:
             matched_contexts=final,
             searched_directories=root_uris,
         )
+
+    def _bounded_query_for_embedding(self, query: str) -> str:
+        """Bound search query text before sending it to the embedding backend."""
+        if not self.query_max_input_tokens:
+            return query
+        bounded = truncate_embedding_input(
+            query,
+            self.query_max_input_tokens,
+            suffix="",
+        )
+        if bounded != query:
+            logger.debug(
+                "[HierarchicalRetriever] Truncated query embedding input from ~%d to <=%d tokens",
+                estimate_embedding_input_tokens(query),
+                self.query_max_input_tokens,
+            )
+        return bounded
 
     async def _global_vector_search(
         self,

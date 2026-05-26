@@ -195,6 +195,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
+    "query_max_input_tokens": 2048,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -214,6 +215,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` uses only summary. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
+| `query_max_input_tokens` | int | Optional maximum estimated search-query tokens sent to the embedding model. Defaults to `min(embedding.max_input_tokens, 2048)` |
 | `provider` | str | `"openai"`, `"azure"`, `"volcengine"`, `"vikingdb"`, `"jina"`, `"ollama"`, `"gemini"`, `"voyage"`, `"dashscope"`, `"minimax"`, `"cohere"`, `"litellm"`, or `"local"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
@@ -1346,6 +1348,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
+    "query_max_input_tokens": 2048,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",

@@ -282,6 +282,7 @@ class OpenVikingService:
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             retrieval_config=config.retrieval,
+            query_max_input_tokens=config.embedding.effective_query_max_input_tokens,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )

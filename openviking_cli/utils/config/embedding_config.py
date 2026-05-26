@@ -386,8 +386,23 @@ class EmbeddingConfig(BaseModel):
         ge=100,
         description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
     )
+    query_max_input_tokens: Optional[int] = Field(
+        default=None,
+        ge=100,
+        description=(
+            "Maximum estimated tokens sent to embeddings for search queries. "
+            "Defaults to min(max_input_tokens, 2048)."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
+
+    @property
+    def effective_query_max_input_tokens(self) -> int:
+        """Return the query-side embedding token cap."""
+        if self.query_max_input_tokens is not None:
+            return self.query_max_input_tokens
+        return min(self.max_input_tokens, 2048)
 
     @model_validator(mode="before")
     @classmethod

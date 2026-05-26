@@ -121,6 +121,7 @@ def init_viking_fs(
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
+    query_max_input_tokens: int = 2048,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -133,6 +134,7 @@ def init_viking_fs(
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
         retrieval_config: Retrieval ranking configuration
+        query_max_input_tokens: Maximum estimated tokens for query embeddings
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -145,6 +147,7 @@ def init_viking_fs(
         rerank_config=rerank_config,
         vector_store=vector_store,
         retrieval_config=retrieval_config,
+        query_max_input_tokens=query_max_input_tokens,
         encryptor=encryptor,
     )
 
@@ -217,6 +220,7 @@ class VikingFS:
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
+        query_max_input_tokens: int = 2048,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -226,6 +230,7 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
+        self.query_max_input_tokens = max(0, int(query_max_input_tokens or 0))
         self._encryptor = encryptor
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
@@ -1407,6 +1412,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            query_max_input_tokens=self.query_max_input_tokens,
         )
 
         # Infer context_type (None = search all types)
@@ -1568,6 +1574,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            query_max_input_tokens=self.query_max_input_tokens,
         )
 
         async def _execute(tq: TypedQuery):

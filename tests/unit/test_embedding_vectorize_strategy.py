@@ -29,6 +29,8 @@ def test_embedding_text_source_defaults_to_content_only():
     cfg = _cfg()
     assert cfg.text_source == "content_only"
     assert cfg.max_input_tokens == 4096
+    assert cfg.query_max_input_tokens is None
+    assert cfg.effective_query_max_input_tokens == 2048
 
 
 @pytest.mark.parametrize("bad_value", ["summary", "content", "auto", ""])
@@ -45,3 +47,19 @@ def test_embedding_max_input_tokens_validation_accepts_reasonable_value():
 def test_embedding_max_input_tokens_validation_rejects_too_small_value():
     with pytest.raises(ValueError):
         _cfg(max_input_tokens=10)
+
+
+def test_embedding_query_max_input_tokens_overrides_default_query_cap():
+    cfg = _cfg(max_input_tokens=4096, query_max_input_tokens=1000)
+    assert cfg.query_max_input_tokens == 1000
+    assert cfg.effective_query_max_input_tokens == 1000
+
+
+def test_embedding_query_max_input_tokens_defaults_to_smaller_content_cap():
+    cfg = _cfg(max_input_tokens=1000)
+    assert cfg.effective_query_max_input_tokens == 1000
+
+
+def test_embedding_query_max_input_tokens_validation_rejects_too_small_value():
+    with pytest.raises(ValueError):
+        _cfg(query_max_input_tokens=10)
