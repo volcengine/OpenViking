@@ -18,7 +18,6 @@ function makeEngine(opts?: {
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
-  quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
 }) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
@@ -65,7 +64,6 @@ function makeEngine(opts?: {
     cfg,
     logger,
     getClient,
-    quickPrecheck: opts?.quickPrecheck,
     resolveAgentId,
   });
 
@@ -130,34 +128,6 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("no_messages"),
-    );
-  });
-
-  it("skips immediately when local precheck reports OpenViking unavailable", async () => {
-    const quickPrecheck = vi.fn().mockResolvedValue({
-      ok: false as const,
-      reason: "local process is not running",
-    });
-    const { engine, client, getClient, logger } = makeEngine({
-      cfgOverrides: {
-        mode: "local",
-        port: 1933,
-      },
-      quickPrecheck,
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello" }],
-      prePromptMessageCount: 0,
-    });
-
-    expect(quickPrecheck).toHaveBeenCalledTimes(1);
-    expect(getClient).not.toHaveBeenCalled();
-    expect(client.addSessionMessage).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("afterTurn precheck failed"),
     );
   });
 
@@ -233,7 +203,6 @@ describe("context-engine afterTurn()", () => {
     const { engine, logger } = makeEngine({
       commitTokenThreshold: 50,
       getSession: { pending_tokens: 5000 },
-      cfgOverrides: { serverAuthMode: "trusted" },
     });
 
     await engine.afterTurn!({
@@ -252,28 +221,8 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id in trusted mode", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { serverAuthMode: "trusted" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello world" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
-  });
-
-
-  it("passes sanitized senderId as role_id in api_key mode", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { serverAuthMode: "api_key" },
-    });
+  it("passes sanitized senderId as role_id", async () => {
+    const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
       sessionId: "s1",
@@ -547,7 +496,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("stores adjacent toolResults as separate user groups with current extractor behavior", async () => {
+  it("coalesces adjacent toolResults into one user group for turn-level budgets", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -567,13 +516,14 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(4);
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    expect((client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>)[0]?.tool_output).toContain("content of a");
-    expect(client.addSessionMessage.mock.calls[2][1]).toBe("user");
-    expect((client.addSessionMessage.mock.calls[2][2] as Array<{ tool_output?: string }>)[0]?.tool_output).toContain("ok");
-    expect(client.addSessionMessage.mock.calls[3][1]).toBe("assistant");
+    const toolParts = client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>;
+    expect(toolParts).toHaveLength(2);
+    expect(toolParts[0]?.tool_output).toContain("content of a");
+    expect(toolParts[1]?.tool_output).toContain("ok");
+    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
   it("sanitizes <relevant-memories> from assistant content", async () => {

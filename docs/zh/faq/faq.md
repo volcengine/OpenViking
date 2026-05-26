@@ -56,7 +56,7 @@ viking://
 ### 环境要求是什么？
 
 - **Python 版本**：3.10 或更高
-- **编译工具**（如果从源码安装或在不支持的平台上）：Go 1.19+, GCC 9+ 或 Clang 11+
+- **编译工具**（如果从源码安装或在不支持的平台上）：Rust/Cargo, GCC 9+ 或 Clang 11+
 - **必需依赖**：Embedding 模型（推荐火山引擎 Doubao）
 - **可选依赖**：
   - VLM（视觉语言模型）：用于多模态内容处理和语义提取
@@ -165,7 +165,7 @@ SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（emb
 await client.add_resource(
     "./document.pdf",
     reason="项目技术文档",  # 描述资源用途，提升检索质量
-    target="viking://resources/docs/"  # 指定存储位置
+    to="viking://resources/docs/"  # 指定存储位置
 )
 
 # 添加网页

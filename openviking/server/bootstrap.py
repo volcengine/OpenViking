@@ -20,7 +20,12 @@ from openviking.server.app import create_app
 from openviking.server.config import load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
-from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, DEFAULT_OV_CONF
+from openviking_cli.utils.config.consts import (
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_OV_CONF,
+    DEFAULT_OVCLI_CONF,
+    OPENVIKING_CLI_CONFIG_ENV,
+)
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -97,6 +102,25 @@ def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
         return str(Path(workspace).expanduser().resolve() / "bot" / "logs")
     except Exception:
         return str(default_log_dir)
+
+
+def _resolve_cli_config_for_bot(config_path: Optional[str]) -> Optional[str]:
+    """Resolve which ovcli.conf the vikingbot child process should use."""
+    explicit_cli_config = os.environ.get(OPENVIKING_CLI_CONFIG_ENV)
+    if explicit_cli_config:
+        return explicit_cli_config
+
+    resolved_ov_conf = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_ov_conf is not None:
+        colocated_cli_config = Path(resolved_ov_conf).resolve().parent / DEFAULT_OVCLI_CONF
+        if colocated_cli_config.exists():
+            return str(colocated_cli_config)
+
+    default_cli_config = DEFAULT_CONFIG_DIR / DEFAULT_OVCLI_CONF
+    if default_cli_config.exists():
+        return str(default_cli_config)
+
+    return None
 
 
 def main():
@@ -239,6 +263,7 @@ def main():
             enable_bot_logging,
             bot_log_dir,
             bot_port,
+            config_path=args.config,
         )
 
     # Create and run server app
@@ -292,6 +317,7 @@ def _start_vikingbot_gateway(
     enable_logging: bool,
     log_dir: str,
     port: int = VIKINGBOT_DEFAULT_PORT,
+    config_path: Optional[str] = None,
 ) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
@@ -346,6 +372,9 @@ def _start_vikingbot_gateway(
     try:
         # Set environment to ensure it uses the same Python environment
         env = os.environ.copy()
+        cli_config_path = _resolve_cli_config_for_bot(config_path)
+        if cli_config_path is not None:
+            env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
 
         process = subprocess.Popen(
             vikingbot_cmd,

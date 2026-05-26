@@ -8,20 +8,39 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 
 import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.directories import get_context_type_for_uri
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+_PORTABLE_SCALAR_FIELDS = frozenset(
+    {
+        "type",
+        "level",
+        "name",
+        "description",
+        "tags",
+        "abstract",
+    }
+)
+
+
+def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
+    if not embedding_msg or not overrides:
+        return
+    for field in _PORTABLE_SCALAR_FIELDS:
+        value = overrides.get(field)
+        if value is not None:
+            embedding_msg.context_data[field] = value
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -38,15 +57,6 @@ async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: in
             f"Failed to decrement embedding tracker for semantic_msg_id={semantic_msg_id}: {e}",
             exc_info=True,
         )
-
-
-def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
-    """Derive owner_space from a URI."""
-    if uri.startswith("viking://agent/"):
-        return agent_space_fragment(ctx)
-    if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-        return user_space_fragment(ctx)
-    return ""
 
 
 def _coerce_datetime(value: object) -> Optional[datetime]:
@@ -193,6 +203,7 @@ async def vectorize_directory_meta(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
+    scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -210,7 +221,7 @@ async def vectorize_directory_meta(
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
         parent_uri = VikingURI(uri).parent.uri
-        owner_space = _owner_space_for_uri(uri, ctx)
+        owner_space = owner_space_for_uri(uri, ctx)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
 
@@ -230,6 +241,10 @@ async def vectorize_directory_meta(
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
+        _apply_scalar_overrides(
+            msg_abstract,
+            (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
+        )
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
@@ -259,6 +274,10 @@ async def vectorize_directory_meta(
             )
             context_overview.set_vectorize(Vectorize(text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+            _apply_scalar_overrides(
+                msg_overview,
+                (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
+            )
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
@@ -270,6 +289,12 @@ async def vectorize_directory_meta(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
                         exc_info=True,
                     )
+    except Exception as e:
+        logger.error(
+            f"Failed to vectorize directory metadata for {uri}: {e}",
+            exc_info=True,
+        )
+        raise
     finally:
         await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
 
@@ -283,6 +308,7 @@ async def vectorize_file(
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
+    scalar_override: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -321,19 +347,14 @@ async def vectorize_file(
             updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
-            owner_space=_owner_space_for_uri(file_path, ctx),
+            owner_space=owner_space_for_uri(file_path, ctx),
         )
 
         content_type = get_resource_content_type(file_name)
         embedding_cfg = get_openviking_config().embedding
-        configured_text_source = getattr(embedding_cfg, "text_source", "summary_first")
+        configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
-        max_input_chars = int(getattr(embedding_cfg, "max_input_chars", 1000) or 1000)
-
-        def _truncate_text(value: str) -> str:
-            if len(value) <= max_input_chars:
-                return value
-            return value[:max_input_chars] + "\n...(truncated for embedding)"
+        max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -356,7 +377,7 @@ async def vectorize_file(
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    content = _truncate_text(content)
+                    content = truncate_embedding_input(content, max_input_tokens)
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(
@@ -380,6 +401,7 @@ async def vectorize_file(
         if not embedding_msg:
             return
 
+        _apply_scalar_overrides(embedding_msg, scalar_override)
         embedding_msg.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(embedding_msg)
         enqueued = True
@@ -406,8 +428,12 @@ async def index_resource(
     (``/memories/``) are indexed as ``"memory"`` rather than the default
     ``"resource"``.
     """
+    if uri.startswith("viking://session/") or uri == "viking://session":
+        logger.info("Skipping indexing for session namespace: %s", uri)
+        return
+
     viking_fs = get_viking_fs()
-    context_type = get_context_type_for_uri(uri)
+    context_type = context_type_for_uri(uri)
 
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"
@@ -418,13 +444,11 @@ async def index_resource(
 
     if await viking_fs.exists(abstract_uri, ctx=ctx):
         content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            abstract = content.decode("utf-8")
+        abstract = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if await viking_fs.exists(overview_uri, ctx=ctx):
         content = await viking_fs.read_file(overview_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            overview = content.decode("utf-8")
+        overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
         await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)

@@ -72,7 +72,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 | **SessionService** | Session management | session, sessions, commit, delete |
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
 | **RelationService** | Relation management | relations, link, unlink |
-| **PackService** | Import/export | export_ovpack, import_ovpack |
+| **PackService** | Import/export and backup/restore | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | Debug service | observer (ObserverService) |
 
 ## Dual-Layer Storage
@@ -177,3 +177,4 @@ curl http://localhost:1933/api/v1/search/find \
 - [Data Encryption](./10-encryption.md) - At-rest encryption and key architecture
 - [Multi-Tenant](./11-multi-tenant.md) - Account / user / agent isolation model
 - [Metrics](./12-metrics.md) - `/metrics` usage and key metric explanations
+- [Privacy Configs and Skill Privacy Extraction/Restore](./13-privacy.md) - Versioning, placeholder extraction, and read-time restore

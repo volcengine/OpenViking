@@ -2,7 +2,7 @@ name: 05. OpenClaw2OpenViking Memory Tests
 
 on:
   release:
-    types: [prereleased, released]
+    types: [prereleased]
   schedule:
     - cron: '0 2,10 * * *'
   workflow_dispatch:
@@ -77,6 +77,11 @@ jobs:
           ref: ${{ github.ref }}
           submodules: false
           fetch-depth: 100
+
+      - name: Install OpenClaw plugin dependencies
+        run: |
+          cd examples/openclaw-plugin
+          npm install --production 2>&1 || npm install 2>&1 || true
 
       - name: Upgrade OpenViking to latest main
         run: |

@@ -3,6 +3,7 @@
 """Legacy API Key management (original implementation)."""
 
 import fnmatch
+import hashlib
 import hmac
 import json
 import secrets
@@ -12,6 +13,7 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
@@ -63,6 +65,7 @@ class LegacyAPIKeyManager:
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
+        self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
@@ -567,6 +570,35 @@ class LegacyAPIKeyManager:
             return Role.USER
         return Role(user.get("role", "user"))
 
+    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+        """Return SHA-256 hex digest of the user's stored API key value, or None.
+
+        The "stored value" is whatever is persisted in ``user_info["key"]``:
+        either the plaintext API key (when hashing is disabled) or its
+        Argon2id hash (when hashing is enabled). Both are stable per
+        key-generation — they are written once on create / regenerate and
+        never mutate in place — so the fingerprint is stable as long as the
+        key is unchanged, and changes the moment ``regenerate_key`` runs.
+
+        Used by OAuth to bind issued tokens to the API key that authorized
+        them: at OTP / authorize time we record this fingerprint; at every
+        OAuth bearer auth we recompute and compare. Mismatch (rotation) or
+        ``None`` (user removed) fails the request closed.
+
+        Returns None when the account or user does not exist, or when the
+        stored value is empty (no fingerprint to bind to).
+        """
+        account = self._accounts.get(account_id)
+        if account is None:
+            return None
+        user = account.users.get(user_id)
+        if user is None:
+            return None
+        stored = user.get("key", "")
+        if not stored:
+            return None
+        return hashlib.sha256(stored.encode("utf-8")).hexdigest()
+
     # ---- internal helpers ----
 
     def _generate_api_key(self) -> str:
@@ -602,8 +634,7 @@ class LegacyAPIKeyManager:
     async def _read_json(self, path: str) -> Optional[dict]:
         """Read a JSON file from AGFS with encryption support. Returns None if not found."""
         try:
-            # Read file directly using AGFS
-            content = self._viking_fs.agfs.read(path)
+            content = await self._async_agfs.read(path)
             if isinstance(content, bytes):
                 raw = content
             else:
@@ -632,12 +663,10 @@ class LegacyAPIKeyManager:
         account_id = parts[2] if len(parts) >= 3 else "default"
         content = await self._viking_fs.encrypt_bytes(account_id, content)
 
-        # Ensure parent directories exist
-        self._ensure_parent_dirs(path)
-        # Write file directly using AGFS
-        self._viking_fs.agfs.write(path, content)
+        await self._ensure_parent_dirs_async(path)
+        await self._async_agfs.write(path, content)
 
-    def _ensure_parent_dirs(self, path: str) -> None:
+    async def _ensure_parent_dirs_async(self, path: str) -> None:
         """Recursively create all parent directories for a file path."""
         # Handle direct AGFS paths
         if path.startswith("/local/"):
@@ -648,7 +677,7 @@ class LegacyAPIKeyManager:
                 for i in range(1, len(parts)):
                     parent = "/" + "/".join(parts[:i])
                     try:
-                        self._viking_fs.agfs.mkdir(parent)
+                        await self._async_agfs.mkdir(parent)
                     except Exception:
                         pass
 

@@ -4,7 +4,7 @@
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-from typing import TYPE_CHECKING, Any, Type
+from typing import Any, Type
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -15,9 +15,6 @@ from openviking.session.memory.merge_op.base import (
     get_python_type_for_field,
 )
 
-if TYPE_CHECKING:
-    from openviking.session.memory.merge_op.patch_handler import MemoryPatchHandler
-
 
 class PatchOp(MergeOpBase):
     """Patch merge operation - SEARCH/REPLACE for strings, direct replace for others."""
@@ -26,7 +23,6 @@ class PatchOp(MergeOpBase):
 
     def __init__(self, field_type: FieldType):
         self._field_type = field_type
-        self._patch_handler: "MemoryPatchHandler | None" = None
 
     def get_output_schema_type(self, field_type: FieldType) -> Type[Any]:
         if field_type == FieldType.STRING:
@@ -35,7 +31,7 @@ class PatchOp(MergeOpBase):
 
     def get_output_schema_description(self, field_description: str) -> str:
         if self._field_type == FieldType.STRING:
-            return f"PATCH operation for '{field_description}'. Use SEARCH/REPLACE blocks to modify content."
+            return f"PATCH operation for '{field_description}'. Follow the shared SEARCH/REPLACE rules above."
         return f"Replace value for '{field_description}'"
 
     def apply(self, current_value: Any, patch_value: Any) -> Any:
@@ -68,7 +64,14 @@ class PatchOp(MergeOpBase):
 
         # Case 1: StrPatch object - apply patch
         if isinstance(patch_value, StrPatch):
-            return apply_str_patch(current_str, patch_value)
+            # Filter out empty-search blocks when there's existing content.
+            # Empty search with existing content is invalid (can't match empty string
+            # against non-empty content), so skip those blocks.
+            valid_blocks = [b for b in patch_value.blocks if b.search]
+            if valid_blocks:
+                return apply_str_patch(current_str, StrPatch(blocks=valid_blocks))
+            # All blocks have empty search → no valid patches, keep original
+            return current_value
 
         # Case 2: dict form of StrPatch (from JSON parsing)
         if isinstance(patch_value, dict):
@@ -80,8 +83,12 @@ class PatchOp(MergeOpBase):
                             blocks.append(SearchReplaceBlock(**block_dict))
                         else:
                             blocks.append(block_dict)
-                    patch_value = StrPatch(blocks=blocks)
-                    return apply_str_patch(current_str, patch_value)
+                    # Filter out empty-search blocks when there's existing content
+                    valid_blocks = [b for b in blocks if b.search]
+                    if valid_blocks:
+                        return apply_str_patch(current_str, StrPatch(blocks=valid_blocks))
+                    # All blocks have empty search → keep original
+                    return current_value
             except Exception:
                 # If conversion fails, treat as simple replacement
                 return str(patch_value) if patch_value is not None else ""

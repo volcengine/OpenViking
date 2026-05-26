@@ -71,7 +71,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 | **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
 | **RelationService** | 关联管理 | relations, link, unlink |
-| **PackService** | 导入导出 | export_ovpack, import_ovpack |
+| **PackService** | 导入导出、备份恢复 | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | 调试服务 | observer (ObserverService) |
 
 ## 双层存储
@@ -176,3 +176,4 @@ curl http://localhost:1933/api/v1/search/find \
 - [数据加密](./10-encryption.md) - 静态数据加密与密钥架构
 - [多租户](./11-multi-tenant.md) - account / user / agent 隔离模型
 - [指标](./12-metrics.md) - `/metrics` 使用方式与关键指标说明
+- [用户隐私配置](./13-privacy.md) - 隐私版本管理、自动提取Skill隐私配置

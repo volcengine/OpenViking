@@ -5,7 +5,7 @@ This guide collects the current OpenViking observability entry points in one pla
 - service health and component status
 - request-level `telemetry`
 - terminal-side `ov tui`
-- web-side `OpenViking Console`
+- web-side `Web Studio` (served by the OV server at `/studio`)
 - `/metrics` time-series metrics
 
 If you just want to know where to look first, start with the table below.
@@ -15,8 +15,8 @@ If you just want to know where to look first, start with the table below.
 | Entry point | Best for | Typical use case |
 | --- | --- | --- |
 | `/health`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
-| `ov tui` | `viking://` trees, directory summaries, file content, vector records | development debugging, verifying that data actually landed |
-| `OpenViking Console` | web UI for browsing, search, resource import, tenants, and system state | interactive investigation without typing every command |
+| `ov tui` | `viking://` trees, directory summaries, file content, vector records, image preview for supported image files | development debugging, verifying that data actually landed |
+| `Web Studio` (`/studio`) | same-origin web UI on the OV server: Home shows token / retrieval / context-commit trends; Resources browses URIs; Retrieval runs find; Request Logs shows audit | interactive investigation without typing every command |
 | `telemetry` | per-request duration, token usage, vector retrieval, ingestion stages | debugging one specific slow or unexpected call |
 | `/metrics` | request trends, error rates, latency distribution, queue and probe state | Prometheus scraping, Grafana dashboards, alert rules |
 
@@ -152,52 +152,35 @@ Common keys:
 A typical debugging flow is:
 
 1. Run `ov tui viking://resources` and locate the target document or directory.
-2. Confirm the right-side panel shows `abstract`, `overview`, or file content.
+2. Confirm the right-side panel shows `abstract`, `overview`, or file content (supported image files — `png`, `jpg`, `jpeg`, `gif`, `bmp`, `webp`, `tiff`, `tif` — are rendered inline as a preview).
 3. Press `v` to inspect vector records for that URI.
 4. Press `c` to get the total count, and `n` to keep paging if needed.
 
 TUI is primarily for data-plane inspection. It helps answer "did the resource really land?" and "were vectors really written?" but it does not directly show token totals or per-stage request timing.
 
-## Use OpenViking Console for web-based investigation
+## Use Web Studio for web-based investigation
 
-The repo also contains a standalone web console. It is not wired into the main CLI and must be started separately:
-
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933
-```
-
-Then open:
+The OV server serves the Web Studio frontend at `/studio` on its own port — no separate process to start.
 
 ```text
-http://127.0.0.1:8020/
+http://127.0.0.1:1933/studio
 ```
 
-On first use, go to `Settings` and set your `X-API-Key`.
+On first use, open the Connection dialog in the top right and set your `X-API-Key`. The base URL defaults to the current same origin (the URL you loaded `/studio` from).
 
-The most useful panels for observability are:
+The most useful pages for observability are:
 
-- `FileSystem`: browse URIs, directories, and files
-- `Find`: run retrieval requests and inspect results
-- `Add Resource`: import resources and inspect responses
-- `Add Memory`: submit content through a session commit and inspect the memory flow
-- `Tenants` / `Monitor`: inspect tenant, user, and system state
+- `Home` (`/studio`): today's token usage, retrieval counts, context-commit trends, agent access summary — backed by the `/api/v1/console/*` BFF
+- `Request Logs` (`/studio/request-logs`): audit logs filterable by account / user / agent / route, backed by `/api/v1/console/audit`
+- `Resources` (`/studio/resources`): browse URIs, view directories and files, upload resources
+- `Retrieval` (`/studio/retrieval`): run find / search / grep requests and inspect results
+- `Sessions` (`/studio/sessions`): browse session history, inspect message and memory commit flow
 
-If you need write operations such as `Add Resource`, `Add Memory`, or tenant/user administration, start the console with `--write-enabled`:
+Write operations (`Add Resource`, `Add Memory`, tenant/user administration) are gated by the API key currently signed in — there's no separate `--write-enabled` switch.
 
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933 \
-  --write-enabled
-```
+From an observability standpoint, Studio talks to the same `/api/v1/console/*` BFF (dashboard summary, token series, context commits, audit logs) the old standalone console used — only the UI changed. For operations such as `find`, `add-resource`, and `session commit`, you can expand the result panel to inspect `telemetry.summary`.
 
-From an observability standpoint, one useful detail is that the console result panel shows raw API responses. For operations such as `find`, `add-resource`, and `session commit`, the proxy layer requests `telemetry` by default, so you can usually inspect `telemetry.summary` directly in the UI.
-
-Console is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
+Studio is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
 
 ## Request-level telemetry
 
@@ -277,6 +260,7 @@ OpenViking groups signal-level observability configuration under `server.observa
 - `server.observability.metrics`: metrics subsystem and exporters
 - `server.observability.traces`: trace export configuration
 - `server.observability.logs`: log export configuration
+- `server.observability.dump_body`: attaches HTTP request/response bodies (filtered by content-type, truncated by bytes) as attributes on the active trace span so they can be inspected in trace UIs. Off by default — bodies may contain secrets and high-cardinality content
 
 Example:
 
@@ -298,7 +282,8 @@ Example:
             },
             "endpoint": "otel-collector:4317",
             "service_name": "openviking-server",
-            "export_interval_ms": 10000
+            "export_interval_ms": 10000,
+            "headers": {}
           }
         }
       },
@@ -309,7 +294,8 @@ Example:
           "insecure": true
         },
         "endpoint": "otel-collector:4317",
-        "service_name": "openviking-server"
+        "service_name": "openviking-server",
+        "headers": {}
       },
       "logs": {
         "enabled": true,
@@ -318,12 +304,24 @@ Example:
           "insecure": true
         },
         "endpoint": "otel-collector:4317",
-        "service_name": "openviking-server"
+        "service_name": "openviking-server",
+        "headers": {}
+      },
+      "dump_body": {
+        "enabled": false,
+        "max_bytes": 4096
       }
     }
   }
 }
 ```
+
+Notes:
+
+- `headers` forwards custom OTLP request headers or gRPC metadata to the exporter.
+- This is useful when an OTLP backend requires extra auth headers for direct ingestion.
+- The `headers` shape is the same across `traces`, `logs`, and `metrics.exporters.otel`.
+- When `protocol="grpc"`, `headers` are sent as gRPC metadata and keys should be lowercase, for example `x-byteapm-appkey`; this restriction does not apply to `protocol="http"`.
 
 For full fields, supported ranges, and more examples, see:
 

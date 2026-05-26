@@ -9,13 +9,20 @@ Handles skill parsing, LLM generation, and storage operations.
 import tempfile
 import time
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import yaml
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import agent_space_fragment, canonical_agent_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.privacy import (
+    UserPrivacyConfigService,
+    extract_skill_privacy_values,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.storage import VikingDBManager
@@ -24,6 +31,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.zip_safe import safe_extract_zip
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -42,9 +50,14 @@ class SkillProcessor:
     5. Index to vector store
     """
 
-    def __init__(self, vikingdb: VikingDBManager):
+    def __init__(
+        self,
+        vikingdb: VikingDBManager,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+    ):
         """Initialize skill processor."""
         self.vikingdb = vikingdb
+        self._privacy_config_service = privacy_config_service
 
     async def process_skill(
         self,
@@ -76,15 +89,19 @@ class SkillProcessor:
             data,
             allow_local_path_resolution=allow_local_path_resolution,
         )
+        self._validate_skill_dict(skill_dict)
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
+
+        skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
+        skill_abstract = self._build_skill_abstract(skill_dict)
 
         context = Context(
             uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
             parent_uri=f"{canonical_agent_root(ctx)}/skills",
             is_leaf=False,
-            abstract=skill_dict.get("description", ""),
+            abstract=skill_abstract,
             context_type=ContextType.SKILL.value,
             user=ctx.user,
             account_id=ctx.account_id,
@@ -106,13 +123,14 @@ class SkillProcessor:
             round((time.perf_counter() - overview_start) * 1000, 3),
         )
 
-        skill_dir_uri = f"viking://agent/skills/{context.meta['name']}"
+        skill_dir_uri = context.uri
 
         write_start = time.perf_counter()
         await self._write_skill_content(
             viking_fs=viking_fs,
             skill_dict=skill_dict,
             skill_dir_uri=skill_dir_uri,
+            abstract=skill_abstract,
             overview=overview,
             ctx=ctx,
         )
@@ -138,6 +156,7 @@ class SkillProcessor:
         )
         return {
             "status": "success",
+            "root_uri": skill_dir_uri,
             "uri": skill_dir_uri,
             "name": skill_dict["name"],
             "auxiliary_files": len(auxiliary_files),
@@ -195,7 +214,98 @@ class SkillProcessor:
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
+        skill_dict = self._normalize_skill_dict(skill_dict)
+        self._validate_skill_dict(skill_dict)
         return skill_dict, auxiliary_files, base_path
+
+    @staticmethod
+    def _normalize_list_field(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return value
+        if isinstance(value, (tuple, set)):
+            return list(value)
+        return [value]
+
+    @staticmethod
+    def _normalize_skill_dict(skill_dict: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(skill_dict)
+
+        allowed_tools = normalized.get("allowed_tools")
+        if not allowed_tools:
+            allowed_tools = normalized.get("allowed-tools")
+        if allowed_tools is not None:
+            normalized["allowed_tools"] = SkillProcessor._normalize_list_field(allowed_tools)
+        normalized.pop("allowed-tools", None)
+
+        tags = normalized.get("tags")
+        if tags is not None:
+            normalized["tags"] = SkillProcessor._normalize_list_field(tags)
+
+        return normalized
+
+    @staticmethod
+    def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
+        """Validate normalized skill metadata before storage/indexing."""
+        name = skill_dict.get("name")
+        if name is None:
+            raise InvalidArgumentError("Skill must have 'name' field", details={"field": "name"})
+        if not isinstance(name, str) or not name.strip():
+            raise InvalidArgumentError(
+                "Skill 'name' must be a non-empty string",
+                details={"field": "name"},
+            )
+
+    @staticmethod
+    def _build_skill_abstract(skill_dict: Dict[str, Any]) -> str:
+        """Build the L0 skill abstract from normalized SKILL.md header metadata."""
+        abstract_meta: Dict[str, Any] = {
+            "name": skill_dict["name"],
+            "description": skill_dict.get("description", ""),
+        }
+
+        tags = skill_dict.get("tags")
+        if tags:
+            abstract_meta["tags"] = tags
+
+        allowed_tools = skill_dict.get("allowed_tools") or skill_dict.get("allowed-tools")
+        if allowed_tools:
+            abstract_meta["allowed_tools"] = allowed_tools
+
+        return yaml.safe_dump(abstract_meta, allow_unicode=True, sort_keys=False).strip()
+
+    async def sanitize_skill_privacy(
+        self, skill_dict: Dict[str, Any], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._sanitize_skill_privacy(skill_dict, ctx)
+
+    async def _sanitize_skill_privacy(
+        self, skill_dict: Dict[str, Any], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        if not self._privacy_config_service:
+            return skill_dict
+
+        content = skill_dict.get("content", "")
+        extraction_result = await extract_skill_privacy_values(
+            skill_name=skill_dict.get("name", ""),
+            skill_description=skill_dict.get("description", ""),
+            content=content,
+        )
+        if not extraction_result.values:
+            return skill_dict
+
+        sanitized = deepcopy(skill_dict)
+        sanitized["content"] = extraction_result.sanitized_content
+        await self._privacy_config_service.upsert(
+            ctx=ctx,
+            category="skill",
+            target_key=sanitized["name"],
+            values=extraction_result.values,
+            updated_by=ctx.user.user_id,
+            change_reason="auto-extracted from add_skill",
+        )
+        return sanitized
 
     async def _generate_overview(self, skill_dict: Dict[str, Any], config) -> str:
         """Generate L1 overview using VLM."""
@@ -216,14 +326,15 @@ class SkillProcessor:
         viking_fs: VikingFS,
         skill_dict: Dict[str, Any],
         skill_dir_uri: str,
+        abstract: str,
         overview: str,
         ctx: RequestContext,
     ):
         """Write main skill content to VikingFS."""
         await viking_fs.write_context(
             uri=skill_dir_uri,
-            content=skill_dict.get("content", ""),
-            abstract=skill_dict.get("description", ""),
+            content=SkillLoader.to_skill_md(skill_dict),
+            abstract=abstract,
             overview=overview,
             content_filename="SKILL.md",
             is_leaf=False,
@@ -261,15 +372,20 @@ class SkillProcessor:
     async def _index_skill(self, context: Context, skill_dir_uri: str):
         """Write skill directory vector via async queue as L0."""
         context.uri = skill_dir_uri
-        context.parent_uri = "viking://agent/skills"
         context.is_leaf = False
         context.level = 0
 
         context.set_vectorize(Vectorize(text=context.abstract))
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if embedding_msg:
-            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
-            if enqueued and embedding_msg.telemetry_id:
+            if embedding_msg.telemetry_id:
                 get_request_wait_tracker().register_embedding_root(
                     embedding_msg.telemetry_id, embedding_msg.id
+                )
+            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+            if not enqueued and embedding_msg.telemetry_id:
+                get_request_wait_tracker().mark_embedding_failed(
+                    embedding_msg.telemetry_id,
+                    embedding_msg.id,
+                    "embedding enqueue returned false",
                 )

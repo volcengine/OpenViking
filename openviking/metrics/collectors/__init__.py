@@ -16,6 +16,7 @@ from .cache import CacheCollector
 from .embedding import EmbeddingCollector
 from .encryption import EncryptionCollector
 from .encryption_probe import EncryptionProbeCollector
+from .feedback import FeedbackCollector
 from .lock import LockCollector
 from .manager import CollectorManager, RefreshResult
 from .model_provider_probe import ModelProviderProbeCollector
@@ -44,6 +45,7 @@ __all__ = [
     "VLMCollector",
     "CacheCollector",
     "EncryptionCollector",
+    "FeedbackCollector",
     "QueueCollector",
     "RerankCollector",
     "LockCollector",

@@ -115,7 +115,7 @@ app.include_router(api_fastapi.search_router)
 
 
 @app.get("/")
-async def root() -> Dict[str, str]:
+def root() -> Dict[str, str]:
     """Root endpoint providing basic server information.
 
     Returns:
@@ -125,7 +125,7 @@ async def root() -> Dict[str, str]:
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+def health() -> Dict[str, Any]:
     """Health check endpoint for monitoring server status.
 
     Returns:

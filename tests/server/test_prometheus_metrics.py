@@ -3,6 +3,8 @@
 
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
+import json
+
 import httpx
 import pytest
 
@@ -191,6 +193,69 @@ class TestMetricsEndpoint:
         finally:
             shutdown_metrics(app=app)
 
+    async def test_metrics_endpoint_exports_feedback_metrics(self, monkeypatch, tmp_path):
+        sessions_dir = tmp_path / "bot" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "cli__default__session-1.jsonl").write_text(
+            json.dumps(
+                {
+                    "_type": "metadata",
+                    "session_key": "cli__default__session-1",
+                    "updated_at": "2026-05-01T10:00:00",
+                    "metadata": {
+                        "feedback_events": [{"response_id": "resp-1", "feedback_type": "thumb_up"}],
+                        "response_outcomes": {
+                            "resp-1": {"outcome_label": "positive_feedback"},
+                            "resp-2": {"outcome_label": "resolved"},
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        config = ServerConfig(
+            observability=ObservabilityConfig(
+                metrics=MetricsConfig(
+                    enabled=True,
+                    bot_data_path=str(tmp_path / "bot"),
+                    exporters=MetricsExportersConfig(
+                        prometheus=PrometheusExporterConfig(enabled=True)
+                    ),
+                )
+            )
+        )
+        app = create_app(config=config, service=None)
+        init_metrics_from_server_config(config, app=app)
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/metrics")
+                assert resp.status_code == 200
+                assert 'openviking_feedback_events_total{valid="1"} 1.0' in resp.text
+                assert (
+                    'openviking_feedback_channel_events_total{channel="cli__default",valid="1"} 1.0'
+                    in resp.text
+                )
+        finally:
+            shutdown_metrics(app=app)
+
+    def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
+        import importlib
+        import sys
+
+        monkeypatch.setitem(sys.modules, "vikingbot", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.config", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.config.loader", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.observability", None)
+        monkeypatch.setitem(sys.modules, "vikingbot.observability.feedback_stats", None)
+
+        bootstrap = importlib.reload(importlib.import_module("openviking.metrics.bootstrap"))
+        manager = bootstrap.create_default_collector_manager(app=None, service=None)
+
+        assert "FeedbackCollector" not in [type(c).__name__ for c in manager._collectors]
+
 
 def test_reinitializing_metrics_shuts_down_existing_exporters(monkeypatch):
     class FakeOTelExporter:
@@ -232,6 +297,48 @@ def test_reinitializing_metrics_shuts_down_existing_exporters(monkeypatch):
     assert first.started == 1
     assert first.shutdown_calls == 1
     assert len(FakeOTelExporter.instances) == 2
+
+    shutdown_metrics(app=None)
+
+
+def test_metrics_otel_exporter_receives_headers_from_server_config(monkeypatch):
+    class FakeOTelExporter:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.instances.append(self)
+
+        def start(self):
+            return None
+
+        async def shutdown(self):
+            return None
+
+    from openviking.metrics import global_api as global_api_module
+
+    config = ServerConfig(
+        observability=ObservabilityConfig(
+            metrics=MetricsConfig(
+                enabled=True,
+                exporters=MetricsExportersConfig(
+                    prometheus=PrometheusExporterConfig(enabled=False),
+                    otel=OTelExporterConfig(
+                        enabled=True,
+                        headers={"X-ByteAPM-AppKey": "metric-appkey"},
+                    ),
+                ),
+            )
+        )
+    )
+
+    shutdown_metrics(app=None)
+    monkeypatch.setattr(global_api_module, "OTelMetricExporter", FakeOTelExporter)
+
+    init_metrics_from_server_config(config, app=None)
+
+    assert len(FakeOTelExporter.instances) == 1
+    assert FakeOTelExporter.instances[0].kwargs["headers"] == {"X-ByteAPM-AppKey": "metric-appkey"}
 
     shutdown_metrics(app=None)
 

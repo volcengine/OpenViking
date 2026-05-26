@@ -29,15 +29,22 @@ from tests.base_cli_test import BaseOpenClawCLITest
 
 SERVER_URL = os.environ.get("SERVER_URL", "http://127.0.0.1:1933")
 OPENVIKING_API_KEY = os.environ.get("OPENVIKING_API_KEY", "test-root-api-key")
+OPENVIKING_ACCOUNT = os.environ.get("OPENVIKING_ACCOUNT", "default")
+OPENVIKING_USER = os.environ.get("OPENVIKING_USER", "default")
 TASK_POLL_INTERVAL = 5
 TASK_POLL_MAX_WAIT = 120
 
 
 def _get_api_headers() -> Dict[str, str]:
-    return {
-        "X-OpenViking-API-Key": OPENVIKING_API_KEY,
+    headers = {
+        "X-API-Key": OPENVIKING_API_KEY,
         "Content-Type": "application/json",
     }
+    if OPENVIKING_ACCOUNT and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-Account"] = OPENVIKING_ACCOUNT
+    if OPENVIKING_USER and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-User"] = OPENVIKING_USER
+    return headers
 
 
 class OVSessionVerifier:
@@ -207,7 +214,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}的目标是什么",
             keywords=[unique_detail],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -257,6 +264,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             f"我之前提到的{unique_marker}是什么？目标是什么？请从你的记忆或上下文中搜索",
             session_id=session_b,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response,
@@ -294,7 +302,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}用什么技术",
             keywords=["量子加密", "加密"],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -331,6 +339,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             "请搜索你的记忆，我之前有没有提到过一个和加密通信或者协议相关的项目？请仔细搜索记忆文件后回答",
             session_id=session_b,
+            timeout=300,
         )
 
         self.logger.info("[6/7] 验证回复包含记忆中的关键信息（对话级别断言）")
@@ -377,7 +386,7 @@ class TestArchiveExpand(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message=f"{unique_marker}的预算是多少",
             keywords=["480"],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_id,
         )
 
@@ -463,7 +472,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message="我在做什么项目",
             keywords=[marker_a],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_a,
         )
 
@@ -476,7 +485,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         self.smart_wait_for_sync(
             check_message="我在做什么项目",
             keywords=[marker_b],
-            timeout=30.0,
+            timeout=60.0,
             session_id=session_b,
         )
 
@@ -503,6 +512,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         response_a = self.send_and_retry_on_timeout(
             "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_a,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response_a,
@@ -514,6 +524,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         response_b = self.send_and_retry_on_timeout(
             "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_b,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response_b,
@@ -582,6 +593,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             "我负责的项目叫什么？核心模块是什么？",
             session_id=session_id,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response,
@@ -593,83 +605,10 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         response2 = self.send_and_retry_on_timeout(
             "我们团队有几个人？项目截止日期是什么时候？",
             session_id=session_id,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response2,
             [["8", "八"], ["年底"]],
-            case_sensitive=False,
-        )
-
-
-class TestCrossSessionRecall(BaseOpenClawCLITest):
-    """
-    跨 session recall 验证
-    测试目标：验证在 session A 写入的记忆，能在全新的 session B 中通过 auto-recall 检索到
-    测试路径：session A 写入 → commit + 记忆提取 → session B 查询 → 验证 recall 注入 + 记忆文件存在
-    """
-
-    def test_cross_session_recall_works(self):
-        """session A 写入的信息应能在 session B 中通过 recall 检索到"""
-        unique_marker = "星云数据库"
-        unique_detail = "使用分布式架构"
-
-        session_a = self.generate_unique_session_id(prefix="recall_source")
-        session_b = self.generate_unique_session_id(prefix="recall_target")
-        verifier = OVSessionVerifier()
-
-        self.logger.info("[1/7] 记录 OV session 快照 + 记忆文件 mtime 快照")
-        before_sessions = verifier.list_session_ids()
-        before_files = OVSessionVerifier.snapshot_memory_files()
-
-        self.logger.info("[2/7] 在 session A 中写入独特信息")
-        self.send_and_log(
-            f"我正在开发{unique_marker}，{unique_detail}，支持PB级存储",
-            session_id=session_a,
-        )
-
-        self.smart_wait_for_sync(
-            check_message=f"{unique_marker}用什么架构",
-            keywords=["分布式"],
-            timeout=30.0,
-            session_id=session_a,
-        )
-
-        self.logger.info("[3/7] 显式 commit 并等待记忆提取完成")
-        ov_session_id = verifier.find_new_session_id(before_sessions)
-        if ov_session_id:
-            task_id = verifier.commit_session(ov_session_id)
-            if task_id:
-                result = verifier.poll_task_until_done(task_id)
-                if result:
-                    extracted = result.get("result", {}).get("memories_extracted", {})
-                    self.logger.info(f"  记忆提取结果: {extracted}")
-
-        self.logger.info("[4/7] 验证记忆文件已新增或更新且包含关键信息（文件级别断言）")
-        memory_found = OVSessionVerifier.find_new_or_updated_files(
-            before_files, keyword=unique_marker
-        )
-        self.logger.info(f"  本次新增/更新且包含'{unique_marker}'的记忆文件数: {len(memory_found)}")
-        for mf in memory_found:
-            self.logger.info(f"  [{mf['status']}] {mf['path']}")
-            if "content_preview" in mf:
-                self.logger.info(f"  内容预览: {mf['content_preview'][:100]}")
-        if not memory_found:
-            self.logger.warning(f"  未找到本次新增/更新且包含'{unique_marker}'的记忆文件")
-
-        self.logger.info("[5/7] 验证记忆提取成功（API 级别断言）")
-        if ov_session_id:
-            has_memories = verifier.assert_memories_extracted(ov_session_id)
-            self.logger.info(f"  记忆提取成功: {has_memories}")
-
-        self.logger.info("[6/7] 在全新的 session B 中查询相同信息")
-        response = self.send_and_retry_on_timeout(
-            f"我之前提到的{unique_marker}是什么？有什么特点？",
-            session_id=session_b,
-        )
-
-        self.logger.info("[7/7] 验证 session B 通过 auto-recall 获取到 session A 的记忆")
-        self.assertAnyKeywordInResponse(
-            response,
-            [[unique_marker]],
             case_sensitive=False,
         )

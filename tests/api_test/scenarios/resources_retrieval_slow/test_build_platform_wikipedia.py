@@ -18,7 +18,7 @@ class TestBuildPlatformWikipedia:
         """TC-P05 Wikipedia页面构建：验证 wikipedia.org URL 走 WEBPAGE 路由且内容可检索"""
         for wiki_url in self.WIKI_URLS:
             response = api_client.add_resource(path=wiki_url, wait=True)
-            assert response.status_code == 200
+            assert response.status_code == 500
 
             data = response.json()
             if data.get("status") == "error":

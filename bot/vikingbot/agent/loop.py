@@ -6,9 +6,11 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from contextlib import AsyncExitStack
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -24,11 +26,13 @@ from vikingbot.config.schema import BotMode, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
+from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
-from vikingbot.session.manager import SessionManager
+from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
-from vikingbot.utils.tracing import trace
+from vikingbot.utils.tracing import set_response_id, trace
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import ExecToolConfig
@@ -194,11 +198,16 @@ class AgentLoop:
             progress to users during long-running operations.
 
         Example:
-            >>> await self._publish_thinking_event(
-            ...     session_key=SessionKey(channel="telegram", chat_id="123"),
-            ...     event_type=OutboundEventType.TOOL_START,
-            ...     content="Executing web search..."
-            ... )
+            async def notify_tool_call() -> None:
+                await self._publish_thinking_event(
+                    session_key=SessionKey(
+                        type="telegram",
+                        channel_id="default",
+                        chat_id="123",
+                    ),
+                    event_type=OutboundEventType.TOOL_CALL,
+                    content="Executing web search...",
+                )
         """
         await self.bus.publish_outbound(
             OutboundMessage(
@@ -263,7 +272,9 @@ class AgentLoop:
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
-    ) -> tuple[str | None, list[dict], dict[str, int], int]:
+        memory_user_ids: list[str] | None = None,
+        disabled_tools: list[str] | None = None,
+    ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -272,18 +283,22 @@ class AgentLoop:
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
+            memory_user_ids: List of user IDs for memory retrieval
+            disabled_tools: Tool names to hide from the model for this request
 
         Returns:
-            tuple of (final_content, tools_used)
+            tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
         iteration = 0
         final_content = None
+        final_reasoning_content = None
         tools_used: list[dict] = []
         token_usage = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+        write_exp_injected = False
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -299,7 +314,10 @@ class AgentLoop:
 
             response = await self.provider.chat(
                 messages=messages,
-                tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
+                tools=self.tools.get_definitions(
+                    ov_tools_enable=ov_tools_enable,
+                    disabled_tools=disabled_tools,
+                ),
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
@@ -319,6 +337,34 @@ class AgentLoop:
                 )
 
             if response.has_tool_calls:
+                # Inject experience memory before write-related tool calls (once per session)
+                if not write_exp_injected:
+                    _ov_cfg = load_config().ov_server
+                    _write_tools = set(_ov_cfg.exp_write_tools)
+                    if any(tc.name in _write_tools for tc in response.tool_calls):
+                        write_exp_injected = True
+                        try:
+                            # Build query from last 3 user messages
+                            _user_msgs = [
+                                m["content"] for m in messages
+                                if m.get("role") == "user" and isinstance(m.get("content"), str)
+                            ]
+                            _query = "\n".join(_user_msgs[-3:])
+                            workspace_id = self.sandbox_manager.to_workspace_id(session_key) if self.sandbox_manager else "shared"
+                            _exp = await self.context.memory.get_viking_experience_context(
+                                query=_query, workspace_id=workspace_id
+                            )
+                            logger.info(f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}")
+                            if _exp:
+                                messages.append({
+                                    "role": "user",
+                                    "content": f"## Relevant Agent Experience\n{_exp}",
+                                })
+                                continue
+                        except Exception as _e:
+                            logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
+
+                final_reasoning_content = response.reasoning_content
                 args_list = [tc.arguments for tc in response.tool_calls]
                 tool_call_dicts = [
                     {
@@ -348,6 +394,7 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
+                        memory_user_ids=memory_user_ids,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -402,6 +449,7 @@ class AgentLoop:
                 )
             else:
                 final_content = response.content
+                final_reasoning_content = response.reasoning_content
                 break
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
@@ -410,7 +458,7 @@ class AgentLoop:
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, tools_used, token_usage, iteration
+        return final_content, final_reasoning_content, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -479,14 +527,20 @@ class AgentLoop:
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
             ov_tools_enable = self._get_ov_tools_enable(session_key)
+            disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
+            if not isinstance(disabled_tools, list):
+                disabled_tools = []
             # Get profile_user_list from channel config
             profile_user_list = []
-            memory_user = ""
+            # Try to get memory_users from message metadata first (CLI mode), then from channel config
+            memory_user = msg.metadata.get("memory_users", []) if msg.metadata else []
             channel_config = self._get_channel_config(session_key)
 
             if channel_config and ov_tools_enable:
                 profile_user_list = getattr(channel_config, "profile_user_list", [])
-                memory_user = getattr(channel_config, "memory_user", "")
+                # Only override if not already set from metadata
+                if not memory_user:
+                    memory_user = getattr(channel_config, "memory_user", None) or []
 
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
@@ -554,11 +608,13 @@ class AgentLoop:
             # Debug mode handling
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
+                await self._evaluate_previous_response_outcome(session, msg)
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return None
 
             if not msg.need_reply:
+                await self._evaluate_previous_response_outcome(session, msg)
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return OutboundMessage(
@@ -578,6 +634,8 @@ class AgentLoop:
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=False)
 
+            await self._evaluate_previous_response_outcome(session, msg)
+
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)
             else:
@@ -595,30 +653,52 @@ class AgentLoop:
             )
 
             # Build initial messages (use get_history for LLM-formatted messages)
+            provider_name = self.config.get_provider_name(self.model) if self.config else None
             messages = await message_context.build_messages(
-                history=session.get_history(),
+                history=session.get_history(provider_name=provider_name),
                 current_message=msg.content,
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
                 ov_tools_enable=ov_tools_enable,
                 profile_user_list=profile_user_list,
-                memory_user=memory_user,
+                memory_users=memory_user,
             )
             relevant_memories = message_context.latest_relevant_memories
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
-            # Run agent loop
-            final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
-                messages=messages,
-                session_key=session_key,
-                publish_events=True,
-                sender_id=msg.sender_id,
-                ov_tools_enable=ov_tools_enable,
-            )
+            # Run agent loop within a stable response identity for tracing/tool spans.
+            response_id = uuid.uuid4().hex
+            with set_response_id(response_id):
+                (
+                    final_content,
+                    final_reasoning_content,
+                    tools_used,
+                    token_usage,
+                    iteration,
+                ) = await self._run_agent_loop(
+                    messages=messages,
+                    session_key=session_key,
+                    publish_events=True,
+                    sender_id=msg.sender_id,
+                    ov_tools_enable=ov_tools_enable,
+                    memory_user_ids=memory_user,
+                    disabled_tools=disabled_tools,
+                )
 
             # Log response preview
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
+
+            response_completed = self._build_response_completed_payload(
+                msg=msg,
+                response_id=response_id,
+                final_content=final_content,
+                final_reasoning_content=final_reasoning_content,
+                token_usage=token_usage,
+                time_cost_seconds=time.time() - start_time,
+                iteration=iteration,
+                tools_used=tools_used,
+            )
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
@@ -626,28 +706,38 @@ class AgentLoop:
                 session.add_message(
                     "assistant",
                     final_content,
+                    response_id=response_id,
                     tools_used=tools_used if tools_used else None,
                     token_usage=token_usage,
                     sender_id=msg.sender_id,
+                    reasoning_content=final_reasoning_content,
                 )
+                session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
-
-            time_cost = round(time.time() - start_time, 2)
-            if tools_used is not None:
-                tools_used_names = [tool["tool_name"] for tool in tools_used]
-            else:
-                tools_used_names = []
+            LangfuseClient.get_instance().update_generation_metadata(
+                response_id, response_completed
+            )
             response_metadata = dict(msg.metadata or {})
             if relevant_memories is not None:
                 response_metadata["relevant_memories"] = relevant_memories
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    session_key=msg.session_key,
+                    content="",
+                    event_type=OutboundEventType.RESPONSE_COMPLETED,
+                    response_id=response_id,
+                    metadata={"response_completed": response_completed},
+                )
+            )
             return OutboundMessage(
                 session_key=msg.session_key,
                 content=final_content,
                 metadata=response_metadata,
+                response_id=response_id,
                 token_usage=token_usage,
-                time_cost=time_cost,
-                iteration=iteration,
-                tools_used_names=tools_used_names,
+                time_cost=response_completed["time_cost_ms"] / 1000,
+                iteration=response_completed["iteration_count"],
+                tools_used_names=response_completed["tools_used_names"],
             )
         finally:
             long_running_notified = True
@@ -656,6 +746,95 @@ class AgentLoop:
                 await monitor_task
             except asyncio.CancelledError:
                 pass
+
+    @staticmethod
+    def _build_response_completed_payload(
+        msg: InboundMessage,
+        response_id: str,
+        final_content: str,
+        final_reasoning_content: str | None,
+        token_usage: dict[str, Any],
+        time_cost_seconds: float,
+        iteration: int,
+        tools_used: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Build a stable response fact shared by analytics sinks."""
+        prompt_tokens = int(token_usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(token_usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(token_usage.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+        tools_used_names = [
+            str(tool_name)
+            for tool in (tools_used or [])
+            if (tool_name := tool.get("tool_name")) is not None
+        ]
+        return {
+            "response_id": response_id,
+            "session_id": msg.session_key.safe_name(),
+            "user_id": msg.sender_id,
+            "channel": msg.session_key.channel_key(),
+            "session_type": msg.session_key.type,
+            "time_cost_ms": round(time_cost_seconds * 1000),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "iteration_count": iteration,
+            "tool_count": len(tools_used_names),
+            "tools_used_names": tools_used_names,
+            "response_length": len(final_content),
+            "created_at": datetime.now().isoformat(),
+            "has_reasoning": bool(final_reasoning_content),
+        }
+
+    async def _evaluate_previous_response_outcome(
+        self, session: Session, msg: InboundMessage
+    ) -> None:
+        """Evaluate the latest assistant response before appending a new user turn."""
+        if msg.metadata.get(HEARTBEAT_METADATA_KEY):
+            return
+
+        last_response = None
+        for message in reversed(session.messages):
+            if message.get("role") == "assistant" and message.get("response_id"):
+                last_response = message
+                break
+            if message.get("role") == "user":
+                break
+
+        if last_response is None:
+            return
+
+        response_id = last_response["response_id"]
+        evaluation = evaluate_response_outcome(
+            session.messages
+            + [{"role": "user", "content": msg.content, "timestamp": msg.timestamp.isoformat()}],
+            response_id,
+            feedback_events=session.metadata.get("feedback_events", []),
+            now=msg.timestamp,
+        )
+        if evaluation is None:
+            return
+
+        outcomes = session.metadata.setdefault("response_outcomes", {})
+        previous = outcomes.get(response_id)
+        if not should_update_outcome(previous, evaluation):
+            return
+
+        outcome_payload = evaluation.to_dict()
+        outcomes[response_id] = outcome_payload
+        LangfuseClient.get_instance().update_response_outcome(
+            response_id,
+            outcome_payload["outcome_label"],
+            outcome_payload,
+        )
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=msg.session_key,
+                content="",
+                event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                response_id=response_id,
+                metadata={"response_outcome_evaluated": outcome_payload},
+            )
+        )
 
     def _get_channel_config(self, session_key: SessionKey):
         """Get channel config for a session key.
@@ -699,8 +878,9 @@ class AgentLoop:
             profile_user_list = getattr(channel_config, "profile_user_list", [])
 
         # Build messages with the announce content
+        provider_name = self.config.get_provider_name(self.model) if self.config else None
         messages = await self.context.build_messages(
-            history=session.get_history(),
+            history=session.get_history(provider_name=provider_name),
             current_message=msg.content,
             session_key=msg.session_key,
             ov_tools_enable=ov_tools_enable,
@@ -708,11 +888,18 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
-        final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
+        (
+            final_content,
+            final_reasoning_content,
+            tools_used,
+            token_usage,
+            iteration,
+        ) = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
+            memory_user_ids=None,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
@@ -721,7 +908,10 @@ class AgentLoop:
         # Save to session (mark as system message in history)
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
         session.add_message(
-            "assistant", final_content, tools_used=tools_used if tools_used else None
+            "assistant",
+            final_content,
+            tools_used=tools_used if tools_used else None,
+            reasoning_content=final_reasoning_content,
         )
         await self.sessions.save(session)
 

@@ -8,7 +8,7 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.uri_validation import validate_optional_viking_uri
+from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
@@ -50,6 +50,7 @@ class SearchService:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Complex search with session context.
 
@@ -60,12 +61,13 @@ class SearchService:
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
+            level: Filter by level (0=abstract, 1=overview, 2=file)
 
         Returns:
             FindResult
         """
         _ensure_non_empty_query(query)
-        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
+        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -80,6 +82,7 @@ class SearchService:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            level=level,
         )
         return result
 
@@ -91,6 +94,7 @@ class SearchService:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -100,12 +104,13 @@ class SearchService:
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
+            level: Filter by level (0=abstract, 1=overview, 2=file)
 
         Returns:
             FindResult
         """
         _ensure_non_empty_query(query)
-        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
+        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,
@@ -114,5 +119,6 @@ class SearchService:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            level=level,
         )
         return result

@@ -31,8 +31,7 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
   }
 
   if (max_id != static_cast<int>(fields.size()) - 1) {
-    throw std::invalid_argument(
-        "Field ids must be contiguous from 0 to N-1");
+    throw std::invalid_argument("Field ids must be contiguous from 0 to N-1");
   }
 
   std::vector<bool> seen(fields.size(), false);
@@ -124,9 +123,13 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
     switch (meta.data_type) {
       case FieldType::STRING: {
         if (std::holds_alternative<std::string>(val)) {
-          int len = std::get<std::string>(val).length();
-          var_infos[i] = {variable_region_offset, len};
-          variable_region_offset += UINT16_SIZE + len;
+          size_t len = std::get<std::string>(val).length();
+          if (len > STRING_MAX_UINT16_LENGTH) {
+            throw std::invalid_argument("string field '" + meta.name +
+                                        "' exceeds 65535 bytes");
+          }
+          var_infos[i] = {variable_region_offset, static_cast<int>(len)};
+          variable_region_offset += UINT16_SIZE + static_cast<int>(len);
         } else {
           var_infos[i] = {variable_region_offset, 0};
           variable_region_offset += UINT16_SIZE;

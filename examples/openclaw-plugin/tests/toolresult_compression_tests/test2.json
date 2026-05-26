@@ -1,0 +1,19 @@
+[
+  {
+    "id": "t1-module-ingest",
+    "prompt": "你在做一次真实的模块接手分析。目标：理解 kubelet 中“Pod 处理与状态更新”主链路。仅允许读取以下文件，不允许读取其他文件，不允许测试：\n1) /root/.openclaw/workspace/kubernetes/pkg/kubelet/kubelet.go\n2) /root/.openclaw/workspace/kubernetes/pkg/kubelet/pod_workers.go\n3) /root/.openclaw/workspace/kubernetes/pkg/kubelet/status/status_manager.go\n4) /root/.openclaw/workspace/kubernetes/pkg/kubelet/pleg/generic.go\n输出固定格式：\nCHAIN_MAP（5-8条）\nHOTSPOTS（3条）\nOBSERVABILITY_GAPS（3条）\n禁止额外章节。"
+  },
+  {
+    "id": "t2-design-no-tools",
+    "prompt": "禁止调用任何工具。基于上一轮内容，选择1个最有价值的 hotspot，给出最小改造方案（偏设计，不改代码）。输出固定格式：\nTARGET\nPROBLEM\nMINIMAL_SCOPE（最多2个文件）\nINVARIANTS（3条）\nROLLBACK（2条）"
+  },
+  {
+    "id": "t3-patch-plan-no-tools",
+    "prompt": "禁止调用任何工具。把方案细化成可执行改动计划，输出固定格式：\nEDIT_PLAN（按文件列出函数级改动）\nPSEUDO_DIFF（10-20行伪代码）\nRISK_CHECKLIST（5条）"
+  },
+  {
+    "id": "t4-delivery-no-tools",
+    "prompt": "禁止调用任何工具。输出可直接贴到 PR 描述的交付摘要，固定格式：\nCONTEXT\nROOT_CAUSE_HYPOTHESIS\nPROPOSED_CHANGE\nEXPECTED_IMPACT\nKNOWN_RISKS\nNEXT_STEP"
+  }
+]
+

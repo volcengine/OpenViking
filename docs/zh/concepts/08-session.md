@@ -108,8 +108,9 @@ commit() 分两阶段执行：
 **Phase 2（异步后台）**：
 5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
 6. 提取长期记忆
-7. 更新 active_count
-8. 写入 `.done` 完成标记
+7. 写入 `memory_diff.json`（记忆变更审计日志）到归档目录
+8. 更新 active_count
+9. 写入 `.done` 完成标记
 
 ### 摘要格式
 
@@ -168,6 +169,57 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 | Existing item | `merge` | 将候选内容合并到指定已有记忆 |
 | Existing item | `delete` | 删除冲突的已有记忆 |
 
+## 记忆变更记录
+
+每次 `session.commit()` 会在归档目录写入 `memory_diff.json`，记录本次提交的所有记忆变更，便于审计和回溯。
+
+```json
+{
+  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "extracted_at": "2026-04-21T10:00:00Z",
+  "operations": {
+    "adds": [
+      {
+        "uri": "memory/user/xxx/identity.md",
+        "memory_type": "identity",
+        "after": "新创建的文件内容"
+      }
+    ],
+    "updates": [
+      {
+        "uri": "memory/user/xxx/context/project.md",
+        "memory_type": "context",
+        "before": "修改前的文件内容",
+        "after": "修改后的文件内容"
+      }
+    ],
+    "deletes": [
+      {
+        "uri": "memory/user/xxx/context/old.md",
+        "memory_type": "context",
+        "deleted_content": "被删除的文件内容"
+      }
+    ]
+  },
+  "summary": {
+    "total_adds": 1,
+    "total_updates": 1,
+    "total_deletes": 1
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `archive_uri` | 本次提交的归档目录 URI |
+| `extracted_at` | 提取时间的 ISO 8601 格式 |
+| `operations.adds` | 新增的记忆（无 `before`） |
+| `operations.updates` | 修改的记忆（含 `before` 和 `after`） |
+| `operations.deletes` | 删除的记忆（含 `deleted_content`） |
+| `summary` | 各操作类型的计数 |
+
+即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+
 ## 存储结构
 
 ```
@@ -180,6 +232,7 @@ viking://session/{session_id}/
 │   │   ├── messages.jsonl    # Phase 1 写入
 │   │   ├── .abstract.md      # Phase 2 写入（后台）
 │   │   ├── .overview.md      # Phase 2 写入（后台）
+│   │   ├── memory_diff.json  # Phase 2 写入（后台，记忆变更审计）
 │   │   └── .done             # Phase 2 完成标记
 │   └── archive_NNN/
 └── tools/

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
+from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.parsers.constants import (
     ADDITIONAL_TEXT_EXTENSIONS,
     CODE_EXTENSIONS,
@@ -219,6 +220,7 @@ async def upload_directory(
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
+    gitignore_matcher = GitignoreMatcher(local_dir)
 
     warnings: List[str] = []
 
@@ -227,11 +229,26 @@ async def upload_directory(
     parent_uris: Set[str] = {viking_uri_base}
 
     for root, dirs, files in os.walk(local_dir):
-        dirs[:] = [
-            d for d in dirs if not should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
-        ]
+        dir_path = Path(root)
+        dir_spec = gitignore_matcher.spec_for_dir(dir_path)
+
+        # Prune subdirectories in-place so os.walk won't descend into them
+        kept = []
+        for d in dirs:
+            sub_dir_path = dir_path / d
+            should_skip = should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
+            if should_skip:
+                continue
+
+            if gitignore_matcher.is_ignored_dir(sub_dir_path, dir_spec):
+                continue
+
+            kept.append(d)
+
+        dirs[:] = kept
+
         for file_name in files:
-            file_path = Path(root) / file_name
+            file_path = dir_path / file_name
             should_skip, _ = should_skip_file(
                 file_path,
                 max_file_size=max_file_size,
@@ -239,6 +256,10 @@ async def upload_directory(
             )
             if should_skip:
                 continue
+
+            if gitignore_matcher.is_ignored_file(file_path, dir_spec):
+                continue
+
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
                 safe_rel = _sanitize_rel_path(rel_path_str)
@@ -252,31 +273,22 @@ async def upload_directory(
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 
     # --- Phase 2: Pre-create all directories ---
-    # Memoized mkdir: each unique agfs path is created at most once.
+    # Memoized mkdir: each unique VikingFS path is created at most once.
     # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP calls
     # by tracking already-processed paths across all directories.
     _created: Set[str] = set()
 
-    def _mkdir_with_parents(agfs_path: str) -> None:
-        parts = agfs_path.lstrip("/").split("/")
-        for i in range(1, len(parts) + 1):
-            p = "/" + "/".join(parts[:i])
-            if p in _created:
-                continue
-            try:
-                viking_fs.agfs.mkdir(p)
-                _created.add(p)
-            except Exception as e:
-                if "already" in str(e).lower():
-                    _created.add(p)
-                else:
-                    logger.warning(f"Failed to create directory {p}: {e}")
-
-    def _create_all_dirs() -> None:
-        for dir_uri in sorted(parent_uris):
-            _mkdir_with_parents(viking_fs._uri_to_path(dir_uri))
-
-    await asyncio.to_thread(_create_all_dirs)
+    for dir_uri in sorted(parent_uris):
+        if dir_uri in _created:
+            continue
+        try:
+            await viking_fs.mkdir(dir_uri, exist_ok=True)
+            _created.add(dir_uri)
+        except Exception as e:
+            if "already" in str(e).lower():
+                _created.add(dir_uri)
+            else:
+                logger.warning(f"Failed to create directory {dir_uri}: {e}")
 
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
@@ -285,14 +297,13 @@ async def upload_directory(
     async def _upload_one(idx: int, file_path: Path, target_uri: str) -> None:
         async with sem:
 
-            def _do() -> None:
+            def _read_and_encode() -> bytes:
                 content = file_path.read_bytes()
-                encoded = detect_and_convert_encoding(content, file_path)
-                agfs_path = viking_fs._uri_to_path(target_uri)
-                viking_fs.agfs.write(agfs_path, encoded)
+                return detect_and_convert_encoding(content, file_path)
 
             try:
-                await asyncio.to_thread(_do)
+                encoded = await asyncio.to_thread(_read_and_encode)
+                await viking_fs.write_file_bytes(target_uri, encoded)
             except Exception as exc:
                 errors[idx] = f"Failed to upload {file_path}: {exc}"
 

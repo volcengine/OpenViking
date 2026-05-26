@@ -56,7 +56,7 @@ viking://
 ### What are the environment requirements?
 
 - **Python Version**: 3.10 or higher
-- **Build Tools** (if installing from source or on unsupported platforms): Go 1.19+, GCC 9+ or Clang 11+
+- **Build Tools** (if installing from source or on unsupported platforms): Rust/Cargo, GCC 9+ or Clang 11+
 - **Required Dependencies**: Embedding model (Volcengine Doubao recommended)
 - **Optional Dependencies**:
   - VLM (Vision Language Model): For multimodal content processing and semantic extraction
@@ -166,7 +166,7 @@ The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other 
 await client.add_resource(
     "./document.pdf",
     reason="Project technical documentation",  # Describe resource purpose to improve retrieval quality
-    target="viking://resources/docs/"  # Specify storage location
+    to="viking://resources/docs/"  # Specify storage location
 )
 
 # Add web page

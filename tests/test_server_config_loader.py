@@ -60,6 +60,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "bot_api_url": "http://localhost:19999",
                     "observability": {"metrics": {"exporters": {"prometheus": {"enabled": True}}}},
                 },
+                "storage": {"agfs": {"queuefs": {"mode": "worker"}}},
                 "encryption": {"enabled": True},
             }
         )
@@ -75,6 +76,14 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.bot_api_url == "http://localhost:19999"
     assert config.observability.metrics.exporters.prometheus.enabled is True
     assert config.encryption_enabled is True
+
+
+def test_load_server_config_rejects_legacy_queuefs_scope(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"queuefs_scope": "process"}}))
+
+    with pytest.raises(ValueError, match=r"server\.queuefs_scope"):
+        load_server_config(str(config_path))
 
 
 def test_load_bot_gateway_token_reads_token_from_bot_gateway_section(tmp_path):
@@ -117,3 +126,52 @@ def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path)
         "openviking_http_requests_total",
         "openviking_task_pending",
     ]
+
+
+def test_load_server_config_preserves_otlp_headers_fields(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "observability": {
+                        "traces": {
+                            "enabled": True,
+                            "headers": {
+                                "X-ByteAPM-AppKey": "trace-appkey",
+                            },
+                        },
+                        "logs": {
+                            "enabled": True,
+                            "headers": {
+                                "X-ByteAPM-AppKey": "log-appkey",
+                            },
+                        },
+                        "metrics": {
+                            "enabled": True,
+                            "exporters": {
+                                "otel": {
+                                    "enabled": True,
+                                    "headers": {
+                                        "X-ByteAPM-AppKey": "metric-appkey",
+                                    },
+                                }
+                            },
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.observability.traces.headers == {
+        "X-ByteAPM-AppKey": "trace-appkey",
+    }
+    assert config.observability.logs.headers == {
+        "X-ByteAPM-AppKey": "log-appkey",
+    }
+    assert config.observability.metrics.exporters.otel.headers == {
+        "X-ByteAPM-AppKey": "metric-appkey",
+    }

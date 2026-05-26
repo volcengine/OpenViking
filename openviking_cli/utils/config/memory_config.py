@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -40,16 +40,83 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    eager_prefetch: bool = Field(
+    agent_memory_enabled: bool = Field(
         default=False,
+        description=(
+            "Enable agent-scope trajectory/experience memory extraction. When true, "
+            "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
+            "execution trajectories from the conversation; Phase 2 consolidates them "
+            "into higher-level experience memories."
+        ),
+    )
+    experimental_memory_switch: bool = Field(
+        default=False,
+        description=(
+            "Experimental memory switch for experimental testing. When enabled, "
+            "experimental memory templates are loaded and agent_memory_enabled defaults "
+            "to true unless explicitly configured."
+        ),
+    )
+    eager_prefetch: bool = Field(
+        default=True,
         description=(
             "When enabled, prefetch will execute search + read to preload all memory file contents "
             "into the context, and no read/search tools will be provided to the LLM. "
             "When disabled (default), LLM has read tool and reads files on-demand."
         ),
     )
+    prefetch_search_topn: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Number of top search results to read during prefetch. "
+            "Only applies when eager_prefetch is enabled. "
+            "When multiple directories are searched, results are merged and top-N are read."
+        ),
+    )
+    extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), memory extraction runs on session commit "
+            "to produce long-term memories. When disabled, sessions are archived "
+            "but no memory extraction is performed. Useful for read-only or "
+            "stateless deployments."
+        ),
+    )
+    session_skill_extraction_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the agent skill directory. Disabled by "
+            "default."
+        ),
+    )
+    role_id_memory_isolation_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction uses role_id from messages to determine "
+            "which user/agent the memory belongs to. When disabled (default), role_id "
+            "is ignored and the login user from the request context is used instead."
+        ),
+    )
+    link_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction supports link extraction between "
+            "memory items (page_id, links field, and link resolution). When disabled (default), "
+            "no page_id or link fields are generated, and link resolution is skipped."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
+            data = data.copy()
+            data.setdefault("agent_memory_enabled", True)
+        return data
 
     @field_validator("agent_scope_mode")
     @classmethod

@@ -19,11 +19,16 @@ Features:
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.parse.parsers.media.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
@@ -32,6 +37,17 @@ from .base import DataAccessor, LocalResource, SourceType
 from .mime_types import MEDIA_TYPE_ALIASES, IANAMediaType, get_preferred_extension
 
 logger = get_logger(__name__)
+
+DOCUMENT_EXTENSIONS = {
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".pptx",
+    ".epub",
+    ".zip",
+}
 
 
 class URLType(Enum):
@@ -42,6 +58,10 @@ class URLType(Enum):
     DOWNLOAD_MD = "download_md"  # Markdown file download link
     DOWNLOAD_TXT = "download_txt"  # Text file download link
     DOWNLOAD_HTML = "download_html"  # HTML file download link
+    DOWNLOAD_IMAGE = "download_image"  # Image file download link
+    DOWNLOAD_AUDIO = "download_audio"  # Audio file download link
+    DOWNLOAD_VIDEO = "download_video"  # Video file download link
+    DOWNLOAD_DOCUMENT = "download_document"  # Office/e-book/archive document link
     UNKNOWN = "unknown"  # Unknown or unsupported type
 
 
@@ -72,6 +92,10 @@ class URLTypeDetector:
         ".text": URLType.DOWNLOAD_TXT,
         ".html": URLType.DOWNLOAD_HTML,
         ".htm": URLType.DOWNLOAD_HTML,
+        **dict.fromkeys(IMAGE_EXTENSIONS, URLType.DOWNLOAD_IMAGE),
+        **dict.fromkeys(AUDIO_EXTENSIONS, URLType.DOWNLOAD_AUDIO),
+        **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_VIDEO),
+        **dict.fromkeys(DOCUMENT_EXTENSIONS, URLType.DOWNLOAD_DOCUMENT),
     }
 
     # === IANA Media Type to URL type mapping ===
@@ -95,6 +119,20 @@ class URLTypeDetector:
         # Plain text
         "text/plain": URLType.DOWNLOAD_TXT,
         "text/*": URLType.DOWNLOAD_TXT,
+        # Media files. Some signed object-storage URLs reject HEAD, but for
+        # extensionless URLs that do return headers this routes to media parsers.
+        "image/*": URLType.DOWNLOAD_IMAGE,
+        "audio/*": URLType.DOWNLOAD_AUDIO,
+        "video/*": URLType.DOWNLOAD_VIDEO,
+        # Document formats supported by ParserRegistry. The final extension
+        # still comes from URL path, Content-Disposition, or IANA media type.
+        "application/msword": URLType.DOWNLOAD_DOCUMENT,
+        "application/vnd.ms-excel": URLType.DOWNLOAD_DOCUMENT,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": URLType.DOWNLOAD_DOCUMENT,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": URLType.DOWNLOAD_DOCUMENT,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": URLType.DOWNLOAD_DOCUMENT,
+        "application/epub+zip": URLType.DOWNLOAD_DOCUMENT,
+        "application/zip": URLType.DOWNLOAD_DOCUMENT,
     }
 
     # URLType to file extension mapping
@@ -104,6 +142,10 @@ class URLTypeDetector:
         URLType.DOWNLOAD_MD: ".md",
         URLType.DOWNLOAD_TXT: ".txt",
         URLType.DOWNLOAD_HTML: ".html",
+        URLType.DOWNLOAD_IMAGE: ".png",
+        URLType.DOWNLOAD_AUDIO: ".mp3",
+        URLType.DOWNLOAD_VIDEO: ".mp4",
+        URLType.DOWNLOAD_DOCUMENT: ".zip",
         URLType.UNKNOWN: ".html",
     }
 
@@ -166,32 +208,15 @@ class URLTypeDetector:
             async with httpx.AsyncClient(**client_kwargs) as client:
                 response = await client.head(url)
 
-                # Get raw headers for debugging
-                content_type_raw = response.headers.get("content-type", "")
-                content_disposition = response.headers.get("content-disposition", "")
-
-                meta["content_type_raw"] = content_type_raw
-                meta["content_disposition_raw"] = content_disposition
                 meta["status_code"] = response.status_code
+                if not (200 <= response.status_code < 300):
+                    meta["head_status_skipped"] = response.status_code
+                    raise RuntimeError(f"HEAD returned {response.status_code}; headers not trusted")
 
-                # === Step 2a: Check Content-Disposition for filename (RFC 6266) ===
-                filename_from_disposition = self._extract_filename_from_disposition(
-                    content_disposition
-                )
-                if filename_from_disposition:
-                    meta["filename_from_disposition"] = filename_from_disposition
-                    filename_lower = filename_from_disposition.lower()
-                    for ext, url_type in self.EXTENSION_MAP.items():
-                        if filename_lower.endswith(ext):
-                            meta["detected_by"] = "content_disposition"
-                            meta["extension"] = ext
-                            return url_type, meta
-
-                # === Step 2b: Check Content-Type (RFC 6838) ===
-                if content_type_raw:
-                    url_type = self._detect_from_media_type(content_type_raw, meta)
-                    if url_type != URLType.UNKNOWN:
-                        return url_type, meta
+                # === Step 2a/2b: Check Content-Disposition and Content-Type ===
+                url_type = self.detect_from_headers(response.headers, meta)
+                if url_type != URLType.UNKNOWN:
+                    return url_type, meta
 
         except PermissionDeniedError:
             raise
@@ -203,7 +228,58 @@ class URLTypeDetector:
         meta["detected_by"] = "default"
         return URLType.WEBPAGE, meta
 
-    def _detect_from_media_type(self, content_type: str, meta: Dict[str, Any]) -> URLType:
+    def detect_from_headers(
+        self,
+        headers: Mapping[str, str],
+        meta: Dict[str, Any],
+        detected_by_prefix: str = "",
+    ) -> URLType:
+        """
+        Detect URL type from HTTP response headers.
+
+        Args:
+            headers: Response headers from HEAD or GET.
+            meta: Metadata dict to update.
+            detected_by_prefix: Optional prefix for meta["detected_by"], e.g. "get_".
+
+        Returns:
+            Detected URLType, or URLType.UNKNOWN if no header matched.
+        """
+        content_type_raw = headers.get("content-type", "")
+        content_disposition = headers.get("content-disposition", "")
+
+        meta["content_type_raw"] = content_type_raw
+        meta["content_disposition_raw"] = content_disposition
+
+        # Check Content-Disposition for filename (RFC 6266)
+        filename_from_disposition = self._extract_filename_from_disposition(content_disposition)
+        if filename_from_disposition:
+            meta["filename_from_disposition"] = filename_from_disposition
+            filename_lower = filename_from_disposition.lower()
+            for ext, url_type in self.EXTENSION_MAP.items():
+                if filename_lower.endswith(ext):
+                    meta["detected_by"] = f"{detected_by_prefix}content_disposition"
+                    meta["extension"] = ext
+                    return url_type
+
+        # Check Content-Type (RFC 6838)
+        if content_type_raw:
+            url_type = self._detect_from_media_type(
+                content_type_raw,
+                meta,
+                detected_by_prefix=detected_by_prefix,
+            )
+            if url_type != URLType.UNKNOWN:
+                return url_type
+
+        return URLType.UNKNOWN
+
+    def _detect_from_media_type(
+        self,
+        content_type: str,
+        meta: Dict[str, Any],
+        detected_by_prefix: str = "",
+    ) -> URLType:
         """
         Detect URL type from IANA media type.
 
@@ -240,17 +316,17 @@ class URLTypeDetector:
         if media_type.suffix:
             media_type_with_suffix = f"{media_type_key}+{media_type.suffix}"
             if media_type_with_suffix in self.MEDIA_TYPE_MAP:
-                meta["detected_by"] = "media_type_suffix"
+                meta["detected_by"] = f"{detected_by_prefix}media_type_suffix"
                 return self.MEDIA_TYPE_MAP[media_type_with_suffix]
 
         if media_type_key in self.MEDIA_TYPE_MAP:
-            meta["detected_by"] = "media_type"
+            meta["detected_by"] = f"{detected_by_prefix}media_type"
             return self.MEDIA_TYPE_MAP[media_type_key]
 
         # Check for wildcard matches
         for pattern, url_type in self.MEDIA_TYPE_MAP.items():
             if media_type.matches(pattern):
-                meta["detected_by"] = "media_type_pattern"
+                meta["detected_by"] = f"{detected_by_prefix}media_type_pattern"
                 meta["media_type_pattern"] = pattern
                 return url_type
 
@@ -432,20 +508,7 @@ class HTTPAccessor(DataAccessor):
             request_validator=request_validator,
         )
 
-        # Determine file extension using IANA standards
-        ext = self._determine_file_extension(url, url_type, detect_meta)
-
-        # Create temp file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-        temp_path = temp_file.name
-        temp_file.close()
-
-        # Get original filename from URL or Content-Disposition
-        original_filename = detect_meta.get("filename_from_disposition")
-        if not original_filename:
-            original_filename = self._extract_filename_from_url(url)
-
-        meta = {**detect_meta, "extension": ext, "original_filename": original_filename}
+        temp_path: Optional[str] = None
 
         try:
             # Download content
@@ -484,19 +547,189 @@ class HTTPAccessor(DataAccessor):
                     user_msg = "HTTP request failed: unexpected error."
                     raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
 
+                meta = self._finalize_download_metadata(
+                    url=url,
+                    initial_url_type=url_type,
+                    initial_meta=detect_meta,
+                    response_headers=response.headers,
+                    content=response.content,
+                )
+                url_type = meta["resolved_url_type"]
+                ext = meta["extension"]
+
+                # Create temp file after GET headers/content have had a chance
+                # to refine detection. This avoids routing extensionless signed
+                # URLs as HTML when HEAD is rejected by object storage.
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                temp_path = temp_file.name
+                temp_file.close()
+
                 # Write to temp file
                 Path(temp_path).write_bytes(response.content)
 
             return temp_path, url_type, meta
         except Exception:
             # Clean up on error
-            try:
-                p = Path(temp_path)
-                if p.exists():
-                    p.unlink(missing_ok=True)
-            except Exception:
-                pass
+            if temp_path:
+                try:
+                    p = Path(temp_path)
+                    if p.exists():
+                        p.unlink(missing_ok=True)
+                except Exception:
+                    pass
             raise
+
+    def _finalize_download_metadata(
+        self,
+        url: str,
+        initial_url_type: URLType,
+        initial_meta: Dict[str, Any],
+        response_headers: Mapping[str, str],
+        content: bytes,
+    ) -> Dict[str, Any]:
+        """Resolve final URL type, extension, and filename using GET data."""
+        meta = dict(initial_meta)
+        url_type = initial_url_type
+
+        get_meta: Dict[str, Any] = {}
+        get_url_type = self._url_detector.detect_from_headers(
+            response_headers,
+            get_meta,
+            detected_by_prefix="get_",
+        )
+        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(url_type, get_url_type):
+            url_type = get_url_type
+            meta.update(get_meta)
+            meta["refined_by_get_headers"] = True
+        else:
+            meta.setdefault("get_content_type_raw", response_headers.get("content-type", ""))
+            meta.setdefault(
+                "get_content_disposition_raw",
+                response_headers.get("content-disposition", ""),
+            )
+            if get_meta.get("filename_from_disposition"):
+                meta.setdefault(
+                    "get_filename_from_disposition",
+                    get_meta["filename_from_disposition"],
+                )
+
+        magic_url_type, magic_ext = self._detect_from_magic_bytes(content)
+        if magic_url_type != URLType.UNKNOWN and self._should_use_magic_bytes(
+            url_type, initial_meta
+        ):
+            url_type = magic_url_type
+            meta["detected_by"] = "magic_bytes"
+            meta["magic_extension"] = magic_ext
+            meta["refined_by_magic_bytes"] = True
+
+        meta["resolved_url_type"] = url_type
+        if meta.get("refined_by_magic_bytes") and magic_ext:
+            ext = magic_ext
+        else:
+            ext = self._determine_file_extension(url, url_type, meta)
+
+        original_filename = meta.get("filename_from_disposition")
+        if not original_filename:
+            original_filename = self._extract_filename_from_url(url)
+        if original_filename == "download" and ext and ext != ".html":
+            original_filename = f"download{ext}"
+
+        meta.update({"extension": ext, "original_filename": original_filename})
+        return meta
+
+    @staticmethod
+    def _should_refine_url_type(current: URLType, candidate: URLType) -> bool:
+        """Only replace ambiguous/default webpage guesses with file types."""
+        if candidate in (URLType.UNKNOWN, URLType.WEBPAGE):
+            return False
+        if current in (URLType.UNKNOWN, URLType.WEBPAGE):
+            return True
+        return current == candidate
+
+    @staticmethod
+    def _should_use_magic_bytes(current: URLType, initial_meta: Dict[str, Any]) -> bool:
+        """Use binary signatures for ambiguous detections, but not explicit URL extensions."""
+        if initial_meta.get("detected_by") == "extension":
+            return False
+        return current in {
+            URLType.UNKNOWN,
+            URLType.WEBPAGE,
+            URLType.DOWNLOAD_TXT,
+            URLType.DOWNLOAD_HTML,
+        }
+
+    @staticmethod
+    def _detect_from_magic_bytes(content: bytes) -> Tuple[URLType, Optional[str]]:
+        """Detect common binary types when headers are unavailable or generic."""
+        sample = content[:16]
+        if sample.startswith(b"\x89PNG\r\n\x1a\n"):
+            return URLType.DOWNLOAD_IMAGE, ".png"
+        if sample.startswith(b"\xff\xd8\xff"):
+            return URLType.DOWNLOAD_IMAGE, ".jpg"
+        if sample.startswith(b"GIF87a") or sample.startswith(b"GIF89a"):
+            return URLType.DOWNLOAD_IMAGE, ".gif"
+        if sample.startswith(b"BM"):
+            return URLType.DOWNLOAD_IMAGE, ".bmp"
+        if sample.startswith(b"RIFF") and len(sample) >= 12:
+            riff_type = sample[8:12]
+            if riff_type == b"WEBP":
+                return URLType.DOWNLOAD_IMAGE, ".webp"
+            if riff_type == b"WAVE":
+                return URLType.DOWNLOAD_AUDIO, ".wav"
+            if riff_type == b"AVI ":
+                return URLType.DOWNLOAD_VIDEO, ".avi"
+        if sample.startswith(b"ID3") or sample.startswith(b"\xff\xfb"):
+            return URLType.DOWNLOAD_AUDIO, ".mp3"
+        if len(sample) >= 12 and sample[4:8] == b"ftyp":
+            brand = sample[8:12].lower()
+            if brand in {b"qt  ", b"moov"}:
+                return URLType.DOWNLOAD_VIDEO, ".mov"
+            return URLType.DOWNLOAD_VIDEO, ".mp4"
+        if sample.startswith(b"\x1f\x8b"):
+            return URLType.UNKNOWN, ".gz"
+        svg_sample = content[:512].lstrip()
+        if svg_sample.startswith(b"<svg") or (
+            svg_sample.startswith(b"<?xml") and b"<svg" in svg_sample
+        ):
+            return URLType.DOWNLOAD_IMAGE, ".svg"
+        if sample.startswith(b"%PDF-"):
+            return URLType.DOWNLOAD_PDF, ".pdf"
+        if sample.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+            return URLType.DOWNLOAD_DOCUMENT, ".doc"
+        if (
+            sample.startswith(b"PK\x03\x04")
+            or sample.startswith(b"PK\x05\x06")
+            or sample.startswith(b"PK\x07\x08")
+        ):
+            return URLType.DOWNLOAD_DOCUMENT, HTTPAccessor._detect_zip_based_extension(content)
+        return URLType.UNKNOWN, None
+
+    @staticmethod
+    def _detect_zip_based_extension(content: bytes) -> str:
+        """Differentiate Office/EPUB/ZIP files that all share the ZIP signature."""
+        try:
+            from io import BytesIO
+            from zipfile import ZipFile
+
+            with ZipFile(BytesIO(content)) as zf:
+                names = set(zf.namelist())
+                if "word/document.xml" in names or any(name.startswith("word/") for name in names):
+                    return ".docx"
+                if "xl/workbook.xml" in names or any(name.startswith("xl/") for name in names):
+                    return ".xlsx"
+                if "ppt/presentation.xml" in names or any(
+                    name.startswith("ppt/") for name in names
+                ):
+                    return ".pptx"
+                if "mimetype" in names:
+                    try:
+                        if zf.read("mimetype", 64) == b"application/epub+zip":
+                            return ".epub"
+                    except Exception:
+                        pass
+        except Exception:
+            return ".zip"
+        return ".zip"
 
     def _determine_file_extension(
         self,

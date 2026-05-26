@@ -66,6 +66,14 @@ class SkillLoader:
             "description": skill_dict.get("description", ""),
         }
 
+        allowed_tools = skill_dict.get("allowed_tools") or skill_dict.get("allowed-tools") or []
+        if allowed_tools:
+            frontmatter["allowed-tools"] = allowed_tools
+
+        tags = skill_dict.get("tags") or []
+        if tags:
+            frontmatter["tags"] = tags
+
         yaml_str = yaml.dump(frontmatter, allow_unicode=True, sort_keys=False)
 
         return f"---\n{yaml_str}---\n\n{skill_dict.get('content', '')}"

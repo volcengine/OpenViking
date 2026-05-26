@@ -410,6 +410,14 @@ class NewAPIKeyManager:
         """
         return self._legacy.get_user_role(account_id, user_id)
 
+    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+        """SHA-256 hex digest of the user's stored API key value, or None.
+
+        Delegates to legacy. See ``LegacyAPIKeyManager.get_user_key_fingerprint``
+        for the rotation/deletion semantics OAuth relies on.
+        """
+        return self._legacy.get_user_key_fingerprint(account_id, user_id)
+
     # ---- Property proxies for backward compatibility with tests ----
 
     @property
@@ -445,8 +453,8 @@ class NewAPIKeyManager:
     async def _write_json(self, path: str, data: dict) -> None:
         return await self._legacy._write_json(path, data)
 
-    def _ensure_parent_dirs(self, path: str) -> None:
-        return self._legacy._ensure_parent_dirs(path)
+    async def _ensure_parent_dirs_async(self, path: str) -> None:
+        return await self._legacy._ensure_parent_dirs_async(path)
 
     async def _save_accounts_json(self) -> None:
         return await self._legacy._save_accounts_json()

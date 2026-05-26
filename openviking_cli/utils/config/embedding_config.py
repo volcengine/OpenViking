@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -57,6 +57,16 @@ class EmbeddingModelConfig(BaseModel):
             "Extra HTTP headers for API requests. Passed as default_headers to the OpenAI client. "
             "Useful for OpenRouter (e.g., {'HTTP-Referer': '...', 'X-Title': '...'}) "
             "or other OpenAI-compatible providers that require custom headers."
+        ),
+    )
+    encoding_format: Optional[Literal["float", "base64"]] = Field(
+        default=None,
+        description=(
+            "Wire format for embedding values. Applies to OpenAI / Azure providers. "
+            "Leave unset to use the OpenAI Python SDK default (currently 'base64', "
+            "which is bandwidth-efficient and decoded client-side). Set to 'float' "
+            "to send/receive plain JSON arrays. This is the recommended workaround "
+            "when the upstream gateway cannot serialize base64 responses correctly."
         ),
     )
     api_version: Optional[str] = Field(
@@ -239,6 +249,16 @@ class EmbeddingModelConfig(BaseModel):
             return self.dimension
 
         provider = (self.provider or "").lower()
+        if provider in {"openai", "azure"}:
+            openai_model_dimensions = {
+                "text-embedding-ada-002": 1536,
+                "text-embedding-3-small": 1536,
+                "text-embedding-3-large": 3072,
+            }
+            model_lower = (self.model or "").lower()
+            if model_lower in openai_model_dimensions:
+                return openai_model_dimensions[model_lower]
+
         if provider == "voyage":
             from openviking.models.embedder.voyage_embedders import (
                 get_voyage_model_default_dimension,
@@ -358,13 +378,13 @@ class EmbeddingConfig(BaseModel):
         description="Maximum retry attempts for embedding provider calls (0 disables retry)",
     )
     text_source: str = Field(
-        default="summary_first",
+        default="content_only",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
-    max_input_chars: int = Field(
-        default=1000,
+    max_input_tokens: int = Field(
+        default=4096,
         ge=100,
-        description="Maximum characters sent to embeddings when raw text fallback is used",
+        description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
     )
 
     model_config = {"extra": "forbid"}
@@ -460,6 +480,11 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                    **(
+                        {"encoding_format": cfg.encoding_format}
+                        if cfg.encoding_format is not None
+                        else {}
+                    ),
                 },
             ),
             ("azure", "dense"): (
@@ -476,6 +501,11 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                    **(
+                        {"encoding_format": cfg.encoding_format}
+                        if cfg.encoding_format is not None
+                        else {}
+                    ),
                 },
             ),
             ("volcengine", "dense"): (

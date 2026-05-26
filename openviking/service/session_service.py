@@ -9,6 +9,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -33,6 +34,7 @@ class SessionService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
+        self._tool_output_externalization_config = ToolOutputExternalizationConfig()
 
     def set_dependencies(
         self,
@@ -44,6 +46,12 @@ class SessionService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
+
+    def set_tool_output_externalization_config(
+        self, config: ToolOutputExternalizationConfig
+    ) -> None:
+        """Set tool output externalization controls for newly created sessions."""
+        self._tool_output_externalization_config = config.model_copy(deep=True)
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -96,6 +104,7 @@ class SessionService:
             user=ctx.user,
             ctx=ctx,
             session_id=session_id,
+            tool_output_externalization_config=self._tool_output_externalization_config,
         )
 
     async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
@@ -202,20 +211,31 @@ class SessionService:
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-    async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
         Delegates to commit_async() for true non-blocking behavior.
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: See :meth:`commit_async`.
 
         Returns:
             Commit result
         """
-        return await self.commit_async(session_id, ctx)
+        return await self.commit_async(session_id, ctx, keep_recent_count=keep_recent_count)
 
-    async def commit_async(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit_async(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Async commit a session.
 
         Phase 1 (archive) always runs inline.  Phase 2 (memory extraction)
@@ -223,6 +243,8 @@ class SessionService:
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: Number of most-recent messages to keep in the
+                live session after commit. ``0`` archives everything.
 
         Returns:
             Commit result with keys: session_id, status, task_id,
@@ -230,16 +252,17 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async()
+        result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
-        task = get_task_tracker().get(
+        task = await get_task_tracker().get(
             task_id,
-            owner_account_id=ctx.account_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
 
@@ -257,12 +280,15 @@ class SessionService:
             raise NotInitializedError("SessionCompressor")
 
         session = await self.get(session_id, ctx)
+        session_uri = canonical_session_uri(session_id)
+        archive_uri = f"{session_uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
             user=ctx.user,
             session_id=session_id,
             ctx=ctx,
+            archive_uri=archive_uri,
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories

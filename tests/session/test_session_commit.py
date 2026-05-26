@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,6 +13,7 @@ from openviking import AsyncOpenViking
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.storage.transaction import get_lock_manager
 from openviking_cli.exceptions import FailedPreconditionError
 
 
@@ -19,7 +21,7 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     """Poll the task tracker until the task reaches a terminal state."""
     tracker = get_task_tracker()
     for _ in range(int(timeout / 0.1)):
-        task = tracker.get(task_id)
+        task = await tracker.get(task_id)
         if task and task.status.value in ("completed", "failed"):
             return task.to_dict()
         await asyncio.sleep(0.1)
@@ -55,6 +57,62 @@ class TestCommit:
 
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
+
+    async def test_commit_reports_session_skills_separately(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = False
+        config.memory.session_skill_extraction_enabled = True
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={
+                    "contexts": [],
+                    "session_skills": [{"uri": "viking://account/test/agent/skills/code-review"}],
+                }
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {}
+        assert task_result["result"]["session_skills_extracted"] == 1
+        assert task_result["result"]["session_skill_uris"] == [
+            "viking://account/test/agent/skills/code-review"
+        ]
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
+    async def test_commit_skips_session_skill_extraction_when_disabled(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["session_skills_extracted"] == 0
+        assert task_result["result"]["session_skill_uris"] == []
+        session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""
@@ -137,40 +195,7 @@ class TestCommit:
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
 
-    async def test_commit_with_usage_records(self, client: AsyncOpenViking):
-        """Test commit with usage records"""
-        session = client.session(session_id="usage_commit_test")
-
-        session.add_message("user", [TextPart("Test message")])
-        session.used(contexts=["viking://user/test/resources/doc.md"])
-        session.add_message("assistant", [TextPart("Response")])
-
-        result = await session.commit_async()
-
-        assert result.get("status") == "accepted"
-        assert result.get("task_id") is not None
-
-        # active_count_updated is now in the background task result
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
-
     async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
-        """Regression test: active_count must actually increment after commit.
-
-        Previously _update_active_counts() had three bugs:
-        1. Called storage.update() with MongoDB-style kwargs (filter=, update=)
-           that don't match the actual signature update(collection, id, data),
-           causing a silent TypeError on every commit.
-        2. Used $inc syntax which storage.update() does not support (merge semantics
-           require a plain value, not an increment operator).
-        3. Used fetch_by_uri() to locate the record, but that method's path-field
-           filter returns the entire subtree (hierarchical match), so any URI that
-           has child records triggers a 'Duplicate records found' error and returns
-           None — leaving active_count un-updated even after fixes 1 and 2.
-
-        Fix: use storage.filter() to look up the record by URI and read
-        its stored id, then call storage.update() with that id.
-        """
         client, uri = client_with_resource_sync
         vikingdb = client._client.service.vikingdb_manager
         # Use the client's own context to match the account_id used when adding the resource
@@ -236,3 +261,20 @@ class TestCommit:
         session.add_message("user", [TextPart("Second round message")])
         with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
             await session.commit_async()
+
+    async def test_commit_skips_redo_when_recovery_disabled(
+        self, session_with_messages: Session, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Phase 2 should not write or clear redo markers when redo recovery is disabled."""
+
+        redo_log = MagicMock()
+        lock_manager = get_lock_manager()
+        monkeypatch.setattr(lock_manager, "_redo_recovery_enabled", False)
+        monkeypatch.setattr(lock_manager, "_redo_log", redo_log)
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        redo_log.write_pending.assert_not_called()
+        redo_log.mark_done.assert_not_called()

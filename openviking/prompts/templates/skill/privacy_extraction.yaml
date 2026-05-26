@@ -1,0 +1,75 @@
+metadata:
+  id: "skill.privacy_extraction"
+  name: "Skill Privacy Extraction"
+  description: "Extract user-maintained private config items from skill content as structured JSON"
+  version: "1.1.0"
+  language: "en"
+  category: "skill"
+
+variables:
+  - name: "skill_name"
+    type: "string"
+    description: "Skill name"
+    required: true
+  - name: "skill_description"
+    type: "string"
+    description: "Skill description"
+    required: true
+  - name: "skill_content"
+    type: "string"
+    description: "Complete skill content"
+    required: true
+
+template: |
+  Analyze the following skill content and extract user-private configuration items that should be maintained in the privacy config store.
+
+  ## Skill Information
+  **Name**: {{ skill_name }}
+  **Description**: {{ skill_description }}
+
+  ## Complete Content
+  {{ skill_content }}
+
+  ## Extraction Goal
+  Identify configuration items that are private, security-sensitive, environment-specific, tenant-specific, or user-maintained, even if the skill content does not contain a concrete value yet.
+
+  ## Extraction Rules
+  - Extract both:
+    - configuration items with explicit concrete values already present in the content
+    - configuration items that are clearly required or expected to be provided by the user, even if the value is missing, described only in prose, or shown only as a placeholder/example
+  - Focus especially on secrets, credentials, endpoints, and user-maintained connection settings, including but not limited to:
+    - api_key
+    - token
+    - ak
+    - sk
+    - access_key
+    - secret_key
+    - client_secret
+    - base_url
+    - endpoint
+    - host
+    - project
+    - resource_id
+    - collection_name
+    - collection
+    - database
+    - username
+    - password
+  - If a config item is clearly required but no real value is present, still include the field and set its value to an empty string.
+  - Prefer normalized snake_case field names when the document uses human-readable labels. For example:
+    - "Access Key" -> "access_key"
+    - "Secret Key" -> "secret_key"
+  - Do not invent concrete secret values.
+  - Ignore ordinary business input parameters that are not user-maintained configuration, such as one-time query inputs like query, limit, or request payload examples.
+  - If no user-maintained private config items are present, return an empty object.
+
+  ## Output Format
+  Return JSON only, in exactly this shape:
+  {
+    "values": {
+      "field_name": "raw value or empty string"
+    }
+  }
+
+llm_config:
+  temperature: 0.0

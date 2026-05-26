@@ -4,7 +4,6 @@
 
 import base64
 import json
-import logging
 import os
 import time
 from pathlib import Path
@@ -18,10 +17,11 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_google_generate_language_endpoint(api_base: str) -> bool:
@@ -93,8 +93,39 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Prefixes that are already complete LiteLLM routes. Keep them authoritative
+# so keyword-based auto-detection does not rewrite cross-provider model names.
+EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
+    "azure/",
+    "azure_ai/",
+    "azure_text/",
+    "bedrock/",
+    "sagemaker/",
+    "sagemaker_chat/",
+    "sagemaker_nova/",
+    "vertex_ai/",
+)
+
+# These explicit routes normally authenticate through cloud-native credential
+# chains, so a placeholder api_key should not be forwarded by default.
+NATIVE_AUTH_LITELLM_PREFIXES: tuple[str, ...] = (
+    "bedrock/",
+    "sagemaker/",
+    "sagemaker_chat/",
+    "sagemaker_nova/",
+    "vertex_ai/",
+)
+
+
+def _has_litellm_prefix(model: str, prefixes: tuple[str, ...]) -> bool:
+    return model.lower().startswith(prefixes)
+
+
 def detect_provider_by_model(model: str) -> str | None:
     """Detect provider by model name."""
+    if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+        return None
+
     model_lower = model.lower()
     for provider, config in PROVIDER_CONFIGS.items():
         if any(kw in model_lower for kw in config["keywords"]):
@@ -115,6 +146,7 @@ class LiteLLMVLMProvider(VLMBase):
         self._provider_name = config.get("provider")
         self._extra_headers = config.get("extra_headers") or {}
         self._thinking = config.get("thinking", False)
+        self._forward_api_key = config.get("forward_api_key")
         self._detected_provider: str | None = None
 
         if self.api_key:
@@ -130,6 +162,8 @@ class LiteLLMVLMProvider(VLMBase):
             detected = detect_provider_by_model(model)
             if detected:
                 provider = detected
+            elif _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+                return
 
         if provider and provider in PROVIDER_CONFIGS:
             env_key = PROVIDER_CONFIGS[provider]["env_key"]
@@ -140,6 +174,9 @@ class LiteLLMVLMProvider(VLMBase):
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider prefixes."""
+        if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
+            return model
+
         provider = self._detected_provider or detect_provider_by_model(model)
 
         if provider and provider in PROVIDER_CONFIGS:
@@ -153,6 +190,13 @@ class LiteLLMVLMProvider(VLMBase):
             return f"openai/{model}"
 
         return model
+
+    def _should_forward_api_key(self, model: str) -> bool:
+        if not self.api_key:
+            return False
+        if self._forward_api_key is not None:
+            return self._forward_api_key is True
+        return not _has_litellm_prefix(model, NATIVE_AUTH_LITELLM_PREFIXES)
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -220,10 +264,10 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
             "timeout": self.timeout,
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
 
-        if self.api_key:
+        if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
         if self.api_base:
             is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
@@ -234,6 +278,8 @@ class LiteLLMVLMProvider(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
 
         # Only send enable_thinking to DashScope-compatible providers
         provider = self._detected_provider or detect_provider_by_model(model)
@@ -393,10 +439,11 @@ class LiteLLMVLMProvider(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion synchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -420,10 +467,11 @@ class LiteLLMVLMProvider(VLMBase):
         images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

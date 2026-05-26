@@ -71,10 +71,12 @@ OpenCode auto-discovers first-level `*.ts` and `*.js` files under `~/.config/ope
 
 This plugin also works if you intentionally place it in a workspace-local plugin directory, because it stores config and runtime files next to the plugin file itself.
 
-Recommended: provide the API key via environment variable instead of writing it into the config file:
+Recommended: provide the API key and tenant identity via environment variables instead of writing them into the config file:
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
+export OPENVIKING_ACCOUNT="default"
+export OPENVIKING_USER="opencode"
 ```
 
 ## Configuration
@@ -85,6 +87,8 @@ Example config:
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -94,7 +98,9 @@ Example config:
 }
 ```
 
-The environment variable `OPENVIKING_API_KEY` takes precedence over the config file.
+`account` and `user` are sent as `X-OpenViking-Account` and `X-OpenViking-User` tenant headers on every plugin API request; leave them empty to omit the headers.
+
+The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take precedence over the config file.
 
 ## Runtime Files
 
@@ -184,18 +190,18 @@ const result = await memcommit({})
 
 ## Memory Recall
 
-The plugin can automatically search OpenViking memories and inject relevant context into each user message before it reaches the LLM. This uses OpenCode's `experimental.chat.messages.transform` hook.
+The plugin can automatically search OpenViking memories and inject relevant context into each user message before it reaches the LLM. This uses OpenCode's `chat.message` hook to prepend a synthetic memory part to the outgoing message.
 
-> **Note**: This feature relies on an experimental OpenCode API. The hook signature or behavior may change in future OpenCode versions.
+> **Note**: This feature relies on OpenCode's `chat.message` hook contract. The hook signature or behavior may change in future OpenCode versions.
 
 ### How It Works
 
-1. On every user message, the plugin extracts the latest user text
+1. On every user message, the plugin extracts text from the message parts
 2. Searches OpenViking using semantic search (5-second timeout)
 3. Ranks results using multi-factor scoring (base score + leaf boost + temporal boost + preference boost + lexical overlap)
 4. Deduplicates results (abstract-based for regular memories, URI-based for events/cases)
 5. Formats matching memories as a `<relevant-memories>` XML block
-6. Appends the block to the user message's text part
+6. Prepends the block as a synthetic text part (`synthetic: true`) on the outgoing message so the memory persists across turns without polluting user input
 
 If OpenViking is unavailable or the search times out, the message is passed through unchanged.
 
@@ -216,6 +222,8 @@ Add an `autoRecall` block to your `openviking-config.json` to customize recall b
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {

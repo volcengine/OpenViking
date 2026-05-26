@@ -15,6 +15,7 @@ from loguru import logger
 
 # Context variable to store current session ID
 _session_id: ContextVar[str | None] = ContextVar("session_id", default=None)
+_response_id: ContextVar[str | None] = ContextVar("response_id", default=None)
 
 T = TypeVar("T")
 
@@ -28,6 +29,11 @@ except ImportError:
 def get_current_session_id() -> str | None:
     """Get the current session ID from context."""
     return _session_id.get()
+
+
+def get_current_response_id() -> str | None:
+    """Get the current response ID from context."""
+    return _response_id.get()
 
 
 @contextmanager
@@ -48,6 +54,16 @@ def set_session_id(session_id: str | None) -> Generator[None, None, None]:
         yield
     finally:
         _session_id.reset(token)
+
+
+@contextmanager
+def set_response_id(response_id: str | None) -> Generator[None, None, None]:
+    """Set the response ID for the current context."""
+    token = _response_id.set(response_id)
+    try:
+        yield
+    finally:
+        _response_id.reset(token)
 
 
 def trace(
@@ -163,14 +179,15 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     has_propagate = hasattr(langfuse, "propagate_attributes")
+                    is_enabled = getattr(langfuse, "enabled", False)
                     # logger.info(f"[LANGFUSE] Client status: enabled={langfuse.enabled}, has_propagate_attributes={has_propagate}")
-                    if langfuse.enabled and has_propagate:
+                    if is_enabled and has_propagate:
                         # logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)
                     else:
                         if not has_propagate:
-                            logger.warning(f"[LANGFUSE] propagate_attributes not available")
+                            logger.warning("[LANGFUSE] propagate_attributes not available")
                     return await wrapped_func(*args, **kwargs)
             else:
                 return await wrapped_func(*args, **kwargs)

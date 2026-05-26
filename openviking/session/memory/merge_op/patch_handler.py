@@ -24,6 +24,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.utils.line_numbers import (
+    add_line_numbers,
+    every_line_has_line_numbers,
+    extract_start_line_number,
+    strip_line_numbers,
+)
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -107,6 +113,8 @@ def fuzzy_search(
     """
     Perform a "middle-out" search to find the slice most similar to search_chunk.
 
+    For single-line search, also checks for substring matches within each line.
+
     Returns dict with bestScore, bestMatchIndex, bestMatchContent
     """
     best_score = 0.0
@@ -119,23 +127,63 @@ def fuzzy_search(
     left_index = mid_point
     right_index = mid_point + 1
 
+    # For single-line search, enable substring matching mode
+    is_single_line = search_len == 1
+    search_str = search_lines[0] if is_single_line else ""
+
     while left_index >= start_index or right_index <= end_index - search_len:
         if left_index >= start_index:
-            original_chunk = "\n".join(lines[left_index : left_index + search_len])
-            similarity = get_similarity(original_chunk, search_chunk)
-            if similarity > best_score:
-                best_score = similarity
-                best_match_index = left_index
-                best_match_content = original_chunk
+            if is_single_line:
+                # Check substring match in this single line
+                line = lines[left_index]
+                # First check for exact substring match
+                if search_str in line:
+                    best_score = 1.0
+                    best_match_index = left_index
+                    best_match_content = line
+                    left_index -= 1
+                    continue
+                # If no exact match, try the best similarity with substrings
+                line_score, line_content = _find_best_substring_match(line, search_str)
+                if line_score > best_score:
+                    best_score = line_score
+                    best_match_index = left_index
+                    best_match_content = line_content
+            else:
+                # Original multi-line logic
+                original_chunk = "\n".join(lines[left_index : left_index + search_len])
+                similarity = get_similarity(original_chunk, search_chunk)
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match_index = left_index
+                    best_match_content = original_chunk
             left_index -= 1
 
         if right_index <= end_index - search_len:
-            original_chunk = "\n".join(lines[right_index : right_index + search_len])
-            similarity = get_similarity(original_chunk, search_chunk)
-            if similarity > best_score:
-                best_score = similarity
-                best_match_index = right_index
-                best_match_content = original_chunk
+            if is_single_line:
+                # Check substring match in this single line
+                line = lines[right_index]
+                # First check for exact substring match
+                if search_str in line:
+                    best_score = 1.0
+                    best_match_index = right_index
+                    best_match_content = line
+                    right_index += 1
+                    continue
+                # If no exact match, try the best similarity with substrings
+                line_score, line_content = _find_best_substring_match(line, search_str)
+                if line_score > best_score:
+                    best_score = line_score
+                    best_match_index = right_index
+                    best_match_content = line_content
+            else:
+                # Original multi-line logic
+                original_chunk = "\n".join(lines[right_index : right_index + search_len])
+                similarity = get_similarity(original_chunk, search_chunk)
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match_index = right_index
+                    best_match_content = original_chunk
             right_index += 1
 
     return {
@@ -145,41 +193,38 @@ def fuzzy_search(
     }
 
 
-# ============================================================================
-# Line Number Utilities (from RooCode)
-# ============================================================================
+def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
+    """Find the best matching substring in a line."""
+    best_score = 0.0
+    best_content = ""
+    search_len = len(search_str)
+    line_len = len(line)
 
+    # If search string is longer than line, just compare the whole line
+    if search_len >= line_len:
+        return get_similarity(line, search_str), line
 
-def add_line_numbers(content: str, start_line: int = 1) -> str:
-    """Add line numbers to content."""
-    lines = content.split("\n")
-    numbered_lines = [f"{start_line + i} | {line}" for i, line in enumerate(lines)]
-    return "\n".join(numbered_lines)
+    # Try sliding window for best match (limit to reasonable checks for performance)
+    # First check at start, end, and a few positions in between
+    positions_to_check = [0, line_len - search_len]
+    if line_len > search_len * 3:
+        positions_to_check.append(line_len // 2 - search_len // 2)
 
+    for i in positions_to_check:
+        if 0 <= i <= line_len - search_len:
+            substring = line[i : i + search_len]
+            score = get_similarity(substring, search_str)
+            if score > best_score:
+                best_score = score
+                best_content = substring
 
-def strip_line_numbers(content: str, aggressive: bool = False) -> str:
-    """
-    Strip line numbers from content.
+    # Also compare with the whole line as fallback
+    whole_line_score = get_similarity(line, search_str)
+    if whole_line_score > best_score:
+        best_score = whole_line_score
+        best_content = line
 
-    Args:
-        content: Content with line numbers
-        aggressive: If True, strip all line numbers regardless of format
-    """
-    if aggressive:
-        # Aggressive: remove anything that looks like a line number at the start
-        return re.sub(r"^\s*\d+\s*[|:]\s*", "", content, flags=re.MULTILINE)
-    else:
-        # Standard: only strip "N | " format
-        return re.sub(r"^\d+\s*\|\s*", "", content, flags=re.MULTILINE)
-
-
-def every_line_has_line_numbers(content: str) -> bool:
-    """Check if every line in content has a line number."""
-    lines = content.split("\n")
-    if not lines:
-        return False
-    # Check if all lines match the pattern "N | " at the start
-    return all(re.match(r"^\d+\s*\|\s*", line) for line in lines)
+    return best_score, best_content
 
 
 # ============================================================================
@@ -426,21 +471,57 @@ class MultiSearchReplaceDiffStrategy:
         if not matches:
             return DiffResult(success=True, content=original_content)
 
+        # First try simple substring replacement - this handles the common case
+        result_content = original_content
+        all_applied = True
+        processed_matches = []
+
+        for match in matches:
+            search_content = unescape_markers(match.get("searchContent", ""))
+            replace_content = unescape_markers(match.get("replaceContent", ""))
+
+            if search_content == replace_content:
+                continue
+
+            has_line_numbers = (
+                every_line_has_line_numbers(search_content)
+                and every_line_has_line_numbers(replace_content)
+            ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
+
+            if has_line_numbers:
+                search_content = strip_line_numbers(search_content)
+                replace_content = strip_line_numbers(replace_content)
+
+            if not search_content:
+                all_applied = False
+                break
+
+            if search_content not in result_content:
+                all_applied = False
+                break
+
+            processed_matches.append((search_content, replace_content))
+
+        if all_applied and processed_matches:
+            for search_content, replace_content in processed_matches:
+                result_content = result_content.replace(search_content, replace_content)
+            return DiffResult(success=True, content=result_content)
+
+        # Fall back to line-based approach for complex cases
         # Detect line ending from original content
         line_ending = "\r\n" if "\r\n" in original_content else "\n"
         result_lines = re.split(r"\r?\n", original_content)
-        delta = 0
         diff_results = []
         applied_count = 0
 
-        # Sort replacements by start_line
+        # Sort replacements by startLine
         replacements = [
             {
-                "startLine": int(match.get("startLine", 0)),
-                "searchContent": match.get("searchContent", ""),
-                "replaceContent": match.get("replaceContent", ""),
+                "startLine": int(m.get("startLine", 0)),
+                "searchContent": m.get("searchContent", ""),
+                "replaceContent": m.get("replaceContent", ""),
             }
-            for match in matches
+            for m in matches
         ]
         replacements.sort(key=lambda x: x["startLine"])
 
@@ -462,10 +543,9 @@ class MultiSearchReplaceDiffStrategy:
             ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
             if has_all_line_numbers and start_line == 0:
-                # Extract start line from first line
-                first_line = search_content.split("\n")[0]
-                if "|" in first_line:
-                    start_line = int(first_line.split("|")[0].strip())
+                inferred_start_line = extract_start_line_number(search_content)
+                if inferred_start_line is not None:
+                    start_line = inferred_start_line
 
             if has_all_line_numbers:
                 search_content = strip_line_numbers(search_content)
@@ -675,7 +755,6 @@ class MultiSearchReplaceDiffStrategy:
             before_match = result_lines[:match_index]
             after_match = result_lines[match_index + len(search_lines) :]
             result_lines = before_match + indented_replace_lines + after_match
-            delta = delta - len(matched_lines) + len(replace_lines)
             applied_count += 1
 
         final_content = line_ending.join(result_lines)
@@ -765,83 +844,8 @@ class MultiSearchReplaceDiffStrategy:
 
 
 # ============================================================================
-# MemoryPatchHandler
+# Structured patch application
 # ============================================================================
-
-
-class MemoryPatchHandler:
-    """Handler for applying patches to memory content."""
-
-    # Patch format markers
-    SEARCH_MARKER = "<<<<<<< SEARCH"
-    SPLIT_MARKER = "======="
-    REPLACE_MARKER = ">>>>>>> REPLACE"
-    LINE_NUMBER_PREFIX = ":start_line:"
-
-    def __init__(self, fuzzy_threshold: float = 1.0, buffer_lines: int = 40):
-        """
-        Initialize the patch handler.
-
-        Args:
-            fuzzy_threshold: Similarity threshold for fuzzy matching (0.0 to 1.0, default 1.0 = exact match)
-            buffer_lines: Number of extra context lines to search (default 40)
-        """
-        self._strategy = MultiSearchReplaceDiffStrategy(
-            fuzzy_threshold=fuzzy_threshold, buffer_lines=buffer_lines
-        )
-
-    def apply_content_patch(self, original_content: str, patch: str) -> str:
-        """
-        Apply SEARCH/REPLACE format patch to content.
-
-        Patch format:
-            <<<<<<< SEARCH
-            :start_line:10
-            -------
-            Original content
-            =======
-            New content
-            >>>>>>> REPLACE
-
-        Supports multiple SEARCH/REPLACE blocks in a single patch.
-
-        Args:
-            original_content: Original content string
-            patch: Patch string in SEARCH/REPLACE format
-
-        Returns:
-            Updated content
-
-        Raises:
-            PatchParseError: If patch format is invalid
-        """
-        if not patch or not patch.strip():
-            return original_content
-
-        # First validate marker sequencing - raise PatchParseError for invalid patches
-        valid_seq = validate_marker_sequencing(patch)
-        if not valid_seq["success"]:
-            raise PatchParseError(valid_seq["error"])
-
-        result = self._strategy.apply_diff(original_content, patch)
-
-        if result.success:
-            return result.content if result.content is not None else original_content
-        else:
-            # If failed but patch was valid (e.g., search content not found), fall back to appending
-            error_msg = result.error or "Unknown error"
-            logger.warning(f"Patch application failed, falling back to append: {error_msg}")
-            return original_content + "\n" + self._extract_replace_content(patch)
-
-    def _extract_replace_content(self, patch: str) -> str:
-        """Extract replace content from patch for fallback append."""
-        try:
-            matches = self._strategy._parse_diff_blocks(patch)
-            if matches:
-                return matches[-1].get("replaceContent", "")
-        except Exception:
-            pass
-        return patch
 
 
 def apply_str_patch(original_content: str, patch: StrPatch) -> str:
@@ -857,15 +861,40 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     if not patch.blocks:
         return original_content
 
-    # Directly convert StrPatch to internal format, skip string conversion
-    strategy = MultiSearchReplaceDiffStrategy()
+    # First try simple substring replacement - this handles the common case
+    result_content = original_content
+    all_applied = True
+
+    for block in patch.blocks:
+        search_content = unescape_markers(block.search)
+        replace_content = unescape_markers(block.replace)
+
+        if search_content == replace_content:
+            continue
+
+        if not search_content:
+            all_applied = False
+            break
+
+        if search_content not in result_content:
+            all_applied = False
+            break
+
+        result_content = result_content.replace(search_content, replace_content)
+
+    if all_applied:
+        return result_content
+
+    # Fall back to line-based approach for complex cases
+    strategy = MultiSearchReplaceDiffStrategy(fuzzy_threshold=0.8)
 
     # Convert StrPatch blocks to internal match format
     matches = []
     for block in patch.blocks:
+        start_line = getattr(block, "start_line", None) or 0
         matches.append(
             {
-                "startLine": block.start_line or 0,
+                "startLine": start_line,
                 "searchContent": block.search,
                 "replaceContent": block.replace,
             }
@@ -874,7 +903,6 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     if not matches:
         return original_content
 
-    # Apply using the same logic as apply_diff, but with pre-parsed matches
     # Detect line ending from original content
     line_ending = "\r\n" if "\r\n" in original_content else "\n"
     result_lines = re.split(r"\r?\n", original_content)
@@ -884,20 +912,18 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     # Sort replacements by start_line
     replacements = [
         {
-            "startLine": int(match.get("startLine", 0)),
-            "searchContent": match.get("searchContent", ""),
-            "replaceContent": match.get("replaceContent", ""),
+            "startLine": int(m.get("startLine", 0)),
+            "searchContent": m.get("searchContent", ""),
+            "replaceContent": m.get("replaceContent", ""),
         }
-        for match in matches
+        for m in matches
     ]
     replacements.sort(key=lambda x: x["startLine"])
 
     for replacement in replacements:
         search_content = replacement["searchContent"]
         replace_content = replacement["replaceContent"]
-        start_line = replacement["startLine"] + (
-            replacement["startLine"] if replacement["startLine"] != 0 else 0
-        )
+        start_line = replacement["startLine"]
 
         # Unescape markers
         search_content = unescape_markers(search_content)
@@ -910,10 +936,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
 
         if has_all_line_numbers and start_line == 0:
-            # Extract start line from first line
-            first_line = search_content.split("\n")[0]
-            if "|" in first_line:
-                start_line = int(first_line.split("|")[0].strip())
+            inferred_start_line = extract_start_line_number(search_content)
+            if inferred_start_line is not None:
+                start_line = inferred_start_line
 
         if has_all_line_numbers:
             search_content = strip_line_numbers(search_content)
@@ -1125,14 +1150,12 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     final_content = line_ending.join(result_lines)
 
     # Check if all results are successful (including no-change cases)
-    all_successful = all(result.get("success", False) for result in diff_results)
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
-        # If failed, fall back to appending last replace content
-        logger.warning("Patch application failed, falling back to append")
-        last_replace = matches[-1].get("replaceContent", "") if matches else ""
-        return original_content + "\n" + last_replace
+        raise PatchParseError(
+            f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}"
+        )
 
     return final_content
 

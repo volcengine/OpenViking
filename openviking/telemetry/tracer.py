@@ -62,7 +62,10 @@ class TraceIdLoggingFilter(logging.Filter):
     """日志过滤器：注入 TraceID"""
 
     def filter(self, record):
-        record.trace_id = get_trace_id()
+        trace_id = get_trace_id()
+        record.trace_id = trace_id
+        if trace_id:
+            record.msg = f"[{trace_id}] {record.msg}"
         return True
 
 
@@ -75,11 +78,13 @@ def _setup_logging():
 
     try:
         # Configure logger to patch records with trace_id
-        logger.configure(
-            patcher=lambda record: record.__setitem__(
-                "extra", {**record["extra"], "trace_id": get_trace_id()}
-            )
-        )
+        def _patch_trace_id(record):
+            trace_id = get_trace_id()
+            record["extra"]["trace_id"] = trace_id
+            if trace_id:
+                record["message"] = f"[{trace_id}] {record['message']}"
+
+        logger.configure(patcher=_patch_trace_id)
         _trace_id_filter_added = True
     except Exception:
         _log_trace_internal_failure("[TRACER] failed to configure loguru trace_id patcher")
@@ -92,6 +97,41 @@ def _setup_logging():
                 handler.addFilter(TraceIdLoggingFilter())
     except Exception:
         _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
+
+
+def init_tracer_from_config() -> Any:
+    """Initialize tracer from the legacy ov.conf telemetry.tracer config."""
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        tracer_cfg = config.telemetry.tracer
+
+        if not tracer_cfg.enabled:
+            logger.info("[TRACER] disabled in config")
+            return None
+
+        if not tracer_cfg.endpoint:
+            logger.warning("[TRACER] endpoint not configured")
+            return None
+
+        headers = {
+            "x-tls-otel-tracetopic": tracer_cfg.topic,
+            "x-tls-otel-ak": tracer_cfg.ak,
+            "x-tls-otel-sk": tracer_cfg.sk,
+            "x-tls-otel-region": "cn-beijing",
+        }
+
+        return init_tracer(
+            endpoint=tracer_cfg.endpoint,
+            service_name=tracer_cfg.service_name or "openviking",
+            protocol="grpc",
+            headers=headers,
+            enabled=tracer_cfg.enabled,
+        )
+    except Exception as e:
+        logger.warning(f"[TRACER] init from config failed: {e}")
+        return None
 
 
 def init_tracer_from_server_config(server_config: Any) -> Any:
@@ -118,6 +158,7 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             service_name=trace_cfg.service_name,
             protocol=trace_cfg.protocol,
             insecure=trace_cfg.tls.insecure,
+            headers=trace_cfg.headers,
             enabled=trace_cfg.enabled,
         )
     except Exception as e:
@@ -131,7 +172,7 @@ def _init_asyncio_instrumentation() -> None:
         from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
 
         AsyncioInstrumentor().instrument()
-        logger.info("[TRACER] initialized AsyncioInstrumentor")
+        logger.debug("[TRACER] initialized AsyncioInstrumentor")
     except ImportError:
         logger.warning("[TRACER] opentelemetry-instrumentation-asyncio not installed")
     except Exception as e:
@@ -143,6 +184,7 @@ def init_tracer(
     service_name: str,
     protocol: str = "grpc",
     insecure: bool = False,
+    headers: Optional[dict[str, str]] = None,
     enabled: bool = True,
 ) -> Any:
     """Initialize the OpenTelemetry tracer.
@@ -152,6 +194,7 @@ def init_tracer(
         service_name: Service name for tracing
         protocol: OTLP protocol ("grpc" or "http")
         insecure: For OTLP/gRPC only. When True, use plaintext instead of TLS.
+        headers: Additional OTLP exporter headers for vendor-specific auth.
         enabled: Whether to enable tracing
 
     Returns:
@@ -171,6 +214,7 @@ def init_tracer(
         return None
 
     try:
+        normalized_headers = {str(key): str(value) for key, value in (headers or {}).items()}
         resource_attributes = {
             "service.name": service_name,
         }
@@ -184,10 +228,12 @@ def init_tracer(
                 trace_exporter = OTLPGrpcSpanExporter(
                     endpoint=endpoint,
                     insecure=insecure,
+                    headers=normalized_headers,
                 )
             except TypeError:
                 trace_exporter = OTLPGrpcSpanExporter(
                     endpoint=endpoint,
+                    headers=normalized_headers,
                 )
         elif protocol == "http":
             if OTLPHttpSpanExporter is None:
@@ -198,6 +244,7 @@ def init_tracer(
                 )
             trace_exporter = OTLPHttpSpanExporter(
                 endpoint=endpoint,
+                headers=normalized_headers,
             )
         else:
             raise ValueError(f"Unsupported trace protocol: {protocol}")
@@ -206,7 +253,7 @@ def init_tracer(
         trace_provider.add_span_processor(
             BatchSpanProcessor(
                 trace_exporter,
-                max_export_batch_size=100,
+                max_export_batch_size=50,
                 schedule_delay_millis=1000,
                 export_timeout_millis=60000,
             )
@@ -222,7 +269,7 @@ def init_tracer(
         # Initialize asyncio instrumentation to create child spans for create_task
         _init_asyncio_instrumentation()
 
-        logger.info(
+        logger.debug(
             "[TRACER] initialized with service_name=%s, protocol=%s, endpoint=%s",
             service_name,
             protocol,
@@ -393,10 +440,10 @@ class tracer:
                     try:
                         # 记录输入参数
                         if not self.ignore_args and args:
-                            self.info("func_args", str(args))
+                            self.set("func_args", str(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
                         if len(func_kwargs) > 0:
-                            self.info("func_kwargs", str(func_kwargs))
+                            self.set("func_kwargs", str(func_kwargs))
 
                         result = await func(*args, **kwargs)
 
@@ -405,6 +452,7 @@ class tracer:
 
                         return result
                     except Exception as e:
+                        self.error("e", e=e)
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
@@ -434,6 +482,7 @@ class tracer:
 
                         return result
                     except Exception as e:
+                        self.error("e", e=e)
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
@@ -499,6 +548,8 @@ class tracer:
     @staticmethod
     def info(line: str, console: bool = False) -> None:
         """Add an event to the current span."""
+        if console:
+            logger.opt(depth=1).info(line)
         if _otel_tracer is None:
             return
 
@@ -518,7 +569,7 @@ class tracer:
     def info_span(line: str, console: bool = False) -> None:
         """Create a new span with the given name."""
         if console:
-            logger.info(line)
+            logger.opt(depth=1).info(line)
         if _otel_tracer is None:
             return
         with tracer.start_as_current_span(name=line):
@@ -527,6 +578,11 @@ class tracer:
     @staticmethod
     def error(line: str, e: Optional[Exception] = None, console: bool = True) -> None:
         """Record an error on the current span."""
+        if console:
+            if e is not None:
+                logger.opt(depth=1).exception(f"{line}", exc_info=e)
+            else:
+                logger.opt(depth=1).error(line)
         if _otel_tracer is None:
             return
 

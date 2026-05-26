@@ -20,6 +20,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
                 "account": "config-account",
                 "user": "config-user",
                 "timeout": 12.5,
+                "profile": True,
             }
         )
     )
@@ -33,6 +34,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5
+    assert client._profile_enabled is True
 
 
 def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monkeypatch):
@@ -44,6 +46,7 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
                 "api_key": "config-key",
                 "account": "config-account",
                 "timeout": 12.5,
+                "profile": True,
             }
         )
     )
@@ -54,12 +57,47 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
         api_key="explicit-key",
         account="explicit-account",
         timeout=33.0,
+        profile_enabled=False,
     )
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "explicit-key"
     assert client._account == "explicit-account"
     assert client._timeout == 33.0
+    assert client._profile_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_user_id_sets_openviking_user_header(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="explicit-key",
+        account="explicit-account",
+        user_id="explicit-user",
+        agent_id="explicit-agent",
+        timeout=33.0,
+        extra_headers={},
+    )
+    await client.initialize()
+
+    assert client._user_id == "explicit-user"
+    assert captured["headers"] == {
+        "X-API-Key": "explicit-key",
+        "X-OpenViking-Agent": "explicit-agent",
+        "X-OpenViking-Account": "explicit-account",
+        "X-OpenViking-User": "explicit-user",
+    }
 
 
 def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
@@ -88,6 +126,7 @@ def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
                 "upload": {
+                    "mode": "shared",
                     "ignore_dirs": "node_modules,.cache",
                     "include": "*.md,*.pdf",
                     "exclude": "*.tmp,*.log",
@@ -101,6 +140,7 @@ def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
 
     assert client._url == "http://config-host:1933"
     assert client._api_key == "config-key"
+    assert client._upload_mode == "shared"
 
 
 def test_async_http_client_rejects_unknown_ovcli_upload_field(tmp_path, monkeypatch):

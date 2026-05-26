@@ -1,0 +1,13 @@
+extends: baseline.yaml
+
+benchmark:
+  name: tau2_openviking_prewrite
+
+strategies:
+  - id: memory_v2_prewrite
+    label: OpenViking Memory V2 pre-write recall
+    memory_backend: openviking
+    train_required: true
+    corpus_id: memory_v2_experience_only
+    train_memory_mode: experience_only
+    retrieval_mode: first_user_prewrite

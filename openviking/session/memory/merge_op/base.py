@@ -55,21 +55,28 @@ class SearchReplaceBlock(BaseModel):
 
     search: str = Field(
         ...,
-        description="Content to search for. ONLY include the EXACT lines you need to change - NEVER include the entire section. Example (WRONG): '## Melanie\\n- line1\\n- line2\\n[50 more lines]'. Example (CORRECT): '- Art can be in the most unlikely places, and love and acceptance really can be found everywhere'",
+        description="The text to replace. Use the smallest unique fragment - usually 2-4 adjacent lines is sufficient. Only include the exact lines that need to change, never the entire section. Preserve the exact indentation from the original. Must be unique in the file. Choose page_id first. SEARCH must be copied exactly from the read result of the file bound to that page_id. Never use SEARCH text from another memory or page. If the read result includes `line_number<TAB>` prefixes, exclude those prefixes from SEARCH. Multi-line SEARCH must be contiguous; split non-adjacent edits into separate blocks.",
     )
-    replace: str = Field(..., description="Content to replace with")
-    start_line: Optional[int] = Field(None, description="Starting line number hint")
+    replace: str = Field(
+        ...,
+        description="The text to replace it with (must be different from search). Use empty string to delete the matched content. Never include `line_number<TAB>` prefixes in REPLACE text.",
+    )
 
 
 class StrPatch(BaseModel):
     """String patch containing multiple SEARCH/REPLACE blocks.
 
     All string fields with merge_op=patch use this structure.
+
+    IMPORTANT format rules for blocks:
+    - Each block MUST have both "search" and "replace" fields
+    - ✅ Correct: {"blocks": [{"search": "old text", "replace": "new text"}]}
+    - ❌ Wrong: {"blocks": ["just a string"]} or {"blocks": [{"search": "old"}]} (missing replace)
     """
 
     blocks: List[SearchReplaceBlock] = Field(
         default_factory=list,
-        description="List of SEARCH/REPLACE blocks to apply. PREFER direct string replacement over SEARCH/REPLACE when possible. When using SEARCH/REPLACE, only include the specific line(s) to change, never the entire section.",
+        description="List of SEARCH/REPLACE blocks. Each search block must be unique in the file.",
     )
 
     def get_first_replace(self) -> Optional[str]:
@@ -90,6 +97,7 @@ class MergeOp(str, Enum):
     """Merge operation enumeration."""
 
     PATCH = "patch"
+    REPLACE = "replace"
     SUM = "sum"
     IMMUTABLE = "immutable"
 

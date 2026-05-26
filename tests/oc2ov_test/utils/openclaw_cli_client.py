@@ -55,12 +55,17 @@ class OpenClawCLIClient:
         self.timeout = 180
 
     def send_message(
-        self, message: str, session_id: Optional[str] = None, agent_id: Optional[str] = None
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         使用 openclaw agent 命令发送消息
         """
         target_session_id = session_id or self.session_id
+        cmd_timeout = timeout or self.timeout
 
         cmd = [
             "openclaw",
@@ -89,9 +94,9 @@ class OpenClawCLIClient:
             if not lock_released:
                 logger.warning("Session lock not released, request may fail with lock timeout")
 
-            logger.info(f"⏳ 等待响应 (超时: {self.timeout}秒)...")
+            logger.info(f"⏳ 等待响应 (超时: {cmd_timeout}秒)...")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=cmd_timeout)
 
             logger.info(f"✅ 命令执行完成 - 返回码: {result.returncode}")
 
@@ -131,7 +136,7 @@ class OpenClawCLIClient:
             return response_data
 
         except subprocess.TimeoutExpired:
-            error_msg = f"命令执行超时 (超时: {self.timeout}秒)"
+            error_msg = f"命令执行超时 (超时: {cmd_timeout}秒)"
             logger.error("=" * 80)
             logger.error(error_msg)
             logger.error("=" * 80)

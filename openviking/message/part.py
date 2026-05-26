@@ -48,6 +48,21 @@ class ToolPart:
     duration_ms: Optional[float] = None  # 执行耗时（毫秒）
     prompt_tokens: Optional[int] = None  # 输入 Token
     completion_tokens: Optional[int] = None  # 输出 Token
+    tool_output_ref: str = ""
+    tool_output_truncated: bool = False
+    tool_output_original_chars: Optional[int] = None
+    tool_output_preview_chars: Optional[int] = None
+    tool_output_sha256: str = ""
+    tool_output_storage_uri: str = ""
+    tool_output_mime_type: str = "text/plain"
+    tool_output_source_ref: str = ""
+    tool_output_source_offset: Optional[int] = None
+    tool_output_source_limit: Optional[int] = None
+    tool_output_externalization_error: str = ""
+    tool_output_group_id: str = ""
+    tool_output_externalized_reason: str = ""
+    tool_output_group_original_chars: Optional[int] = None
+    tool_output_group_budget_chars: Optional[int] = None
 
 
 Part = Union[TextPart, ContextPart, ToolPart]
@@ -83,6 +98,21 @@ def part_from_dict(data: dict) -> Part:
             duration_ms=data.get("duration_ms"),
             prompt_tokens=data.get("prompt_tokens"),
             completion_tokens=data.get("completion_tokens"),
+            tool_output_ref=data.get("tool_output_ref", ""),
+            tool_output_truncated=bool(data.get("tool_output_truncated", False)),
+            tool_output_original_chars=data.get("tool_output_original_chars"),
+            tool_output_preview_chars=data.get("tool_output_preview_chars"),
+            tool_output_sha256=data.get("tool_output_sha256", ""),
+            tool_output_storage_uri=data.get("tool_output_storage_uri", ""),
+            tool_output_mime_type=data.get("tool_output_mime_type", "text/plain"),
+            tool_output_source_ref=data.get("tool_output_source_ref", ""),
+            tool_output_source_offset=data.get("tool_output_source_offset"),
+            tool_output_source_limit=data.get("tool_output_source_limit"),
+            tool_output_externalization_error=data.get("tool_output_externalization_error", ""),
+            tool_output_group_id=data.get("tool_output_group_id", ""),
+            tool_output_externalized_reason=data.get("tool_output_externalized_reason", ""),
+            tool_output_group_original_chars=data.get("tool_output_group_original_chars"),
+            tool_output_group_budget_chars=data.get("tool_output_group_budget_chars"),
         )
     else:
         return TextPart(text=str(data))

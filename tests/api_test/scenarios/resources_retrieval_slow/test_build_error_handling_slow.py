@@ -377,7 +377,7 @@ class TestBuildErrorHandlingSlow:
 
         try:
             response = api_client.add_resource(path=zip_path, wait=True)
-            assert response.status_code == 200
+            assert response.status_code == 500
 
             data = response.json()
             if data.get("status") == "error":

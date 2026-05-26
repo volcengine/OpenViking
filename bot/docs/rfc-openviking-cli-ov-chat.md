@@ -32,10 +32,10 @@ flowchart TB
         subgraph Server["OpenViking Server<br/>(Python/FastAPI, Port 1933)"]
             Auth["统一认证中间件<br/>Unified Auth"]
             BotAPIProxy["Bot API Proxy<br/>(--with-bot)"]
-            BotRouter["/api/v1/bot/*<br/>Router"]
+            BotRouter["/bot/v1/*<br/>Router"]
         end
 
-        subgraph Vikingbot["Vikingbot (Process 2, Port 18791)"]
+        subgraph Vikingbot["Vikingbot (Process 2, Port 18790)"]
             subgraph Channels["Channels (BaseChannel 实现)"]
                 OC["OpenAPIChannel"]
                 FC["FeishuChannel<br/>(Webhook)"]
@@ -105,7 +105,7 @@ flowchart TB
         DiscordClient["Discord Client"]
     end
 
-    CLI -->|"HTTP POST<br/>http://localhost:18791/chat"| OCEndpoints
+    CLI -->|"HTTP POST<br/>http://localhost:1933/bot/v1/chat"| OCEndpoints
     FeishuApp -->|"Webhook POST<br/>/webhook/event"| FCEndpoints
     DiscordClient -->|"WebSocket"| Discord
 
@@ -175,7 +175,7 @@ flowchart TB
 - Support for session management and context building / 支持会话管理和上下文构建
 
 **Architecture Position / 架构位置：**
-- Process 2 (Port 18791 default) / 进程2（默认端口 18791）
+- Process 2 (Port 18790 default) / 进程2（默认端口 18790）
 - Receives proxied requests from OpenViking Server / 接收来自 OpenViking 服务器的代理请求
 
 ---
@@ -201,9 +201,9 @@ Channel → MessageBus.inbound → Agent Loop → MessageBus.outbound → Channe
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/bot/health` | Health check |
-| POST | `/api/v1/bot/chat` | Send message (non-streaming) |
-| POST | `/api/v1/bot/chat/stream` | Send message (streaming, SSE) |
+| GET | `/bot/v1/health` | Health check |
+| POST | `/bot/v1/chat` | Send message (non-streaming) |
+| POST | `/bot/v1/chat/stream` | Send message (streaming, SSE) |
 
 ### 4.2 Response Codes
 
@@ -225,8 +225,8 @@ openviking-server --with-bot
 
 # Output:
 # OpenViking HTTP Server is running on 127.0.0.1:1933
-# Bot API proxy enabled, forwarding to http://localhost:18791
-# [vikingbot] Starting gateway on port 18791...
+# Bot API proxy enabled, forwarding to http://127.0.0.1:18790
+# Starting vikingbot gateway...
 ```
 
 **说明 / Note:**
@@ -248,17 +248,17 @@ ov chat
 ov chat -m "Hello, bot!"
 
 # Use custom endpoint
-VIKINGBOT_ENDPOINT=http://localhost:1933/api/v1/bot ov chat -m "Hello!"
+VIKINGBOT_ENDPOINT=http://localhost:1933/bot/v1 ov chat -m "Hello!"
 ```
 
 ### 5.3 Direct HTTP API usage / 直接 HTTP API 使用
 
 ```bash
 # Health check
-curl http://localhost:1933/api/v1/bot/health
+curl http://localhost:1933/bot/v1/health
 
 # Send a message
-curl -X POST http://localhost:1933/api/v1/bot/chat \
+curl -X POST http://localhost:1933/bot/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "message": "Hello!",
@@ -267,7 +267,7 @@ curl -X POST http://localhost:1933/api/v1/bot/chat \
   }'
 
 # Streaming response
-curl -X POST http://localhost:1933/api/v1/bot/chat/stream \
+curl -X POST http://localhost:1933/bot/v1/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
     "message": "Hello!",
@@ -293,7 +293,7 @@ Vikingbot 的配置项统一放在 `ov.conf` 的 `bot` 字段下：
     "port": 1933,
     "root_api_key": "your-api-key",
     "with_bot": true,
-    "bot_api_url": "http://localhost:18791"
+    "bot_api_url": "http://localhost:18790"
   },
   "bot": {
     "agents": {
@@ -303,7 +303,7 @@ Vikingbot 的配置项统一放在 `ov.conf` 的 `bot` 字段下：
     },
     "gateway": {
       "host": "127.0.0.1",
-      "port": 18791,
+      "port": 18790,
       "token": ""
     },
     "channels": [

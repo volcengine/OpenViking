@@ -7,7 +7,12 @@ from __future__ import annotations
 import threading
 import time
 
-from openviking.utils.model_retry import classify_api_error
+from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_PERMANENT,
+    ERROR_CLASS_QUOTA_EXCEEDED,
+    classify_api_error,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -90,6 +95,10 @@ class CircuitBreaker:
     def record_failure(self, error: Exception) -> None:
         """Record a failed API call. May trip the breaker."""
         error_class = classify_api_error(error)
+        if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+            logger.info(f"Circuit breaker ignoring row-specific input error: {error}")
+            return
+
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
@@ -105,10 +114,10 @@ class CircuitBreaker:
                 )
                 return
 
-            if error_class == "permanent":
+            if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
-                logger.info(f"Circuit breaker tripped immediately on permanent error: {error}")
+                logger.info(f"Circuit breaker tripped immediately on {error_class} error: {error}")
                 return
 
             if self._failure_count >= self._failure_threshold:

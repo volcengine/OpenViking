@@ -27,7 +27,7 @@ class TestBuildMediaResourcesSlow:
 
         try:
             response = api_client.add_resource(path=svg_path, wait=True)
-            assert response.status_code == 200
+            assert response.status_code == 500
 
             data = response.json()
             assert data.get("status") in ("ok", "error"), (

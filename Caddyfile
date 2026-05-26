@@ -1,0 +1,24 @@
+# OpenViking reverse proxy — legacy fallback
+#
+# Port 1934 is retained only as a legacy entrypoint for existing deployments
+# that already reference it. Its primary remaining purpose is as the upstream
+# target for a TLS-terminating proxy (e.g. HTTPS via Caddy domain block).
+#
+# For new deployments, connect directly to the OV server on port 1933.
+# Web Studio is served by OV itself at /studio — no separate proxy needed.
+#
+# To add public HTTPS, append a domain block below (Caddy auto-provisions
+# Let's Encrypt certs):
+#
+#   {$OPENVIKING_PUBLIC_BASE_URL} {
+#       reverse_proxy openviking:1933
+#       # Optional: pin ACME email
+#       # tls {$OV_ACME_EMAIL}
+#   }
+#
+# Then expose ports 80/443 in docker-compose.yml and set
+# OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com in .env.
+
+:1934 {
+	reverse_proxy openviking:1933
+}

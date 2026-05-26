@@ -5,11 +5,14 @@ Tests for JSON stable parsing utilities.
 """
 
 import json
+import logging
 from typing import List, Optional
+from unittest.mock import patch
 
 from pydantic import BaseModel, Field
 
 from openviking.session.memory.utils import (
+    JsonUtils,
     _get_arg_type,
     _get_origin_type,
     extract_json_content,
@@ -140,17 +143,17 @@ class TestTypeHelpers:
 
     def test_get_origin_type_from_optional(self):
         """Test extracts type from Optional[T]."""
-        assert _get_origin_type(Optional[str]) == str
-        assert _get_origin_type(Optional[int]) == int
+        assert _get_origin_type(Optional[str]) is str
+        assert _get_origin_type(Optional[int]) is int
 
     def test_get_origin_type_from_list(self):
         """Test returns list for List[T]."""
-        assert _get_origin_type(List[str]) == list
+        assert _get_origin_type(List[str]) is list
 
     def test_get_arg_type_from_list(self):
         """Test extracts item type from List[T]."""
-        assert _get_arg_type(List[str]) == str
-        assert _get_arg_type(List[int]) == int
+        assert _get_arg_type(List[str]) is str
+        assert _get_arg_type(List[int]) is int
 
 
 class TestParseJsonWithStability:
@@ -224,6 +227,26 @@ Please be careful with the output."""
         assert error is not None
 
 
+class TestJsonUtilsLoads:
+    """Tests for JsonUtils.loads convenience parsing."""
+
+    class TestModel(BaseModel):
+        reasonning: str
+        count: Optional[int] = None
+
+    def test_loads_returns_raw_dict_without_model(self):
+        """Test raw JSON loading still returns a dict without a model class."""
+        data = JsonUtils.loads('{"reasonning": "test", "count": 42}')
+        assert data == {"reasonning": "test", "count": 42}
+
+    def test_loads_validates_pydantic_model(self):
+        """Test model class loading uses a TypeAdapter instance."""
+        data = JsonUtils.loads('{"reasonning": "test", "count": "42"}', self.TestModel)
+        assert isinstance(data, self.TestModel)
+        assert data.reasonning == "test"
+        assert data.count == 42
+
+
 class TestMemoryOperationsIntegration:
     """Integration tests with MemoryOperations-like models."""
 
@@ -264,6 +287,88 @@ class TestMemoryOperationsIntegration:
         data, error = parse_json_with_stability(content)
         assert error is None
         assert data["delete_uris"] == "viking://user/default/memories/old.md"
+
+    def test_recoverable_invalid_list_item_logs_below_error(self):
+        """Test recoverable invalid list items do not emit error-level logs."""
+
+        class SearchReplaceBlock(BaseModel):
+            search: str
+            replace: str
+
+        class StrPatch(BaseModel):
+            blocks: List[SearchReplaceBlock] = Field(default_factory=list)
+
+        class PreferenceItem(BaseModel):
+            content: str | StrPatch | None = None
+            page_id: int | None = None
+
+        class PreferenceOperations(BaseModel):
+            preferences: List[PreferenceItem] = Field(default_factory=list)
+
+        content = json.dumps(
+            {
+                "preferences": [
+                    {
+                        "content": {
+                            "blocks": [
+                                {"search": "old", "replace": "new"},
+                                {"page_id": 8},
+                            ]
+                        },
+                        "page_id": 8,
+                    }
+                ]
+            }
+        )
+
+        with patch("openviking.session.memory.utils.json_parser.tracer.error") as mock_error:
+            with patch("openviking.session.memory.utils.json_parser.tracer.info") as mock_info:
+                data, error = parse_json_with_stability(content, model_class=PreferenceOperations)
+
+        assert error is None
+        assert data.preferences == []
+        assert mock_error.call_count == 0
+        assert mock_info.call_count >= 1
+
+    def test_recoverable_model_fallback_does_not_log_exception(self):
+        """Test recoverable model fallback avoids exception-level logging."""
+
+        class SearchReplaceBlock(BaseModel):
+            search: str
+            replace: str
+
+        class StrPatch(BaseModel):
+            blocks: List[SearchReplaceBlock] = Field(default_factory=list)
+
+        class PreferenceItem(BaseModel):
+            content: str | StrPatch | None = None
+            page_id: int | None = None
+
+        class PreferenceOperations(BaseModel):
+            preferences: List[PreferenceItem] = Field(default_factory=list)
+
+        content = json.dumps(
+            {
+                "preferences": [
+                    {
+                        "content": {
+                            "blocks": [
+                                {"search": "old", "replace": "new"},
+                                {"page_id": 8},
+                            ]
+                        },
+                        "page_id": 8,
+                    }
+                ]
+            }
+        )
+
+        with patch("openviking.session.memory.utils.json_parser.logger.exception") as mock_exception:
+            data, error = parse_json_with_stability(content, model_class=PreferenceOperations)
+
+        assert error is None
+        assert data.preferences == []
+        assert mock_exception.call_count == 0
 
 
 class TestParseMemoryFileWithFields:

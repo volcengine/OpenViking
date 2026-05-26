@@ -28,4 +28,4 @@ jobs:
         run: npm run docs:build
         working-directory: docs
         env:
-          DOCS_BASE: /${{ github.event.repository.name }}/
+          DOCS_BASE: /

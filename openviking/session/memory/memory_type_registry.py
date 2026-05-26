@@ -10,12 +10,19 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def resolve_memory_templates_dir() -> Path:
+    """Resolve the memory templates directory from PromptManager semantics."""
+    return PromptManager._resolve_templates_dir(None) / "memory"
 
 
 class MemoryTypeRegistry:
@@ -33,38 +40,67 @@ class MemoryTypeRegistry:
             self._load_schemas()
 
     def _load_schemas(self) -> None:
-        """Load schemas from built-in and custom directories. Fails on error."""
+        """Load schemas from built-in templates, then custom/configured overrides."""
         import os
 
         from openviking_cli.utils.config import get_openviking_config
 
-        builtin_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
-        )
+        memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
-        # Load from builtin directory (must succeed)
-        if not os.path.exists(builtin_dir):
-            raise RuntimeError(f"Builtin memory templates directory not found: {builtin_dir}")
-        loaded = self.load_from_directory(builtin_dir)
+        if not os.path.exists(memory_templates_dir):
+            raise RuntimeError(f"Memory templates directory not found: {memory_templates_dir}")
+        loaded = self.load_from_directory(memory_templates_dir)
         if loaded == 0:
-            raise RuntimeError(f"No memory schemas loaded from builtin directory: {builtin_dir}")
-        logger.info(f"Loaded {loaded} memory schemas from builtin: {builtin_dir}")
+            raise RuntimeError(
+                f"No memory schemas loaded from memory templates directory: {memory_templates_dir}"
+            )
+        logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load from custom directory (if configured)
+        # Load experimental memory templates when the experimental memory switch is enabled.
+        if getattr(config.memory, "experimental_memory_switch", False):
+            experimental_memory_dir = str(Path(memory_templates_dir) / "experimental_memory")
+            if os.path.exists(experimental_memory_dir):
+                experimental_memory_loaded = self.load_from_directory(
+                    experimental_memory_dir, replace=True
+                )
+                logger.info(
+                    "Loaded %s experimental memory schemas from: %s",
+                    experimental_memory_loaded,
+                    experimental_memory_dir,
+                )
+
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
             if os.path.exists(custom_dir_expanded):
-                custom_loaded = self.load_from_directory(custom_dir_expanded)
+                custom_loaded = self.load_from_directory(custom_dir_expanded, replace=True)
                 logger.info(
                     f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
                 )
+        else:
+            memory_templates_dir = str(resolve_memory_templates_dir())
+            if memory_templates_dir != str(
+                PromptManager._get_bundled_templates_dir() / "memory"
+            ) and os.path.exists(memory_templates_dir):
+                loaded = self.load_from_directory(memory_templates_dir, replace=True)
+                logger.info(
+                    "Loaded %s memory schemas from configured prompt templates: %s",
+                    loaded,
+                    memory_templates_dir,
+                )
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
-        """Register a memory type."""
+        """Register a memory type. Raises error if already exists."""
+        if memory_type.memory_type in self._types:
+            raise ValueError(f"Duplicate memory type '{memory_type.memory_type}'")
         self._types[memory_type.memory_type] = memory_type
         logger.debug(f"Registered memory type: {memory_type.memory_type}")
+
+    def replace(self, memory_type: MemoryTypeSchema) -> None:
+        """Replace an existing memory type."""
+        self._types[memory_type.memory_type] = memory_type
+        logger.debug(f"Replaced memory type: {memory_type.memory_type}")
 
     def get(self, name: str) -> Optional[MemoryTypeSchema]:
         """Get a memory type by name."""
@@ -106,36 +142,43 @@ class MemoryTypeRegistry:
         Returns:
             List of directory URIs from enabled schemas
         """
-        import jinja2
-
         uris = []
         for schema in self.list_all(include_disabled=False):
             if schema.directory:
-                env = jinja2.Environment(autoescape=False)
-                template = env.from_string(schema.directory)
-                dir_path = template.render(user_space=user_space, agent_space=agent_space)
+                dir_path = TemplateUtils.render(
+                    schema.directory,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
+                )
                 uris.append(dir_path)
         return uris
 
-    def load_from_yaml(self, yaml_path: str) -> None:
+    def load_from_yaml(self, yaml_path: str, replace: bool = False) -> None:
         """
         Load memory type from a YAML file.
 
         Args:
             yaml_path: Path to YAML file
+            replace: If True, replace existing memory type; if False, raise error on duplicate
         """
         with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         memory_type = self._parse_memory_type(data)
-        self.register(memory_type)
+        if replace:
+            self.replace(memory_type)
+        else:
+            self.register(memory_type)
 
-    def load_from_directory(self, dir_path: str) -> int:
+    def load_from_directory(self, dir_path: str, replace: bool = False) -> int:
         """
         Load all YAML files from a directory.
 
         Args:
             dir_path: Directory path
+            replace: If True, replace existing memory types; if False, raise error on duplicate
 
         Returns:
             Number of types loaded
@@ -149,14 +192,14 @@ class MemoryTypeRegistry:
 
         for yaml_file in dir_path_obj.glob("*.yaml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
@@ -184,9 +227,11 @@ class MemoryTypeRegistry:
             fields=fields,
             filename_template=data.get("filename_template", ""),
             content_template=data.get("content_template"),
+            embedding_template=data.get("embedding_template"),
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
+            agent_only=data.get("agent_only", False),
             overview_template=data.get("overview_template"),
         )
 
@@ -200,8 +245,6 @@ class MemoryTypeRegistry:
         Args:
             ctx: Request context (must have user with user_space_name and agent_space_name)
         """
-        import jinja2
-
         from openviking.storage.viking_fs import get_viking_fs
 
         logger = get_logger(__name__)
@@ -213,7 +256,6 @@ class MemoryTypeRegistry:
             f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"
         )
 
-        env = jinja2.Environment(autoescape=False)
         viking_fs = get_viking_fs()
 
         for schema in self.list_all(include_disabled=False):
@@ -234,13 +276,19 @@ class MemoryTypeRegistry:
 
             # Render directory and filename from schema
             try:
-                directory = env.from_string(schema.directory).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                directory = TemplateUtils.render(
+                    schema.directory,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
                 )
-                filename = env.from_string(schema.filename_template).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                filename = TemplateUtils.render(
+                    schema.filename_template,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
                 )
             except Exception:
                 continue
@@ -255,16 +303,16 @@ class MemoryTypeRegistry:
                 pass
 
             # Add MEMORY_FIELDS comment with field metadata
-            # Template rendering is handled inside serialize_with_metadata
-            from openviking.session.memory.utils.content import serialize_with_metadata
+            from openviking.session.memory.dataclass import MemoryFile
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-            metadata = {
-                "memory_type": schema.memory_type,
-                **fields_with_init,
-                "content": "",  # content will come from content_template rendering
-            }
-            full_content = serialize_with_metadata(
-                metadata,
+            mf = MemoryFile(
+                uri=file_uri,
+                memory_type=schema.memory_type,
+                extra_fields=fields_with_init,
+            )
+            full_content = MemoryFileUtils.write(
+                mf,
                 content_template=schema.content_template,
             )
 

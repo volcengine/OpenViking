@@ -32,6 +32,12 @@ from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
 from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.observability.feedback_stats import (
+    compute_feedback_stats,
+    format_feedback_stats_table,
+    select_feedback_stats,
+    validate_feedback_stats_sort_by,
+)
 
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
@@ -116,6 +122,7 @@ def _get_gateway_token(config) -> str:
     if gateway is None:
         return ""
     return getattr(gateway, "token", "") or ""
+
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -333,7 +340,13 @@ def gateway(
         )
         server = uvicorn.Server(config_uvicorn)
 
-        tasks = [cron.start(), heartbeat.start(), channels.start_all(), agent_loop.run(), server.serve()]
+        tasks = [
+            cron.start(),
+            heartbeat.start(),
+            channels.start_all(),
+            agent_loop.run(),
+            server.serve(),
+        ]
         # if enable_console:
         #     tasks.append(start_console(console_port))
 
@@ -568,6 +581,7 @@ def prepare_agent_channel(
     logs: bool,
     eval: bool = False,
     sender: str | None = None,
+    memory_user: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -576,7 +590,7 @@ def prepare_agent_channel(
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig()
+        channel_config = SingleTurnChannelConfig(memory_user=memory_user)
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -590,7 +604,7 @@ def prepare_agent_channel(
         channels.add_channel(channel)
     else:
         # Interactive mode - use ChatChannel with thinking display
-        channel_config = ChatChannelConfig()
+        channel_config = ChatChannelConfig(memory_user=memory_user)
         channel = ChatChannel(
             channel_config,
             bus,
@@ -624,6 +638,9 @@ def chat(
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
     ),
+    memory_user: list[str] = typer.Option(
+        None, "--memory-user", help="User ID for memory retrieval (can be repeated)"
+    ),
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -656,7 +673,9 @@ def chat(
     if session_id is None:
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
+    channels = prepare_agent_channel(
+        config, bus, message, session_id, markdown, logs, eval, sender, memory_user
+    )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
     )
@@ -1041,6 +1060,118 @@ def status():
                 console.print(
                     f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
                 )
+
+
+@app.command("feedback-stats")
+def feedback_stats(
+    config_path: str = typer.Option(
+        None, "--config", "-c", help="Path to ov.conf, default ~/.openviking/ov.conf"
+    ),
+    channel: str = typer.Option(None, "--channel", help="Only include one channel key"),
+    session_key: str = typer.Option(None, "--session", help="Only include one session key"),
+    updated_since: str = typer.Option(
+        None, "--updated-since", help="Only include sessions updated at or after this ISO timestamp"
+    ),
+    updated_until: str = typer.Option(
+        None,
+        "--updated-until",
+        help="Only include sessions updated at or before this ISO timestamp",
+    ),
+    sort_by: str = typer.Option(
+        "responses_total", "--sort-by", help="Sort channel rows by a metric field"
+    ),
+    top_n: int = typer.Option(None, "--top-n", min=1, help="Limit the number of channel rows"),
+    include_sessions: bool = typer.Option(
+        False, "--sessions", help="Include per-session breakdown in JSON and table output"
+    ),
+    session_limit: int = typer.Option(
+        None,
+        "--session-limit",
+        min=1,
+        help="Limit the number of session rows when --sessions is used",
+    ),
+    output: str = typer.Option("json", "--output", help="Output format: json or table"),
+):
+    """Aggregate minimal feedback observability metrics from persisted sessions."""
+    try:
+        validate_feedback_stats_sort_by(sort_by)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--sort-by") from exc
+
+    path = Path(config_path).expanduser() if config_path is not None else None
+    config = ensure_config(path)
+    _init_bot_data(config)
+    stats = compute_feedback_stats(
+        config.bot_data_path,
+        channel=channel,
+        session_key=session_key,
+        updated_since=updated_since,
+        updated_until=updated_until,
+        include_sessions=include_sessions,
+    )
+    stats = select_feedback_stats(
+        stats,
+        sort_by=sort_by,
+        top_n=top_n,
+        session_limit=session_limit if include_sessions else None,
+    )
+
+    if output == "json":
+        console.print_json(json.dumps(stats, ensure_ascii=False))
+        return
+    if output == "table":
+        _print_feedback_stats_table(stats)
+        return
+
+    raise typer.BadParameter("output must be one of: json, table")
+
+
+def _print_feedback_stats_table(stats: dict) -> None:
+    table_data = format_feedback_stats_table(stats)
+
+    summary_table = Table(title="Feedback Summary")
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", justify="right")
+
+    for key, value in table_data["summary_rows"]:
+        summary_table.add_row(key, value)
+
+    console.print(summary_table)
+
+    if not table_data["channel_rows"]:
+        return
+
+    channels_table = Table(title="Feedback By Channel")
+    channels_table.add_column("Channel", style="magenta")
+    channels_table.add_column("Responses", justify="right")
+    channels_table.add_column("Feedback", justify="right")
+    channels_table.add_column("Coverage", justify="right")
+    channels_table.add_column("Thumbs Up", justify="right")
+    channels_table.add_column("Thumbs Down", justify="right")
+    channels_table.add_column("Resolution", justify="right")
+
+    for row in table_data["channel_rows"]:
+        channels_table.add_row(*row)
+
+    console.print(channels_table)
+
+    if not table_data["session_rows"]:
+        return
+
+    sessions_table = Table(title="Feedback By Session")
+    sessions_table.add_column("Session", style="green")
+    sessions_table.add_column("Channel", style="magenta")
+    sessions_table.add_column("Updated At")
+    sessions_table.add_column("Responses", justify="right")
+    sessions_table.add_column("Feedback", justify="right")
+    sessions_table.add_column("Negative", justify="right")
+    sessions_table.add_column("Reasked", justify="right")
+    sessions_table.add_column("Resolution", justify="right")
+
+    for row in table_data["session_rows"]:
+        sessions_table.add_row(*row)
+
+    console.print(sessions_table)
 
 
 # ============================================================================

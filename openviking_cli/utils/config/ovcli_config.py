@@ -15,6 +15,7 @@ from .consts import DEFAULT_OVCLI_CONF, OPENVIKING_CLI_CONFIG_ENV
 class OVCLIUploadConfig(BaseModel):
     """Upload-related defaults in ovcli.conf."""
 
+    mode: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
     exclude: Optional[str] = None
@@ -31,6 +32,7 @@ class OVCLIConfig(BaseModel):
     account: Optional[str] = None
     user: Optional[str] = None
     timeout: float = 60.0
+    profile: bool = False
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
 

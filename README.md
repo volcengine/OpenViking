@@ -64,7 +64,7 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
 - **Python Version**: 3.10 or higher
-- **Go Version**: 1.22 or higher (Required for building AGFS components)
+- **Rust Toolchain**: Cargo (Required for building RAGFS and CLI components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions)
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
@@ -80,7 +80,7 @@ pip install openviking --upgrade --force-reinstall
 #### Rust CLI (Optional)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+npm i -g @openviking/cli
 ```
 
 Or build from source:
@@ -323,7 +323,9 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-251215 or text-embedding-3-large)
     },
-    "max_concurrent": 10               // Max concurrent embedding requests (default: 10)
+    "max_concurrent": 10,              // Max concurrent embedding requests (default: 10)
+    "text_source": "content_only",     // Text file vectorization source: content_only|summary_first|summary_only
+    "max_input_tokens": 4096           // Max estimated raw text tokens sent to embedding
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
@@ -335,7 +337,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `azure`, `jina`, `ollama`, `voyage`, `dashscope`, `minimax`, `cohere`, `vikingdb`, `gemini` (requires `pip install "google-genai>=1.0.0"`), `litellm`, and `local`. For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
 
 #### Server Configuration Examples
 
@@ -502,15 +504,17 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 #### CLI/Client Configuration Examples
 
-👇 Expand to see the configuration example for your CLI/Client:
+You can initialize the configuration of the CLI/client interactively through the `ov config setup-cli` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
 
-Example: ovcli.conf for visiting localhost server
+👇 Expand to see the configuration example for your CLI/Client:
+<details>
+<summary><b>Example: ovcli.conf for visiting localhost server</b></summary>
+
 
 ```json
 {
   "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
+  "timeout": 60.0
 }
 ```
 
@@ -533,6 +537,7 @@ Command Prompt (cmd.exe):
 ```bat
 set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 ```
+</details>
 
 ### 4. Run Your First Example
 
@@ -626,6 +631,8 @@ To ensure optimal storage performance and data security, we recommend deploying 
 👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
 
 👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
+
+👉 **[View: LangChain / LangGraph Integration](./docs/en/agent-integrations/06-langchain-langgraph.md)**
 
 \--
 
@@ -747,6 +754,11 @@ Let's work together to define and build the future of AI Agent context managemen
 ### Star Trend
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
+
+## Security and privacy
+
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
 
 ## License
 

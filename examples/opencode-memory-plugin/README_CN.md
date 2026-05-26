@@ -71,10 +71,12 @@ OpenCode 会自动发现 `~/.config/opencode/plugins` 下一级目录中的 `*.t
 
 如果您有意将插件放置在工作区本地插件目录中，此插件也可以使用，因为它会将配置和运行时文件存储在插件文件旁边。
 
-推荐：通过环境变量提供 API 密钥，而不是将其写入配置文件：
+推荐：通过环境变量提供 API 密钥和租户身份，而不是将其写入配置文件：
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
+export OPENVIKING_ACCOUNT="default"
+export OPENVIKING_USER="opencode"
 ```
 
 ## 配置
@@ -85,6 +87,8 @@ export OPENVIKING_API_KEY="your-api-key-here"
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -94,7 +98,9 @@ export OPENVIKING_API_KEY="your-api-key-here"
 }
 ```
 
-环境变量 `OPENVIKING_API_KEY` 优先于配置文件。
+`account` 和 `user` 会作为 `X-OpenViking-Account` 与 `X-OpenViking-User` 租户头随每次插件 API 请求发送；留空则不会附加这些头。
+
+环境变量 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` 优先于配置文件。
 
 ## 运行时文件
 

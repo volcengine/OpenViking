@@ -200,3 +200,85 @@ class TestAllowedDirectoriesList:
                 # Verify the result contains the expected directories with variables replaced
                 assert "viking://user/default/memories/preferences" in result
                 assert "viking://agent/default/memories/tools" in result
+
+
+class TestExtractLoopFinalJsonRetry:
+    def test_final_instruction_includes_schema_aware_empty_json(self):
+        extract_loop = object.__new__(ExtractLoop)
+        extract_loop._expected_fields = ["delete_uris", "preferences", "tools"]
+
+        instruction = extract_loop._build_final_operations_instruction()
+
+        assert "ONLY a valid JSON object" in instruction
+        assert '"delete_uris": []' in instruction
+        assert '"preferences": []' in instruction
+        assert '"tools": []' in instruction
+
+    def test_final_skeleton_always_includes_delete_uris(self):
+        extract_loop = object.__new__(ExtractLoop)
+        extract_loop._expected_fields = ["preferences"]
+
+        assert extract_loop._build_final_operations_skeleton() == {
+            "delete_uris": [],
+            "preferences": [],
+        }
+
+    @pytest.mark.asyncio
+    async def test_final_unparseable_response_raises_instead_of_empty_success(self):
+        class FakeVLM:
+            model = "test-model"
+
+            def __init__(self):
+                self.seen_messages = []
+
+            async def get_completion_async(self, **kwargs):
+                self.seen_messages.append(list(kwargs["messages"]))
+                return "this is not json"
+
+        class FakeContextProvider:
+            read_file_contents = {}
+
+            def get_memory_schemas(self, ctx):
+                return [
+                    MemoryTypeSchema(
+                        memory_type="preferences",
+                        description="Preferences",
+                        directory="viking://user/{user_space}/memories/preferences",
+                        filename_template="{topic}.md",
+                        fields=[],
+                    )
+                ]
+
+            def get_tools(self):
+                return []
+
+            def get_extract_context(self):
+                return MagicMock()
+
+            def instruction(self):
+                return "Extract memory operations."
+
+            async def prefetch(self):
+                return []
+
+        vlm = FakeVLM()
+        extract_loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MagicMock(),
+            context_provider=FakeContextProvider(),
+            max_iterations=1,
+        )
+
+        with pytest.raises(RuntimeError, match="final response could not be parsed"):
+            await extract_loop.run()
+
+        final_prompts = [
+            message["content"]
+            for messages in vlm.seen_messages
+            for message in messages
+            if message.get("role") == "user"
+            and "maximum number of tool call iterations" in message.get("content", "")
+        ]
+        assert final_prompts
+        assert '"delete_uris": []' in final_prompts[-1]
+        assert '"preferences": []' in final_prompts[-1]

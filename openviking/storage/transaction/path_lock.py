@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
-from openviking.pyagfs import AGFSClient
+from openviking.pyagfs import AGFSClient, AsyncAGFSClient
 from openviking.storage.transaction.lock_handle import LockOwner
 from openviking_cli.utils.logger import get_logger
 
@@ -11,13 +13,18 @@ logger = get_logger(__name__)
 
 # Lock file name
 LOCK_FILE_NAME = ".path.ovlock"
+EXACT_LOCK_FILE_PREFIX = ".exact.ovlock."
 
 # Lock type constants
-LOCK_TYPE_POINT = "P"
-LOCK_TYPE_SUBTREE = "S"
+LOCK_TYPE_EXACT = "E"
+LOCK_TYPE_TREE = "T"
+# Upgrade compatibility: old POINT/SUBTREE tokens are still treated as tree locks.
+_READ_ONLY_TREE_LOCK_TYPES = {"P", "S"}
 
 # Default poll interval when waiting for a lock (seconds)
 _POLL_INTERVAL = 0.2
+_WAIT_LOG_INTERVAL = 10.0
+_last_timeout_warning_at: dict[str, float] = {}
 
 
 @dataclass
@@ -27,13 +34,14 @@ class LockRefreshResult:
     failed_paths: list[str] = field(default_factory=list)
 
 
-def _make_fencing_token(owner_id: str, lock_type: str = LOCK_TYPE_POINT) -> str:
+def _make_fencing_token(owner_id: str, lock_type: str = LOCK_TYPE_EXACT) -> str:
     return f"{owner_id}:{time.time_ns()}:{lock_type}"
 
 
 def _parse_fencing_token(token: str) -> Tuple[str, int, str]:
-    if token.endswith(f":{LOCK_TYPE_POINT}") or token.endswith(f":{LOCK_TYPE_SUBTREE}"):
-        lock_type = token[-1]
+    known_types = {LOCK_TYPE_EXACT, LOCK_TYPE_TREE, *_READ_ONLY_TREE_LOCK_TYPES}
+    if len(token) >= 2 and token[-2] == ":" and token[-1] in known_types:
+        lock_type = LOCK_TYPE_TREE if token[-1] in _READ_ONLY_TREE_LOCK_TYPES else token[-1]
         rest = token[:-2]
         idx = rest.rfind(":")
         if idx >= 0:
@@ -45,41 +53,95 @@ def _parse_fencing_token(token: str) -> Tuple[str, int, str]:
                 pass
         return rest, 0, lock_type
 
-    if ":" in token:
-        idx = token.rfind(":")
-        owner_id_part = token[:idx]
-        ts_part = token[idx + 1 :]
-        try:
-            return owner_id_part, int(ts_part), LOCK_TYPE_POINT
-        except ValueError:
-            pass
-
-    return token, 0, LOCK_TYPE_POINT
+    return token, 0, LOCK_TYPE_EXACT
 
 
-class PathLock:
+def _log_timeout_waiting(message: str) -> None:
+    now = asyncio.get_running_loop().time()
+    last_warning_at = _last_timeout_warning_at.get(message, 0.0)
+    if not last_warning_at or now - last_warning_at >= _WAIT_LOG_INTERVAL:
+        logger.warning(message)
+        _last_timeout_warning_at[message] = now
+
+
+class PathLockEngine:
     def __init__(self, agfs_client: AGFSClient, lock_expire: float = 300.0):
         self._agfs = agfs_client
+        self._async_agfs = AsyncAGFSClient(agfs_client)
         self._lock_expire = lock_expire
 
     def _get_lock_path(self, path: str) -> str:
-        path = path.rstrip("/")
+        path = path.rstrip("/") or "/"
+        if path == "/":
+            return f"/{LOCK_FILE_NAME}"
         return f"{path}/{LOCK_FILE_NAME}"
 
-    def _ensure_directory_exists(self, path: str):
-        """确保目录存在，不存在则创建"""
+    def _is_existing_directory(self, path: str) -> bool:
         try:
-            # 检查路径是否存在
-            self._agfs.stat(path)
+            stat = self._agfs.stat(path.rstrip("/") or "/")
         except Exception:
-            # 路径不存在，尝试创建目录
+            return False
+        if isinstance(stat, dict):
+            return stat.get("isDir") is True
+        return getattr(stat, "isDir", None) is True
+
+    async def _is_existing_directory_async(self, path: str) -> bool:
+        try:
+            stat = await self._async_agfs.stat(path.rstrip("/") or "/")
+        except Exception:
+            return False
+        if isinstance(stat, dict):
+            return stat.get("isDir") is True
+        return getattr(stat, "isDir", None) is True
+
+    def _get_prefixed_exact_lock_path(self, path: str) -> str:
+        path = path.rstrip("/") or "/"
+        parent = self._get_parent_path(path)
+        if not parent:
+            return self._get_lock_path(path)
+        name = path.rsplit("/", 1)[-1]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "path"
+        safe_name = safe_name[:80]
+        digest = hashlib.sha1(path.encode("utf-8")).hexdigest()[:16]
+        return f"{parent}/{EXACT_LOCK_FILE_PREFIX}{safe_name}.{digest}"
+
+    def _get_exact_lock_path(self, path: str) -> str:
+        """Return the primary lock-file path for an exact path lock."""
+        if self._is_existing_directory(path):
+            return self._get_lock_path(path)
+        return self._get_prefixed_exact_lock_path(path)
+
+    def _get_exact_lock_paths(self, path: str) -> list[str]:
+        """Return all lock-file paths that can protect this exact path."""
+        primary = self._get_exact_lock_path(path)
+        prefixed = self._get_prefixed_exact_lock_path(path)
+        if primary == prefixed:
+            return [primary]
+        return [primary, prefixed]
+
+    async def _get_exact_lock_path_async(self, path: str) -> str:
+        """Async variant for acquire paths, where stat may be remote/blocking."""
+        if await self._is_existing_directory_async(path):
+            return self._get_lock_path(path)
+        return self._get_prefixed_exact_lock_path(path)
+
+    async def _get_exact_lock_paths_async(self, path: str) -> list[str]:
+        primary = await self._get_exact_lock_path_async(path)
+        prefixed = self._get_prefixed_exact_lock_path(path)
+        if primary == prefixed:
+            return [primary]
+        return [primary, prefixed]
+
+    async def _ensure_directory_exists_async(self, path: str):
+        """Async variant for lock acquisition paths."""
+        try:
+            await self._async_agfs.stat(path)
+        except Exception:
             try:
                 parent = self._get_parent_path(path)
                 if parent:
-                    # 递归创建父目录
-                    self._ensure_directory_exists(parent)
-                # 创建当前目录
-                self._agfs.mkdir(path)
+                    await self._ensure_directory_exists_async(parent)
+                await self._async_agfs.mkdir(path)
                 logger.debug(f"Directory created: {path}")
             except Exception as e:
                 logger.warning(f"Failed to create directory {path}: {e}")
@@ -104,8 +166,28 @@ class PathLock:
         except Exception:
             return None
 
+    async def _read_token_async(self, lock_path: str) -> Optional[str]:
+        try:
+            content = await self._async_agfs.read(lock_path)
+            if isinstance(content, bytes):
+                token = content.decode("utf-8").strip()
+            else:
+                token = str(content).strip()
+            return token if token else None
+        except Exception:
+            return None
+
     def _read_owner_and_type(self, lock_path: str) -> Tuple[Optional[str], Optional[str]]:
         token = self._read_token(lock_path)
+        if token is None:
+            return None, None
+        owner_id, _, lock_type = _parse_fencing_token(token)
+        return owner_id, lock_type
+
+    async def _read_owner_and_type_async(
+        self, lock_path: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        token = await self._read_token_async(lock_path)
         if token is None:
             return None, None
         owner_id, _, lock_type = _parse_fencing_token(token)
@@ -115,6 +197,95 @@ class PathLock:
         current_owner_id, _ = self._read_owner_and_type(lock_path)
         return current_owner_id == owner_id
 
+    async def is_lock_owned_by_async(self, lock_path: str, owner_id: str) -> bool:
+        current_owner_id, _ = await self._read_owner_and_type_async(lock_path)
+        return current_owner_id == owner_id
+
+    async def _is_lock_owned_by_async(self, lock_path: str, owner_id: str) -> bool:
+        return await self.is_lock_owned_by_async(lock_path, owner_id)
+
+    def is_locked(self, path: str, ignore_stale: bool = True) -> bool:
+        """Check whether *path* is currently locked.
+
+        Detection rules (aligned with conflict checks in the acquire flow):
+        - The path itself has a valid .path.ovlock; or
+        - The path has a valid exact-path lock in the parent directory; or
+        - Any ancestor directory holds a TREE lock.
+
+        Args:
+            path: Path to check (already converted to AGFS internal path).
+            ignore_stale: Whether to ignore expired (stale) locks. Defaults
+                to True to stay consistent with the acquire flow: stale
+                locks will be cleaned up by the next acquirer, so they are
+                not considered as held here.
+        """
+        # 1. Lock on the path itself
+        own_lock_path = self._get_lock_path(path)
+        token = self._read_token(own_lock_path)
+        if token is not None:
+            if not (ignore_stale and self.is_lock_stale(own_lock_path, self._lock_expire)):
+                return True
+
+        # 2. ExactPathLock for file, directory name, or not-yet-created paths
+        for exact_lock_path in self._get_exact_lock_paths(path):
+            if exact_lock_path == own_lock_path:
+                continue
+            exact_token = self._read_token(exact_lock_path)
+            if exact_token is not None:
+                if not (ignore_stale and self.is_lock_stale(exact_lock_path, self._lock_expire)):
+                    return True
+
+        # 3. Ancestor TREE locks
+        parent = self._get_parent_path(path)
+        while parent:
+            ancestor_lock = self._get_lock_path(parent)
+            ancestor_token = self._read_token(ancestor_lock)
+            if ancestor_token is not None:
+                _, _, lock_type = _parse_fencing_token(ancestor_token)
+                if lock_type == LOCK_TYPE_TREE and not (
+                    ignore_stale and self.is_lock_stale(ancestor_lock, self._lock_expire)
+                ):
+                    return True
+            parent = self._get_parent_path(parent)
+
+        return False
+
+    async def is_locked_async(self, path: str, ignore_stale: bool = True) -> bool:
+        """Async variant of is_locked for request/background paths."""
+        own_lock_path = self._get_lock_path(path)
+        token = await self._read_token_async(own_lock_path)
+        if token is not None:
+            if not (
+                ignore_stale and await self._is_lock_stale_async(own_lock_path, self._lock_expire)
+            ):
+                return True
+
+        for exact_lock_path in await self._get_exact_lock_paths_async(path):
+            if exact_lock_path == own_lock_path:
+                continue
+            exact_token = await self._read_token_async(exact_lock_path)
+            if exact_token is not None:
+                if not (
+                    ignore_stale
+                    and await self._is_lock_stale_async(exact_lock_path, self._lock_expire)
+                ):
+                    return True
+
+        parent = self._get_parent_path(path)
+        while parent:
+            ancestor_lock = self._get_lock_path(parent)
+            ancestor_token = await self._read_token_async(ancestor_lock)
+            if ancestor_token is not None:
+                _, _, lock_type = _parse_fencing_token(ancestor_token)
+                if lock_type == LOCK_TYPE_TREE and not (
+                    ignore_stale
+                    and await self._is_lock_stale_async(ancestor_lock, self._lock_expire)
+                ):
+                    return True
+            parent = self._get_parent_path(parent)
+
+        return False
+
     def collect_lost_owner_locks(self, owner: LockOwner) -> list[str]:
         lost_paths: list[str] = []
         for lock_path in list(owner.locks):
@@ -122,24 +293,36 @@ class PathLock:
                 lost_paths.append(lock_path)
         return lost_paths
 
+    async def collect_lost_owner_locks_async(self, owner: LockOwner) -> list[str]:
+        lost_paths: list[str] = []
+        for lock_path in list(owner.locks):
+            if not await self._is_lock_owned_by_async(lock_path, owner.id):
+                lost_paths.append(lock_path)
+        return lost_paths
+
     async def _is_locked_by_other(self, lock_path: str, owner_id: str) -> bool:
-        token = self._read_token(lock_path)
+        token = await self._read_token_async(lock_path)
         if token is None:
             return False
         lock_owner, _, _ = _parse_fencing_token(token)
         return lock_owner != owner_id
 
     async def _create_lock_file(
-        self, lock_path: str, owner_id: str, lock_type: str = LOCK_TYPE_POINT
+        self, lock_path: str, owner_id: str, lock_type: str = LOCK_TYPE_EXACT
     ) -> None:
         token = _make_fencing_token(owner_id, lock_type)
-        self._agfs.write(lock_path, token.encode("utf-8"))
+        await self._async_agfs.write(lock_path, token.encode("utf-8"))
 
     async def _owned_lock_type(self, path: str, owner: LockOwner) -> Optional[str]:
         lock_path = self._get_lock_path(path)
+        return await self._owned_lock_type_for_lock_path(lock_path, owner)
+
+    async def _owned_lock_type_for_lock_path(
+        self, lock_path: str, owner: LockOwner
+    ) -> Optional[str]:
         if lock_path not in owner.locks:
             return None
-        token = self._read_token(lock_path)
+        token = await self._read_token_async(lock_path)
         if token is None:
             return None
         lock_owner, _, lock_type = _parse_fencing_token(token)
@@ -147,17 +330,17 @@ class PathLock:
             return None
         return lock_type
 
-    async def _has_owned_ancestor_subtree(self, path: str, owner: LockOwner) -> bool:
+    async def _has_owned_ancestor_tree(self, path: str, owner: LockOwner) -> bool:
         current = path.rstrip("/")
         while current:
-            if await self._owned_lock_type(current, owner) == LOCK_TYPE_SUBTREE:
+            if await self._owned_lock_type(current, owner) == LOCK_TYPE_TREE:
                 return True
             current = self._get_parent_path(current) or ""
         return False
 
     async def _remove_lock_file(self, lock_path: str) -> bool:
         try:
-            self._agfs.rm(lock_path)
+            await self._async_agfs.rm(lock_path)
             return True
         except Exception as e:
             if "not found" in str(e).lower():
@@ -174,21 +357,55 @@ class PathLock:
         age = (time.time_ns() - ts) / 1e9
         return age > expire_seconds
 
-    async def _check_ancestors_for_subtree(self, path: str, exclude_owner_id: str) -> Optional[str]:
+    async def _is_lock_stale_async(self, lock_path: str, expire_seconds: float = 300.0) -> bool:
+        token = await self._read_token_async(lock_path)
+        if token is None:
+            return True
+        _, ts, _ = _parse_fencing_token(token)
+        if ts == 0:
+            return True
+        age = (time.time_ns() - ts) / 1e9
+        return age > expire_seconds
+
+    async def _check_ancestors_for_tree(self, path: str, exclude_owner_id: str) -> Optional[str]:
         parent = self._get_parent_path(path)
         while parent:
             lock_path = self._get_lock_path(parent)
-            token = self._read_token(lock_path)
+            token = await self._read_token_async(lock_path)
             if token is not None:
                 owner_id, _, lock_type = _parse_fencing_token(token)
-                if owner_id != exclude_owner_id and lock_type == LOCK_TYPE_SUBTREE:
+                if owner_id != exclude_owner_id and lock_type == LOCK_TYPE_TREE:
                     return lock_path
             parent = self._get_parent_path(parent)
         return None
 
+    async def _check_path_lock(self, path: str, exclude_owner_id: str) -> Optional[str]:
+        lock_path = self._get_lock_path(path)
+        token = await self._read_token_async(lock_path)
+        if token is None:
+            return None
+        owner_id, _, _ = _parse_fencing_token(token)
+        if owner_id != exclude_owner_id:
+            return lock_path
+        return None
+
+    async def _check_exact_path_lock(self, path: str, exclude_owner_id: str) -> Optional[str]:
+        for lock_path in await self._get_exact_lock_paths_async(path):
+            token = await self._read_token_async(lock_path)
+            if token is None:
+                continue
+            owner_id, _, _ = _parse_fencing_token(token)
+            if owner_id != exclude_owner_id:
+                return lock_path
+        return None
+
     async def _scan_descendants_for_locks(self, path: str, exclude_owner_id: str) -> Optional[str]:
         try:
-            entries = self._agfs.ls(path)
+            try:
+                await self._async_agfs.stat(path)
+            except Exception:
+                return None
+            entries = await self._async_agfs.ls(path)
             if not isinstance(entries, list):
                 return None
             for entry in entries:
@@ -197,11 +414,19 @@ class PathLock:
                 name = entry.get("name", "")
                 if not name or name in (".", ".."):
                     continue
+                entry_path = f"{path.rstrip('/')}/{name}"
+                if name.startswith(EXACT_LOCK_FILE_PREFIX):
+                    token = await self._read_token_async(entry_path)
+                    if token is not None:
+                        owner_id, _, _ = _parse_fencing_token(token)
+                        if owner_id != exclude_owner_id:
+                            return entry_path
+                    continue
                 if not entry.get("isDir", False):
                     continue
-                subdir = f"{path.rstrip('/')}/{name}"
+                subdir = entry_path
                 subdir_lock = self._get_lock_path(subdir)
-                token = self._read_token(subdir_lock)
+                token = await self._read_token_async(subdir_lock)
                 if token is not None:
                     owner_id, _, _ = _parse_fencing_token(token)
                     if owner_id != exclude_owner_id:
@@ -213,109 +438,176 @@ class PathLock:
             logger.warning(f"Failed to scan descendants of {path}: {e}")
         return None
 
-    async def acquire_point(
+    async def acquire_exact_path(
         self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
     ) -> bool:
+        """Acquire a short lock for one exact path.
+
+        It conflicts with:
+        - another ExactPathLock on the same path;
+        - any ancestor TREE lock;
+        - a TREE lock on the exact same path.
+
+        It does not conflict with sibling exact paths.
+        """
         owner_id = owner.id
-        lock_path = self._get_lock_path(path)
-        owned_lock_type = await self._owned_lock_type(path, owner)
-        if owned_lock_type in {LOCK_TYPE_POINT, LOCK_TYPE_SUBTREE}:
+        lock_path = await self._get_exact_lock_path_async(path)
+        if lock_path in owner.locks and await self._is_lock_owned_by_async(lock_path, owner_id):
             owner.add_lock(lock_path)
-            logger.debug(f"[POINT] Reusing owned lock on: {path}")
+            logger.debug(f"[EXACT] Reusing owned exact lock on: {path}")
             return True
-        if await self._has_owned_ancestor_subtree(path, owner):
-            logger.debug(f"[POINT] Reusing owned ancestor SUBTREE lock on: {path}")
+        if await self._has_owned_ancestor_tree(path, owner):
+            logger.debug(f"[EXACT] Reusing owned ancestor TREE lock on: {path}")
             return True
         if timeout is None:
-            # 无限等待
             deadline = float("inf")
         else:
-            # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
-
-        # 确保目录存在
-        if not self._ensure_directory_exists(path):
-            logger.warning(f"[POINT] Failed to ensure directory exists: {path}")
-            return False
+        wait_start = asyncio.get_running_loop().time()
+        next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
         while True:
-            if await self._is_locked_by_other(lock_path, owner_id):
-                if self.is_lock_stale(lock_path, self._lock_expire):
-                    logger.warning(f"[POINT] Removing stale lock: {lock_path}")
-                    await self._remove_lock_file(lock_path)
+            existing_exact_lock = await self._check_exact_path_lock(path, owner_id)
+            if existing_exact_lock:
+                if await self._is_lock_stale_async(existing_exact_lock, self._lock_expire):
+                    logger.warning(f"[EXACT] Removing stale exact lock: {existing_exact_lock}")
+                    await self._remove_lock_file(existing_exact_lock)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[POINT] Timeout waiting for lock on: {path}")
+                    _log_timeout_waiting(f"[EXACT] Timeout waiting for exact lock on: {path}")
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[EXACT] Still waiting for lock on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            ancestor_conflict = await self._check_ancestors_for_subtree(path, owner_id)
+            same_path_lock = self._get_lock_path(path)
+            if same_path_lock != lock_path:
+                token = await self._read_token_async(same_path_lock)
+                if token is not None:
+                    lock_owner, _, _ = _parse_fencing_token(token)
+                    if lock_owner != owner_id:
+                        if await self._is_lock_stale_async(same_path_lock, self._lock_expire):
+                            logger.warning(f"[EXACT] Removing stale lock: {same_path_lock}")
+                            await self._remove_lock_file(same_path_lock)
+                            continue
+                        if asyncio.get_running_loop().time() >= deadline:
+                            _log_timeout_waiting(f"[EXACT] Timeout waiting for lock: {path}")
+                            return False
+                        await asyncio.sleep(_POLL_INTERVAL)
+                        continue
+
+            ancestor_conflict = await self._check_ancestors_for_tree(path, owner_id)
             if ancestor_conflict:
-                if self.is_lock_stale(ancestor_conflict, self._lock_expire):
+                if await self._is_lock_stale_async(ancestor_conflict, self._lock_expire):
                     logger.warning(
-                        f"[POINT] Removing stale ancestor SUBTREE lock: {ancestor_conflict}"
+                        f"[EXACT] Removing stale ancestor TREE lock: {ancestor_conflict}"
                     )
                     await self._remove_lock_file(ancestor_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(
-                        f"[POINT] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
+                    _log_timeout_waiting(
+                        f"[EXACT] Timeout waiting for ancestor TREE lock: {ancestor_conflict}"
                     )
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[EXACT] Still waiting for ancestor TREE lock: {ancestor_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            try:
-                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_POINT)
-            except Exception as e:
-                logger.error(f"[POINT] Failed to create lock file: {e}")
+            parent = self._get_parent_path(path)
+            if (
+                lock_path != self._get_lock_path(path)
+                and parent
+                and not await self._ensure_directory_exists_async(parent)
+            ):
+                logger.warning(f"[EXACT] Failed to ensure parent directory exists: {parent}")
                 return False
 
-            backed_off = False
-            conflict_after = await self._check_ancestors_for_subtree(path, owner_id)
-            if conflict_after:
-                their_token = self._read_token(conflict_after)
-                if their_token:
-                    their_owner_id, their_ts, _ = _parse_fencing_token(their_token)
-                    my_token = self._read_token(lock_path)
-                    _, my_ts, _ = (
-                        _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_POINT)
-                    )
-                    if (my_ts, owner_id) > (their_ts, their_owner_id):
-                        logger.debug(f"[POINT] Backing off (livelock guard) on {path}")
-                        await self._remove_lock_file(lock_path)
-                        backed_off = True
+            try:
+                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_EXACT)
+            except Exception as e:
+                logger.error(f"[EXACT] Failed to create lock file: {e}")
+                return False
+
+            if not await self._is_lock_owned_by_async(lock_path, owner_id):
+                logger.debug(f"[EXACT] Lost lock write race on: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
-                    if not backed_off:
-                        await self._remove_lock_file(lock_path)
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            if not self.is_lock_owned_by(lock_path, owner_id):
-                logger.debug(f"[POINT] Lock ownership verification failed: {path}")
+            conflict_after = await self._check_path_lock(path, owner_id)
+            if conflict_after == lock_path:
+                conflict_after = None
+            if not conflict_after:
+                conflict_after = await self._check_ancestors_for_tree(path, owner_id)
+            if conflict_after:
+                their_token = await self._read_token_async(conflict_after)
+                if their_token:
+                    their_owner_id, their_ts, _ = _parse_fencing_token(their_token)
+                    my_token = await self._read_token_async(lock_path)
+                    _, my_ts, _ = (
+                        _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_EXACT)
+                    )
+                    if (my_ts, owner_id) > (their_ts, their_owner_id):
+                        logger.debug(f"[EXACT] Backing off (livelock guard) on {path}")
+                        if await self._is_lock_owned_by_async(lock_path, owner_id):
+                            await self._remove_lock_file(lock_path)
+                if asyncio.get_running_loop().time() >= deadline:
+                    if await self._is_lock_owned_by_async(lock_path, owner_id):
+                        await self._remove_lock_file(lock_path)
+                    return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[EXACT] Still waiting after conflict check on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
+                await asyncio.sleep(_POLL_INTERVAL)
+                continue
+
+            if not await self._is_lock_owned_by_async(lock_path, owner_id):
+                logger.debug(f"[EXACT] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[EXACT] Still waiting for lock ownership verification: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
             owner.add_lock(lock_path)
-            logger.debug(f"[POINT] Lock acquired: {lock_path}")
+            logger.debug(f"[EXACT] Lock acquired: {lock_path}")
             return True
 
-    async def acquire_subtree(
+    async def acquire_tree(
         self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
     ) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
         owned_lock_type = await self._owned_lock_type(path, owner)
-        if owned_lock_type == LOCK_TYPE_SUBTREE:
+        if owned_lock_type == LOCK_TYPE_TREE:
             owner.add_lock(lock_path)
-            logger.debug(f"[SUBTREE] Reusing owned SUBTREE lock on: {path}")
+            logger.debug(f"[TREE] Reusing owned TREE lock on: {path}")
             return True
-        if await self._has_owned_ancestor_subtree(path, owner):
-            logger.debug(f"[SUBTREE] Reusing owned ancestor SUBTREE lock on: {path}")
+        if await self._has_owned_ancestor_tree(path, owner):
+            logger.debug(f"[TREE] Reusing owned ancestor TREE lock on: {path}")
             return True
         if timeout is None:
             # 无限等待
@@ -323,99 +615,146 @@ class PathLock:
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
-
-        # 确保目录存在
-        if not self._ensure_directory_exists(path):
-            logger.warning(f"[SUBTREE] Failed to ensure directory exists: {path}")
-            return False
+        wait_start = asyncio.get_running_loop().time()
+        next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
         while True:
             if await self._is_locked_by_other(lock_path, owner_id):
-                if self.is_lock_stale(lock_path, self._lock_expire):
-                    logger.warning(f"[SUBTREE] Removing stale lock: {lock_path}")
+                if await self._is_lock_stale_async(lock_path, self._lock_expire):
+                    logger.warning(f"[TREE] Removing stale lock: {lock_path}")
                     await self._remove_lock_file(lock_path)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(f"[SUBTREE] Timeout waiting for lock on: {path}")
+                    _log_timeout_waiting(f"[TREE] Timeout waiting for lock on: {path}")
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[TREE] Still waiting for lock on: {path} (waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            # Check ancestor paths for SUBTREE locks held by other owners
-            ancestor_conflict = await self._check_ancestors_for_subtree(path, owner_id)
+            # Check ancestor paths for TREE locks held by other owners
+            ancestor_conflict = await self._check_ancestors_for_tree(path, owner_id)
             if ancestor_conflict:
-                if self.is_lock_stale(ancestor_conflict, self._lock_expire):
-                    logger.warning(
-                        f"[SUBTREE] Removing stale ancestor SUBTREE lock: {ancestor_conflict}"
-                    )
+                if await self._is_lock_stale_async(ancestor_conflict, self._lock_expire):
+                    logger.warning(f"[TREE] Removing stale ancestor TREE lock: {ancestor_conflict}")
                     await self._remove_lock_file(ancestor_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(
-                        f"[SUBTREE] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
+                    _log_timeout_waiting(
+                        f"[TREE] Timeout waiting for ancestor TREE lock: {ancestor_conflict}"
                     )
+                    return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[TREE] Still waiting for ancestor TREE lock: {ancestor_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
+                await asyncio.sleep(_POLL_INTERVAL)
+                continue
+
+            exact_conflict = await self._check_exact_path_lock(path, owner_id)
+            if exact_conflict:
+                if await self._is_lock_stale_async(exact_conflict, self._lock_expire):
+                    logger.warning(f"[TREE] Removing stale exact lock: {exact_conflict}")
+                    await self._remove_lock_file(exact_conflict)
+                    continue
+                if asyncio.get_running_loop().time() >= deadline:
+                    _log_timeout_waiting(f"[TREE] Timeout waiting for exact lock: {exact_conflict}")
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
             desc_conflict = await self._scan_descendants_for_locks(path, owner_id)
             if desc_conflict:
-                if self.is_lock_stale(desc_conflict, self._lock_expire):
-                    logger.warning(f"[SUBTREE] Removing stale descendant lock: {desc_conflict}")
+                if await self._is_lock_stale_async(desc_conflict, self._lock_expire):
+                    logger.warning(f"[TREE] Removing stale descendant lock: {desc_conflict}")
                     await self._remove_lock_file(desc_conflict)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
-                    logger.warning(
-                        f"[SUBTREE] Timeout waiting for descendant lock: {desc_conflict}"
+                    _log_timeout_waiting(
+                        f"[TREE] Timeout waiting for descendant lock: {desc_conflict}"
                     )
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[TREE] Still waiting for descendant lock: {desc_conflict} "
+                        f"(path={path}, waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
+            if not await self._ensure_directory_exists_async(path):
+                logger.warning(f"[TREE] Failed to ensure directory exists: {path}")
+                return False
+
             try:
-                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_SUBTREE)
+                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_TREE)
             except Exception as e:
-                logger.error(f"[SUBTREE] Failed to create lock file: {e}")
+                logger.error(f"[TREE] Failed to create lock file: {e}")
                 return False
 
             backed_off = False
             conflict_after = await self._scan_descendants_for_locks(path, owner_id)
             if not conflict_after:
-                conflict_after = await self._check_ancestors_for_subtree(path, owner_id)
+                conflict_after = await self._check_exact_path_lock(path, owner_id)
+            if not conflict_after:
+                conflict_after = await self._check_ancestors_for_tree(path, owner_id)
             if conflict_after:
-                their_token = self._read_token(conflict_after)
+                their_token = await self._read_token_async(conflict_after)
                 if their_token:
                     their_owner_id, their_ts, _ = _parse_fencing_token(their_token)
-                    my_token = self._read_token(lock_path)
+                    my_token = await self._read_token_async(lock_path)
                     _, my_ts, _ = (
-                        _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_SUBTREE)
+                        _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_TREE)
                     )
                     if (my_ts, owner_id) > (their_ts, their_owner_id):
-                        logger.debug(f"[SUBTREE] Backing off (livelock guard) on {path}")
+                        logger.debug(f"[TREE] Backing off (livelock guard) on {path}")
                         await self._remove_lock_file(lock_path)
                         backed_off = True
                 if asyncio.get_running_loop().time() >= deadline:
                     if not backed_off:
                         await self._remove_lock_file(lock_path)
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[TREE] Still waiting after conflict check on: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            if not self.is_lock_owned_by(lock_path, owner_id):
-                logger.debug(f"[SUBTREE] Lock ownership verification failed: {path}")
+            if not await self._is_lock_owned_by_async(lock_path, owner_id):
+                logger.debug(f"[TREE] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
+                now = asyncio.get_running_loop().time()
+                if timeout is None and now >= next_wait_log_at:
+                    logger.info(
+                        f"[TREE] Still waiting for lock ownership verification: {path} "
+                        f"(waited={now - wait_start:.1f}s)"
+                    )
+                    next_wait_log_at = now + _WAIT_LOG_INTERVAL
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
             owner.add_lock(lock_path)
-            logger.debug(f"[SUBTREE] Lock acquired: {lock_path}")
+            logger.debug(f"[TREE] Lock acquired: {lock_path}")
             return True
 
     async def acquire_mv(
         self,
         src_path: str,
-        dst_parent_path: str,
+        dst_path: str,
         owner: LockOwner,
         timeout: Optional[float] = 0.0,
         src_is_dir: bool = True,
@@ -424,51 +763,43 @@ class PathLock:
 
         Args:
             src_path: Source path to lock.
-            dst_parent_path: Parent directory of the destination to lock.
-                Callers typically pass the destination's parent so that the
-                lock covers sibling-level conflicts without requiring the
-                target to exist yet.
+            dst_path: Destination path to lock.
             owner: Lock owner handle.
             timeout: Maximum seconds to wait for each lock.
-            src_is_dir: Whether the source is a directory (SUBTREE lock)
-                or a file (POINT lock on parent).
+            src_is_dir: Whether the source is a directory (TREE lock)
+                or a file (ExactPathLock on source and destination path).
         """
         if src_is_dir:
-            if not await self.acquire_subtree(src_path, owner, timeout=timeout):
-                logger.warning(f"[MV] Failed to acquire SUBTREE lock on source: {src_path}")
+            if not await self.acquire_tree(src_path, owner, timeout=timeout):
+                logger.warning(f"[MV] Failed to acquire TREE lock on source: {src_path}")
                 return False
-            if not await self.acquire_subtree(dst_parent_path, owner, timeout=timeout):
-                logger.warning(
-                    f"[MV] Failed to acquire SUBTREE lock on destination parent: {dst_parent_path}"
-                )
+            if not await self.acquire_exact_path(dst_path, owner, timeout=timeout):
+                logger.warning(f"[MV] Failed to acquire exact lock on destination: {dst_path}")
                 await self.release(owner)
                 return False
         else:
-            src_parent = src_path.rsplit("/", 1)[0] if "/" in src_path else src_path
-            if not await self.acquire_point(src_parent, owner, timeout=timeout):
-                logger.warning(f"[MV] Failed to acquire POINT lock on source parent: {src_parent}")
+            if not await self.acquire_exact_path(src_path, owner, timeout=timeout):
+                logger.warning(f"[MV] Failed to acquire exact lock on source: {src_path}")
                 return False
-            if not await self.acquire_point(dst_parent_path, owner, timeout=timeout):
-                logger.warning(
-                    f"[MV] Failed to acquire POINT lock on destination parent: {dst_parent_path}"
-                )
+            if not await self.acquire_exact_path(dst_path, owner, timeout=timeout):
+                logger.warning(f"[MV] Failed to acquire exact lock on destination: {dst_path}")
                 await self.release(owner)
                 return False
 
-        logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_parent_path}")
+        logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_path}")
         return True
 
     async def refresh(self, owner: LockOwner) -> LockRefreshResult:
         """Rewrite all lock file timestamps to prevent stale cleanup."""
         result = LockRefreshResult()
         for lock_path in list(owner.locks):
-            parsed_owner_id, lock_type = self._read_owner_and_type(lock_path)
+            parsed_owner_id, lock_type = await self._read_owner_and_type_async(lock_path)
             if parsed_owner_id != owner.id or lock_type is None:
                 result.lost_paths.append(lock_path)
                 continue
             new_token = _make_fencing_token(owner.id, lock_type)
             try:
-                self._agfs.write(lock_path, new_token.encode("utf-8"))
+                await self._async_agfs.write(lock_path, new_token.encode("utf-8"))
                 result.refreshed_paths.append(lock_path)
             except Exception as e:
                 logger.warning(f"Failed to refresh lock {lock_path}: {e}")
@@ -479,7 +810,7 @@ class PathLock:
         lock_count = len(owner.locks)
         released_count = 0
         for lock_path in reversed(list(owner.locks)):
-            if self.is_lock_owned_by(lock_path, owner.id):
+            if await self._is_lock_owned_by_async(lock_path, owner.id):
                 await self._remove_lock_file(lock_path)
                 released_count += 1
             owner.remove_lock(lock_path)
@@ -490,6 +821,6 @@ class PathLock:
         for lock_path in reversed(lock_paths):
             if lock_path not in owner.locks:
                 continue
-            if self.is_lock_owned_by(lock_path, owner.id):
+            if await self._is_lock_owned_by_async(lock_path, owner.id):
                 await self._remove_lock_file(lock_path)
             owner.remove_lock(lock_path)

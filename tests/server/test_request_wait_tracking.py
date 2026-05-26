@@ -239,6 +239,7 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
             timeout=9.0,
         )
 
+    assert result["root_uri"] == "viking://agent/skills/demo"
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
     assert tracker.wait_calls == [(telemetry.telemetry_id, 9.0)]
@@ -263,7 +264,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_subtree=lambda handle, path: _return_true(handle, path),
+        acquire_tree=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 
@@ -323,7 +324,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_subtree=lambda handle, path: _return_true(handle, path),
+        acquire_tree=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 

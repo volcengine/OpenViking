@@ -1136,7 +1136,7 @@ def main() -> int:
         )
         or str(os.environ.get("OPENVIKING_API_KEY", "")).strip()
     )
-    agent_id = args.agent_id or str(plugin_config.get("agentId", "")).strip() or DEFAULT_AGENT_ID
+    agent_id = args.agent_id or str(plugin_config.get("agent_prefix", "")).strip() or DEFAULT_AGENT_ID
     user_id = args.user_id or f"ov-healthcheck-{uuid.uuid4().hex[:8]}"
     probe = f"probe-{uuid.uuid4().hex[:8]}"
     run_facts = build_run_facts(probe)
@@ -1183,7 +1183,7 @@ def main() -> int:
             recorder.add("WARN", "plugins.entries.openviking entry missing")
 
         if plugin_config:
-            mode = str(plugin_config.get("mode", "local"))
+            mode = str(plugin_config.get("mode", "remote"))
             recorder.add("INFO", "Plugin mode", mode)
             if ov_config_path:
                 recorder.add("INFO", "OpenViking config discovered", str(ov_config_path))

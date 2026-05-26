@@ -9,9 +9,10 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
     AGFSHTTPError,
+    AGFSNotFoundError,
     AGFSTimeoutError,
 )
-from openviking.storage.errors import ResourceBusyError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -366,6 +367,8 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
 def is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, FileNotFoundError):
         return True
+    if isinstance(exc, AGFSNotFoundError):
+        return True
     if isinstance(exc, AGFSHTTPError) and exc.status_code == 404:
         return True
     message = str(exc).lower()
@@ -391,6 +394,10 @@ def is_invalid_uri_error(exc: Exception) -> bool:
     )
 
 
+def _not_found_error(resource: str | None, resource_type: str) -> NotFoundError:
+    return NotFoundError(resource or "", resource_type)
+
+
 def map_exception(
     exc: Exception,
     *,
@@ -400,11 +407,25 @@ def map_exception(
     if isinstance(exc, OpenVikingError):
         return exc
     if isinstance(exc, ResourceBusyError):
-        return ConflictError(str(exc), resource=resource)
+        details: dict[str, Any] = {
+            "resource": exc.uri or resource,
+            "uri": exc.uri or resource,
+            "conflict_type": exc.conflict_type,
+            "retryable": exc.retryable,
+        }
+        return OpenVikingError(str(exc), code="CONFLICT", details=details)
+    if isinstance(exc, LockAcquisitionError):
+        details = {
+            "resource": resource,
+            "uri": resource,
+            "conflict_type": "path_busy",
+            "retryable": True,
+        }
+        return OpenVikingError(str(exc), code="CONFLICT", details=details)
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
-        return NotFoundError(resource or str(exc), resource_type)
+        return _not_found_error(resource, resource_type)
     if _is_model_api_key_configuration_error(exc):
         return FailedPreconditionError(
             "Model provider API key is not configured",
@@ -422,7 +443,7 @@ def map_exception(
         return UnavailableError("storage backend", reason=str(exc))
     if isinstance(exc, AGFSHTTPError):
         if exc.status_code == 404 or is_not_found_error(exc):
-            return NotFoundError(resource or str(exc), resource_type)
+            return _not_found_error(resource, resource_type)
         if exc.status_code == 403:
             return PermissionDeniedError(str(exc), resource=resource)
         if exc.status_code == 409:
@@ -436,10 +457,13 @@ def map_exception(
     if isinstance(exc, AGFSClientError):
         message = str(exc)
         if is_not_found_error(exc):
-            return NotFoundError(resource or message, resource_type)
+            return _not_found_error(resource, resource_type)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)
         lowered = message.lower()
+        if "not a directory" in lowered:
+            details = {"resource": resource} if resource else None
+            return FailedPreconditionError(message, details=details)
         if "permission denied" in lowered:
             return PermissionDeniedError(message, resource=resource)
         if "already exists" in lowered:
@@ -452,7 +476,7 @@ def map_exception(
     message = str(exc)
     lowered = message.lower()
     if is_not_found_error(exc):
-        return NotFoundError(resource or message, resource_type)
+        return _not_found_error(resource, resource_type)
     if is_invalid_uri_error(exc):
         return InvalidURIError(resource or message, message)
     if "permission denied" in lowered or "access denied" in lowered:

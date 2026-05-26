@@ -3,14 +3,13 @@
 """
 Async Task Tracker for OpenViking.
 
-Provides a lightweight, in-memory registry for tracking background operations
+Provides a lightweight registry for tracking background operations
 (e.g. session commit with wait=false). Callers receive a task_id that can be
 polled via the /tasks API to check completion status, results, or errors.
 
 Design decisions:
-  - v1 is pure in-memory (no persistence). Tasks are lost on restart.
   - Thread-safe (QueueManager workers run in separate threads).
-  - TTL-based cleanup prevents unbounded memory growth.
+  - TTL-based cleanup still applies to in-memory cache.
   - Error messages are sanitized to avoid leaking sensitive data.
 """
 
@@ -20,10 +19,12 @@ import threading
 import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.service.task_store import InMemoryTaskStore, TaskStore
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -48,8 +49,8 @@ class TaskRecord:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     resource_id: Optional[str] = None  # e.g. session_id
-    owner_account_id: Optional[str] = None
-    owner_user_id: Optional[str] = None
+    account_id: Optional[str] = None
+    user_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -57,8 +58,10 @@ class TaskRecord:
         """Serialize for JSON response."""
         d = asdict(self)
         d["status"] = self.status.value
-        d.pop("owner_account_id", None)
-        d.pop("owner_user_id", None)
+        d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
+        d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
+        d.pop("account_id", None)
+        d.pop("user_id", None)
         return d
 
 
@@ -76,6 +79,13 @@ def get_task_tracker() -> "TaskTracker":
             if _instance is None:
                 _instance = TaskTracker()
     return _instance
+
+
+def set_task_tracker(tracker: "TaskTracker") -> None:
+    """Replace the global TaskTracker singleton."""
+    global _instance
+    with _init_lock:
+        _instance = tracker
 
 
 def reset_task_tracker() -> None:
@@ -106,9 +116,10 @@ def _sanitize_error(error: str) -> str:
 
 
 class TaskTracker:
-    """In-memory async task tracker with TTL-based cleanup.
+    """Async task tracker with pluggable storage and in-memory compatibility cache.
 
-    Thread-safe: all mutations go through ``_lock``.
+    Async lifecycle operations are serialized by ``_async_lock``. The thread
+    lock only protects sync snapshot reads of the local cache.
     """
 
     MAX_TASKS = 10_000
@@ -116,11 +127,17 @@ class TaskTracker:
     TTL_FAILED = 604_800  # 7 days
     CLEANUP_INTERVAL = 300  # 5 minutes
 
-    def __init__(self) -> None:
+    def __init__(self, store: Optional[TaskStore] = None) -> None:
+        self._store = store or InMemoryTaskStore()
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
-        logger.info("[TaskTracker] Initialized (in-memory, max_tasks=%d)", self.MAX_TASKS)
+        logger.info(
+            "[TaskTracker] Initialized (store=%s, max_tasks=%d)",
+            self._store.__class__.__name__,
+            self.MAX_TASKS,
+        )
 
     # ── Lifecycle ──
 
@@ -145,75 +162,94 @@ class TaskTracker:
         while True:
             try:
                 await asyncio.sleep(self.CLEANUP_INTERVAL)
-                self._evict_expired()
+                await self._evict_expired()
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("[TaskTracker] Cleanup error")
 
-    def _evict_expired(self) -> None:
+    async def _evict_expired(self) -> None:
         """Remove expired tasks and enforce MAX_TASKS."""
         now = time.time()
-        with self._lock:
-            to_delete = []
-            for tid, t in self._tasks.items():
-                if t.status == TaskStatus.COMPLETED and (now - t.updated_at) > self.TTL_COMPLETED:
-                    to_delete.append(tid)
-                elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
-                    to_delete.append(tid)
-            for tid in to_delete:
-                del self._tasks[tid]
+        async with self._async_lock:
+            deleted_tasks: List[TaskRecord] = []
+            with self._lock:
+                expired_ids = []
+                for tid, t in self._tasks.items():
+                    if (
+                        t.status == TaskStatus.COMPLETED
+                        and (now - t.updated_at) > self.TTL_COMPLETED
+                    ):
+                        expired_ids.append(tid)
+                    elif t.status == TaskStatus.FAILED and (now - t.updated_at) > self.TTL_FAILED:
+                        expired_ids.append(tid)
 
-            # FIFO eviction if still over limit
-            if len(self._tasks) > self.MAX_TASKS:
-                sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
-                excess = len(self._tasks) - self.MAX_TASKS
-                for tid, _ in sorted_tasks[:excess]:
-                    del self._tasks[tid]
+                for tid in expired_ids:
+                    task = self._tasks.pop(tid, None)
+                    if task is not None:
+                        deleted_tasks.append(task)
 
-            if to_delete:
-                logger.debug("[TaskTracker] Evicted %d expired tasks", len(to_delete))
+                if len(self._tasks) > self.MAX_TASKS:
+                    sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
+                    excess = len(self._tasks) - self.MAX_TASKS
+                    for tid, _ in sorted_tasks[:excess]:
+                        task = self._tasks.pop(tid, None)
+                        if task is not None:
+                            deleted_tasks.append(task)
+
+            for task in deleted_tasks:
+                if isinstance(self._store, InMemoryTaskStore) and task.account_id:
+                    await self._store.delete(
+                        task.task_id,
+                        account_id=task.account_id,
+                        user_id=task.user_id,
+                    )
+
+            if expired_ids:
+                logger.debug("[TaskTracker] Evicted %d expired tasks", len(expired_ids))
 
     @staticmethod
     def _matches_owner(
         task: TaskRecord,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
         """Return True when a task belongs to the requested owner filter."""
-        if owner_account_id is not None and task.owner_account_id != owner_account_id:
+        if account_id is not None and task.account_id != account_id:
             return False
-        if owner_user_id is not None and task.owner_user_id != owner_user_id:
+        if user_id is not None and task.user_id != user_id:
             return False
         return True
 
     @staticmethod
-    def _validate_owner(owner_account_id: str, owner_user_id: str) -> None:
+    def _validate_owner(account_id: str, user_id: str) -> None:
         """Reject ownerless task creation for user-originated background work."""
-        if not owner_account_id or not owner_user_id:
-            raise ValueError("Task ownership requires non-empty owner_account_id and owner_user_id")
+        if not account_id or not user_id:
+            raise ValueError("Task ownership requires non-empty account_id and user_id")
 
     # ── CRUD ──
 
-    def create(
+    async def create(
         self,
         task_type: str,
         resource_id: Optional[str] = None,
         *,
-        owner_account_id: str,
-        owner_user_id: str,
+        account_id: str,
+        user_id: str,
     ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
-        self._validate_owner(owner_account_id, owner_user_id)
+        self._validate_owner(account_id, user_id)
         task = TaskRecord(
             task_id=str(uuid4()),
             task_type=task_type,
             resource_id=resource_id,
-            owner_account_id=owner_account_id,
-            owner_user_id=owner_user_id,
+            account_id=account_id,
+            user_id=user_id,
         )
-        with self._lock:
-            self._tasks[task.task_id] = task
+        async with self._async_lock:
+            await self._store.create(task)
+            with self._lock:
+                self._tasks[task.task_id] = task
         logger.debug(
             "[TaskTracker] Created task %s type=%s resource=%s",
             task.task_id,
@@ -222,40 +258,46 @@ class TaskTracker:
         )
         return self._copy(task)
 
-    def create_if_no_running(
+    async def create_if_no_running(
         self,
         task_type: str,
         resource_id: str,
         *,
-        owner_account_id: str,
-        owner_user_id: str,
+        account_id: str,
+        user_id: str,
     ) -> Optional[TaskRecord]:
         """Atomically check for running tasks and create a new one if none exist.
 
         Returns TaskRecord on success, None if a running task already exists.
         This eliminates the race condition between has_running() and create().
         """
-        self._validate_owner(owner_account_id, owner_user_id)
-        with self._lock:
-            # Check for existing running tasks
+        self._validate_owner(account_id, user_id)
+        async with self._async_lock:
+            for task in await self._load_all_from_store(account_id, user_id):
+                with self._lock:
+                    self._tasks[task.task_id] = task
+
+            with self._lock:
+                tasks = list(self._tasks.values())
             has_active = any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
-                and self._matches_owner(t, owner_account_id, owner_user_id)
+                and self._matches_owner(t, account_id, user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-                for t in self._tasks.values()
+                for t in tasks
             )
             if has_active:
                 return None
-            # Create atomically within same lock
             task = TaskRecord(
                 task_id=str(uuid4()),
                 task_type=task_type,
                 resource_id=resource_id,
-                owner_account_id=owner_account_id,
-                owner_user_id=owner_user_id,
+                account_id=account_id,
+                user_id=user_id,
             )
-            self._tasks[task.task_id] = task
+            await self._store.create(task)
+            with self._lock:
+                self._tasks[task.task_id] = task
         logger.debug(
             "[TaskTracker] Created task %s type=%s resource=%s",
             task.task_id,
@@ -264,63 +306,99 @@ class TaskTracker:
         )
         return self._copy(task)
 
-    def start(self, task_id: str) -> None:
+    async def start(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         """Transition task to RUNNING."""
-        with self._lock:
-            task = self._tasks.get(task_id)
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.RUNNING
                 task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
 
-    def complete(self, task_id: str, result: Optional[Dict[str, Any]] = None) -> None:
+    async def complete(
+        self,
+        task_id: str,
+        result: Optional[Dict[str, Any]] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         """Transition task to COMPLETED with optional result."""
-        with self._lock:
-            task = self._tasks.get(task_id)
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.COMPLETED
                 task.result = result
                 task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
         logger.info("[TaskTracker] Task %s completed", task_id)
 
-    def fail(self, task_id: str, error: str) -> None:
+    async def fail(
+        self,
+        task_id: str,
+        error: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         """Transition task to FAILED with sanitized error."""
-        with self._lock:
-            task = self._tasks.get(task_id)
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.FAILED
                 task.error = _sanitize_error(error)
                 task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
         logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
-    def get(
+    async def get(
         self,
         task_id: str,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[TaskRecord]:
         """Look up a single task. Returns a snapshot copy (None if not found)."""
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if task is None or not self._matches_owner(task, owner_account_id, owner_user_id):
+        async with self._async_lock:
+            with self._lock:
+                task = self._tasks.get(task_id)
+            if task is None and account_id is not None:
+                task = await self._load_from_store(task_id, account_id, user_id)
+                if task is not None:
+                    with self._lock:
+                        self._tasks[task.task_id] = task
+            if task is None or not self._matches_owner(task, account_id, user_id):
                 return None
             return self._copy(task)
 
-    def list_tasks(
+    async def list_tasks(
         self,
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[TaskRecord]:
         """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
-        with self._lock:
-            tasks = [
-                self._copy(t)
-                for t in self._tasks.values()
-                if self._matches_owner(t, owner_account_id, owner_user_id)
-            ]
+        async with self._async_lock:
+            if account_id is not None:
+                loaded = await self._load_all_from_store(account_id, user_id)
+                if loaded:
+                    with self._lock:
+                        for task in loaded:
+                            self._tasks[task.task_id] = task
+            with self._lock:
+                source = list(self._tasks.values())
+            tasks = [self._copy(t) for t in source if self._matches_owner(t, account_id, user_id)]
         if task_type:
             tasks = [t for t in tasks if t.task_type == task_type]
         if status:
@@ -330,22 +408,69 @@ class TaskTracker:
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks[:limit]
 
-    def has_running(
+    async def has_running(
         self,
         task_type: str,
         resource_id: str,
-        owner_account_id: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
         """Check if there is already a running task for the given type+resource."""
-        with self._lock:
+        async with self._async_lock:
+            if account_id is not None:
+                loaded = await self._load_all_from_store(account_id, user_id)
+                if loaded:
+                    with self._lock:
+                        for task in loaded:
+                            self._tasks[task.task_id] = task
+            with self._lock:
+                tasks = list(self._tasks.values())
             return any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
-                and self._matches_owner(t, owner_account_id, owner_user_id)
+                and self._matches_owner(t, account_id, user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-                for t in self._tasks.values()
+                for t in tasks
             )
+
+    async def _load_for_update(
+        self,
+        task_id: str,
+        account_id: Optional[str],
+        user_id: Optional[str],
+    ) -> Optional[TaskRecord]:
+        with self._lock:
+            task = self._tasks.get(task_id)
+        if task is not None:
+            return task if self._matches_owner(task, account_id, user_id) else None
+        if account_id is None or user_id is None:
+            return None
+        return await self._load_from_store(task_id, account_id, user_id)
+
+    @staticmethod
+    def _record_from_payload(payload: Dict[str, Any]) -> TaskRecord:
+        data = dict(payload)
+        data["status"] = TaskStatus(data["status"])
+        return TaskRecord(**data)
+
+    async def _load_from_store(
+        self,
+        task_id: str,
+        account_id: str,
+        user_id: Optional[str],
+    ) -> Optional[TaskRecord]:
+        payload = await self._store.get(task_id, account_id=account_id, user_id=user_id)
+        if payload is None:
+            return None
+        return self._record_from_payload(payload)
+
+    async def _load_all_from_store(
+        self, account_id: str, user_id: Optional[str]
+    ) -> List[TaskRecord]:
+        return [
+            self._record_from_payload(payload)
+            for payload in await self._store.list(account_id, user_id=user_id)
+        ]
 
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:

@@ -42,6 +42,7 @@ class FakeVikingFS:
     def __init__(self) -> None:
         self.files: Dict[str, bytes] = {}
         self.dirs: List[str] = []
+        self.write_file_bytes_calls: List[str] = []
         self.agfs = FakeAGFS(self.files)
 
     def _uri_to_path(self, uri: str) -> str:
@@ -49,6 +50,7 @@ class FakeVikingFS:
         return uri
 
     async def write_file_bytes(self, uri: str, content: bytes) -> None:
+        self.write_file_bytes_calls.append(uri)
         self.files[uri] = content
 
     async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
@@ -331,6 +333,27 @@ class TestUploadDirectory:
         assert "viking://temp/test/readme.md" in viking_fs.files
         assert "viking://temp/test/config.yaml" in viking_fs.files
         assert "viking://temp/test/src/main.go" in viking_fs.files
+        assert "viking://temp/test/hello.py" in viking_fs.write_file_bytes_calls
+
+    @pytest.mark.asyncio
+    async def test_uses_vikingfs_write_api_for_file_content(self, tmp_path: Path) -> None:
+        class GuardedAGFS(FakeAGFS):
+            def write(self, path: str, content: bytes) -> None:
+                raise AssertionError("upload_directory must not bypass VikingFS writes")
+
+        class GuardedVikingFS(FakeVikingFS):
+            def __init__(self) -> None:
+                super().__init__()
+                self.agfs = GuardedAGFS(self.files)
+
+        (tmp_path / "hello.py").write_text("print('hello')", encoding="utf-8")
+        viking_fs = GuardedVikingFS()
+
+        count, warnings = await upload_directory(tmp_path, "viking://temp/guarded", viking_fs)
+
+        assert count == 1
+        assert warnings == []
+        assert viking_fs.files["viking://temp/guarded/hello.py"] == b"print('hello')"
 
     @pytest.mark.asyncio
     async def test_skips_hidden_files(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
@@ -355,9 +378,7 @@ class TestUploadDirectory:
     @pytest.mark.asyncio
     async def test_creates_root_dir(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
         await upload_directory(tmp_dir, "viking://temp/root", viking_fs)
-        # _mkdir_with_parents strips leading slash then re-adds it, so the stored agfs
-        # path is the _uri_to_path() result with a "/" prefix.
-        assert any("temp/root" in d for d in viking_fs.agfs.dirs)
+        assert "viking://temp/root" in viking_fs.dirs
 
     @pytest.mark.asyncio
     async def test_custom_ignore_dirs(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
@@ -374,6 +395,18 @@ class TestUploadDirectory:
         count, _ = await upload_directory(tmp_dir, "viking://temp/test", viking_fs, max_file_size=5)
         # Most files are > 5 bytes, so fewer uploads
         assert count < 4
+
+    @pytest.mark.asyncio
+    async def test_respects_gitignore(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
+        (tmp_path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+        (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
+        (tmp_path / "skip.tmp").write_text("no", encoding="utf-8")
+
+        count, _ = await upload_directory(tmp_path, "viking://temp/gi", viking_fs)
+
+        assert count == 1
+        assert "viking://temp/gi/keep.txt" in viking_fs.files
+        assert "viking://temp/gi/skip.tmp" not in viking_fs.files
 
 
 # ---------------------------------------------------------------------------
@@ -510,9 +543,6 @@ class TestUploadDirectoryEdgeCases:
             def mkdir(self, path: str) -> None:
                 pass
 
-            def write(self, path: str, content: bytes) -> None:
-                raise IOError("write error")
-
         class FailingWriteFS:
             agfs = FailingAGFS()
 
@@ -521,6 +551,9 @@ class TestUploadDirectoryEdgeCases:
 
             async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
                 pass
+
+            async def write_file_bytes(self, uri: str, content: bytes) -> None:
+                raise IOError("write error")
 
         (tmp_path / "ok.py").write_text("print(1)", encoding="utf-8")
 
