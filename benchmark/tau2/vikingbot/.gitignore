@@ -1,0 +1,16 @@
+# Generated eval artifacts
+result/
+result_*/
+trajectory/
+trajectory_*/
+
+# External tau2-bench checkout (see README / setup_env.sh)
+tau2-bench/
+
+# Reports & logs
+full_test_report*.txt
+*.log
+
+# Python caches
+__pycache__/
+*.pyc

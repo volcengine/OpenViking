@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CONFIG="$SCRIPT_DIR/config/baseline.yaml"
 EXECUTE=false
@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'EOF'
 Usage:
-  benchmark/tau2/run_full_eval.sh [--config PATH] [--run-id ID] [--execute] [--preflight]
+  benchmark/tau2/llm/run_full_eval.sh [--config PATH] [--run-id ID] [--execute] [--preflight]
 
 Without --execute the script only writes run_plan artifacts.
 EOF
