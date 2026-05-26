@@ -17,7 +17,7 @@ from openviking.privacy import (
 )
 from openviking.server.identity import RequestContext
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.viking_fs import GrepEngine, VikingFS
+from openviking.storage.viking_fs import VikingFS
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
@@ -243,9 +243,7 @@ class FSService:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         level_limit: int = 5,
-        engine: GrepEngine = "auto",
-        switch_to_remote_threshold: int = 1000,
-        remote_return_limit: int = 100,
+        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
@@ -258,8 +256,6 @@ class FSService:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             level_limit=level_limit,
-            engine=engine,
-            switch_to_remote_threshold=switch_to_remote_threshold,
             remote_return_limit=remote_return_limit,
             ctx=ctx,
         )

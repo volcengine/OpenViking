@@ -502,14 +502,8 @@ enum Commands {
         /// Maximum depth level to traverse (default: 10)
         #[arg(short = 'L', long = "level-limit", default_value = "10")]
         level_limit: i32,
-        /// Search engine mode: "auto" (default) or "fs"
-        #[arg(long = "engine", default_value = "auto")]
-        engine: Option<String>,
-        /// L2 record count threshold to switch to vikingdb; 0 means always use vikingdb
-        #[arg(long = "switch-to-remote-threshold", default_value = "1000")]
-        switch_to_remote_threshold: Option<i32>,
-        /// Maximum files recalled by vikingdb bm25 (1-100000)
-        #[arg(long = "remote-return-limit", default_value = "100")]
+        /// Maximum files recalled by vikingdb bm25; 0 means auto-adapt (0-100000)
+        #[arg(long = "remote-return-limit", default_value = "0")]
         remote_return_limit: Option<i32>,
     },
     /// [Data] Run file glob pattern search
@@ -1498,8 +1492,6 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
-            engine,
-            switch_to_remote_threshold,
             remote_return_limit,
         } => {
             handlers::handle_grep(
@@ -1509,8 +1501,6 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
-                engine,
-                switch_to_remote_threshold,
                 remote_return_limit,
                 ctx,
             )

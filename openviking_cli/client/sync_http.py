@@ -7,7 +7,6 @@ Wraps AsyncHTTPClient with synchronous methods.
 
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.storage.viking_fs import GrepEngine
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils import run_async
@@ -314,9 +313,8 @@ class SyncHTTPClient:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
-        engine: GrepEngine = "auto",
-        switch_to_remote_threshold: int = 1000,
-        remote_return_limit: int = 100,
+        level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search with pattern."""
         return run_async(
@@ -326,8 +324,7 @@ class SyncHTTPClient:
                 case_insensitive,
                 node_limit,
                 exclude_uri,
-                engine,
-                switch_to_remote_threshold,
+                level_limit,
                 remote_return_limit,
             )
         )

@@ -16,7 +16,6 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
-from openviking.storage.viking_fs import GrepEngine
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import _resolve_levels, merge_time_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
@@ -112,14 +111,11 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = None
     level_limit: int = 5
-    engine: GrepEngine = "auto"
-    switch_to_remote_threshold: int = Field(
-        default=1000,
-        ge=0,
-        description="L2 record count threshold to switch to vikingdb; 0 means always use vikingdb",
-    )
     remote_return_limit: int = Field(
-        default=100, ge=1, le=100000, description="Maximum files recalled by vikingdb bm25"
+        default=0,
+        ge=0,
+        le=100000,
+        description="Maximum files recalled by vikingdb bm25; 0 means auto-adapt",
     )
 
 
@@ -238,8 +234,6 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
-            engine=request.engine,
-            switch_to_remote_threshold=request.switch_to_remote_threshold,
             remote_return_limit=request.remote_return_limit,
         )
     except AGFSNotFoundError:

@@ -11,8 +11,6 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.storage.viking_fs import GrepEngine
-
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
 from openviking.telemetry import TelemetryRequest
@@ -477,9 +475,8 @@ class AsyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
-        engine: GrepEngine = "auto",
-        switch_to_remote_threshold: int = 1000,
-        remote_return_limit: int = 100,
+        level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
@@ -489,8 +486,7 @@ class AsyncOpenViking:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             exclude_uri=exclude_uri,
-            engine=engine,
-            switch_to_remote_threshold=switch_to_remote_threshold,
+            level_limit=level_limit,
             remote_return_limit=remote_return_limit,
         )
 

@@ -22,10 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
-
-# Grep engine mode type alias — import this instead of repeating Literal["auto", "fs"]
-GrepEngine = Literal["auto", "fs"]
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.namespace import (
     NamespaceShapeError,
@@ -55,13 +52,14 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.grep_config import GrepEngine
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
 
@@ -125,6 +123,7 @@ def init_viking_fs(
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
+    grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -133,10 +132,10 @@ def init_viking_fs(
 
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding)
-        agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
         retrieval_config: Retrieval ranking configuration
+        grep_config: Grep engine configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -149,6 +148,7 @@ def init_viking_fs(
         rerank_config=rerank_config,
         vector_store=vector_store,
         retrieval_config=retrieval_config,
+        grep_config=grep_config,
         encryptor=encryptor,
     )
 
@@ -221,6 +221,7 @@ class VikingFS:
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
+        grep_config: Optional["GrepConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -230,6 +231,7 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
+        self.grep_config = grep_config
         self._encryptor = encryptor
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
@@ -692,9 +694,7 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 5,
         ctx: Optional[RequestContext] = None,
-        engine: GrepEngine = "auto",
-        switch_to_remote_threshold: int = 1000,
-        remote_return_limit: int = 100,
+        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -711,11 +711,9 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
-            engine: Search engine mode: "auto" (default) or "fs"
-            switch_to_remote_threshold: L2 record count threshold to switch to
-                vikingdb; 0 means always use vikingdb (default: 1000)
-            remote_return_limit: Maximum files recalled by vikingdb bm25
-                (default: 100, max: 100000)
+            remote_return_limit: Maximum files recalled by vikingdb bm25.
+                0 means auto-adapt: use maximum limit (100000) to avoid
+                truncating bm25 recall results (default: 0, max: 100000)
 
         Returns:
             Dict with matches, count, match_count, files_scanned
@@ -723,8 +721,17 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         await self.stat(uri, ctx=ctx)
 
-        # Clamp remote_return_limit to valid range
-        remote_return_limit = max(1, min(remote_return_limit, 100000))
+        # Clamp remote_return_limit to valid range (0 = auto, 1-100000 = explicit)
+        if remote_return_limit < 0:
+            remote_return_limit = 0
+        elif remote_return_limit > 0:
+            remote_return_limit = max(1, min(remote_return_limit, 100000))
+
+        # Read engine and threshold from grep_config (ov.conf)
+        engine = self.grep_config.engine if self.grep_config else "auto"
+        switch_to_remote_threshold = (
+            self.grep_config.switch_to_remote_threshold if self.grep_config else 1000
+        )
 
         resolved_engine = await self._resolve_grep_engine(
             engine, uri, ctx, switch_to_remote_threshold
@@ -886,17 +893,25 @@ class VikingFS:
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
 
+        # Split regex alternation (e.g. "error|warning|fail") into individual keywords
+        # for bm25 search. Limit to 10 keywords per VikingDB API constraint.
+        keywords = [kw.strip() for kw in pattern.split("|") if kw.strip()][:10]
+        filter_expr = And(
+            [
+                PathScope("uri", uri),
+                Eq("level", 2),
+            ]
+        )
+
+        # Auto-adapt remote_return_limit: when 0 (default), use the maximum
+        # limit to recall all bm25-matched candidates, ensuring no results are
+        # truncated by an arbitrary cap. The real cost is in phase 2 (local
+        # regex on recalled files), not in bm25 recall itself.
+        if remote_return_limit == 0:
+            remote_return_limit = 100000
+
         # Step 1: vikingdb recall candidate files
         try:
-            # Split regex alternation (e.g. "error|warning|fail") into individual keywords
-            # for bm25 search. Limit to 10 keywords per VikingDB API constraint.
-            keywords = [kw.strip() for kw in pattern.split("|") if kw.strip()][:10]
-            filter_expr = And(
-                [
-                    PathScope("uri", uri),
-                    Eq("level", 2),
-                ]
-            )
             result = await vector_store.search_by_keywords(
                 keywords=keywords,
                 mode="bm25",

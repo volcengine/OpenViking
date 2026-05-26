@@ -8,8 +8,6 @@ Defines the abstract base class that both LocalClient and AsyncHTTPClient implem
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.storage.viking_fs import GrepEngine
-
 from openviking.telemetry import TelemetryRequest
 
 
@@ -196,9 +194,8 @@ class BaseClient(ABC):
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
         node_limit: Optional[int] = None,
-        engine: GrepEngine = "auto",
-        switch_to_remote_threshold: int = 1000,
-        remote_return_limit: int = 100,
+        level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
