@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+import openviking
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
@@ -14,8 +15,6 @@ from openviking.storage.vectordb.collection.result import (
     SearchItemResult,
     SearchResult,
 )
-
-import openviking
 
 # Default request timeout (seconds)
 DEFAULT_TIMEOUT = 30
@@ -541,8 +540,6 @@ class HttpCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/keywords"
         payload = {
@@ -555,8 +552,6 @@ class HttpCollection(ICollection):
             "output_fields": json.dumps(output_fields) if output_fields else None,
             "limit": limit,
             "offset": offset,
-            "mode": mode,
-            "fields": json.dumps(fields) if fields else None,
         }
         payload = {k: v for k, v in payload.items() if v is not None}
         response = requests.post(

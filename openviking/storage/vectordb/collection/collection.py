@@ -73,8 +73,6 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -350,8 +348,6 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ):
         """Search by keywords or query string using vectorization.
 
@@ -364,8 +360,6 @@ class Collection:
             filters (Optional[Dict[str, Any]]): Query filters to narrow down results. Defaults to None.
             output_fields (Optional[List[str]]): List of field names to include in results.
                 If None, returns all fields. Defaults to None.
-            mode (Optional[str]): Search mode, e.g. "bm25" for full-text search. Defaults to None.
-            fields (Optional[List[str]]): Text fields to search in (for bm25 mode). Defaults to None.
 
         Returns:
             SearchResult: Search results containing matching documents with scores and field values.
@@ -377,7 +371,7 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.search_by_keywords(
-            index_name, keywords, query, limit, offset, filters, output_fields, mode, fields
+            index_name, keywords, query, limit, offset, filters, output_fields
         )
 
     def search_by_id(

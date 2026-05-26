@@ -167,8 +167,6 @@ class SearchByKeywordsRequest(BaseModel):
     output_fields: Optional[Any] = Field(None, description="Output fields")
     limit: Optional[int] = Field(10, description="Result limit")
     offset: Optional[int] = Field(0, description="Result offset")
-    mode: Optional[str] = Field(None, description="Search mode, e.g. bm25")
-    fields: Optional[Any] = Field(None, description="Text fields to search in")
 
 
 # ==================== Response Model ====================

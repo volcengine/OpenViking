@@ -110,8 +110,6 @@ class MockCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         raise NotImplementedError("MockCollection.search_by_keywords is not supported")
 

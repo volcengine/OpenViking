@@ -560,8 +560,6 @@ class VolcengineCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -574,8 +572,6 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
-            "mode": mode,
-            "fields": fields,
         }
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)

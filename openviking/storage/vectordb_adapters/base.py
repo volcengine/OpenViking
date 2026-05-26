@@ -531,8 +531,6 @@ class CollectionAdapter(ABC):
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[list[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[list[str]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         result = coll.search_by_keywords(
@@ -543,8 +541,6 @@ class CollectionAdapter(ABC):
             offset=offset,
             filters=self._compile_filter(filter),
             output_fields=output_fields,
-            mode=mode,
-            fields=fields,
         )
         records: list[Dict[str, Any]] = []
         for item in result.data:

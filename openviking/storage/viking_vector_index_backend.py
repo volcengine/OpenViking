@@ -507,8 +507,6 @@ class _SingleAccountBackend:
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         try:
             if self._bound_account_id:
@@ -528,8 +526,6 @@ class _SingleAccountBackend:
                 offset=offset,
                 filter=filter,
                 output_fields=output_fields,
-                mode=mode,
-                fields=fields,
             )
         except Exception as e:
             logger.error("Error searching by keywords: %s", e)
@@ -828,8 +824,6 @@ class VikingVectorIndexBackend:
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
         *,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
@@ -844,8 +838,6 @@ class VikingVectorIndexBackend:
             offset=offset,
             filter=filter,
             output_fields=output_fields,
-            mode=mode,
-            fields=fields,
         )
 
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:

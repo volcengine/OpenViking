@@ -436,8 +436,6 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         """Search by keywords by generating vectors and calling search_by_vector.
 
@@ -449,8 +447,6 @@ class LocalCollection(ICollection):
             offset: Number of results to skip
             filters: Filter conditions
             output_fields: List of fields to return
-            mode: Search mode (ignored for local backend)
-            fields: Text fields to search (ignored for local backend)
 
         Returns:
             SearchResult: Search results

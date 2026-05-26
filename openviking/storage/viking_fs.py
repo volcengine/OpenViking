@@ -904,9 +904,9 @@ class VikingFS:
         )
 
         # Auto-adapt remote_return_limit: when 0 (default), use the maximum
-        # limit to recall all bm25-matched candidates, ensuring no results are
-        # truncated by an arbitrary cap. The real cost is in phase 2 (local
-        # regex on recalled files), not in bm25 recall itself.
+        # limit (100000) so that search_by_keywords returns all matching
+        # documents without truncation. The real cost is in phase 2 (local
+        # regex on recalled files), not in the bm25 recall itself.
         if remote_return_limit == 0:
             remote_return_limit = 100000
 
@@ -914,8 +914,6 @@ class VikingFS:
         try:
             result = await vector_store.search_by_keywords(
                 keywords=keywords,
-                mode="bm25",
-                fields=["content"],
                 limit=remote_return_limit,
                 filter=filter_expr,
                 output_fields=["uri"],
