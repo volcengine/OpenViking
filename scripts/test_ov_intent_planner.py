@@ -23,7 +23,6 @@ from openviking_cli.retrieve.types import ContextType
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
-
 DEFAULT_CONFIG = Path.home() / ".openviking" / "ov.conf"
 EXPECTED_MODEL = "ollama/guoxuter/ov_intent_analysis_sft:v1_q8"
 
