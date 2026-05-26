@@ -257,6 +257,27 @@ def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatc
     assert instances[1]._initialized is True
 
 
+def test_openviking_client_handle_filters_kwargs_for_direct_calls(monkeypatch):
+    class FakeHTTPClient:
+        def __init__(self, **_kwargs):
+            self._initialized = False
+
+        def initialize(self):
+            self._initialized = True
+
+        def find(self, query):
+            return {"query": query}
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FakeHTTPClient)
+
+    client = ensure_client(OpenVikingConnection(url="http://localhost:1933"))
+    result = client.find("recover", unsupported="ignored")
+
+    assert result == {"query": "recover"}
+
+
 def test_openviking_client_evicts_but_does_not_retry_mutating_call(monkeypatch):
     instances = []
 

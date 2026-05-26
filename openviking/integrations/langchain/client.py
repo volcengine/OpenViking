@@ -38,7 +38,6 @@ _RECOVERABLE_RUNTIME_MESSAGE_FRAGMENTS = (
     "event loop is closed",
     "attached to a different loop",
     "bound to a different event loop",
-    "is bound to a different event loop",
 )
 
 
@@ -113,8 +112,11 @@ class OpenVikingClientHandle:
         return self._client
 
     def _openviking_call(self, method_name: str, /, **kwargs: Any) -> Any:
+        return self._call_with_recovery(method_name, **kwargs)
+
+    def _call_with_recovery(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         try:
-            return _call_client_method(self.get(), method_name, **kwargs)
+            return _call_client_method(self.get(), method_name, *args, **kwargs)
         except Exception as exc:
             if not _is_recoverable_client_error(exc):
                 raise
@@ -122,7 +124,7 @@ class OpenVikingClientHandle:
             if not _should_retry_method(method_name):
                 raise
             try:
-                return _call_client_method(self.get(), method_name, **kwargs)
+                return _call_client_method(self.get(), method_name, *args, **kwargs)
             except Exception as retry_exc:
                 if _is_recoverable_client_error(retry_exc):
                     self.reset()
@@ -134,20 +136,7 @@ class OpenVikingClientHandle:
             return attr
 
         def recovered_method(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return getattr(self.get(), name)(*args, **kwargs)
-            except Exception as exc:
-                if not _is_recoverable_client_error(exc):
-                    raise
-                self.reset()
-                if not _should_retry_method(name):
-                    raise
-                try:
-                    return getattr(self.get(), name)(*args, **kwargs)
-                except Exception as retry_exc:
-                    if _is_recoverable_client_error(retry_exc):
-                        self.reset()
-                    raise
+            return self._call_with_recovery(name, *args, **kwargs)
 
         return recovered_method
 
@@ -239,12 +228,21 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
     return client
 
 
-def _call_client_method(client: Any, method_name: str, /, **kwargs: Any) -> Any:
+def _call_client_method(
+    client: Any,
+    method_name: str,
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     method = getattr(client, method_name)
     try:
         signature = inspect.signature(method)
     except (TypeError, ValueError):
-        return method(**{key: value for key, value in kwargs.items() if value is not None})
+        return method(
+            *args,
+            **{key: value for key, value in kwargs.items() if value is not None},
+        )
 
     accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
@@ -258,7 +256,7 @@ def _call_client_method(client: Any, method_name: str, /, **kwargs: Any) -> Any:
             for key, value in kwargs.items()
             if value is not None and key in signature.parameters
         }
-    return method(**filtered)
+    return method(*args, **filtered)
 
 
 def _should_retry_method(method_name: str) -> bool:
