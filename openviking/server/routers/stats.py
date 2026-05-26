@@ -10,6 +10,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.session.memory.graph_health import inspect_memory_graph_health
 from openviking.storage.stats_aggregator import MEMORY_CATEGORIES, StatsAggregator
 from openviking_cli.utils import get_logger
 
@@ -76,5 +77,34 @@ async def get_session_stats(
             error=ErrorInfo(
                 code="INTERNAL_ERROR",
                 message=f"Failed to retrieve session stats: {type(e).__name__}",
+            ),
+        )
+
+
+@router.get("/memory-graph")
+async def get_memory_graph_health(
+    uri: str = Query(..., description="Memory root URI to scan"),
+    node_limit: int = Query(5000, ge=1, le=200000, description="Maximum tree entries to scan"),
+    sample_limit: int = Query(20, ge=0, le=200, description="Maximum violation samples to return"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Inspect stored memory link/backlink graph consistency under a root URI."""
+    service = get_service()
+    try:
+        result = await inspect_memory_graph_health(
+            service.viking_fs,
+            uri,
+            ctx=_ctx,
+            node_limit=node_limit,
+            sample_limit=sample_limit,
+        )
+        return Response(status="ok", result=result)
+    except Exception as e:
+        logger.error("Failed to inspect memory graph for %s: %s", uri, e)
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="INTERNAL_ERROR",
+                message=f"Failed to inspect memory graph: {type(e).__name__}",
             ),
         )
