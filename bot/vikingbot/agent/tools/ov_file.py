@@ -245,7 +245,7 @@ class VikingSearchTool(OVFileTool):
         tool_context: "ToolContext",
         query: str,
         target_uri: Optional[str] = "",
-        min_score: float = 0.01,
+        min_score: float = 0.35,
         **kwargs: Any,
     ) -> str:
         try:
