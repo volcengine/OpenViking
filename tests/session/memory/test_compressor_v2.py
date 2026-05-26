@@ -24,6 +24,7 @@ from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
@@ -225,6 +226,76 @@ async def test_resolve_supersedes_consumes_field_only_after_resolved():
     assert operations.delete_file_contents[0].uri == old_uri
     assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
     assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (f"{exp_dir}/new.md", traj_uri, "derived_from")
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_migrates_peer_links_to_replacement_uri():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    new_uri = f"{exp_dir}/new.md"
+    peer_uri = f"{exp_dir}/peer.md"
+    topic_uri = "viking://agent/default/memories/topics/refund.md"
+    outbound = StoredLink(
+        from_uri=old_uri,
+        to_uri=topic_uri,
+        link_type="related_to",
+        description="old pointed to topic",
+    )
+    inbound = StoredLink(
+        from_uri=peer_uri,
+        to_uri=old_uri,
+        link_type="evolved_from",
+        description="peer pointed to old",
+    )
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[outbound.model_dump()],
+        backlinks=[inbound.model_dump()],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[new_uri],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert inheritance_map == {}
+    assert operations.errors == []
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (new_uri, topic_uri, "related_to"),
+        (peer_uri, new_uri, "evolved_from"),
+    }
+    assert old_uri not in {
+        uri
+        for link in operations.resolved_links
+        for uri in (link.from_uri, link.to_uri)
+    }
 
 
 @pytest.mark.asyncio
@@ -244,6 +315,11 @@ async def test_resolve_supersedes_accepts_multiple_replaced_experiences():
                     "from_uri": old_uri_1,
                     "to_uri": traj_uri_1,
                     "link_type": "derived_from",
+                },
+                {
+                    "from_uri": old_uri_1,
+                    "to_uri": old_uri_2,
+                    "link_type": "related_to",
                 }
             ],
         ),
@@ -289,6 +365,15 @@ async def test_resolve_supersedes_accepts_multiple_replaced_experiences():
     assert {item.uri for item in operations.delete_file_contents} == {old_uri_1, old_uri_2}
     assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
     assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri_1, traj_uri_2]}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (f"{exp_dir}/new.md", traj_uri_1, "derived_from"),
+        (f"{exp_dir}/new.md", traj_uri_2, "derived_from"),
+    }
+    assert not any(
+        uri in {old_uri_1, old_uri_2}
+        for link in operations.resolved_links
+        for uri in (link.from_uri, link.to_uri)
+    )
 
 
 @pytest.mark.asyncio

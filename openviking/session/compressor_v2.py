@@ -1955,6 +1955,7 @@ class SessionCompressorV2:
         from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         inheritance_map: Dict[str, List[str]] = {}
+        replacement_map: Dict[str, str] = {}
 
         exp_dir: str = ""
         if hasattr(provider, "_render_experience_dir"):
@@ -1997,9 +1998,83 @@ class SessionCompressorV2:
             return inherited
 
         def attach_inherited_source_links(new_uri: str, source_uris: List[str]) -> None:
+            if not source_uris:
+                return
             current = inheritance_map.setdefault(new_uri, [])
             for uri in source_uris:
                 unique_append(current, uri)
+
+        def attach_inherited_graph_links(new_uri: str, old_mf: Any) -> None:
+            if not new_uri or not old_mf.uri:
+                return
+
+            if operations.resolved_links is None:
+                operations.resolved_links = []
+            existing = {
+                (link.from_uri, link.to_uri, link.link_type, link.match_text or "")
+                for link in operations.resolved_links
+            }
+
+            for raw_link in [*(old_mf.links or []), *(old_mf.backlinks or [])]:
+                if not isinstance(raw_link, dict):
+                    continue
+                from_uri = str(raw_link.get("from_uri") or "")
+                to_uri = str(raw_link.get("to_uri") or "")
+                if old_mf.uri not in {from_uri, to_uri}:
+                    continue
+
+                inherited = dict(raw_link)
+                if from_uri == old_mf.uri:
+                    inherited["from_uri"] = new_uri
+                if to_uri == old_mf.uri:
+                    inherited["to_uri"] = new_uri
+
+                if not inherited.get("from_uri") or not inherited.get("to_uri"):
+                    continue
+                if inherited["from_uri"] == inherited["to_uri"]:
+                    continue
+
+                try:
+                    link = StoredLink(**inherited)
+                except Exception as e:
+                    tracer.error(
+                        f"[supersedes] failed to inherit graph link from {old_mf.uri}: {e}"
+                    )
+                    continue
+
+                key = (link.from_uri, link.to_uri, link.link_type, link.match_text or "")
+                if key in existing:
+                    continue
+                operations.resolved_links.append(link)
+                existing.add(key)
+
+        def remap_replacement_graph_links() -> None:
+            if not replacement_map or not operations.resolved_links:
+                return
+
+            remapped: List[StoredLink] = []
+            existing: set[tuple[str, str, str, str]] = set()
+            for link in operations.resolved_links:
+                from_uri = replacement_map.get(link.from_uri, link.from_uri)
+                to_uri = replacement_map.get(link.to_uri, link.to_uri)
+                if not from_uri or not to_uri or from_uri == to_uri:
+                    continue
+                next_link = link
+                if from_uri != link.from_uri or to_uri != link.to_uri:
+                    next_link = link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri})
+
+                key = (
+                    next_link.from_uri,
+                    next_link.to_uri,
+                    next_link.link_type,
+                    next_link.match_text or "",
+                )
+                if key in existing:
+                    continue
+                remapped.append(next_link)
+                existing.add(key)
+
+            operations.resolved_links = remapped
 
         def append_delete_target(old_mf: Any) -> None:
             if all(existing.uri != old_mf.uri for existing in operations.delete_file_contents):
@@ -2026,7 +2101,9 @@ class SessionCompressorV2:
                 append_delete_target(old_mf)
                 tracer.info(f"[supersedes] '{candidate}' → queued for delete: {old_uri}")
                 if new_uri:
+                    replacement_map[old_uri] = new_uri
                     attach_inherited_source_links(new_uri, collect_inherited_source_links(old_mf))
+                    attach_inherited_graph_links(new_uri, old_mf)
                 return True, False, None
             except Exception as e:
                 if old_uri in prefetched_uris:
@@ -2108,6 +2185,7 @@ class SessionCompressorV2:
             else:
                 operations.errors.extend(unresolved_messages)
 
+        remap_replacement_graph_links()
         return inheritance_map
 
     def _attach_source_trajectory_links_to_operations(

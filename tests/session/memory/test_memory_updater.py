@@ -424,6 +424,149 @@ class TestMemoryUpdater:
         assert trajectory.backlinks == [other_link.model_dump()]
 
     @pytest.mark.asyncio
+    async def test_apply_operations_migrates_replacement_links_and_cleans_old_uri(self):
+        old_exp_uri = "viking://agent/a/memories/experiences/old.md"
+        new_exp_uri = "viking://agent/a/memories/experiences/new.md"
+        peer_exp_uri = "viking://agent/a/memories/experiences/peer.md"
+        traj_uri = "viking://agent/a/memories/trajectories/t1.md"
+        old_source_link = StoredLink(
+            from_uri=old_exp_uri,
+            to_uri=traj_uri,
+            link_type="derived_from",
+        )
+        migrated_source_link = StoredLink(
+            from_uri=new_exp_uri,
+            to_uri=traj_uri,
+            link_type="derived_from",
+        )
+        old_peer_link = StoredLink(
+            from_uri=peer_exp_uri,
+            to_uri=old_exp_uri,
+            link_type="evolved_from",
+        )
+        migrated_peer_link = StoredLink(
+            from_uri=peer_exp_uri,
+            to_uri=new_exp_uri,
+            link_type="evolved_from",
+        )
+
+        schema = MemoryTypeSchema(
+            memory_type="experiences",
+            description="experience memory",
+            directory="viking://agent/a/memories/experiences",
+            filename_template="{{ experience_name }}.md",
+            fields=[
+                MemoryField(
+                    name="experience_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
+            ],
+            content_template="{{ content }}",
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        store = {
+            old_exp_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=old_exp_uri,
+                    content="old",
+                    links=[old_source_link.model_dump()],
+                    backlinks=[old_peer_link.model_dump()],
+                    memory_type="experiences",
+                    extra_fields={"experience_name": "old"},
+                )
+            ),
+            peer_exp_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=peer_exp_uri,
+                    content="peer",
+                    links=[old_peer_link.model_dump()],
+                    memory_type="experiences",
+                    extra_fields={"experience_name": "peer"},
+                )
+            ),
+            traj_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=traj_uri,
+                    content="trajectory",
+                    backlinks=[old_source_link.model_dump()],
+                    memory_type="trajectories",
+                )
+            ),
+        }
+
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
+        mock_viking_fs.write_file = AsyncMock(side_effect=mock_write_file)
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        async def mock_apply_delete(uri, ctx):
+            store.pop(uri, None)
+
+        updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        result = await updater.apply_operations(
+            operations=ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        memory_fields={
+                            "experience_name": "new",
+                            "content": "new",
+                        },
+                        memory_type="experiences",
+                        uris=[new_exp_uri],
+                    )
+                ],
+                delete_file_contents=[
+                    MemoryFile(
+                        uri=old_exp_uri,
+                        links=[old_source_link.model_dump()],
+                        backlinks=[old_peer_link.model_dump()],
+                        memory_type="experiences",
+                    )
+                ],
+                errors=[],
+                resolved_links=[migrated_source_link, migrated_peer_link],
+            ),
+            ctx=ctx,
+        )
+
+        assert result.written_uris == [new_exp_uri]
+        assert result.deleted_uris == [old_exp_uri]
+        assert old_exp_uri not in store
+
+        new_exp = MemoryFileUtils.read(store[new_exp_uri], uri=new_exp_uri)
+        peer_exp = MemoryFileUtils.read(store[peer_exp_uri], uri=peer_exp_uri)
+        trajectory = MemoryFileUtils.read(store[traj_uri], uri=traj_uri)
+        assert new_exp.links == [migrated_source_link.model_dump()]
+        assert new_exp.backlinks == [migrated_peer_link.model_dump()]
+        assert peer_exp.links == [migrated_peer_link.model_dump()]
+        assert trajectory.backlinks == [migrated_source_link.model_dump()]
+        for content in (new_exp, peer_exp, trajectory):
+            for link in [*(content.links or []), *(content.backlinks or [])]:
+                assert old_exp_uri not in {link.get("from_uri"), link.get("to_uri")}
+
+    @pytest.mark.asyncio
     async def test_apply_operations_heals_preserved_forward_links_on_upsert(self):
         exp_uri = "viking://agent/a/memories/experiences/identity.md"
         traj_uri = "viking://agent/a/memories/trajectories/t1.md"
