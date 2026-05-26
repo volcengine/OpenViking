@@ -115,9 +115,6 @@ python scripts/commit_trajectory_to_memory.py \
   --include-eval-result
 ```
 
-Helper utilities: `scripts/stat_trajectory.py` (token / tool-call stats) and
-`scripts/check_openviking_tool_calls.py` (count runs that invoked `openviking_*` tools).
-
 ---
 
 ## How the runner adapts VikingBot for tau2
@@ -128,12 +125,6 @@ required**:
 - **Tool registry swap** — by default the agent's built-in tools are unregistered and only the
   tau2 environment tools (plus `communicate_with_user`) are registered; pass `--keep-default-tools`
   to also keep VikingBot/OpenViking tools (e.g. memory).
-- **Simulated time** — `_patch_sim_time` rewrites the agent's "Current Time" to tau2's fixed
-  simulation time so behavior is reproducible.
-- **Advisory memory scope guard** — an inline guard prompt (`SCOPE_PROMPT`) is appended to keep
-  retrieved memories advisory and prevent the agent from broadening the user's requested scope
-  before write-like tool calls. (The parent harness ships an equivalent treatment as
-  `../config/scope_prompts/generic_memory_scope.md`.)
 - **Epoch-based memory commit** — `commit_trajectory_to_memory.py` writes train trajectories
   (optionally only failed ones, via `--only-wrong`) into OpenViking memory between epochs.
 
@@ -150,4 +141,3 @@ required**:
   - `run_tau2_domain.sh` — runs all tasks in a `{domain}_{split}` slice with bounded concurrency
   - `run_eval_reward.sh` — average reward over a result folder
   - `commit_trajectory_to_memory.py` — commit trajectories into OpenViking memory
-  - `stat_trajectory.py`, `check_openviking_tool_calls.py` — analysis helpers

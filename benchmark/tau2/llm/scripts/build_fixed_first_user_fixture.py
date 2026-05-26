@@ -94,7 +94,7 @@ def build_fixture(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", type=Path, default=Path("benchmark/tau2/.external/tau2-bench"))
+    parser.add_argument("--repo", type=Path, default=Path("benchmark/tau2/llm/.external/tau2-bench"))
     parser.add_argument("--results-json", type=Path, required=True)
     parser.add_argument("--domain", required=True)
     parser.add_argument("--task-split-name", default="test")
