@@ -12,7 +12,7 @@ Category rerank and other harness-only diagnostics are intentionally left out.
 ## Layout
 
 ```text
-benchmark/tau2/
+benchmark/tau2/llm/
 ├── config/
 │   ├── baseline.yaml
 │   ├── official.yaml
@@ -25,9 +25,9 @@ benchmark/tau2/
 └── run_full_eval.sh
 ```
 
-Generated eval artifacts are written to `benchmark/tau2/result/<run_id>/`.
+Generated eval artifacts are written to `benchmark/tau2/llm/result/<run_id>/`.
 Memory corpus artifacts are cached outside the run id at
-`benchmark/tau2/result/memory_corpora/` by default.
+`benchmark/tau2/llm/result/memory_corpora/` by default.
 
 ## Quick Start
 
@@ -59,8 +59,8 @@ For a local one-command setup, clone and install TAU-2 into ignored benchmark
 directories:
 
 ```bash
-benchmark/tau2/scripts/setup_tau2_repo.sh
-source benchmark/tau2/.env.tau2
+benchmark/tau2/llm/scripts/setup_tau2_repo.sh
+source benchmark/tau2/llm/.env.tau2
 ```
 
 For PR-B-compatible reproduction, pin the TAU-2 checkout to a ref that includes
@@ -68,9 +68,9 @@ the confirmation-aware text-user-simulator prompt. The original PR-B evidence
 used the open TAU-2 fix PR head (`79dbf0c18ac7637aedf869cb3122babcd57aaf17`):
 
 ```bash
-benchmark/tau2/scripts/setup_tau2_repo.sh \
+benchmark/tau2/llm/scripts/setup_tau2_repo.sh \
   --ref refs/pull/297/head
-source benchmark/tau2/.env.tau2
+source benchmark/tau2/llm/.env.tau2
 ```
 
 Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/tau2-bench/pull/297).
@@ -78,7 +78,7 @@ Reference: [sierra-research/tau2-bench#297](https://github.com/sierra-research/t
 Plan the default benchmark without running TAU-2:
 
 ```bash
-python benchmark/tau2/scripts/run_eval.py --config benchmark/tau2/config/baseline.yaml --plan-only
+python benchmark/tau2/llm/scripts/run_eval.py --config benchmark/tau2/llm/config/baseline.yaml --plan-only
 ```
 
 Add `--preflight` or `--strict-preflight` when you want the runner to write a
@@ -87,8 +87,8 @@ small environment/config check next to the run plan.
 After setup, verify the local TAU-2 link and write a one-cell run plan:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/baseline.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/baseline.yaml \
   --strict-preflight \
   --domain retail \
   --strategy-id memory_v2_experience_only \
@@ -99,8 +99,8 @@ benchmark/tau2/run_full_eval.sh \
 Plan a one-cell Memory V2 pre-write smoke:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/baseline.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/baseline.yaml \
   --domain retail \
   --strategy-id memory_v2_prewrite \
   --num-tasks 1 \
@@ -110,8 +110,8 @@ benchmark/tau2/run_full_eval.sh \
 Plan a one-cell trajectory memory smoke:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/trajectory.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/trajectory.yaml \
   --domain retail \
   --strategy-id memory_v2_trajectory_view \
   --num-tasks 1 \
@@ -122,8 +122,8 @@ benchmark/tau2/run_full_eval.sh \
 Run the Memory V2 8-trial matrix (`retail + airline` x 2 strategies x 8 repeats):
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/baseline.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/baseline.yaml \
   --execute
 ```
 
@@ -143,15 +143,15 @@ the same confirmation-aware simulator policy but does not require fixed fixtures
 Run one bootstrap pass per domain:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/fixed_first_user_bootstrap.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/fixed_first_user_bootstrap.yaml \
   --domain retail \
   --run-id fixed_first_user_bootstrap_retail \
   --strict-preflight \
   --execute
 
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/fixed_first_user_bootstrap.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/fixed_first_user_bootstrap.yaml \
   --domain airline \
   --run-id fixed_first_user_bootstrap_airline \
   --strict-preflight \
@@ -161,31 +161,31 @@ benchmark/tau2/run_full_eval.sh \
 Then convert each bootstrap `results.json` into a fixture:
 
 ```bash
-RETAIL_RESULTS=benchmark/tau2/result/fixed_first_user_bootstrap_retail/memory_cells/fixed_first_user_bootstrap_retail_retail_no_memory_r1/fixed_first_user_bootstrap_retail_retail_no_memory_r1.json
-AIRLINE_RESULTS=benchmark/tau2/result/fixed_first_user_bootstrap_airline/memory_cells/fixed_first_user_bootstrap_airline_airline_no_memory_r1/fixed_first_user_bootstrap_airline_airline_no_memory_r1.json
+RETAIL_RESULTS=benchmark/tau2/llm/result/fixed_first_user_bootstrap_retail/memory_cells/fixed_first_user_bootstrap_retail_retail_no_memory_r1/fixed_first_user_bootstrap_retail_retail_no_memory_r1.json
+AIRLINE_RESULTS=benchmark/tau2/llm/result/fixed_first_user_bootstrap_airline/memory_cells/fixed_first_user_bootstrap_airline_airline_no_memory_r1/fixed_first_user_bootstrap_airline_airline_no_memory_r1.json
 
-python benchmark/tau2/scripts/build_fixed_first_user_fixture.py \
+python benchmark/tau2/llm/scripts/build_fixed_first_user_fixture.py \
   --repo "$TAU2_REPO" \
   --results-json "$RETAIL_RESULTS" \
   --domain retail \
   --task-split-name test \
-  --output benchmark/tau2/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json \
+  --output benchmark/tau2/llm/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json \
   --require-full-split
 
-python benchmark/tau2/scripts/build_fixed_first_user_fixture.py \
+python benchmark/tau2/llm/scripts/build_fixed_first_user_fixture.py \
   --repo "$TAU2_REPO" \
   --results-json "$AIRLINE_RESULTS" \
   --domain airline \
   --task-split-name test \
-  --output benchmark/tau2/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json \
+  --output benchmark/tau2/llm/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json \
   --require-full-split
 ```
 
 Export the generated fixture paths for subsequent strict runs:
 
 ```bash
-export TAU2_RETAIL_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json"
-export TAU2_AIRLINE_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json"
+export TAU2_RETAIL_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/llm/result/fixed_first_user_fixtures/retail/fixed_first_user_fixture.json"
+export TAU2_AIRLINE_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/llm/result/fixed_first_user_fixtures/airline/fixed_first_user_fixture.json"
 ```
 
 ### 2. Run smoke and full PR-B matrix
@@ -193,8 +193,8 @@ export TAU2_AIRLINE_FIXED_FIRST_USER_FILE="$PWD/benchmark/tau2/result/fixed_firs
 First run one tiny end-to-end smoke against a clean local OpenViking service:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/prb_content_matrix_new_prompt.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/prb_content_matrix_new_prompt.yaml \
   --domain retail \
   --strategy-id new_traj_fixed_first_user_prewrite \
   --num-tasks 1 \
@@ -207,15 +207,15 @@ benchmark/tau2/run_full_eval.sh \
 Then run the full PR-B matrix:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/prb_content_matrix_new_prompt.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/prb_content_matrix_new_prompt.yaml \
   --run-id prb_content_matrix_new_prompt_full8 \
   --strict-preflight \
   --execute
 ```
 
 The main result is written to
-`benchmark/tau2/result/prb_content_matrix_new_prompt_full8/scoreboard.json`.
+`benchmark/tau2/llm/result/prb_content_matrix_new_prompt_full8/scoreboard.json`.
 Per-cell execution records live under `cell_results/`, raw TAU-2 result JSON
 lives under `memory_cells/`, and corpus identity / generated memory checks live
 under `memory_corpora/`.
@@ -223,8 +223,8 @@ under `memory_corpora/`.
 For a small E2E smoke, keep both the eval and train slices tiny:
 
 ```bash
-benchmark/tau2/run_full_eval.sh \
-  --config benchmark/tau2/config/baseline.yaml \
+benchmark/tau2/llm/run_full_eval.sh \
+  --config benchmark/tau2/llm/config/baseline.yaml \
   --domain retail \
   --strategy-id memory_v2_experience_only \
   --num-tasks 1 \

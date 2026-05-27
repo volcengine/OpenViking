@@ -15,7 +15,7 @@ from typing import Any
 from tau2_common import assert_tau2_results_complete, normalize_litellm_env
 
 AGENT_NAME = "openviking_memory_agent"
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 WRITE_TOOL_PREFIXES = (
     "toggle_",
     "enable_",
