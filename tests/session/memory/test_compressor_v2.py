@@ -83,9 +83,7 @@ def test_same_uri_timeline_stats_counts_only_replayed_groups():
         memory_fields={},
     )
 
-    assert compressor_v2_module._same_uri_timeline_stats(
-        [op_a1, op_a2, op_b, op_multi]
-    ) == (1, 2)
+    assert compressor_v2_module._same_uri_timeline_stats([op_a1, op_a2, op_b, op_multi]) == (1, 2)
 
 
 def test_agent_phase_summary_exposes_apply_window_quality_counters():
@@ -133,12 +131,8 @@ def test_agent_phase_summary_exposes_apply_window_quality_counters():
     assert phase["supersedes_resolved"] == 1
     assert phase["supersedes_unresolved"] == 1
     assert phase["supersedes_delete_queued"] == 1
-    assert phase["operation_exact_apply_window_timeline_conflict_buckets"] == {
-        "experiences": 2
-    }
-    assert phase["operation_exact_apply_window_timeline_conflict_fields_by_name"] == {
-        "content": 2
-    }
+    assert phase["operation_exact_apply_window_timeline_conflict_buckets"] == {"experiences": 2}
+    assert phase["operation_exact_apply_window_timeline_conflict_fields_by_name"] == {"content": 2}
 
 
 def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
