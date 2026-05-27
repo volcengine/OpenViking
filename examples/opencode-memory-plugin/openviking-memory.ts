@@ -2006,7 +2006,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           uri: z
             .string()
             .describe(
-              "Complete viking:// URI from search results or list output (e.g., viking://user/memories/profile.md, viking://agent/memories/context.md)",
+              "Complete viking:// URI from search results or list output (e.g., viking://user/memories/profile.md, viking://resources/zh/guide.md)",
             ),
           level: z
             .enum(["auto", "abstract", "overview", "read"])
@@ -2064,7 +2064,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           uri: z
             .string()
             .describe(
-              "Complete viking:// URI to inspect (e.g., viking://user/memories/, viking://agent/memories/, viking://resources/zh/)",
+              "Complete viking:// URI to inspect (e.g., viking://user/memories/, viking://user/skills/, viking://resources/zh/)",
             ),
           view: z
             .enum(["list", "tree", "stat"])
@@ -2119,7 +2119,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
 
       memcommit: tool({
         description:
-          "Commit the current OpenCode session to OpenViking and extract persistent memories from the accumulated conversation.\n\nBy default this tool commits the OpenViking session mapped to the current OpenCode session. Use `session_id` only when you need to target a specific OpenViking session manually.\n\nUse when:\n- You want a mid-session memory extraction without ending the chat\n- You want recently discussed preferences, entities, or cases persisted immediately\n\nAutomatically extracts and stores:\n- User profile, preferences, entities, events → viking://user/memories/\n- Agent cases and patterns → viking://agent/memories/\n\nReturns background commit progress or completion details, including task_id, memories_extracted, and archived.",
+          "Commit the current OpenCode session to OpenViking and extract persistent memories from the accumulated conversation.\n\nBy default this tool commits the OpenViking session mapped to the current OpenCode session. Use `session_id` only when you need to target a specific OpenViking session manually.\n\nUse when:\n- You want a mid-session memory extraction without ending the chat\n- You want recently discussed preferences, entities, or cases persisted immediately\n\nAutomatically extracts and stores memories under viking://user/memories/.\n\nReturns background commit progress or completion details, including task_id, memories_extracted, and archived.",
         args: {
           session_id: z
             .string()

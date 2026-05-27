@@ -110,7 +110,6 @@ Create `~/.config/opencode/openviking-config.json`:
   "apiKey": "",
   "account": "",
   "user": "",
-  "agentId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -125,12 +124,12 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-`apiKey` is sent as `X-API-Key`. `account`, `user`, and `agentId` are sent as
-`X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent`.
-They are required by multi-tenant OpenViking servers for tenant-scoped APIs.
+`apiKey` is sent as `X-API-Key`. `account` and `user` are sent as
+`X-OpenViking-Account` and `X-OpenViking-User`. They are required by
+multi-tenant OpenViking servers for tenant-scoped APIs.
 
-`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and
-`OPENVIKING_AGENT_ID` take precedence over values in this file.
+`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take
+precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
 

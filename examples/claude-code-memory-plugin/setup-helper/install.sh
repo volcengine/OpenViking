@@ -253,8 +253,7 @@ install_legacy() {
     '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
     --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
     --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-    --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}' || {
+    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' || {
       err 'claude mcp add failed'
       return 1
     }

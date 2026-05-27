@@ -8,7 +8,7 @@
  *
  * Format:
  *   parent:    cc-<ccSessionId>
- *   subagent:  cc-<ccSessionId>__agent-<agentId>
+ *   subagent:  cc-<ccSessionId>__subagent-<subagentId>
  *
  * The CC session_id is preserved verbatim so the OV id is human-readable and
  * the parent/subagent lineage is visible at a glance.
@@ -63,8 +63,8 @@ export function isBypassed(cfg, { sessionId, cwd } = {}) {
 /**
  * Derive a stable OV session ID from a CC session_id.
  *
- * Optionally append a suffix (e.g. subagent agent_id) for isolation. The suffix
- * is normalized: `:` → `-` (so `agent:abc123` → `agent-abc123`) and any
+ * Optionally append a suffix (e.g. subagent_id) for session isolation. The suffix
+ * is normalized: `:` → `-` (so `subagent:abc123` → `subagent-abc123`) and any
  * characters outside [A-Za-z0-9._-] become `-`. Result: `cc-<uuid>__<suffix>`.
  */
 export function deriveOvSessionId(ccSessionId, suffix = "") {
@@ -91,7 +91,6 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
       if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-      if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
       const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.status === "error") {

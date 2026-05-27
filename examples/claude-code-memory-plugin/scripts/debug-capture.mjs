@@ -197,7 +197,6 @@ async function fetchJSON(path, init = {}) {
     if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     dim(`  ${init.method || "GET"} ${path} -> ${res.status}`);
@@ -334,7 +333,6 @@ async function main() {
   console.log(`  captureTimeoutMs: ${cfg.captureTimeoutMs}`);
   console.log(`  captureAssistant: ${cfg.captureAssistantTurns}`);
   console.log(`  debug:            ${cfg.debug}`);
-  console.log(`  agentId:          ${cfg.agentId}`);
   console.log(`  timeoutMs:        ${cfg.timeoutMs}`);
 
   let allTurns;

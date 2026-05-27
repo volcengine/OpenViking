@@ -515,7 +515,6 @@ class OpenVikingConfig(BaseModel):
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
-    agent_id: str = ""
     exp_write_tools: list[str] = Field(default_factory=lambda: ["write_file", "edit_file"])
 
     @field_validator("api_key_type", mode="before")

@@ -73,7 +73,6 @@ If you don't want the installer touching your rc, do these three things yourself
      [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
      [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
      [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
-     _env_args+=("OPENVIKING_AGENT_ID=${OPENVIKING_AGENT_ID:-codex}")
      env "${_env_args[@]}" codex "$@"
    }
    ```
@@ -86,7 +85,7 @@ If you don't want the installer touching your rc, do these three things yourself
 
 Connection / identity resolution order (highest to lowest, applies to both hooks and MCP):
 
-1. **Environment variables**: `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`
+1. **Environment variables**: `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`
 2. **`ovcli.conf`**: `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
 3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (only `server.url` / `server.root_api_key` as connection fallback; tuning fields under a legacy `codex.*` block are honored but deprecated — see [Tuning the plugin](#tuning-the-plugin))
 4. **Built-in defaults**: `http://127.0.0.1:1933`, unauthenticated

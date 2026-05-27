@@ -72,7 +72,7 @@ type claude        # 期望输出：claude is a shell function
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启/关闭 |
 | `OPENVIKING_DEBUG` | `false` | 写日志到 `~/.openviking/logs/cc-hooks.log` |
 
-多租户场景设置 `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT_ID`。完整环境变量列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)。
+多租户场景设置 `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`。完整环境变量列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)。
 
 </details>
 

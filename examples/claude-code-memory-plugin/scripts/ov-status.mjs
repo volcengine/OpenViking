@@ -73,7 +73,7 @@ async function main() {
   console.log(`OpenViking — ${cfg.baseUrl}  (${health.ok ? "✓" : "✗"} /health ${latency}ms)`);
   console.log(
     `Identity: account=${cfg.accountId || "(unset)"}  ` +
-    `user=${cfg.userId || "(server-resolved)"}  agent=${cfg.agentId}`,
+    `user=${cfg.userId || "(server-resolved)"}`,
   );
   console.log("");
 
