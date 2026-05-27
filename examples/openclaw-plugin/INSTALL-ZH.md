@@ -205,7 +205,7 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `peer_role` | `none` | 控制 session message 是否写 `peer_id`：`none`、`assistant` 或 `person`。 |
+| `peer_role` | `none` | 控制 session message 和 recall/search 请求是否写 `peer_id`：`none`、`assistant` 或 `person`。 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
@@ -232,7 +232,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `peer_role` | `none` | 控制 session message 是否写 `peer_id`：`none`、`assistant` 或 `person` |
+| `peer_role` | `none` | 控制 session message 和 recall/search 请求是否写 `peer_id`：`none`、`assistant` 或 `person` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀 |
 
 旧配置里的 `agent_prefix` / `agentId` 仍会读取。如果存在这些旧字段且没有显式 `peer_role`，插件会按 `peer_role=assistant` 解释。

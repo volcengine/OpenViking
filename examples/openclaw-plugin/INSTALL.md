@@ -205,7 +205,7 @@ Core fields:
 | `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
 | `apiKey` | empty | OpenViking API key |
-| `peer_role` | `none` | Controls session `peer_id` writes: `none`, `assistant`, or `person`. |
+| `peer_role` | `none` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant`. |
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
@@ -320,7 +320,7 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `peer_role` | `none` | Controls session `peer_id` writes: `none`, `assistant`, or `person` |
+| `peer_role` | `none` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person` |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant` |
 
 Legacy `agent_prefix` / `agentId` configs are still read. If either exists and `peer_role` is missing, the plugin treats the config as `peer_role=assistant`.

@@ -13,7 +13,7 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import { formatMessageFaithful, resolveMessagePeerId, toPeerId } from "./context-engine.js";
+import { formatMessageFaithful, resolveMessagePeerId, resolveSearchPeerId, toPeerId } from "./context-engine.js";
 import {
   compileSessionPatterns,
   shouldBypassSession,
@@ -685,6 +685,16 @@ const contextEnginePlugin = {
       };
     };
 
+    const resolveToolSearchPeerId = (
+      ctx: unknown,
+      session: PluginSessionRouting,
+    ): string | undefined =>
+      resolveSearchPeerId({
+        peerRole: cfg.peer_role,
+        personPeerId: toPeerId(extractToolSenderId(ctx)),
+        assistantPeerId: session.agentId,
+      });
+
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
       const warnings = result.warnings?.length ? ` Warnings: ${result.warnings.join("; ")}` : "";
@@ -816,7 +826,11 @@ const contextEnginePlugin = {
       return lines.join("\n");
     };
 
-    const memorySearchOpenViking = async (input: MemorySearchInput, agentId?: string) => {
+    const memorySearchOpenViking = async (
+      input: MemorySearchInput,
+      agentId?: string,
+      peerId?: string,
+    ) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
@@ -825,11 +839,11 @@ const contextEnginePlugin = {
       const client = await getClient();
       let result: FindResult;
       if (input.uri) {
-        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
+        result = await client.find(query, { targetUri: input.uri, limit, peerId }, agentId);
       } else {
         const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          client.find(query, { targetUri: "viking://resources", limit }, agentId),
-          client.find(query, { targetUri: "viking://user/skills", limit }, agentId),
+          client.find(query, { targetUri: "viking://resources", limit, peerId }, agentId),
+          client.find(query, { targetUri: "viking://user/skills", limit, peerId }, agentId),
         ]);
         const successful: FindResult[] = [];
         if (resourcesSettled.status === "fulfilled") {
@@ -861,6 +875,7 @@ const contextEnginePlugin = {
           action: "searched",
           query,
           uri: input.uri,
+          peer_id: peerId ?? null,
           memories: result.memories ?? [],
           resources: result.resources ?? [],
           skills: result.skills ?? [],
@@ -949,11 +964,12 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("memory_search");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const peerId = resolveToolSearchPeerId(ctx, session);
           return memorySearchOpenViking({
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, session.agentId);
+          }, session.agentId, peerId);
         },
       }),
       { name: "memory_search" },
@@ -1011,7 +1027,8 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           const input = parseMemorySearchCommandArgs(ctx.args ?? "");
-          const result = await memorySearchOpenViking(input, session.agentId);
+          const peerId = resolveToolSearchPeerId(ctx, session);
+          const result = await memorySearchOpenViking(input, session.agentId, peerId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking memory search failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1042,6 +1059,7 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("memory_recall");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const peerId = resolveToolSearchPeerId(ctx, session);
           const { query } = params as { query: string };
           const limit =
             typeof (params as { limit?: number }).limit === "number"
@@ -1061,6 +1079,7 @@ const contextEnginePlugin = {
           if (cfg.logFindRequests) {
             api.logger.info(
               `openviking: memory_recall runtime_agent_id="${session.agentId}" ` +
+                `peer_id="${peerId ?? ""}" ` +
                 `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
             );
           }
@@ -1074,6 +1093,7 @@ const contextEnginePlugin = {
                 targetUri,
                 limit: requestLimit,
                 scoreThreshold: 0,
+                peerId,
               },
               session.agentId,
             );
@@ -1085,6 +1105,7 @@ const contextEnginePlugin = {
                   targetUri: "viking://user/memories",
                   limit: requestLimit,
                   scoreThreshold: 0,
+                  peerId,
                 },
                 session.agentId,
               ),
@@ -1094,6 +1115,7 @@ const contextEnginePlugin = {
                   targetUri: "viking://user/memories",
                   limit: requestLimit,
                   scoreThreshold: 0,
+                  peerId,
                 },
                 session.agentId,
               ),
@@ -1106,6 +1128,7 @@ const contextEnginePlugin = {
                     targetUri: "viking://resources",
                     limit: requestLimit,
                     scoreThreshold: 0,
+                    peerId,
                   },
                   session.agentId,
                 ),
@@ -1333,6 +1356,7 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("memory_forget");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const peerId = resolveToolSearchPeerId(ctx, session);
           const client = await getClient();
           const uri = (params as { uri?: string }).uri;
           if (uri) {
@@ -1377,6 +1401,7 @@ const contextEnginePlugin = {
               targetUri,
               limit: requestLimit,
               scoreThreshold: 0,
+              peerId,
             },
             session.agentId,
           );

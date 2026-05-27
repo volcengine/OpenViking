@@ -71,6 +71,22 @@ export function resolveMessagePeerId(params: {
   return undefined;
 }
 
+export function resolveSearchPeerId(params: {
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"];
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  const role = params.peerRole === "person"
+    ? "user"
+    : params.peerRole === "assistant"
+      ? "assistant"
+      : undefined;
+  return resolveMessagePeerId({
+    ...params,
+    role,
+  });
+}
+
 type IngestBatchResult = {
   ingestedCount: number;
 };
@@ -1165,10 +1181,16 @@ export function createMemoryOpenVikingContextEngine(params: {
           const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+          const peerId = resolveSearchPeerId({
+            peerRole: cfg.peer_role,
+            personPeerId: toPeerId(sender.senderId),
+            assistantPeerId: agentId,
+          });
           const recall = await buildAutoRecallContext({
             cfg,
             client,
             agentId,
+            peerId,
             queryText: recallQuery.query,
             logger,
             verbose: (message) => logger.info(message),

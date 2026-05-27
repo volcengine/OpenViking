@@ -15,6 +15,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -27,10 +28,32 @@ def _ensure_non_empty_query(query: str) -> None:
         raise InvalidArgumentError("Search query must not be empty.")
 
 
-def _is_empty_target_uri(target_uri: Union[str, List[str]]) -> bool:
-    if isinstance(target_uri, list):
-        return not any(target_uri)
-    return not target_uri
+def _is_default_user_memory_target(target_uri: str, ctx: RequestContext) -> bool:
+    if not target_uri:
+        return True
+    try:
+        normalized = VikingURI.normalize(target_uri).rstrip("/")
+    except Exception:
+        return False
+
+    user_root = canonical_user_root(ctx).rstrip("/")
+    return normalized in {
+        "viking://user/memories",
+        f"{user_root}/memories",
+    }
+
+
+def _peer_memory_targets(ctx: RequestContext, peer_id: str) -> List[str]:
+    user_root = canonical_user_root(ctx)
+    return [
+        f"{user_root}/memories",
+        f"{user_root}/peers/{peer_id}/memories",
+    ]
+
+
+def _append_unique(targets: List[str], target_uri: str) -> None:
+    if target_uri not in targets:
+        targets.append(target_uri)
 
 
 def _target_uri_for_peer(
@@ -43,14 +66,26 @@ def _target_uri_for_peer(
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
-    if not normalized_peer_id or not _is_empty_target_uri(target_uri):
+    if not normalized_peer_id:
         return target_uri
 
-    user_root = canonical_user_root(ctx)
-    return [
-        f"{user_root}/memories",
-        f"{user_root}/peers/{normalized_peer_id}/memories",
-    ]
+    peer_targets = _peer_memory_targets(ctx, normalized_peer_id)
+    if isinstance(target_uri, list):
+        if not any(target_uri):
+            return peer_targets
+
+        expanded_targets: List[str] = []
+        for item in target_uri:
+            if _is_default_user_memory_target(item, ctx):
+                for peer_target in peer_targets:
+                    _append_unique(expanded_targets, peer_target)
+            elif item:
+                _append_unique(expanded_targets, item)
+        return expanded_targets
+
+    if _is_default_user_memory_target(target_uri, ctx):
+        return peer_targets
+    return target_uri
 
 
 class SearchService:

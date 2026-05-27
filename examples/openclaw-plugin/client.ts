@@ -405,18 +405,28 @@ export class OpenVikingClient {
     query: string,
     options: {
       targetUri: string;
-      limit: number;
+      limit?: number;
       scoreThreshold?: number;
+      peerId?: string;
     },
     agentId?: string,
   ): Promise<FindResult> {
     const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri, agentId);
-    const body = {
+    const body: {
+      query: string;
+      target_uri: string;
+      limit?: number;
+      score_threshold?: number;
+      peer_id?: string;
+    } = {
       query,
       target_uri: normalizedTargetUri,
       limit: options.limit,
       score_threshold: options.scoreThreshold,
     };
+    if (options.peerId) {
+      body.peer_id = options.peerId;
+    }
     const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
@@ -429,6 +439,7 @@ export class OpenVikingClient {
           resolved_user_id: identity.userId,
           target_uri: normalizedTargetUri,
           target_uri_input: options.targetUri,
+          peer_id: options.peerId ?? null,
           query:
             query.length > 4000
               ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`

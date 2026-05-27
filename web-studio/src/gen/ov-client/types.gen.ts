@@ -348,6 +348,10 @@ export type FindRequest = {
      */
     target_uri?: string | Array<string>;
     /**
+     * Peer Id
+     */
+    peer_id?: string | null;
+    /**
      * Limit
      */
     limit?: number;
@@ -602,6 +606,10 @@ export type SearchRequest = {
      * Target Uri
      */
     target_uri?: string | Array<string>;
+    /**
+     * Peer Id
+     */
+    peer_id?: string | null;
     /**
      * Session Id
      */

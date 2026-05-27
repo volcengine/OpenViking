@@ -541,6 +541,31 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(body.target_uri).toBe("viking://user/alice/skills");
   });
 
+  it("includes peer_id when find receives peerId", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "shared-agent", 5000);
+    await client.find("test", {
+      targetUri: "viking://user/memories",
+      peerId: "telegram_12345",
+    }, "shared-agent");
+
+    const findCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    )!;
+    const body = JSON.parse(String((findCall[1] as RequestInit).body));
+    expect(body.peer_id).toBe("telegram_12345");
+  });
+
   it("includes peer_id when addSessionMessage receives one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
     vi.stubGlobal("fetch", fetchMock);

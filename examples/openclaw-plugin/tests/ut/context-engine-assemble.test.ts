@@ -155,6 +155,95 @@ describe("context-engine assemble()", () => {
     }
   });
 
+  it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
+          },
+        },
+      );
+
+      const sourceMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      await engine.assemble({
+        sessionId: "session-person-peer",
+        runtimeContext: { senderId: "wx/user-01@abc" },
+        messages: sourceMessages,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes assistant peer_id to transformContext auto-recall when peer_role is assistant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "assistant",
+          },
+        },
+      );
+
+      const sourceMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      await engine.assemble({
+        sessionId: "session-assistant-peer",
+        messages: sourceMessages,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("passes through transformContext messages when the latest message is not user", async () => {
     const { engine, getClient } = makeEngine(
       {

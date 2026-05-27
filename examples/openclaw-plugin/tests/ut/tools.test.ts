@@ -247,6 +247,41 @@ describe("Tool: memory_recall (registration)", () => {
     }
   });
 
+  it("passes sender peer_id to memory_recall when peer_role is person", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      peer_role: "person",
+    });
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_recall")!({
+      sessionId: "test-session",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-recall-peer", {
+      query: "backend preference",
+    }) as ToolResult;
+
+    const findBodies = fetchMock.mock.calls
+      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(findBodies).toHaveLength(2);
+    for (const body of findBodies) {
+      expect(body.peer_id).toBe("wx_user-01_abc");
+    }
+  });
+
   it("applies recallMaxInjectedChars to explicit memory_recall output", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
@@ -816,6 +851,39 @@ describe("Tool: memory_search (behavioral)", () => {
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
     expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+  });
+
+  it("passes assistant peer_id to memory_search when peer_role is assistant", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "assistant" });
+    contextEnginePlugin.register(api as any);
+    const search = factoryTools.get("memory_search")!({
+      sessionId: "runtime-session",
+      agentId: "worker",
+    });
+
+    await search.execute("tc-memory-search-peer", { query: "OpenViking install" }) as ToolResult;
+
+    const findBodies = fetchMock.mock.calls
+      .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(findBodies).toHaveLength(2);
+    for (const body of findBodies) {
+      expect(body.peer_id).toBe("worker");
+    }
   });
 
   it("returns partial results when one default scope search fails", async () => {

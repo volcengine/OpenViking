@@ -212,6 +212,7 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -219,6 +220,7 @@ async def find(
         query=query,
         ctx=_get_ctx(),
         target_uri=target_uri,
+        peer_id=peer_id,
         limit=limit,
         score_threshold=min_score,
         level=level,
@@ -234,6 +236,7 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -246,6 +249,7 @@ async def search(
         query=query,
         ctx=ctx,
         target_uri=target_uri,
+        peer_id=peer_id,
         session=session,
         limit=limit,
         score_threshold=min_score,

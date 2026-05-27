@@ -77,6 +77,42 @@ def test_peer_search_keeps_explicit_target_uri():
     )
 
 
+def test_peer_search_expands_default_user_memory_target():
+    ctx = RequestContext(user=UserIdentifier("acct", "support_bot"), role=Role.USER)
+
+    assert _target_uri_for_peer("viking://user/memories", ctx, "web:visitor:alice") == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/peers/web:visitor:alice/memories",
+    ]
+
+
+def test_peer_search_expands_canonical_user_memory_target():
+    ctx = RequestContext(user=UserIdentifier("acct", "support_bot"), role=Role.USER)
+
+    assert _target_uri_for_peer(
+        "viking://user/support_bot/memories",
+        ctx,
+        "web:visitor:alice",
+    ) == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/peers/web:visitor:alice/memories",
+    ]
+
+
+def test_peer_search_list_expands_only_default_memory_targets():
+    ctx = RequestContext(user=UserIdentifier("acct", "support_bot"), role=Role.USER)
+
+    assert _target_uri_for_peer(
+        ["viking://user/memories", "viking://resources/docs"],
+        ctx,
+        "web:visitor:alice",
+    ) == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://resources/docs",
+    ]
+
+
 def test_default_memory_roots_include_all_peer_memories():
     ctx = RequestContext(user=UserIdentifier("acct", "support_bot"), role=Role.USER)
     retriever = HierarchicalRetriever(storage=None, embedder=None)

@@ -112,6 +112,7 @@ The main rules are:
 - `peer_role=none` is the default and does not write `peer_id` on session messages
 - `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
 - `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
+- recall/search requests also send the same resolved `peer_id` when `peer_role` is `assistant` or `person`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 

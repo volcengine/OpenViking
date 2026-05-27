@@ -3,10 +3,31 @@
 
 import json
 
+import httpx
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
+
+
+class FakeSearchHTTP:
+    def __init__(self):
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def post(self, path: str, json: dict[str, object]):
+        self.calls.append((path, json))
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "result": {
+                    "memories": [],
+                    "resources": [],
+                    "skills": [],
+                    "total": 0,
+                },
+            },
+        )
 
 
 def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monkeypatch):
@@ -277,3 +298,69 @@ def test_async_http_client_prefers_extra_headers_over_alias(tmp_path, monkeypatc
 
     # extra_headers 优先
     assert client._extra_headers == {"X-Custom-Header": "from-plural"}
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.find(
+        "invoice",
+        target_uri="viking://user/memories",
+        peer_id="web:visitor:alice",
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/find",
+            {
+                "query": "invoice",
+                "target_uri": "viking://user/memories",
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "telemetry": False,
+                "peer_id": "web:visitor:alice",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.search(
+        "invoice",
+        target_uri="viking://user/memories",
+        session_id="session-1",
+        peer_id="web:visitor:alice",
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/search",
+            {
+                "query": "invoice",
+                "target_uri": "viking://user/memories",
+                "session_id": "session-1",
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "telemetry": False,
+                "peer_id": "web:visitor:alice",
+            },
+        )
+    ]

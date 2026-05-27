@@ -105,7 +105,7 @@ claude mcp add --transport http openviking \
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
-| `search` | 语义搜索记忆、资源和技能 | `query`, `target_uri`(可选), `limit`, `min_score` |
+| `search` | 语义搜索记忆、资源和技能 | `query`, `target_uri`(可选), `peer_id`(可选), `limit`, `min_score` |
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
