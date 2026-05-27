@@ -207,7 +207,7 @@ export async function saveFileContent(
           uri,
           content,
           mode: 'replace',
-          wait: true,
+          wait: false,
         },
       }),
     )
