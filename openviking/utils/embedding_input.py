@@ -46,3 +46,22 @@ def truncate_embedding_input(
         else:
             high = mid - 1
     return text[:low].rstrip() + suffix
+
+
+def resolve_embedding_max_input_tokens(
+    config: dict[str, object] | None,
+    default: int | None = None,
+) -> int | None:
+    """Read and normalize max_input_tokens from an embedder config dict."""
+    raw_value = (config or {}).get("max_input_tokens", default)
+    if raw_value is None:
+        return default
+
+    try:
+        max_tokens = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+    if max_tokens <= 0:
+        return default
+    return max_tokens

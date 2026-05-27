@@ -42,6 +42,13 @@ def test_embedding_max_input_tokens_validation_accepts_reasonable_value():
     assert cfg.max_input_tokens == 1000
 
 
+def test_embedding_runtime_config_includes_max_input_tokens():
+    cfg = _cfg(max_input_tokens=1000)
+    embedder = cfg.get_embedder()
+
+    assert embedder.config["max_input_tokens"] == 1000
+
+
 def test_embedding_max_input_tokens_validation_rejects_too_small_value():
     with pytest.raises(ValueError):
         _cfg(max_input_tokens=10)

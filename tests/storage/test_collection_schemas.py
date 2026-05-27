@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
@@ -404,14 +404,18 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
         async def upsert(self, _data, *, ctx):
             return "rec-1"
 
-    class _CapturingEmbedder:
+    class _CapturingEmbedder(DenseEmbedderBase):
         def __init__(self):
+            super().__init__("capturing-test", config={"max_input_tokens": 10})
             self.text = None
 
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             del is_query
             self.text = text
             return EmbedResult(dense_vector=[0.1, 0.2])
+
+        def get_dimension(self) -> int:
+            return 2
 
     embedder = _CapturingEmbedder()
     monkeypatch.setattr(
