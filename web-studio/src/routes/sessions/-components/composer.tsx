@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { ArrowUpIcon, SquareIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
@@ -10,6 +11,7 @@ interface ComposerProps {
 }
 
 export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
+  const { t } = useTranslation('sessions')
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -56,7 +58,7 @@ export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
         <textarea
           ref={textareaRef}
           autoFocus
-          placeholder="回复..."
+          placeholder={t('chat.placeholder')}
           rows={1}
           value={value}
           onChange={(e) => {
