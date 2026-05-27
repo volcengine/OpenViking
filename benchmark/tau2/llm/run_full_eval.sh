@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-CONFIG="$SCRIPT_DIR/config/baseline.yaml"
+CONFIG="$SCRIPT_DIR/config/no_memory.yaml"
 EXECUTE=false
 PREFLIGHT=false
 STRICT_PREFLIGHT=false

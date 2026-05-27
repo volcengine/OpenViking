@@ -967,7 +967,7 @@ def main() -> int:
             "How to replay TAU-2 train messages into OpenViking sessions. "
             "openviking_text preserves the compact adapter text format; role_tool_blocks "
             "uses role-prefixed messages plus tool-call/tool-response blocks. "
-            "custom_like is a compatibility alias for older cached PR-B corpora."
+            "custom_like is a compatibility alias for older cached custom-like corpora."
         ),
     )
     parser.add_argument(
