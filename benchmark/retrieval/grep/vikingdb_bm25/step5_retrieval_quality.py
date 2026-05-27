@@ -19,10 +19,9 @@ NOTE: `remote_return_limit` defaults to 0 (auto-adapt to 100000), so bm25 recall
 is not truncated. No need to test different limit values.
 
 Usage:
-  python3 step5_retrieval_quality.py [--uri URI] [--case-insensitive] [--output FILE]
+  python3 step5_retrieval_quality.py [--uri URI]
 """
 
-import argparse
 import json
 import os
 import re
@@ -54,7 +53,7 @@ TEST_PATTERNS = [
 ]
 
 
-def run_ov_grep(uri: str, pattern: str, case_insensitive: bool = False) -> tuple[set[str], float]:
+def run_ov_grep(uri: str, pattern: str) -> tuple[set[str], float]:
     """Run `ov grep --output json` and extract matched URIs."""
     cmd = OV_CMD + [
         "--output",
@@ -66,8 +65,6 @@ def run_ov_grep(uri: str, pattern: str, case_insensitive: bool = False) -> tuple
         "100000",
         pattern,
     ]
-    if case_insensitive:
-        cmd.insert(cmd.index("grep") + 1, "-i")
 
     cmd_str = shlex.join(cmd)
     print(f"  $ {cmd_str}")
@@ -80,9 +77,19 @@ def run_ov_grep(uri: str, pattern: str, case_insensitive: bool = False) -> tuple
         stderr = result.stderr.strip()[:200]
         raise RuntimeError(f"ov grep failed (exit={result.returncode}): {stderr}")
 
+    # Find the JSON line in stdout (skip echo_command output like "cmd: ov grep ...")
+    json_line = None
+    for line in result.stdout.strip().splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            json_line = line
+            break
+    if not json_line:
+        raise RuntimeError(f"No JSON output from ov grep. stdout: {result.stdout[:200]}")
+
     # Parse JSON response: {"status": "ok", "result": {"matches": [...], ...}}
     try:
-        resp = json.loads(result.stdout)
+        resp = json.loads(json_line)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse ov grep output: {e}") from e
 
@@ -101,10 +108,9 @@ def local_path_to_viking_uri(filepath: str) -> str:
     return "viking://resources/" + rel.replace(os.sep, "/").rstrip("/")
 
 
-def compute_ground_truth(pattern: str, case_insensitive: bool = False) -> tuple[set[str], float]:
+def compute_ground_truth(pattern: str) -> tuple[set[str], float]:
     """Scan local benchmark files with Python regex to get ground truth."""
-    flags = re.IGNORECASE if case_insensitive else 0
-    compiled = re.compile(pattern, flags)
+    compiled = re.compile(pattern)
     truth_uris = set()
     t0 = time.monotonic()
     for root, dirs, files in os.walk(BENCHMARK_DIR):
@@ -141,13 +147,7 @@ def compute_metrics(truth: set[str], predicted: set[str]) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Step 5: Retrieval quality evaluation")
-    parser.add_argument("--uri", default=BASE_URI, help=f"Base URI to search (default: {BASE_URI})")
-    parser.add_argument("--case-insensitive", action="store_true", help="Case-insensitive matching")
-    parser.add_argument(
-        "--output", default=None, help="Output JSON file path (default: print to stdout only)"
-    )
-    args = parser.parse_args()
+    uri = BASE_URI
 
     if not os.path.isdir(BENCHMARK_DIR):
         print(f"Error: Benchmark data not found at {BENCHMARK_DIR}")
@@ -157,9 +157,8 @@ def main():
     print("=" * 100)
     print("Retrieval Quality Evaluation: auto (bm25+fs) vs local fs (ground truth)")
     print("=" * 100)
-    print(f"URI:              {args.uri}")
-    print(f"Case insensitive: {args.case_insensitive}")
-    print(f"Data dir:         {BENCHMARK_DIR}")
+    print(f"URI:       {uri}")
+    print(f"Data dir:  {BENCHMARK_DIR}")
     print()
     print("Ensure ov.conf has:")
     print('  "grep": {"engine": "auto", "switch_to_remote_threshold": 0}')
@@ -172,12 +171,12 @@ def main():
         print(f"--- {label} (pattern: {pattern}) ---")
 
         # Ground truth: scan local files
-        truth_uris, fs_elapsed = compute_ground_truth(pattern, args.case_insensitive)
+        truth_uris, fs_elapsed = compute_ground_truth(pattern)
         print(f"  Ground truth (local fs): {len(truth_uris)} matches ({fs_elapsed:.2f}s)")
 
         # Auto grep (via ov CLI with --output json)
         try:
-            auto_uris, auto_elapsed = run_ov_grep(args.uri, pattern, args.case_insensitive)
+            auto_uris, auto_elapsed = run_ov_grep(uri, pattern)
         except Exception as e:
             print(f"  Auto grep FAILED: {e}")
             results.append(
@@ -261,12 +260,6 @@ def main():
                 "  This should not happen (phase 2 regex guarantees precision). Investigate URI format."
             )
     print()
-
-    # Save results
-    if args.output:
-        with open(args.output, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {args.output}")
 
 
 if __name__ == "__main__":
