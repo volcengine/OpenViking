@@ -360,11 +360,10 @@ async def commit_session(
     body: CommitRequest = Body(default_factory=CommitRequest),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Commit a session (archive and extract memories).
+    """Commit a session and enqueue archive finalization.
 
-    Archive (Phase 1) completes before returning.  Memory extraction
-    (Phase 2) runs in the background.  A ``task_id`` is returned for
-    polling progress via ``GET /tasks/{task_id}``.
+    Archive payload writing completes before returning. A ``task_id`` is
+    returned for polling archive finalization via ``GET /tasks/{task_id}``.
     """
     service = get_service()
     execution = await run_operation(
@@ -379,6 +378,18 @@ async def commit_session(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
+
+
+@router.post("/{session_id}/archives/{archive_id}/retry")
+async def retry_session_archive(
+    session_id: str = Path(..., description="Session ID"),
+    archive_id: str = Path(..., description="Archive ID, e.g. archive_002"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Retry a terminal failed archive finalize task."""
+    service = get_service()
+    result = await service.sessions.retry_archive_finalize(session_id, archive_id, _ctx)
+    return Response(status="ok", result=result)
 
 
 @router.post("/{session_id}/extract")

@@ -884,16 +884,17 @@ await client.session_used(
 
 #### 1. API 实现介绍
 
-提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
+提交会话。archive payload 写入会立即完成；归档 finalize 在后台异步执行，并返回 `task_id` 用于查询进度。记忆提取、关系写入和 active_count 更新在 `.done` 之后 best-effort 执行。
 
-**两阶段提交流程**：
-- **Phase 1（同步）**: 快照当前消息，清空 live session，创建归档目录，写入原始消息
-- **Phase 2（异步）**: 生成摘要（L0/L1），提取长期记忆，更新关系和 active_count
+**提交流程**：
+- **Inline path**: 快照当前消息，写 archive payload 和保留的 live tail，并持久化 finalize task
+- **Finalize task**: 生成摘要（L0/L1），写归档元数据，并写 `.done`
+- **Best-effort side effects**: 在 `.done` 之后提取长期记忆、更新关系和 active_count
 
 **注意事项**：
 - 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`
-- 后台 Phase 2 会按 archive 顺序串行推进：`archive_N+1` 会等待 `archive_N` 写出 `.done` 后再继续
-- 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回错误，直到该失败被处理
+- 后台 finalize 会按 archive 顺序串行推进：`archive_N+1` 会等待 `archive_N` 写出 `.done` 后再继续
+- 如果更早的 archive finalize 进入 terminal failure，后续 commit 会直接返回 `FAILED_PRECONDITION`，直到该 archive 被 retry
 
 **代码入口**：
 - `openviking/session/session.py:Session.commit_async()` - 核心实现
@@ -935,17 +936,15 @@ import openviking as ov
 
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
-# commit 立即返回 task_id，后台异步执行摘要生成和记忆提取
+# commit 立即返回 task_id，后台异步执行归档 finalize
 result = await client.commit_session("a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# 查询后台任务进度
+# 查询归档 finalize 进度
 task = await client.get_task(result["task_id"])
 if task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+    print(f"Archive finalized: {task['result']['archive_uri']}")
 ```
 
 **CLI**
@@ -1012,7 +1011,9 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 #### 1. API 实现介绍
 
-查询后台任务状态（如 commit 的摘要生成和记忆提取进度）。
+查询后台任务状态。对 session commit 来说，该任务只跟踪归档 finalize：
+生成归档摘要文件并写入 `.done`。记忆提取和 usage 副作用在 `.done` 之后
+best-effort 执行，不决定任务是否成功。
 
 **任务状态**：
 - `pending`: 任务等待执行
@@ -1080,13 +1081,6 @@ print(f"Status: {task['status']}")
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2,
       "token_usage": {
         "llm": {
           "prompt_tokens": 5200,
@@ -1192,64 +1186,10 @@ viking://session/{user_id}/{session_id}/
     │   ├── .abstract.md      # Phase 2 写入（后台）
     │   ├── .overview.md      # Phase 2 写入（后台）
     │   ├── .meta.json        # 归档元数据
-    │   ├── memory_diff.json  # Phase 2 写入（后台，记忆变更时）
     │   ├── .done             # Phase 2 完成标记
     │   └── .failed.json      # Phase 2 失败标记
     └── archive_002/
 ```
-
-### memory_diff.json 数据结构
-
-每次提交会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
-
-```json
-{
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
-  "extracted_at": "2026-04-21T10:00:00Z",
-  "operations": {
-    "adds": [
-      {
-        "uri": "memory/user/xxx/identity.md",
-        "memory_type": "identity",
-        "after": "新创建的文件内容"
-      }
-    ],
-    "updates": [
-      {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
-        "before": "修改前的文件内容",
-        "after": "修改后的文件内容"
-      }
-    ],
-    "deletes": [
-      {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
-        "deleted_content": "被删除的文件内容"
-      }
-    ]
-  },
-  "summary": {
-    "total_adds": 1,
-    "total_updates": 1,
-    "total_deletes": 1
-  }
-}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `archive_uri` | str | 本次提交的归档目录 URI |
-| `extracted_at` | str | 提取时间的 ISO 8601 格式 |
-| `operations.adds` | array | 新增记忆（`uri`、`memory_type`、`after`） |
-| `operations.updates` | array | 修改记忆（`uri`、`memory_type`、`before`、`after`） |
-| `operations.deletes` | array | 删除记忆（`uri`、`memory_type`、`deleted_content`） |
-| `summary.total_adds` | int | 新增记忆数 |
-| `summary.total_updates` | int | 修改记忆数 |
-| `summary.total_deletes` | int | 删除记忆数 |
-
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 ---
 
@@ -1315,16 +1255,14 @@ if results.resources:
         contexts=[results.resources[0].uri]
     )
 
-# 提交会话（立即返回，后台执行摘要生成和记忆提取）
+# 提交会话（立即返回，后台执行归档 finalize）
 commit_result = await client.commit_session(session_id)
 print(f"Task ID: {commit_result['task_id']}")
 
 # 可选：等待后台任务完成
 task = await client.get_task(commit_result["task_id"])
 if task and task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+    print(f"Archive finalized: {task['result']['archive_uri']}")
 ```
 
 **HTTP API**

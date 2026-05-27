@@ -220,14 +220,14 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")
 
     console.print()
-    console.print("  [yellow]提交 Session（触发记忆抽取）...[/yellow]")
+    console.print("  [yellow]提交 Session（触发归档 finalize）...[/yellow]")
     commit_result = client.commit_session(session_id)
     task_id = commit_result.get("task_id")
     console.print(f"  Commit 结果: {commit_result}")
 
     if task_id:
         now = time.time()
-        console.print(f"  [yellow]等待记忆提取完成 (task_id={task_id})...[/yellow]")
+        console.print(f"  [yellow]等待归档 finalize 完成 (task_id={task_id})...[/yellow]")
         while True:
             task = client.get_task(task_id)
             if not task or task.get("status") in ("completed", "failed"):

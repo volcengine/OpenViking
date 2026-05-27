@@ -276,7 +276,7 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
 
         # 轮询等待任务完成
         if task_id:
-            console.print(f"\n  [yellow]等待记忆提取完成 (task_id={task_id})...[/yellow]")
+            console.print(f"\n  [yellow]等待归档 finalize 完成 (task_id={task_id})...[/yellow]")
             start_time = time.time()
             while True:
                 task = client.get_task(task_id)

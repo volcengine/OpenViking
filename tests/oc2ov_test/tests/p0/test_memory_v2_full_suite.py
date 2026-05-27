@@ -8,7 +8,7 @@ Memory V2 全面端到端测试套件
 - skills (技能) - Agent scope
 - tools (工具) - Agent scope
 
-测试方式：通过 OpenClaw agent 进行对话，然后通过 OV API commit session 触发记忆提取。
+测试方式：通过 OpenClaw agent 进行对话，然后通过 OV API commit session 触发归档 finalize 和后续 best-effort 记忆提取。
 OpenClaw Gateway 会自动分配 OV session ID，需要通过对比 sessions 列表来定位。
 """
 
@@ -956,46 +956,45 @@ class MemoryV2TestSuite:
                 result["error"] = f"Commit 失败: {commit_resp}"
                 return False, result
 
-            # 步骤 4: 轮询任务直到完成
-            print(f"\n[步骤 4/5] 等待记忆提取完成 (轮询 task_id: {task_id})")
+            # 步骤 4: 轮询归档 finalize 任务直到完成
+            print(f"\n[步骤 4/5] 等待归档 finalize 完成 (轮询 task_id: {task_id})")
             task_result = self.api.poll_task_until_done(task_id)
             task_status = task_result.get("status", "unknown")
-            memories_extracted = task_result.get("result", {}).get("memories_extracted", {})
+            task_payload = task_result.get("result", {})
+            archive_uri = task_payload.get("archive_uri", "")
             token_usage = task_result.get("result", {}).get("token_usage", {})
 
             print(f"  任务状态: {task_status}")
-            print(f"  提取的记忆: {memories_extracted}")
+            if archive_uri:
+                print(f"  已 finalize archive: {archive_uri}")
             if token_usage:
                 llm_tokens = token_usage.get("llm", {}).get("total_tokens", 0)
                 print(f"  LLM token 用量: {llm_tokens}")
 
             if task_status == "completed":
-                total_extracted = (
-                    sum(len(v) if isinstance(v, list) else v for v in memories_extracted.values())
-                    if memories_extracted
-                    else 0
-                )
-                if total_extracted > 0:
-                    print(f"✓ 记忆提取成功，共提取 {total_extracted} 条记忆")
-                    result["steps"]["memory_extraction"] = "success"
-                else:
-                    print("⚠ 记忆提取完成但结果为空 (VLM 可能返回了无效 JSON)")
-                    result["steps"]["memory_extraction"] = "empty"
+                print("✓ 归档 finalize 成功，记忆提取作为 .done 后 best-effort 副作用验证")
+                result["steps"]["archive_finalize"] = "success"
+                result["steps"]["memory_extraction"] = "best_effort"
             elif task_status == "failed":
                 error_msg = task_result.get("error", "unknown error")
-                print(f"✗ 记忆提取失败: {error_msg}")
-                result["steps"]["memory_extraction"] = "failed"
+                print(f"✗ 归档 finalize 失败: {error_msg}")
+                result["steps"]["archive_finalize"] = "failed"
             else:
-                print("✗ 记忆提取超时")
-                result["steps"]["memory_extraction"] = "timeout"
+                print("✗ 归档 finalize 超时")
+                result["steps"]["archive_finalize"] = "timeout"
 
             result["task_result"] = task_result
 
             # 步骤 5: 验证记忆文件变化（硬性断言）
             print("\n[步骤 5/5] 验证记忆文件变化")
-            memory_files_result = self.check_memory_files(
-                scenario["memory_type"], before_memory_files
-            )
+            memory_files_result = {"found": False, "new_files": [], "modified_files": []}
+            for _ in range(12):
+                memory_files_result = self.check_memory_files(
+                    scenario["memory_type"], before_memory_files
+                )
+                if memory_files_result["found"]:
+                    break
+                time.sleep(5)
             result["memory_files"] = memory_files_result
 
             if memory_files_result["found"]:
@@ -1007,19 +1006,17 @@ class MemoryV2TestSuite:
                 print("✗ 记忆文件验证失败（全目录无新增或修改的文件）")
                 result["steps"]["memory_files"] = "failed"
 
-            # 综合判断：记忆提取成功 + 文件有变化 = 通过
-            extraction_ok = result["steps"].get("memory_extraction") == "success"
+            # 综合判断：归档 finalize 成功 + 记忆文件有变化 = 通过
+            archive_ok = result["steps"].get("archive_finalize") == "success"
             files_ok = result["steps"].get("memory_files") == "success"
 
-            if files_ok:
+            if archive_ok and files_ok:
                 result["status"] = "passed"
-                if not extraction_ok:
-                    print("⚠ 记忆提取轮询超时，但文件验证成功，判定通过")
                 return True, result
             else:
                 reasons = []
-                if not extraction_ok:
-                    reasons.append("记忆提取失败或为空")
+                if not archive_ok:
+                    reasons.append("归档 finalize 未成功")
                 if not files_ok:
                     reasons.append("无新增或修改的记忆文件")
                 result["status"] = "failed"

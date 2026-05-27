@@ -71,8 +71,8 @@ results = client.find(
 # 记忆从会话中自动提取
 session = client.session()
 await session.add_message("user", [{"type": "text", "text": "我喜欢深色模式"}])
-commit = await session.commit()  # 启动后台记忆提取
-task = await client.get_task(commit["task_id"])  # 轮询直到 task["status"] == "completed"
+commit = await session.commit()  # 启动归档 finalize
+task = await client.get_task(commit["task_id"])  # 轮询直到 archive finalize 完成
 
 # 搜索记忆
 results = await client.find(

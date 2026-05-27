@@ -20,7 +20,7 @@ session.commit()
 |--------|-------------|
 | `add_message(role, parts)` | Add message |
 | `used(contexts, skill)` | Record used contexts/skills |
-| `commit()` | Commit: archive (sync) + summary generation and memory extraction (async background) |
+| `commit()` | Commit: archive payload write (inline) + archive finalization (async background) |
 | `get_task(task_id)` | Query background task status |
 
 ### add_message
@@ -66,10 +66,10 @@ result = session.commit()
 #   "archived": True
 # }
 
-# Poll background task progress
+# Poll archive finalization progress
 task = client.get_task(result["task_id"])
 # task["status"]: "pending" | "running" | "completed" | "failed"
-# sum(task["result"]["memories_extracted"].values()): 3
+# task["result"]["archive_uri"]: "viking://session/.../history/archive_001"
 ```
 
 ## Message Structure
@@ -97,20 +97,22 @@ class Message:
 
 ### Archive Flow
 
-commit() executes in two phases:
+commit() separates the durable archive path from best-effort side effects:
 
-**Phase 1 (synchronous, returns immediately)**:
+**Inline path (returns immediately)**:
 1. Increment compression_index
 2. Write messages to archive directory (`messages.jsonl`)
-3. Clear current messages list
-4. Return `task_id`
+3. Persist the retained live messages and session metadata
+4. Persist the archive finalize task and return `task_id`
 
-**Phase 2 (asynchronous background)**:
-5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
-6. Extract long-term memories
-7. Write `memory_diff.json` (memory change audit log) to archive directory
-8. Update active_count
-9. Write `.done` completion marker
+**Archive finalize task (asynchronous background)**:
+5. Generate structured summary (LLM) → write `.abstract.md`, `.overview.md`, and `.meta.json`
+6. Write `.done` completion marker
+
+**Best-effort side effects (after `.done`)**:
+7. Extract long-term memories
+8. Write `memory_diff.json` when memory operations are applied
+9. Link usage records and update active_count
 
 ### Summary Format
 
@@ -171,7 +173,7 @@ Write to AGFS → Vectorize
 
 ## Memory Diff
 
-Each `session.commit()` writes a `memory_diff.json` to the archive directory, recording all memory changes from that commit for auditing and rollback.
+When commit memory extraction applies memory operations, it writes a `memory_diff.json` to the archive directory, recording those changes for auditing and rollback. This is a best-effort side effect after archive finalization; it is not part of the commit task result.
 
 ```json
 {
@@ -218,7 +220,7 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
 | `operations.deletes` | Deleted memories (with `deleted_content`) |
 | `summary` | Counts per operation type |
 
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+An empty `memory_diff.json` may be written when extraction runs with no resulting operations, but commits without memory extraction do not create this file.
 
 ## Storage Structure
 
@@ -229,11 +231,12 @@ viking://session/{session_id}/
 ├── .overview.md              # Current overview
 ├── history/
 │   ├── archive_001/
-│   │   ├── messages.jsonl    # Written in Phase 1
-│   │   ├── .abstract.md      # Written in Phase 2 (background)
-│   │   ├── .overview.md      # Written in Phase 2 (background)
-│   │   ├── memory_diff.json  # Written in Phase 2 (background, memory change audit)
-│   │   └── .done             # Phase 2 completion marker
+│   │   ├── messages.jsonl    # Written by the inline commit path
+│   │   ├── .abstract.md      # Written by the finalize task
+│   │   ├── .overview.md      # Written by the finalize task
+│   │   ├── .meta.json        # Written by the finalize task
+│   │   ├── memory_diff.json  # Optional best-effort memory audit
+│   │   └── .done             # Finalize completion marker
 │   └── archive_NNN/
 └── tools/
     └── {tool_id}/tool.json

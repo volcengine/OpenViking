@@ -25,6 +25,7 @@ from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -140,6 +141,8 @@ async def service(temp_dir: Path, monkeypatch):
     reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
+    mock_agfs = MockLocalAGFS(root_path=temp_dir / "mock_agfs_root")
+    monkeypatch.setattr("openviking.utils.agfs_utils.create_agfs_client", lambda _config: mock_agfs)
     svc = OpenVikingService(
         path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
@@ -195,6 +198,8 @@ async def running_server(temp_dir: Path, monkeypatch):
     reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
+    mock_agfs = MockLocalAGFS(root_path=temp_dir / "mock_agfs_root")
+    monkeypatch.setattr("openviking.utils.agfs_utils.create_agfs_client", lambda _config: mock_agfs)
 
     svc = OpenVikingService(
         path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")

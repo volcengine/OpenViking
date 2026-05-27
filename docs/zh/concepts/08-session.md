@@ -20,7 +20,7 @@ session.commit()
 |------|------|
 | `add_message(role, parts)` | 添加消息 |
 | `used(contexts, skill)` | 记录使用的上下文/技能 |
-| `commit()` | 提交：归档（同步） + 摘要生成和记忆提取（异步后台） |
+| `commit()` | 提交：inline 写 archive payload + 后台归档 finalize |
 | `get_task(task_id)` | 查询后台任务状态 |
 
 ### add_message
@@ -66,10 +66,10 @@ result = session.commit()
 #   "archived": True
 # }
 
-# 查询后台任务进度
+# 查询归档 finalize 进度
 task = client.get_task(result["task_id"])
 # task["status"]: "pending" | "running" | "completed" | "failed"
-# sum(task["result"]["memories_extracted"].values()): 3
+# task["result"]["archive_uri"]: "viking://session/.../history/archive_001"
 ```
 
 ## 消息结构
@@ -97,20 +97,22 @@ class Message:
 
 ### 归档流程
 
-commit() 分两阶段执行：
+commit() 会把可靠归档路径和 best-effort 副作用拆开：
 
-**Phase 1（同步，立即完成）**：
+**Inline path（立即返回）**：
 1. 递增 compression_index
 2. 写入消息到归档目录（`messages.jsonl`）
-3. 清空当前消息列表
-4. 返回 `task_id`
+3. 持久化保留的 live messages 和 session metadata
+4. 持久化 archive finalize task，并返回 `task_id`
 
-**Phase 2（异步后台）**：
-5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
-6. 提取长期记忆
-7. 写入 `memory_diff.json`（记忆变更审计日志）到归档目录
-8. 更新 active_count
-9. 写入 `.done` 完成标记
+**Archive finalize task（异步后台）**：
+5. 生成结构化摘要（LLM）→ 写入 `.abstract.md`、`.overview.md` 和 `.meta.json`
+6. 写入 `.done` 完成标记
+
+**Best-effort side effects（`.done` 之后）**：
+7. 提取长期记忆
+8. 有记忆操作被应用时写入 `memory_diff.json`
+9. 写入 usage 关系并更新 active_count
 
 ### 摘要格式
 
@@ -171,7 +173,7 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 
 ## 记忆变更记录
 
-每次 `session.commit()` 会在归档目录写入 `memory_diff.json`，记录本次提交的所有记忆变更，便于审计和回溯。
+当 commit 的记忆提取应用了记忆操作时，会在归档目录写入 `memory_diff.json`，记录这些变更，便于审计和回溯。它是 archive finalize 完成后的 best-effort 副作用，不属于 commit task 的结果。
 
 ```json
 {
@@ -218,7 +220,7 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 | `operations.deletes` | 删除的记忆（含 `deleted_content`） |
 | `summary` | 各操作类型的计数 |
 
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果记忆提取实际执行但没有产生操作，可能会写入空结构的 `memory_diff.json`；未执行记忆提取的 commit 不会创建该文件。
 
 ## 存储结构
 
@@ -229,11 +231,12 @@ viking://session/{session_id}/
 ├── .overview.md              # 当前概览
 ├── history/
 │   ├── archive_001/
-│   │   ├── messages.jsonl    # Phase 1 写入
-│   │   ├── .abstract.md      # Phase 2 写入（后台）
-│   │   ├── .overview.md      # Phase 2 写入（后台）
-│   │   ├── memory_diff.json  # Phase 2 写入（后台，记忆变更审计）
-│   │   └── .done             # Phase 2 完成标记
+│   │   ├── messages.jsonl    # inline commit path 写入
+│   │   ├── .abstract.md      # finalize task 写入
+│   │   ├── .overview.md      # finalize task 写入
+│   │   ├── .meta.json        # finalize task 写入
+│   │   ├── memory_diff.json  # 可选 best-effort 记忆审计
+│   │   └── .done             # finalize 完成标记
 │   └── archive_NNN/
 └── tools/
     └── {tool_id}/tool.json

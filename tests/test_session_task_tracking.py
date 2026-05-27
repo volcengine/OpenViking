@@ -5,6 +5,7 @@
 
 import asyncio
 from typing import AsyncGenerator, Tuple
+from unittest.mock import patch
 
 import httpx
 import pytest_asyncio
@@ -15,24 +16,31 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+from openviking.storage.transaction import reset_lock_manager
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 @pytest_asyncio.fixture
-async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
+async def api_client(tmp_path) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
+    reset_lock_manager()
     reset_task_tracker()
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
-    await service.initialize()
-    app = create_app(config=ServerConfig(), service=service)
-    set_service(service)
+    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield client, service
+    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
+        service = OpenVikingService(path=str(tmp_path / "api_data"))
+        await service.initialize()
+        app = create_app(config=ServerConfig(), service=service)
+        set_service(service)
 
-    await service.close()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            yield client, service
+
+        await service.close()
     await AsyncOpenViking.reset()
     reset_task_tracker()
+    reset_lock_manager()
 
 
 async def _new_session_with_message(client: httpx.AsyncClient) -> str:
@@ -64,7 +72,8 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
         started: asyncio.Event to set when background task starts (for "gated")
     """
 
-    async def mock_commit(_sid, _ctx, **_kwargs):
+    async def mock_commit(_sid, _ctx, keep_recent_count=0, **_kwargs):
+        del keep_recent_count, _kwargs
         tracker = get_task_tracker()
         task = await tracker.create(
             "session_commit",
@@ -91,8 +100,6 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
                 final_result = {
                     "session_id": _sid,
                     "archive_uri": archive_uri,
-                    "memories_extracted": {},
-                    "active_count_updated": 0,
                 }
                 if result_overrides:
                     final_result.update(result_overrides)
@@ -156,7 +163,7 @@ async def test_task_lifecycle_success(api_client):
 
     service.sessions.commit_async = _make_tracked_commit(
         behavior="gated",
-        result_overrides={"memories_extracted": {"profile": 3, "preferences": 2}},
+        result_overrides={"token_usage": {"total": {"total_tokens": 42}}},
         gate=commit_gate,
         started=commit_started,
     )
@@ -182,7 +189,8 @@ async def test_task_lifecycle_success(api_client):
     assert task_resp.status_code == 200
     result = task_resp.json()["result"]
     assert result["status"] == "completed"
-    assert result["result"]["memories_extracted"] == {"profile": 3, "preferences": 2}
+    assert result["result"]["archive_uri"]
+    assert result["result"]["token_usage"] == {"total": {"total_tokens": 42}}
 
 
 # ── Task lifecycle: pending → running → failed ──
@@ -210,15 +218,24 @@ async def test_task_lifecycle_failure(api_client):
     assert "LLM provider timeout" in result["error"]
 
 
-async def test_task_failed_when_memory_extraction_raises(api_client):
-    """Extractor failures should propagate to task error instead of silent completed+0."""
+async def test_task_completes_when_memory_extraction_raises(api_client, monkeypatch):
+    """Memory extraction is best-effort after archive finalization completes."""
+    from openviking.session.session import Session
+
     client, service = api_client
     session_id = await _new_session_with_message(client)
 
-    async def failing_extract(_context, _user, _session_id):
+    async def fake_summary(_self, _messages, latest_archive_overview=""):
+        del _self
+        del latest_archive_overview
+        return "# Session Summary\n\narchive finalized"
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
         raise RuntimeError("memory_extraction_failed: synthetic extractor error")
 
-    service.sessions._session_compressor.extractor.extract = failing_extract
+    monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_summary)
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = resp.json()["result"]["task_id"]
@@ -233,8 +250,8 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
             break
 
     assert result is not None
-    assert result["status"] == "failed"
-    assert "memory_extraction_failed" in result["error"]
+    assert result["status"] == "completed"
+    assert result["result"]["archive_uri"]
 
 
 # ── Duplicate commit acceptance ──

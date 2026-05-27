@@ -19,6 +19,7 @@ from openviking.server.config import ServerConfig, ToolOutputExternalizationConf
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session import Session
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -286,6 +287,7 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
+    await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
 
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
@@ -788,18 +790,18 @@ async def test_get_session_archive_endpoint_returns_archive_details(client: http
     ]
 
 
-async def test_commit_endpoint_rejects_after_failed_archive(
+async def test_commit_endpoint_rejects_after_terminal_archive_finalize_failure(
     client: httpx.AsyncClient,
-    service,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
+    async def failing_summary(_self, _messages, latest_archive_overview=""):
+        del _self, _messages, latest_archive_overview
+        raise RuntimeError("synthetic summary failure")
 
-    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+    monkeypatch.setattr(Session, "_generate_archive_summary_async", failing_summary)
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -820,4 +822,4 @@ async def test_commit_endpoint_rejects_after_failed_archive(
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "FAILED_PRECONDITION"
-    assert "unresolved failed archive" in body["error"]["message"]
+    assert "has failed archive" in body["error"]["message"]

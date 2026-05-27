@@ -1,5 +1,4 @@
 import time
-import uuid
 
 
 class TestContextBudgetMemory:
@@ -139,55 +138,6 @@ class TestContextBudgetMemory:
                     f"message should have 'parts', got keys: {sorted(msg.keys())}"
                 )
                 assert isinstance(msg["parts"], list), "parts should be list"
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_memory_extraction_after_commit(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            unique_name = f"Alice_{uuid.uuid4().hex[:6]}"
-            api_client.add_message(
-                session_id,
-                "user",
-                f"My name is {unique_name} and I work at TechCorp as a senior engineer specializing in AI",
-            )
-            api_client.add_message(
-                session_id,
-                "assistant",
-                f"Nice to meet you {unique_name}! I'll remember you work at TechCorp in AI.",
-            )
-
-            commit_resp = api_client.session_commit(session_id)
-            assert commit_resp.status_code == 200
-
-            task_id = commit_resp.json().get("result", {}).get("task_id")
-            if task_id:
-                for _ in range(60):
-                    task_resp = api_client.get_task(task_id)
-                    if task_resp.status_code == 200:
-                        if task_resp.json().get("result", {}).get("status") in [
-                            "completed",
-                            "failed",
-                        ]:
-                            break
-                    time.sleep(2)
-
-            get_resp = api_client.get_session(session_id)
-            assert get_resp.status_code == 200
-            result = get_resp.json().get("result", {})
-            memories = result.get("memories_extracted", {})
-
-            assert isinstance(memories, dict), (
-                f"memories_extracted should be dict, got {type(memories)}"
-            )
-            if "total" in memories:
-                assert isinstance(memories["total"], int), "total should be int"
-                assert memories["total"] >= 0, "total should be non-negative"
         finally:
             if session_id:
                 api_client.delete_session(session_id)

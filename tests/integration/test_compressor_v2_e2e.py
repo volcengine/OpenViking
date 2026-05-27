@@ -128,7 +128,7 @@ class TestCompressorV2EndToEnd:
         """
         Test full end-to-end flow:
         1. Create session with conversation
-        2. Commit session (triggers memory extraction)
+        2. Commit session (finalizes archive, then runs best-effort memory extraction)
         3. Wait for processing
         4. Verify memories were created in storage
         """
@@ -159,7 +159,7 @@ class TestCompressorV2EndToEnd:
             )
             print(f"[{role}]: {content[:60]}...")
 
-        # 3. Commit session (this should trigger memory extraction)
+        # 3. Commit session (this should trigger archive finalization)
         print("\nCommitting session...")
         commit_result = await client.commit_session(session_id)
         assert commit_result["status"] == "accepted"
@@ -168,7 +168,7 @@ class TestCompressorV2EndToEnd:
         task_result = await _wait_for_task(client, commit_result["task_id"])
         assert task_result["status"] == "completed"
 
-        # 4. Wait for memory extraction to complete
+        # 4. Wait for memory side effects and vectorization to settle
         print("\nWaiting for processing...")
         await client.wait_processed()
         print("Processing complete!")

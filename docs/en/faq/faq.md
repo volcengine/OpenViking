@@ -342,7 +342,7 @@ This strategy finds semantically matching fragments while understanding the comp
 
 1. **Ensure `commit()` was called**
    ```python
-   await session.commit()  # Triggers memory extraction
+   await session.commit()  # Finalizes archive, then best-effort memory extraction
    ```
 
 2. **Check VLM configuration**

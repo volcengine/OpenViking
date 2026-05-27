@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
+from openviking_cli.exceptions import ConflictError, ProcessingError
 from tests.server.conftest import SAMPLE_MD_CONTENT, SDK_ROOT_API_KEY, TEST_TMP_DIR
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
@@ -223,33 +223,6 @@ async def test_sdk_get_session_archive(http_client):
     assert archive["overview"]
     assert archive["abstract"]
     assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
-
-
-async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_client):
-    client, svc = http_client
-
-    session_info = await client.create_session()
-    session_id = session_info["session_id"]
-
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
-
-    svc.session_compressor.extract_long_term_memories = failing_extract
-
-    await client.add_message(session_id, "user", "First round")
-    commit_result = await client.commit_session(session_id)
-    task_id = commit_result["task_id"]
-
-    for _ in range(100):
-        task = await client.get_task(task_id)
-        if task and task["status"] in ("completed", "failed"):
-            break
-        await asyncio.sleep(0.1)
-
-    await client.add_message(session_id, "user", "Second round")
-    with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
-        await client.commit_session(session_id)
 
 
 # ===================================================================

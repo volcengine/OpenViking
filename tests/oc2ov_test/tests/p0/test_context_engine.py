@@ -124,18 +124,14 @@ class OVSessionVerifier:
             return False
         return detail.get("archive_count", 0) > 0 or detail.get("latest_archive_id") is not None
 
-    def assert_memories_extracted(self, session_id: str) -> bool:
+    def assert_archive_finalized(self, session_id: str) -> bool:
         task_id = self.commit_session(session_id)
         if not task_id:
             return False
         result = self.poll_task_until_done(task_id)
         if not result or result.get("status") != "completed":
             return False
-        extracted = result.get("result", {}).get("memories_extracted", {})
-        if not extracted:
-            return False
-        total = sum(len(v) if isinstance(v, list) else v for v in extracted.values())
-        return total > 0
+        return bool(result.get("result", {}).get("archive_uri"))
 
     @staticmethod
     def snapshot_memory_files() -> Dict[str, float]:
@@ -306,7 +302,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
             session_id=session_a,
         )
 
-        self.logger.info("[3/7] 显式 commit 并等待记忆提取完成")
+        self.logger.info("[3/7] 显式 commit 并等待归档 finalize 完成")
         ov_session_id = verifier.find_new_session_id(before_sessions)
         commit_success = False
         if ov_session_id:
@@ -315,8 +311,8 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
                 result = verifier.poll_task_until_done(task_id)
                 if result:
                     status = result.get("status")
-                    extracted = result.get("result", {}).get("memories_extracted", {})
-                    self.logger.info(f"  Commit 任务状态: {status}, 记忆提取结果: {extracted}")
+                    archive_uri = result.get("result", {}).get("archive_uri", "")
+                    self.logger.info(f"  Commit 任务状态: {status}, archive_uri: {archive_uri}")
                     commit_success = status == "completed"
         if not commit_success:
             self.logger.warning("  Commit 未成功完成，等待额外时间...")

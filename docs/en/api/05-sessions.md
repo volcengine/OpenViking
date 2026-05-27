@@ -884,16 +884,17 @@ await client.session_used(
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling progress.
+Commit a session. Archive payload writing completes immediately. Archive finalization runs asynchronously and returns a `task_id` for polling progress. Memory extraction, relation linking, and active-count updates run best-effort after the archive writes `.done`.
 
-**Two-Phase Commit Flow:**
-- **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, update relations and active_count
+**Commit Flow:**
+- **Inline path**: Snapshot current messages, write the archive payload and retained live tail, and persist the finalize task
+- **Finalize task**: Generate summaries (L0/L1), write archive metadata, and write `.done`
+- **Best-effort side effects**: Extract long-term memories, update relations, and update active_count after `.done`
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
-- Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
-- If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
+- Finalize work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
+- If an earlier archive finalization enters terminal failure, later commit requests fail with `FAILED_PRECONDITION` until that archive is retried.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.commit_async()` - Core implementation
@@ -935,17 +936,15 @@ import openviking as ov
 
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
-# Commit returns immediately with task_id; summary + memory extraction runs in background
+# Commit returns immediately with task_id; archive finalization runs in background
 result = await client.commit_session("a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# Poll background task progress
+# Poll archive finalization progress
 task = await client.get_task(result["task_id"])
 if task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+    print(f"Archive finalized: {task['result']['archive_uri']}")
 ```
 
 **CLI**
@@ -1012,7 +1011,9 @@ The endpoint returns the extracted memory write results as a JSON list. The exac
 
 #### 1. API Implementation Introduction
 
-Query background task status (e.g., commit summary generation and memory extraction progress).
+Query background task status. For session commits, the task tracks archive finalization:
+generating the archive summary files and writing `.done`. Memory extraction and
+usage side effects run best-effort after `.done` and are not part of task success.
 
 **Task Statuses:**
 - `pending`: Task waiting to execute
@@ -1080,13 +1081,6 @@ print(f"Status: {task['status']}")
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2,
       "token_usage": {
         "llm": {
           "prompt_tokens": 5200,
@@ -1104,8 +1098,6 @@ print(f"Status: {task['status']}")
   }
 }
 ```
-
-`memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
 
 ---
 
@@ -1194,64 +1186,10 @@ viking://session/{user_id}/{session_id}/
     |   +-- .abstract.md      # Written in Phase 2 (background)
     |   +-- .overview.md      # Written in Phase 2 (background)
     |   +-- .meta.json        # Archive metadata
-    |   +-- memory_diff.json  # Written in Phase 2 (background, on memory changes)
     |   +-- .done             # Phase 2 completion marker
     |   +-- .failed.json      # Phase 2 failure marker
     +-- archive_002/
 ```
-
-### memory_diff.json Structure
-
-Each commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
-
-```json
-{
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
-  "extracted_at": "2026-04-21T10:00:00Z",
-  "operations": {
-    "adds": [
-      {
-        "uri": "memory/user/xxx/identity.md",
-        "memory_type": "identity",
-        "after": "Newly created file content"
-      }
-    ],
-    "updates": [
-      {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
-        "before": "Content before modification",
-        "after": "Content after modification"
-      }
-    ],
-    "deletes": [
-      {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
-        "deleted_content": "Deleted file content"
-      }
-    ]
-  },
-  "summary": {
-    "total_adds": 1,
-    "total_updates": 1,
-    "total_deletes": 1
-  }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `archive_uri` | str | Archive directory URI for this commit |
-| `extracted_at` | str | ISO 8601 timestamp of extraction |
-| `operations.adds` | array | New memories created (`uri`, `memory_type`, `after`) |
-| `operations.updates` | array | Modified memories (`uri`, `memory_type`, `before`, `after`) |
-| `operations.deletes` | array | Deleted memories (`uri`, `memory_type`, `deleted_content`) |
-| `summary.total_adds` | int | Number of new memories |
-| `summary.total_updates` | int | Number of modified memories |
-| `summary.total_deletes` | int | Number of deleted memories |
-
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
 
 ---
 
@@ -1317,16 +1255,14 @@ if results.resources:
         contexts=[results.resources[0].uri]
     )
 
-# Commit session (returns immediately; summary + memory extraction runs in background)
+# Commit session (returns immediately; archive finalization runs in background)
 commit_result = await client.commit_session(session_id)
 print(f"Task ID: {commit_result['task_id']}")
 
 # Optional: poll for completion
 task = await client.get_task(commit_result["task_id"])
 if task and task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+    print(f"Archive finalized: {task['result']['archive_uri']}")
 ```
 
 **HTTP API**

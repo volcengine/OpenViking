@@ -71,8 +71,8 @@ Memories are divided into user memories and Agent memories, representing learned
 # Memories are auto-extracted from sessions
 session = client.session()
 await session.add_message("user", [{"type": "text", "text": "I prefer dark mode"}])
-commit = await session.commit()  # Starts background memory extraction
-task = await client.get_task(commit["task_id"])  # Poll until task["status"] == "completed"
+commit = await session.commit()  # Starts archive finalization
+task = await client.get_task(commit["task_id"])  # Poll until archive finalize completes
 
 # Search memories
 results = await client.find(
