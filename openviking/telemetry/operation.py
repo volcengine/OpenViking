@@ -422,6 +422,96 @@ class TelemetrySummaryBuilder:
                             ),
                             0,
                         ),
+                        "operation_exact_apply_window_timeline_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_items"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_fields": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_fields"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_written_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_written_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_edited_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_edited_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_deleted_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_deleted_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_error_count": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_error_count"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_cross_uri_create_new_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_cross_uri_create_new_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_cross_uri_create_new_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_cross_uri_create_new_uris"
+                            ),
+                            0,
+                        ),
+                        "result_written_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_written_uris"), 0
+                        ),
+                        "result_edited_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_edited_uris"), 0
+                        ),
+                        "result_deleted_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_deleted_uris"), 0
+                        ),
+                        "result_error_count": cls._i(
+                            counters.get(f"{metric_prefix}.result_error_count"), 0
+                        ),
+                        "supersedes_requested": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_requested"), 0
+                        ),
+                        "supersedes_resolved": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_resolved"), 0
+                        ),
+                        "supersedes_unresolved": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_unresolved"), 0
+                        ),
+                        "supersedes_delete_queued": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_delete_queued"), 0
+                        ),
+                        "supersedes_inheritance_targets": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_inheritance_targets"), 0
+                        ),
+                        "supersedes_graph_links_delta": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_graph_links_delta"), 0
+                        ),
                         "operation_exact_stale_read_uri_count": cls._i(
                             counters.get(f"{metric_prefix}.operation_exact_stale_read_uri_count"),
                             0,
@@ -475,6 +565,18 @@ class TelemetrySummaryBuilder:
                             cls._build_counter_suffix_summary(
                                 counters,
                                 f"{metric_prefix}.operation_exact_apply_window_coalesce_skipped",
+                            )
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_buckets",
+                            )
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_fields_by_name": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_fields_by_name",
                             )
                         ),
                         "operation_exact_stale_base_states": (

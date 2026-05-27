@@ -39,6 +39,7 @@ from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.versioning import content_digest
 from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking.telemetry.operation import TelemetrySummaryBuilder
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -68,6 +69,76 @@ def test_coalesced_window_order_groups_same_uri_timelines():
     )
 
     assert ordered == [op_a1, op_a2, op_b, op_multi]
+
+
+def test_same_uri_timeline_stats_counts_only_replayed_groups():
+    exp_a = "viking://agent/default/memories/experiences/a.md"
+    exp_b = "viking://agent/default/memories/experiences/b.md"
+    op_a1 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_a2 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_b = ResolvedOperation(memory_type="experiences", uris=[exp_b], memory_fields={})
+    op_multi = ResolvedOperation(
+        memory_type="experiences",
+        uris=[exp_a, exp_b],
+        memory_fields={},
+    )
+
+    assert compressor_v2_module._same_uri_timeline_stats(
+        [op_a1, op_a2, op_b, op_multi]
+    ) == (1, 2)
+
+
+def test_agent_phase_summary_exposes_apply_window_quality_counters():
+    prefix = "memory.agent.extract.phase.experience_single"
+    summary = TelemetrySummaryBuilder.build(
+        operation="session.commit",
+        status="ok",
+        duration_ms=1.0,
+        counters={
+            "memory.agent.extract.phase.count": 1,
+            f"{prefix}.count": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_groups": 2,
+            f"{prefix}.operation_exact_apply_window_timeline_items": 5,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_groups": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_fields": 2,
+            f"{prefix}.operation_exact_apply_window_result_written_uris": 4,
+            f"{prefix}.operation_exact_apply_window_cross_uri_create_new_groups": 1,
+            f"{prefix}.operation_exact_apply_window_cross_uri_create_new_uris": 4,
+            f"{prefix}.result_written_uris": 4,
+            f"{prefix}.result_edited_uris": 1,
+            f"{prefix}.supersedes_requested": 2,
+            f"{prefix}.supersedes_resolved": 1,
+            f"{prefix}.supersedes_unresolved": 1,
+            f"{prefix}.supersedes_delete_queued": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_buckets.experiences": 2,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_fields_by_name.content": 2,
+        },
+        gauges={},
+        error_stage="",
+        error_code="",
+        error_message="",
+    )
+
+    phase = summary["memory"]["agent"]["phase"]["experience_single"]
+    assert phase["operation_exact_apply_window_timeline_groups"] == 2
+    assert phase["operation_exact_apply_window_timeline_items"] == 5
+    assert phase["operation_exact_apply_window_timeline_conflict_groups"] == 1
+    assert phase["operation_exact_apply_window_timeline_conflict_fields"] == 2
+    assert phase["operation_exact_apply_window_result_written_uris"] == 4
+    assert phase["operation_exact_apply_window_cross_uri_create_new_groups"] == 1
+    assert phase["operation_exact_apply_window_cross_uri_create_new_uris"] == 4
+    assert phase["result_written_uris"] == 4
+    assert phase["result_edited_uris"] == 1
+    assert phase["supersedes_requested"] == 2
+    assert phase["supersedes_resolved"] == 1
+    assert phase["supersedes_unresolved"] == 1
+    assert phase["supersedes_delete_queued"] == 1
+    assert phase["operation_exact_apply_window_timeline_conflict_buckets"] == {
+        "experiences": 2
+    }
+    assert phase["operation_exact_apply_window_timeline_conflict_fields_by_name"] == {
+        "content": 2
+    }
 
 
 def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():

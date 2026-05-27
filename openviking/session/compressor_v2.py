@@ -319,6 +319,39 @@ def _order_upserts_for_coalesced_timeline(
     return [op for key in ordered_keys for op in grouped[key]]
 
 
+def _same_uri_timeline_stats(
+    upsert_operations: list[ResolvedOperation],
+) -> tuple[int, int]:
+    """Return same-URI timeline group count and item count."""
+
+    group_count = 0
+    item_count = 0
+    current_key: tuple[str, str] | None = None
+    current_len = 0
+
+    def flush_current_group() -> None:
+        nonlocal group_count, item_count, current_len
+        if current_len > 1:
+            group_count += 1
+            item_count += current_len
+        current_len = 0
+
+    for op in upsert_operations:
+        if len(op.uris) != 1:
+            flush_current_group()
+            current_key = None
+            continue
+        key = (op.memory_type, op.uris[0])
+        if key == current_key:
+            current_len += 1
+            continue
+        flush_current_group()
+        current_key = key
+        current_len = 1
+    flush_current_group()
+    return group_count, item_count
+
+
 def _merge_op_value(field: Any) -> str:
     merge_op = getattr(field, "merge_op", "")
     return str(getattr(merge_op, "value", merge_op)).lower()
@@ -1766,7 +1799,46 @@ class SessionCompressorV2:
             # Resolve supersedes fields (name-based Replace): find old experience URI,
             # queue for deletion, and return per-URI inheritance map so only the
             # superseding experience inherits the old source_trajectories.
+            supersedes_requested = sum(
+                1
+                for op in operations.upsert_operations
+                if op.memory_type == "experiences"
+                and str(op.memory_fields.get("supersedes") or "").strip()
+            )
+            supersedes_delete_before = len(operations.delete_file_contents)
+            supersedes_links_before = len(operations.resolved_links or [])
             inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
+            if supersedes_requested:
+                supersedes_remaining = sum(
+                    1
+                    for op in operations.upsert_operations
+                    if op.memory_type == "experiences"
+                    and str(op.memory_fields.get("supersedes") or "").strip()
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_requested",
+                    supersedes_requested,
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_resolved",
+                    max(supersedes_requested - supersedes_remaining, 0),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_unresolved",
+                    supersedes_remaining,
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_delete_queued",
+                    max(len(operations.delete_file_contents) - supersedes_delete_before, 0),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_inheritance_targets",
+                    sum(len(uris) for uris in inheritance_map.values()),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.supersedes_graph_links_delta",
+                    max(len(operations.resolved_links or []) - supersedes_links_before, 0),
+                )
             source_attribution_map: Dict[str, List[str]] = {}
             source_attribution_resolver = getattr(provider, "resolve_source_attribution", None)
             if callable(source_attribution_resolver):
@@ -1890,6 +1962,22 @@ class SessionCompressorV2:
                     f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
                     f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
                     f"errors={len(memory_result.errors)}"
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.result_written_uris",
+                    len(memory_result.written_uris),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.result_edited_uris",
+                    len(memory_result.edited_uris),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.result_deleted_uris",
+                    len(memory_result.deleted_uris),
+                )
+                telemetry.count(
+                    f"memory.agent.extract.phase.{phase_metric_key}.result_error_count",
+                    len(memory_result.errors),
                 )
 
                 archive_uri = getattr(provider, "_memory_diff_archive_uri", "") or ""
@@ -2038,6 +2126,20 @@ class SessionCompressorV2:
                         for link in (payload["memory_operations"].resolved_links or [])
                     ],
                 )
+                leader_telemetry = payloads[0]["telemetry"]
+                leader_phase_key = payloads[0]["phase_metric_key"]
+                leader_prefix = f"memory.agent.extract.phase.{leader_phase_key}"
+                timeline_groups, timeline_items = _same_uri_timeline_stats(
+                    combined_operations.upsert_operations
+                )
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_timeline_groups",
+                    timeline_groups,
+                )
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_timeline_items",
+                    timeline_items,
+                )
                 registry = payloads[0]["provider"]._get_registry()
                 conflict_synthesis_enabled = bool(
                     getattr(
@@ -2057,6 +2159,26 @@ class SessionCompressorV2:
                     _ctx: Any,
                     _extract_context: Any,
                 ) -> Optional[MemoryFile]:
+                    if conflicts:
+                        leader_telemetry.count(
+                            f"{leader_prefix}.operation_exact_apply_window_timeline_conflict_groups",
+                            1,
+                        )
+                        leader_telemetry.count(
+                            f"{leader_prefix}.operation_exact_apply_window_timeline_conflict_fields",
+                            len(conflicts),
+                        )
+                        for conflict in conflicts:
+                            field_name = str(conflict.get("field") or "unknown")
+                            conflict_memory_type = str(conflict.get("memory_type") or memory_type)
+                            leader_telemetry.count(
+                                f"{leader_prefix}.operation_exact_apply_window_timeline_conflict_buckets.{conflict_memory_type}",
+                                1,
+                            )
+                            leader_telemetry.count(
+                                f"{leader_prefix}.operation_exact_apply_window_timeline_conflict_fields_by_name.{field_name}",
+                                1,
+                            )
                     if not conflict_synthesis_enabled:
                         return None
                     return await _synthesize_timeline_conflict_fields(
@@ -2086,6 +2208,31 @@ class SessionCompressorV2:
 
                 written_set = set(memory_result.written_uris)
                 edited_set = set(memory_result.edited_uris)
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_result_written_uris",
+                    len(memory_result.written_uris),
+                )
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_result_edited_uris",
+                    len(memory_result.edited_uris),
+                )
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_result_deleted_uris",
+                    len(memory_result.deleted_uris),
+                )
+                leader_telemetry.count(
+                    f"{leader_prefix}.operation_exact_apply_window_result_error_count",
+                    len(memory_result.errors),
+                )
+                if len(written_set) > 1:
+                    leader_telemetry.count(
+                        f"{leader_prefix}.operation_exact_apply_window_cross_uri_create_new_groups",
+                        1,
+                    )
+                    leader_telemetry.count(
+                        f"{leader_prefix}.operation_exact_apply_window_cross_uri_create_new_uris",
+                        len(written_set),
+                    )
                 results: list[Any] = []
                 for payload in payloads:
                     payload_uris = _collect_operation_write_uris(payload["memory_operations"])
