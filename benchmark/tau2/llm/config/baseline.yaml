@@ -34,7 +34,7 @@ eval:
   # prompt; run_eval.py applies that small prompt patch idempotently when needed.
   user_simulator_policy: confirmation_aware
   # Fixed-first-user fixtures keep the first simulated user turn stable while
-  # leaving later turns live. Main PR-B evidence requires these env vars.
+  # leaving later turns live. Strict reproduction configs require these env vars.
   fixed_first_user_fixtures:
     retail: ${TAU2_RETAIL_FIXED_FIRST_USER_FILE:-}
     airline: ${TAU2_AIRLINE_FIXED_FIRST_USER_FILE:-}
@@ -53,19 +53,3 @@ openviking:
   prewrite_retrieval_top_k: 6
   prewrite_inject_top_k: 2
   replay_write_policy: read_only
-
-strategies:
-  - id: memory_v2_experience_only
-    label: OpenViking Memory V2 experience-only
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_experience_only
-    train_memory_mode: experience_only
-    retrieval_mode: first_user
-  - id: memory_v2_prewrite
-    label: OpenViking Memory V2 pre-write recall
-    memory_backend: openviking
-    train_required: true
-    corpus_id: memory_v2_experience_only
-    train_memory_mode: experience_only
-    retrieval_mode: first_user_prewrite

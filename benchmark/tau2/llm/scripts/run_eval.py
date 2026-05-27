@@ -1028,7 +1028,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plan or run TAU-2 benchmark cells.")
     parser.add_argument(
-        "--config", type=Path, default=Path(__file__).parents[1] / "config" / "baseline.yaml"
+        "--config", type=Path, default=Path(__file__).parents[1] / "config" / "no_memory.yaml"
     )
     parser.add_argument("--run-id", default=run_id())
     parser.add_argument(

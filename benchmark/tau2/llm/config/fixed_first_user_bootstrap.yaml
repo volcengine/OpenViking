@@ -5,7 +5,7 @@ benchmark:
 
 eval:
   # Use live simulator turns once to collect the first user request fixture.
-  # The resulting fixture can then be reused by the strict PR-B configs.
+  # The resulting fixture can then be reused by strict fixed-first-user configs.
   protocol: live_user_bootstrap
   require_fixed_first_user: false
   user_simulator_policy: confirmation_aware
