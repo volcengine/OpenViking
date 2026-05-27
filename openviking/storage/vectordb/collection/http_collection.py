@@ -301,8 +301,8 @@ class HttpCollection(ICollection):
         fetch_result = FetchDataInCollectionResult()
 
         if isinstance(data, dict):
-            if "fetch" in data:
-                fetch = data.get("fetch", [])
+            if "items" in data:
+                fetch = data.get("items", [])
                 fetch_result.items = [
                     DataItem(
                         id=item.get("id"),
