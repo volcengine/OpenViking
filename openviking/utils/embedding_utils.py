@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -238,7 +239,7 @@ async def vectorize_directory_meta(
             account_id=ctx.account_id,
             owner_space=owner_space,
         )
-        context_abstract.set_vectorize(Vectorize(text=abstract))
+        context_abstract.set_vectorize(Vectorize(text=abstract, full_text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
         _apply_scalar_overrides(
             msg_abstract,
@@ -271,7 +272,7 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
             )
-            context_overview.set_vectorize(Vectorize(text=overview))
+            context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
             _apply_scalar_overrides(
                 msg_overview,
@@ -353,6 +354,7 @@ async def vectorize_file(
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
+        max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -360,7 +362,7 @@ async def vectorize_file(
                 logger.warning(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"
                 )
-                context.set_vectorize(Vectorize(text=summary))
+                context.set_vectorize(Vectorize(text=summary, full_text=summary))
             else:
                 logger.warning(
                     f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
@@ -368,20 +370,31 @@ async def vectorize_file(
                 return
         elif content_type == ResourceContentType.TEXT:
             if summary and effective_text_source in {"summary_first", "summary_only"}:
-                context.set_vectorize(Vectorize(text=summary))
+                # Use summary for vectorization, but store full file content for BM25.
+                full_content = ""
+                try:
+                    raw = await viking_fs.read_file(file_path, ctx=ctx)
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8", errors="replace")
+                    full_content = raw
+                except Exception:
+                    pass
+                context.set_vectorize(Vectorize(text=summary, full_text=full_content or summary))
             else:
                 # Read raw file content; embedders apply their own input guard.
                 try:
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    context.set_vectorize(Vectorize(text=content))
+                    full_content = content
+                    content = truncate_embedding_input(content, max_input_tokens)
+                    context.set_vectorize(Vectorize(text=content, full_text=full_content))
                 except Exception as e:
                     logger.warning(
                         f"Failed to read file content for {file_path}, falling back to summary: {e}"
                     )
                     if summary:
-                        context.set_vectorize(Vectorize(text=summary))
+                        context.set_vectorize(Vectorize(text=summary, full_text=summary))
                     else:
                         logger.warning(
                             f"No summary available for {file_path}, skipping vectorization"
@@ -389,7 +402,7 @@ async def vectorize_file(
                         return
         elif summary:
             # For non-text files, use summary
-            context.set_vectorize(Vectorize(text=summary))
+            context.set_vectorize(Vectorize(text=summary, full_text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return

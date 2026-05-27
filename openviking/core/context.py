@@ -41,12 +41,14 @@ class ContextLevel(int, Enum):
 
 class Vectorize:
     text: str = ""
+    full_text: str = ""  # Full content for BM25 (not embedding-truncated)
     # image: str = ""
     # video: str = ""
     # audio: str = ""
 
-    def __init__(self, text: str = ""):
+    def __init__(self, text: str = "", full_text: str = ""):
         self.text = text
+        self.full_text = full_text
 
 
 class Context:

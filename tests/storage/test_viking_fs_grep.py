@@ -17,7 +17,7 @@ class _DummyAgfs:
 async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": True}
 
     async def fake_ls(uri, ctx=None, **kwargs):
@@ -80,7 +80,7 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
 async def test_grep_parallel_reads_respect_concurrency_limit(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": True}
 
     async def fake_ls(uri, ctx=None, **kwargs):
@@ -121,7 +121,7 @@ async def test_grep_parallel_reads_respect_concurrency_limit(monkeypatch):
 async def test_grep_parallel_reads_work_with_blocking_agfs_read(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": True}
 
     async def fake_ls(uri, ctx=None, **kwargs):
@@ -155,7 +155,7 @@ async def test_grep_parallel_reads_work_with_blocking_agfs_read(monkeypatch):
 async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": True}
 
     async def fake_ls(uri, ctx=None, **kwargs):

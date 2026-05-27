@@ -42,7 +42,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import And, Eq, PathScope
+from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -235,6 +235,7 @@ class VikingFS:
         self._encryptor = encryptor
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
+        self._fulltext_available: Optional[bool] = None  # cached result of _collection_has_fulltext
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -692,7 +693,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
         remote_return_limit: int = 0,
     ) -> Dict:
@@ -719,7 +720,9 @@ class VikingFS:
             Dict with matches, count, match_count, files_scanned
         """
         self._ensure_access(uri, ctx)
-        await self.stat(uri, ctx=ctx)
+        # Skip vector_store.count() — the count field is not needed for grep,
+        # and avoiding it saves one VikingDB API call.
+        await self.stat(uri, ctx=ctx, skip_count=True)
 
         # Clamp remote_return_limit to valid range (0 = auto, 1-100000 = explicit)
         if remote_return_limit < 0:
@@ -797,12 +800,19 @@ class VikingFS:
         return "vikingdb_then_fs"
 
     async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
-        """Check if collection has content field and FullText config."""
+        """Check if collection has content field and FullText config.
+
+        Result is cached on the VikingFS instance since collection schema
+        does not change at runtime.
+        """
+        if self._fulltext_available is not None:
+            return self._fulltext_available
         try:
             meta = None
             if hasattr(vector_store, "get_collection_meta"):
                 meta = await vector_store.get_collection_meta(ctx=ctx)
             if not meta:
+                self._fulltext_available = False
                 return False
             fields = meta.get("Fields", [])
             has_content = any(
@@ -810,7 +820,9 @@ class VikingFS:
             )
             fulltext = meta.get("FullText") or []
             has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
-            return has_content and has_content_fulltext
+            result = has_content and has_content_fulltext
+            self._fulltext_available = result
+            return result
         except Exception:
             logger.debug(
                 "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
@@ -818,8 +830,8 @@ class VikingFS:
             return False
 
     async def _get_cached_count(self, uri: str, ctx) -> int:
-        """Get cached count of L2 records for a URI (TTL=60s)."""
-        _COUNT_CACHE_TTL = 60
+        """Get cached count of records for a URI (TTL=1h)."""
+        _COUNT_CACHE_TTL = 3600
         vector_store = self._get_vector_store()
 
         # Include account_id in cache key for multi-tenant safety
@@ -831,9 +843,7 @@ class VikingFS:
         if cached and (now - cached[1]) < _COUNT_CACHE_TTL:
             return cached[0]
 
-        count = await vector_store.count(
-            filter=And([PathScope("uri", uri), Eq("level", 2)]), ctx=ctx
-        )
+        count = await vector_store.count(filter=PathScope("uri", uri, depth=-1), ctx=ctx)
         # Evict oldest entries if cache exceeds max size
         if len(self._count_cache) >= self._count_cache_max_size:
             oldest_keys = sorted(self._count_cache, key=lambda k: self._count_cache[k][1])
@@ -896,12 +906,7 @@ class VikingFS:
         # Split regex alternation (e.g. "error|warning|fail") into individual keywords
         # for bm25 search. Limit to 10 keywords per VikingDB API constraint.
         keywords = [kw.strip() for kw in pattern.split("|") if kw.strip()][:10]
-        filter_expr = And(
-            [
-                PathScope("uri", uri),
-                Eq("level", 2),
-            ]
-        )
+        filter_expr = PathScope("uri", uri, depth=level_limit)
 
         # Auto-adapt remote_return_limit: when 0 (default), use the maximum
         # limit (100000) so that search_by_keywords returns all matching
@@ -995,7 +1000,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Grep using agfs native implementation.
@@ -1091,7 +1096,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Grep implementation for encrypted files.
@@ -1256,7 +1261,9 @@ class VikingFS:
             return 0
         return len([part for part in match_file.split("/") if part])
 
-    async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+    async def stat(
+        self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
+    ) -> Dict[str, Any]:
         """
         File/directory information.
 
@@ -1270,6 +1277,13 @@ class VikingFS:
             count (int): For directories, the number of nodes in the vector index
                 under this directory (including subdirectories). For files, this
                 field is not included.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+            skip_count: If True, skip the vector_store.count() call for directories.
+                Use this when the count field is not needed (e.g. in grep) to avoid
+                an extra VikingDB API call.
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -1277,7 +1291,7 @@ class VikingFS:
         if isinstance(result, dict):
             result["isLocked"] = await self._is_path_locked_async(path)
             # Add count for directories if vector store available
-            if result.get("isDir", False):
+            if not skip_count and result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:

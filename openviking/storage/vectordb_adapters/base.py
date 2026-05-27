@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import uuid
 from abc import ABC, abstractmethod
@@ -533,13 +534,23 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
+        compiled_filter = self._compile_filter(filter)
+        logger.debug(
+            "search_by_keywords: keywords=%s query=%s limit=%s offset=%s filter=%s output_fields=%s",
+            keywords,
+            query,
+            limit,
+            offset,
+            json.dumps(compiled_filter, ensure_ascii=False),
+            output_fields,
+        )
         result = coll.search_by_keywords(
             index_name=self._index_name,
             keywords=keywords,
             query=query,
             limit=limit,
             offset=offset,
-            filters=self._compile_filter(filter),
+            filters=compiled_filter,
             output_fields=output_fields,
         )
         records: list[Dict[str, Any]] = []

@@ -242,7 +242,7 @@ class FSService:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         remote_return_limit: int = 0,
     ) -> Dict:
         """Content search."""

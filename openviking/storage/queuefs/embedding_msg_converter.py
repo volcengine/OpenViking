@@ -68,9 +68,11 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
-        # Store vectorization text in content field for bm25 full-text search.
+        # Store full content in content field for bm25 full-text search.
+        # Use full_text (raw file content) when available; fall back to vectorization_text.
         # Truncate to 64KB (VikingDB text field limit).
-        context_data["content"] = vectorization_text[:65536]
+        full_content = context.vectorize.full_text or vectorization_text
+        context_data["content"] = full_content[:65536]
 
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,
