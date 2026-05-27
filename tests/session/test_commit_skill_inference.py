@@ -1,11 +1,10 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.core.skill_loader import SkillLoader
-from openviking.message import Message, TextPart, ToolPart
+from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v2 import SessionCompressorV2
 from openviking.session.memory.agent_trajectory_context_provider import (
@@ -13,8 +12,6 @@ from openviking.session.memory.agent_trajectory_context_provider import (
 )
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.schema_model_generator import SchemaPromptGenerator
-from openviking.session.memory_extractor import MemoryCategory, MemoryExtractor
 from openviking.session.skill.session_skill_context_provider import (
     SessionSkillContextProvider,
     resolve_skill_extract_templates_dir,
@@ -25,35 +22,6 @@ from openviking.session.skill.skill_operation_updater import (
 )
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
-
-
-class _DummyVLM:
-    def is_available(self):
-        return True
-
-    async def get_completion_async(self, _prompt):
-        return json.dumps(
-            {
-                "skills": [
-                    {
-                        "situation": "代码审查与总结",
-                        "skill_name": "代码审查流程",
-                        "skill_content_reasoning": [
-                            "从对话中提炼稳定步骤",
-                            "保留可复用的检查顺序",
-                        ],
-                        "skill_content": "## 核心规范\n- 先阅读目标文件。\n- 基于证据总结问题。\n\n## 使用该Skill的场景\n- 代码审查\n\n## 实现指南\n### 先决条件\n- 能访问待审查代码\n### 技术和方法\n1. 先读文件。\n2. 再总结发现。\n### 应用场景示例\n- 阅读 README 后输出审查意见。\n\n## 核心要点\n- 先证据，后结论。",
-                    }
-                ]
-            }
-        )
-
-
-def _mock_config():
-    config = MagicMock()
-    config.vlm = _DummyVLM()
-    config.output_language_override = None
-    return config
 
 
 def _build_skill_registry() -> MemoryTypeRegistry:
@@ -91,61 +59,6 @@ def _build_duplicate_session_skill_operations() -> ResolvedOperations:
         delete_file_contents=[],
         errors=[],
     )
-
-
-@pytest.mark.asyncio
-async def test_session_skill_schema_description_is_loaded_from_yaml():
-    registry = _build_skill_registry()
-    schema = registry.get("session_skills")
-    assert schema is not None
-
-    descriptions = SchemaPromptGenerator([schema]).generate_type_descriptions()
-
-    assert "### session_skills" in descriptions
-    assert "一、提取内容的识别规则" in descriptions
-    assert "以后" in descriptions
-
-
-@pytest.mark.asyncio
-async def test_extract_does_not_inject_skill_memory_candidate(monkeypatch):
-    extractor = MemoryExtractor()
-    monkeypatch.setattr(
-        "openviking.session.memory_extractor.get_openviking_config",
-        _mock_config,
-    )
-
-    user = UserIdentifier.the_default_user()
-    messages = [
-        Message(
-            id="m1",
-            role="assistant",
-            parts=[
-                TextPart(
-                    "We should use code-review skill: first read the project files, then summarize findings before drafting output."
-                ),
-                ToolPart(
-                    tool_id="tool_1",
-                    tool_name="read",
-                    tool_uri="viking://session/test/tools/tool_1",
-                    tool_input={"file_path": "README.md"},
-                    tool_output="ok",
-                    tool_status="completed",
-                    duration_ms=12,
-                ),
-            ],
-        )
-    ]
-    candidates = await extractor.extract(
-        {
-            "messages": messages,
-            "summary": "",
-        },
-        user,
-        "session-1",
-    )
-
-    skill_candidates = [c for c in candidates if c.category == MemoryCategory.SKILLS]
-    assert skill_candidates == []
 
 
 @pytest.mark.asyncio

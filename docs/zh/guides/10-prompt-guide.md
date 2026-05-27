@@ -29,7 +29,7 @@ OpenViking 当前的 prompt 主要分为两类：
 | `parsing` | `parsing.context_generation` | 文档结构划分与节点语义生成 | 资源导入与解析 | 文档章节结构、节点摘要、图像摘要 |
 | `semantic` | `semantic.document_summary` | 文件与目录级摘要 | 语义索引构建 | 文件摘要、目录概览、后续检索质量 |
 | `retrieval` | `retrieval.intent_analysis` | 检索意图分析与查询规划 | 检索前分析 | 搜索 query 规划、上下文召回方向 |
-| `compression` | `compression.memory_extraction` | 记忆提取、合并、压缩、摘要 | session commit / memory 管线 | 长期记忆抽取、session 压缩、记忆合并结果 |
+| `compression` | `compression.ov_wm_v2` | 工作记忆压缩与 session archive 摘要 | session commit / memory 管线 | session 压缩质量和工作记忆质量 |
 | `memory` | `profile` | 记忆类型定义 | 记忆落盘与更新 | 不同记忆类型的组织方式和最终内容 |
 | `processing` | `processing.tool_chain_analysis` | 从交互或资源背景中提炼经验 | 后处理与经验沉淀 | 策略提炼、工具链经验、交互学习结果 |
 | `indexing` | `indexing.relevance_scoring` | 评估候选内容相关性 | 检索与索引辅助 | 相关性打分质量 |
@@ -154,37 +154,19 @@ operation_mode: "upsert"
 
 ### Compression
 
-这一类 prompt 主要用于 session 压缩、记忆提取、记忆合并和字段压缩，是长期记忆质量的核心部分。
+这一类 prompt 主要用于 session 压缩和 working memory 更新。长期记忆抽取使用 `memory` 类别下的 v2 schema-driven memory templates。
 
-- `compression.dedup_decision`
-  - 生效环节：记忆候选去重与决策阶段
-  - 影响能力：长期记忆去重、创建或合并策略
-  - 作用：决定新候选记忆应跳过、创建，还是与已有记忆合并
-  - 关键输入：`candidate_content`、`candidate_abstract`、`candidate_overview`、`existing_memories`
+- `compression.ov_wm_v2`
+  - 生效环节：首次 working memory 生成阶段
+  - 影响能力：session archive 概览和当前 working memory 质量
+  - 作用：为 session 创建初始结构化 working memory 文档
+  - 关键输入：`messages`
 
-- `compression.field_compress`
-  - 生效环节：记忆字段压缩阶段
-  - 影响能力：工具记忆等长字段内容的可控长度与可读性
-  - 作用：在保留关键信息的前提下压缩字段内容
-  - 关键输入：`field_name`、`content`、`max_length`
-
-- `compression.memory_extraction`
-  - 生效环节：会话压缩后的记忆提取阶段
-  - 影响能力：长期记忆抽取质量、后续 recall 命中率
-  - 作用：从会话摘要和最近消息中提取值得长期保存的记忆候选
-  - 关键输入：`summary`、`recent_messages`、`user`、`feedback`、`output_language`
-
-- `compression.memory_merge`
-  - 生效环节：单条记忆合并阶段
-  - 影响能力：已有记忆更新后的内容质量
-  - 作用：将已有记忆与新信息合并成更完整的版本
-  - 关键输入：`existing_content`、`new_content`、`category`、`output_language`
-
-- `compression.memory_merge_bundle`
-  - 生效环节：结构化记忆合并阶段
-  - 影响能力：L0/L1/L2 三层记忆合并结果
-  - 作用：一次性输出 abstract、overview、content 三层合并结果
-  - 关键输入：`existing_abstract`、`existing_overview`、`existing_content`、`new_abstract`、`new_overview`、`new_content`、`category`、`output_language`
+- `compression.ov_wm_v2_update`
+  - 生效环节：增量 working memory 更新阶段
+  - 影响能力：session archive 概览和 working memory 连续性
+  - 作用：基于 keep、update、append 操作更新已有 working memory 文档
+  - 关键输入：`previous_working_memory`、`messages`
 
 - `compression.structured_summary`
   - 生效环节：session archive 摘要生成阶段
@@ -477,7 +459,7 @@ OpenViking 支持两种主要的自定义方式：
 ```text
 custom-prompts/
 ├── compression/
-│   └── memory_extraction.yaml
+│   └── ov_wm_v2.yaml
 ├── retrieval/
 │   └── intent_analysis.yaml
 └── semantic/
@@ -502,9 +484,9 @@ export OPENVIKING_PROMPT_TEMPLATES_DIR=/path/to/custom-prompts
 
 影响面示例：
 
-- 修改 `compression.memory_extraction`
-  - 主要影响记忆抽取阶段
-  - 最终影响长期记忆质量和后续 recall 结果
+- 修改 `compression.ov_wm_v2`
+  - 主要影响首次 working memory 生成
+  - 最终影响 session archive 质量和后续 recall 效果
 - 修改 `retrieval.intent_analysis`
   - 主要影响检索前 query plan
   - 最终影响搜索方向和召回效果

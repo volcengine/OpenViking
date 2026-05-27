@@ -223,13 +223,11 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip unless agent_memory_enabled and memory.version == v2."""
+    """Skip unless agent_memory_enabled is configured."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
     if not getattr(config.memory, "agent_memory_enabled", False):
         pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
-    if config.memory.version != "v2":
-        pytest.skip("memory.version != v2 — skipping agent memory tests")
 
 
 @pytest.fixture()
