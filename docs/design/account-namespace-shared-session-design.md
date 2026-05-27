@@ -865,7 +865,6 @@ viking://session/{user_id}/{session_id}
 
 - 本次不支持旧 agent 数据自动迁移到新命名空间
 - 不保留旧 hash namespace 的兼容访问
-- 不继续让 `memory.agent_scope_mode` 参与服务端命名空间决策
 - 如需保留旧 agent 数据，可在升级前自行使用现有 `ovpack` 做离线备份
 
 推荐迁移方式：

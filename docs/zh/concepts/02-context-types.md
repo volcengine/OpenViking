@@ -94,7 +94,7 @@ results = await client.find(
 ### 存储位置
 
 ```
-viking://agent/skills/{skill-name}/
+viking://user/skills/{skill-name}/
 ├── .abstract.md          # L0: 简短描述
 ├── SKILL.md   						# L1: 详细概览
 └── scripts           		# L2: 完整定义
@@ -114,7 +114,7 @@ await client.add_skill({
 # 搜索技能
 results = await client.find(
     "网络搜索",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 

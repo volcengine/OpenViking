@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -381,9 +382,6 @@ class Session:
             self._meta.created_by_user_id = self.ctx.user.user_id
         if not self._meta.participant_user_ids:
             self._meta.participant_user_ids = [self._meta.created_by_user_id]
-        for message in self._messages:
-            self._record_participant(message)
-
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -632,7 +630,8 @@ class Session:
                     tool_id=part.tool_id,
                     tool_name=part.tool_name,
                     message_id=msg.id,
-                    user_id=msg.role_id,
+                    user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
+                    peer_id=msg.peer_id,
                     created_at=msg.created_at,
                     preview_chars=preview_chars,
                     mime_type=part.tool_output_mime_type or "text/plain",
@@ -772,7 +771,6 @@ class Session:
         """Append multiple messages: update lists, stats, JSONL, meta."""
         for msg in messages:
             self._messages.append(msg)
-            self._record_participant(msg)
 
             if msg.role == "user":
                 self._stats.total_turns += 1
@@ -801,20 +799,24 @@ class Session:
 
         Args:
             messages_spec: List of dicts, each with keys:
-                role, parts, role_id (optional), created_at (optional)
+                role, parts, peer_id (optional), created_at (optional)
         """
         all_messages = []
         for spec in messages_spec:
             role = spec["role"]
             parts = spec["parts"]
-            role_id = spec.get("role_id")
-            peer_id = spec.get("peer_id")
             created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
 
-            if peer_id and ("/" in peer_id or "\\" in peer_id):
+            try:
+                peer_id = normalize_peer_id(
+                    spec.get("peer_id"),
+                    spec.get("agent_id"),
+                    spec.get("role_id"),
+                )
+            except ValueError as exc:
                 from openviking_cli.exceptions import InvalidArgumentError
 
-                raise InvalidArgumentError("peer_id must not contain path separators")
+                raise InvalidArgumentError(str(exc)) from exc
 
             if self._is_tool_result_aggregate(role, parts):
                 msgs = [
@@ -822,7 +824,6 @@ class Session:
                         id=f"msg_{uuid4().hex}",
                         role=role,
                         parts=[part],
-                        role_id=role_id,
                         peer_id=peer_id,
                         created_at=created_at,
                     )
@@ -835,7 +836,6 @@ class Session:
                     id=f"msg_{uuid4().hex}",
                     role=role,
                     parts=parts,
-                    role_id=role_id,
                     peer_id=peer_id,
                     created_at=created_at,
                 )
@@ -851,6 +851,7 @@ class Session:
         parts: List[Part],
         role_id: Optional[str] = None,
         peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         created_at: str = None,
     ) -> Message:
         """Add a message.
@@ -865,16 +866,12 @@ class Session:
                     "parts": parts,
                     "role_id": role_id,
                     "peer_id": peer_id,
+                    "agent_id": agent_id,
                     "created_at": created_at,
                 }
             ]
         )
         return msgs[0]
-
-    def _record_participant(self, msg: Message) -> None:
-        if msg.role in {"user", "assistant"} and msg.role_id:
-            if msg.role_id not in self._meta.participant_user_ids:
-                self._meta.participant_user_ids.append(msg.role_id)
 
     def update_tool_part(
         self,

@@ -96,7 +96,9 @@ class AddMessageRequest(BaseModel):
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_id(self.peer_id, self.agent_id)
+        self.peer_id = normalize_peer_id(self.peer_id, self.agent_id, self.role_id)
+        self.agent_id = None
+        self.role_id = None
         return self
 
 
@@ -424,7 +426,6 @@ async def add_message(
 
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
-        role_id = _ctx.resolve_role_id(request.role, request.role_id)
         parts = _resolve_message_parts(request)
 
         session.add_messages(
@@ -432,7 +433,6 @@ async def add_message(
                 {
                     "role": request.role,
                     "parts": parts,
-                    "role_id": role_id,
                     "peer_id": request.peer_id,
                     "created_at": request.created_at,
                 }
@@ -468,13 +468,11 @@ async def batch_add_messages(
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
-            role_id = _ctx.resolve_role_id(msg_request.role, msg_request.role_id)
             parts = _resolve_message_parts(msg_request)
             specs.append(
                 {
                     "role": msg_request.role,
                     "parts": parts,
-                    "role_id": role_id,
                     "peer_id": msg_request.peer_id,
                     "created_at": msg_request.created_at,
                 }

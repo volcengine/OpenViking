@@ -11,7 +11,6 @@ from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperat
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.utils.uri import generate_uri, render_template
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -62,18 +61,10 @@ class MemoryIsolationHandler:
             if allowed_memory_types is not None
             else None
         )
-        config = get_openviking_config()
-        self.role_id_memory_isolation_enabled = (
-            config.memory.role_id_memory_isolation_enabled if config.memory else False
-        )
 
     def prepare_messages(self) -> None:
-        """Normalize missing role_id values when role_id memory isolation is disabled."""
-        if self.role_id_memory_isolation_enabled:
-            return
-        messages = self._extract_context.messages if self._extract_context else []
-        for msg in messages:
-            msg.role_id = self.ctx.resolve_role_id(msg.role, msg.role_id) if self.ctx else None
+        """Keep legacy message metadata exactly as supplied."""
+        return
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -128,12 +119,7 @@ class MemoryIsolationHandler:
 
         else:
             # 使用 ExtractContext 的方法解析 ranges
-            msg_range = self._extract_context.read_message_ranges(item_dict.get("ranges"))
-            # elements 是 List[List[Message]] - 遍历所有消息组
-            for msg_group in msg_range.elements:
-                for msg in msg_group:
-                    if msg.role == "user":
-                        add_user_id(msg.role_id)
+            self._extract_context.read_message_ranges(item_dict.get("ranges"))
             if self.target_peer_id:
                 peer_ids.add(self.target_peer_id)
             check_set_default()

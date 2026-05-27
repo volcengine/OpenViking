@@ -3,6 +3,9 @@ import { getEnv } from "./runtime-utils.js";
 export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
+  peer_role?: "none" | "assistant" | "person";
+  peer_prefix?: string;
+  /** @deprecated Use peer_prefix. Legacy presence defaults peer_role to assistant. */
   agent_prefix?: string;
   apiKey?: string;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
@@ -15,11 +18,6 @@ export type MemoryOpenVikingConfig = {
    */
   isolateUserScopeByAgent?: boolean;
   isolateAgentScopeByUser?: boolean;
-  /**
-   * Deprecated compatibility alias for older hash-based agent space behavior.
-   * Prefer isolateUserScopeByAgent / isolateAgentScopeByUser.
-   */
-  agentScopeMode?: "user_agent" | "agent";
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
@@ -69,14 +67,29 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_AGENT_PREFIX = "";
+const DEFAULT_PEER_ROLE = "none" as const;
+const DEFAULT_PEER_PREFIX = "";
 
-function resolveAgentPrefix(configured: unknown): string {
+function resolvePeerPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
     const trimmed = configured.trim();
-    return trimmed === "default" ? DEFAULT_AGENT_PREFIX : trimmed;
+    return trimmed === "default" ? DEFAULT_PEER_PREFIX : trimmed;
   }
-  return DEFAULT_AGENT_PREFIX;
+  return DEFAULT_PEER_PREFIX;
+}
+
+function resolvePeerRole(configured: unknown, hasLegacyAgentConfig: boolean) {
+  if (typeof configured === "string") {
+    const role = configured.trim().toLowerCase();
+    if (role === "none" || role === "assistant" || role === "person") {
+      return role;
+    }
+    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+  }
+  if (configured !== undefined) {
+    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+  }
+  return hasLegacyAgentConfig ? "assistant" : DEFAULT_PEER_ROLE;
 }
 
 function resolveEnvVars(value: string): string {
@@ -150,17 +163,14 @@ export const memoryOpenVikingConfigSchema = {
       value = {};
     }
     const cfg = value as Record<string, unknown>;
-    if ("agentId" in cfg) {
-      if (!("agent_prefix" in cfg)) {
-        cfg.agent_prefix = cfg.agentId;
-      }
-      delete cfg.agentId;
-    }
+    const hasLegacyAgentConfig = "agent_prefix" in cfg || "agentId" in cfg;
     assertAllowedKeys(
       cfg,
       [
         "mode",
         "baseUrl",
+        "peer_role",
+        "peer_prefix",
         "agent_prefix",
         "agentId",
         "serverAuthMode",
@@ -169,7 +179,6 @@ export const memoryOpenVikingConfigSchema = {
         "userId",
         "isolateUserScopeByAgent",
         "isolateAgentScopeByUser",
-        "agentScopeMode",
         "targetUri",
         "timeoutMs",
         "autoCapture",
@@ -197,6 +206,10 @@ export const memoryOpenVikingConfigSchema = {
     );
 
     const mode = "remote" as const;
+    const peerRole = resolvePeerRole(cfg.peer_role, hasLegacyAgentConfig);
+    const peerPrefix = resolvePeerPrefix(
+      cfg.peer_prefix ?? cfg.agent_prefix ?? cfg.agentId,
+    );
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
@@ -218,11 +231,6 @@ export const memoryOpenVikingConfigSchema = {
         ? cfg.userId.trim()
         : (getEnv("OPENVIKING_USER_ID")?.trim() || "");
 
-    const hasExplicitAgentScopeMode =
-      typeof cfg.agentScopeMode === "string" || getEnv("OPENVIKING_AGENT_SCOPE_MODE") !== undefined;
-    const rawAgentScope = cfg.agentScopeMode ?? getEnv("OPENVIKING_AGENT_SCOPE_MODE");
-    const agentScopeMode =
-      rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
     const explicitIsolateUserScopeByAgent =
       typeof cfg.isolateUserScopeByAgent === "boolean"
         ? cfg.isolateUserScopeByAgent
@@ -248,7 +256,7 @@ export const memoryOpenVikingConfigSchema = {
     const isolateAgentScopeByUser =
       explicitIsolateAgentScopeByUser ??
       envIsolateAgentScopeByUser ??
-      (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
+      false;
     const recallMaxInjectedChars = Math.max(
       100,
       Math.min(
@@ -265,13 +273,14 @@ export const memoryOpenVikingConfigSchema = {
     return {
       mode,
       baseUrl: resolvedBaseUrl,
-      agent_prefix: resolveAgentPrefix(cfg.agent_prefix),
+      peer_role: peerRole,
+      peer_prefix: peerPrefix,
+      agent_prefix: peerPrefix,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       accountId,
       userId,
       isolateUserScopeByAgent,
       isolateAgentScopeByUser,
-      agentScopeMode,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -332,9 +341,20 @@ export const memoryOpenVikingConfigSchema = {
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
     agent_prefix: {
-      label: "Agent Prefix",
+      label: "Agent Prefix (Deprecated)",
       placeholder: "optional-prefix",
-      help: 'Optional prefix for OpenViking X-OpenViking-Agent. Empty means use OpenClaw ctx.agentId directly. Non-empty values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]). If ctx.agentId is unavailable, OpenClaw default agent "main" is used.',
+      help: "Deprecated alias for peer_prefix. Presence without peer_role enables assistant peer compatibility for old installs.",
+      advanced: true,
+    },
+    peer_role: {
+      label: "Peer Role",
+      placeholder: DEFAULT_PEER_ROLE,
+      help: 'Controls which session messages get peer_id: "none", "assistant", or "person".',
+    },
+    peer_prefix: {
+      label: "Peer Prefix",
+      placeholder: "optional-prefix",
+      help: "Optional prefix applied to assistant peer_id values derived from OpenClaw runtime agent IDs.",
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -357,19 +377,13 @@ export const memoryOpenVikingConfigSchema = {
     isolateUserScopeByAgent: {
       label: "Isolate User Scope By Agent",
       placeholder: "false",
-      help: "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      help: "Deprecated and ignored. OpenViking now uses user-scoped namespaces and peer_id for message speakers.",
       advanced: true,
     },
     isolateAgentScopeByUser: {
       label: "Isolate Agent Scope By User",
       placeholder: "false",
-      help: "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
-      advanced: true,
-    },
-    agentScopeMode: {
-      label: "Deprecated Agent Scope Mode",
-      placeholder: "agent",
-      help: 'Deprecated compatibility alias for older routing behavior. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: explicit "user_agent" => false/true, explicit "agent" => false/false. When fully unset, the plugin defaults to false/false to match the current server-side default policy.',
+      help: "Deprecated and ignored. viking://agent/... is no longer a supported namespace.",
       advanced: true,
     },
     targetUri: {

@@ -135,7 +135,7 @@ ov tui viking://resources
 
 这个 TUI 适合做两类观测：
 
-- 看 `viking://resources`、`viking://user`、`viking://agent`、`viking://session` 下实际落了哪些数据
+- 看 `viking://resources`、`viking://user`、`viking://session` 下实际落了哪些数据
 - 看某个 URI 对应的向量记录是否已经写入，以及数量是否符合预期
 
 常用按键：

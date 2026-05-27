@@ -129,7 +129,6 @@ class SyncHTTPClient:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
@@ -141,7 +140,7 @@ class SyncHTTPClient:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -152,7 +151,6 @@ class SyncHTTPClient:
                 content,
                 parts,
                 created_at,
-                role_id,
                 peer_id,
                 telemetry,
             )
@@ -169,7 +167,7 @@ class SyncHTTPClient:
         Args:
             session_id: Session ID
             messages: List of message dicts, each with "role" and optionally
-                      "content", "parts", "created_at", "role_id".
+                      "content", "parts", "created_at", "peer_id".
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:
@@ -286,7 +284,6 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -301,7 +298,6 @@ class SyncHTTPClient:
                 filter=filter,
                 telemetry=telemetry,
                 peer_id=peer_id,
-                agent_id=agent_id,
             )
         )
 
@@ -315,7 +311,6 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -328,7 +323,6 @@ class SyncHTTPClient:
                 filter,
                 telemetry=telemetry,
                 peer_id=peer_id,
-                agent_id=agent_id,
             )
         )
 

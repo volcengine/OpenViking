@@ -105,7 +105,7 @@ def test_peer_id_routes_peer_memory_but_not_self_learning_memory(stub_provider_c
     ]
     extract_context = ExtractContext(messages)
     ctx = RequestContext(
-        user=UserIdentifier("acct", "support_bot", "default"),
+        user=UserIdentifier("acct", "support_bot"),
         role=Role.USER,
     )
     handler = MemoryIsolationHandler(
@@ -157,7 +157,7 @@ def test_peer_id_does_not_route_without_target_peer(stub_provider_config):
     ]
     extract_context = ExtractContext(messages)
     ctx = RequestContext(
-        user=UserIdentifier("acct", "support_bot", "default"),
+        user=UserIdentifier("acct", "support_bot"),
         role=Role.USER,
     )
     handler = MemoryIsolationHandler(ctx, extract_context)

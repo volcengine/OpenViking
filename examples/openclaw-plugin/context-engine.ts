@@ -44,7 +44,7 @@ type IngestResult = {
   ingested: boolean;
 };
 
-export function toRoleId(senderId: string | undefined): string | undefined {
+export function toPeerId(senderId: string | undefined): string | undefined {
   if (!senderId) {
     return undefined;
   }
@@ -54,6 +54,21 @@ export function toRoleId(senderId: string | undefined): string | undefined {
     .replace(/^_+|_+$/g, "")
     .replace(/_+/g, "_");
   return normalized || undefined;
+}
+
+export function resolveMessagePeerId(params: {
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"];
+  role?: string;
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  if (params.peerRole === "person" && params.role === "user") {
+    return params.personPeerId;
+  }
+  if (params.peerRole === "assistant" && params.role === "assistant") {
+    return params.assistantPeerId;
+  }
+  return undefined;
 }
 
 type IngestBatchResult = {
@@ -1351,7 +1366,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const client = await getClient();
         const createdAt = pickLatestCreatedAt(turnMessages);
-        const senderRoleId = toRoleId(sender.senderId);
+        const senderPeerId = toPeerId(sender.senderId);
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
@@ -1375,13 +1390,19 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
 
           if (ovParts.length > 0) {
+            const peerId = resolveMessagePeerId({
+              peerRole: cfg.peer_role,
+              role: msg.role,
+              personPeerId: senderPeerId,
+              assistantPeerId: agentId,
+            });
             await client.addSessionMessage(
               OVSessionId,
-              msg.role, // 统一是 "user"
+              msg.role,
               ovParts,
               agentId,
               createdAt,
-              msg.role === "user" ? senderRoleId : undefined,
+              peerId,
             );
           }
         }

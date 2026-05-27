@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
 
 
@@ -75,10 +76,11 @@ class Message:
         data = {
             "id": self.id,
             "role": self.role,
-            "role_id": self.role_id,
             "parts": [self._part_to_dict(p) for p in self.parts],
             "created_at": created_at_val,
         }
+        if self.role_id is not None:
+            data["role_id"] = self.role_id
         if self.peer_id is not None:
             data["peer_id"] = self.peer_id
         return data
@@ -202,12 +204,18 @@ class Message:
                         tool_output_group_budget_chars=p.get("tool_output_group_budget_chars"),
                     )
                 )
+        role_id = data.get("role_id")
+        try:
+            peer_id = normalize_peer_id(data.get("peer_id"), data.get("agent_id"), role_id)
+        except ValueError:
+            peer_id = data.get("peer_id") or data.get("agent_id")
+
         return cls(
             id=data["id"],
             role=data["role"],
             parts=parts,
-            role_id=data.get("role_id"),
-            peer_id=data.get("peer_id") or data.get("agent_id"),
+            role_id=role_id,
+            peer_id=peer_id,
             created_at=data.get("created_at"),
         )
 
@@ -222,11 +230,11 @@ class Message:
         """Create user message."""
         from uuid import uuid4
 
+        peer_id = normalize_peer_id(peer_id, role_id=role_id)
         return cls(
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
-            role_id=role_id,
             peer_id=peer_id,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -244,6 +252,7 @@ class Message:
         """Create assistant message."""
         from uuid import uuid4
 
+        peer_id = normalize_peer_id(peer_id, role_id=role_id)
         parts: List[Part] = []
         if content:
             parts.append(TextPart(text=content))
@@ -273,7 +282,6 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            role_id=role_id,
             peer_id=peer_id,
             created_at=datetime.now(timezone.utc).isoformat(),
         )

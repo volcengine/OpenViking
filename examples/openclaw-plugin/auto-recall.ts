@@ -186,7 +186,7 @@ export async function buildAutoRecallContext(params: {
           scoreThreshold: 0,
         }, agentId),
         client.find(queryText, {
-          targetUri: "viking://agent/memories",
+          targetUri: "viking://user/memories",
           limit: candidateLimit,
           scoreThreshold: 0,
         }, agentId),

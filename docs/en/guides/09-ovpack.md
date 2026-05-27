@@ -16,7 +16,6 @@ Regular `export/import` handles one package root:
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://agent/...`
 - `viking://session/...`
 
 Full migration uses the separate `backup/restore` flow. It packages public
@@ -24,7 +23,6 @@ scope roots together:
 
 - `viking://resources`
 - `viking://user`
-- `viking://agent`
 - `viking://session`
 
 Internal or runtime data such as `temp`, `queue`, `upload`, lock files, watch
@@ -327,7 +325,7 @@ These fields are regenerated in the target environment and are not restored
 from the package:
 
 ```text
-id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
+id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
 
@@ -409,11 +407,11 @@ ov export viking://user/default/memories ./exports/user-memories.ovpack
 ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-Agent memories:
+User memories:
 
 ```bash
-ov export viking://agent/default/memories ./exports/agent-memories.ovpack
-ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
+ov export viking://user/default/memories ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
 Sessions restore file state only and do not trigger vectorization:

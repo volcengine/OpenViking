@@ -22,7 +22,7 @@ For `/api/v1/admin/*`, trusted mode also permits requests with no explicit ident
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
-| List agent namespaces | Y | Y (own account) | N |
+| List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Change user role | Y | N | N |
 
@@ -82,12 +82,10 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
-| isolate_user_scope_by_agent | bool | No | false | Further isolate user scope by agent |
-| isolate_agent_scope_by_user | bool | No | false | Further isolate agent scope by user |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
-- `isolate_user_scope_by_agent` and `isolate_agent_scope_by_user` are only available via HTTP API, not in Python SDK or CLI
+- Legacy `isolate_user_scope_by_agent` and `isolate_agent_scope_by_user` fields are accepted for compatibility but ignored. Agent namespaces are no longer supported.
 
 #### 3. Usage Examples
 
@@ -103,9 +101,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -135,9 +131,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-OpenViking-User: gateway-admin" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -182,9 +176,7 @@ ov --sudo admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e...",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "user_key": "7f3a9c1e..."
   },
   "time": 0.1
 }
@@ -518,13 +510,12 @@ ov --sudo admin list-users acme
 
 #### 1. API Implementation Overview
 
-List agent namespaces that exist under a workspace. This is an admin discovery API; it does not change normal `viking://agent/...` filesystem semantics.
+Deprecated compatibility endpoint. Agent namespaces are no longer part of the public filesystem model; use user-scoped namespaces instead. The endpoint still verifies access to the account and returns an empty list.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
 2. Verify the account exists
-3. Scan the account's `viking://agent` namespace root
-4. Return sorted agent namespace entries
+3. Return an empty list
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_agents` - HTTP route
@@ -543,7 +534,7 @@ List agent namespaces that exist under a workspace. This is an admin discovery A
 - ROOT can list agents in any account
 - ADMIN can only list agents in their own account
 - USER cannot call this API
-- The result lists agent namespaces that exist in storage. A new account includes the initialized `default` agent namespace.
+- This endpoint is retained for compatibility and does not report filesystem namespaces.
 
 #### 3. Usage Examples
 
@@ -573,10 +564,7 @@ ov --sudo admin list-agents acme
 ```json
 {
   "status": "ok",
-  "result": [
-    {"agent_id": "default", "uri": "viking://agent/default"},
-    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
-  ],
+  "result": [],
   "time": 0.1
 }
 ```

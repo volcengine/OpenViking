@@ -22,7 +22,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
-| 列出 agent namespace | Y | Y（本 account） | N |
+| 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 修改用户角色 | Y | N | N |
 
@@ -82,12 +82,10 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
-| isolate_user_scope_by_agent | bool | 否 | false | 是否按 agent 进一步隔离 user scope |
-| isolate_agent_scope_by_user | bool | 否 | false | 是否按 user 进一步隔离 agent scope |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
-- `isolate_user_scope_by_agent` 和 `isolate_agent_scope_by_user` 仅可通过 HTTP API 设置，Python SDK 和 CLI 暂不支持
+- 旧的 `isolate_user_scope_by_agent` 和 `isolate_agent_scope_by_user` 字段仍会被兼容接收，但会被忽略。当前不再支持 agent namespace。
 
 #### 3. 使用示例
 
@@ -103,9 +101,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -135,9 +131,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-OpenViking-User: gateway-admin" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -182,9 +176,7 @@ ov --sudo admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e...",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "user_key": "7f3a9c1e..."
   },
   "time": 0.1
 }
@@ -516,13 +508,12 @@ ov --sudo admin list-users acme
 
 #### 1. API 实现介绍
 
-列出工作区中已经存在的 agent namespace。这是管理侧发现接口，不改变普通 `viking://agent/...` 文件系统语义。
+已废弃的兼容端点。Agent namespace 不再属于公开文件系统模型；请使用 user-scoped namespace。该端点仍会校验 account 访问权限，但返回空列表。
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
 2. 验证 account 存在
-3. 扫描该 account 的 `viking://agent` namespace 根目录
-4. 返回按 agent_id 排序的 agent namespace 列表
+3. 返回空列表
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_agents` - HTTP 路由
@@ -541,7 +532,7 @@ ov --sudo admin list-users acme
 - ROOT 可以列出任意 account 的 agents
 - ADMIN 只能列出自己所属 account 的 agents
 - USER 不能调用该接口
-- 返回的是存储中已经存在的 agent namespace；新建 account 会包含初始化出的 `default` agent namespace
+- 该端点仅为兼容保留，不再返回文件系统 namespace
 
 #### 3. 使用示例
 
@@ -571,10 +562,7 @@ ov --sudo admin list-agents acme
 ```json
 {
   "status": "ok",
-  "result": [
-    {"agent_id": "default", "uri": "viking://agent/default"},
-    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
-  ],
+  "result": [],
   "time": 0.1
 }
 ```

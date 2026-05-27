@@ -221,7 +221,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id", async () => {
+  it("does not pass peer_id by default", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -233,7 +233,47 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+  });
+
+  it("passes sanitized senderId as peer_id when peer_role is person", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: { peer_role: "person" },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+  });
+
+  it("passes runtime agent as peer_id only for assistant messages when peer_role is assistant", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: { peer_role: "assistant" },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {

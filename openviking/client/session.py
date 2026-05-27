@@ -41,7 +41,6 @@ class Session:
         content: Optional[str] = None,
         parts: Optional[List[Part]] = None,
         created_at: Optional[str] = None,
-        role_id: Optional[str] = None,
         peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
@@ -51,7 +50,7 @@ class Session:
             content: Text content (simple mode)
             parts: Parts list (TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
 
@@ -65,7 +64,6 @@ class Session:
                 role,
                 parts=parts_dicts,
                 created_at=created_at,
-                role_id=role_id,
                 peer_id=peer_id,
             )
         return await self._client.add_message(
@@ -73,7 +71,6 @@ class Session:
             role,
             content=content,
             created_at=created_at,
-            role_id=role_id,
             peer_id=peer_id,
         )
 
@@ -85,7 +82,7 @@ class Session:
 
         Args:
             messages: List of dicts, each with "role" and optionally "content",
-                      "parts", "created_at", "role_id", "peer_id".
+                      "parts", "created_at", "peer_id".
 
         Returns:
             Result dict with session_id, message_count, and added count.

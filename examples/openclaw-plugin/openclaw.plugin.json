@@ -78,10 +78,21 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
-    "agent_prefix": {
-      "label": "Agent Prefix",
+    "peer_role": {
+      "label": "Peer Role",
+      "placeholder": "none",
+      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to none."
+    },
+    "peer_prefix": {
+      "label": "Peer Prefix",
       "placeholder": "optional-prefix",
-      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
+      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
+    },
+    "agent_prefix": {
+      "label": "Agent Prefix (Deprecated)",
+      "placeholder": "optional-prefix",
+      "help": "Deprecated alias for peer_prefix. If present without peer_role, old installs default to peer_role=assistant.",
+      "advanced": true
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -104,19 +115,13 @@
     "isolateUserScopeByAgent": {
       "label": "Isolate User Scope By Agent",
       "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      "help": "Deprecated and ignored. OpenViking now uses user-scoped namespaces and peer_id for message speakers.",
       "advanced": true
     },
     "isolateAgentScopeByUser": {
       "label": "Isolate Agent Scope By User",
       "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
-      "advanced": true
-    },
-    "agentScopeMode": {
-      "label": "Deprecated Agent Scope Mode",
-      "placeholder": "agent",
-      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Explicit user_agent => false/true, explicit agent => false/false. When fully unset, the plugin defaults to false/false to match the current server-side policy.",
+      "help": "Deprecated and ignored. viking://agent/... is no longer a supported namespace.",
       "advanced": true
     },
     "targetUri": {
@@ -227,12 +232,27 @@
       "baseUrl": {
         "type": "string"
       },
+      "peer_role": {
+        "type": "string",
+        "enum": [
+          "none",
+          "assistant",
+          "person"
+        ],
+        "default": "none",
+        "description": "Controls which session messages include peer_id."
+      },
+      "peer_prefix": {
+        "type": "string",
+        "description": "Optional prefix for assistant peer_id values."
+      },
       "agent_prefix": {
-        "type": "string"
+        "type": "string",
+        "description": "Deprecated: use peer_prefix instead. Presence without peer_role enables assistant peer compatibility for old installs."
       },
       "agentId": {
         "type": "string",
-        "description": "Deprecated: use agent_prefix instead"
+        "description": "Deprecated: use peer_prefix instead"
       },
       "serverAuthMode": {
         "type": "string",
@@ -252,9 +272,6 @@
       },
       "isolateAgentScopeByUser": {
         "type": "boolean"
-      },
-      "agentScopeMode": {
-        "type": "string"
       },
       "targetUri": {
         "type": "string"

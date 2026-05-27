@@ -525,8 +525,8 @@ ov add-skill ./skills/my-skill.json --wait
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://agent/skills/my-skill",
-    "uri": "viking://agent/skills/my-skill",
+    "root_uri": "viking://user/skills/my-skill",
+    "uri": "viking://user/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -547,8 +547,8 @@ ov add-skill ./skills/my-skill.json --wait
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://agent/skills/my-skill
-uri             viking://agent/skills/my-skill
+root_uri        viking://user/skills/my-skill
+uri             viking://user/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -558,8 +558,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://agent/skills/my-skill",
-  "uri": "viking://agent/skills/my-skill",
+  "root_uri": "viking://user/skills/my-skill",
+  "uri": "viking://user/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }

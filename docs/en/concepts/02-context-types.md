@@ -94,7 +94,7 @@ Skills are capabilities that Agents can invoke, such as current Skills, MCP, etc
 ### Storage Location
 
 ```
-viking://agent/skills/{skill-name}/
+viking://user/skills/{skill-name}/
 ├── .abstract.md          # L0: Short description
 ├── SKILL.md              # L1: Detailed overview
 └── scripts               # L2: Full definition
@@ -113,7 +113,7 @@ await client.add_skill({
 # Search skills
 results = await client.find(
     "web search",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 

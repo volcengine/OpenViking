@@ -708,6 +708,7 @@ class ReindexExecutor:
                 return
 
         memory_roots: list[str] = []
+        skill_roots: list[str] = []
         resource_directories: list[str] = []
         resource_files: list[str] = []
 
@@ -719,6 +720,10 @@ class ReindexExecutor:
             if classification.is_memory:
                 if entry.get("isDir") and classification.is_memory_root:
                     memory_roots.append(entry_uri)
+                continue
+            if classification.is_skill:
+                if entry.get("isDir") and classification.is_skill_root:
+                    skill_roots.append(entry_uri)
                 continue
             if not self._is_resource_entry_for_namespace(entry_uri, target_root):
                 continue
@@ -734,6 +739,16 @@ class ReindexExecutor:
             await self._reindex_memory(
                 uri=memory_root,
                 mode=memory_mode,
+                run=run,
+            )
+
+        for skill_root in sorted(set(skill_roots)):
+            skill_mode = (
+                "semantic_and_vectors" if mode == "semantic_and_vectors" else "vectors_only"
+            )
+            await self._reindex_skill(
+                uri=skill_root,
+                mode=skill_mode,
                 run=run,
             )
 

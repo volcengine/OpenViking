@@ -68,7 +68,34 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_user_id_sets_openviking_user_header(tmp_path, monkeypatch):
+async def test_async_http_client_omits_identity_headers_when_unconfigured(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="explicit-key",
+        timeout=33.0,
+        extra_headers={},
+    )
+    await client.initialize()
+
+    assert client._user_id is None
+    assert captured["headers"] == {
+        "X-API-Key": "explicit-key",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_sends_configured_identity_headers(tmp_path, monkeypatch):
     captured: dict[str, object] = {}
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text("{}")

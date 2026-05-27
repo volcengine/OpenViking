@@ -579,6 +579,20 @@ class TestMessageFromDict:
         assert msg.content == "Hello from legacy storage"
         assert msg.created_at is None
 
+    def test_from_dict_maps_legacy_role_id_to_peer_id(self):
+        """Legacy role_id values are read through the peer_id field."""
+        d = {
+            "id": "msg-legacy-peer",
+            "role": "user",
+            "role_id": "web:visitor:alice",
+            "parts": [{"type": "text", "text": "Hello"}],
+        }
+
+        msg = Message.from_dict(d)
+
+        assert msg.role_id == "web:visitor:alice"
+        assert msg.peer_id == "web:visitor:alice"
+
     def test_roundtrip(self):
         """Test to_dict -> from_dict roundtrip."""
         original = Message(
@@ -641,6 +655,15 @@ class TestMessageFactoryMethods:
 
         assert msg.id == "custom-id"
 
+    def test_create_user_maps_legacy_role_id_to_peer_id(self):
+        """New factory-created messages do not persist role_id."""
+        msg = Message.create_user("Hello", role_id="web:visitor:alice")
+
+        assert msg.role_id is None
+        assert msg.peer_id == "web:visitor:alice"
+        assert "role_id" not in msg.to_dict()
+        assert msg.to_dict()["peer_id"] == "web:visitor:alice"
+
     def test_create_assistant(self):
         """Test create_assistant factory method."""
         msg = Message.create_assistant("Hello, user!")
@@ -648,6 +671,14 @@ class TestMessageFactoryMethods:
         assert msg.role == "assistant"
         assert msg.content == "Hello, user!"
         assert len(msg.parts) == 1
+
+    def test_create_assistant_maps_legacy_role_id_to_peer_id(self):
+        """Assistant factories use peer_id for legacy role_id input."""
+        msg = Message.create_assistant("Hello", role_id="assistant-a")
+
+        assert msg.role_id is None
+        assert msg.peer_id == "assistant-a"
+        assert "role_id" not in msg.to_dict()
 
     def test_create_assistant_with_context_refs(self):
         """Test create_assistant with context references."""

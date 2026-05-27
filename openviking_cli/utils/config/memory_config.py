@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -12,14 +12,6 @@ class MemoryConfig(BaseModel):
         default="v2",
         description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
     )
-    agent_scope_mode: str = Field(
-        default="user+agent",
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
-            "User is the only data-plane namespace."
-        ),
-    )
-
     custom_templates_dir: str = Field(
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
@@ -91,14 +83,6 @@ class MemoryConfig(BaseModel):
             "default."
         ),
     )
-    role_id_memory_isolation_enabled: bool = Field(
-        default=False,
-        description=(
-            "When enabled, memory extraction uses role_id from messages to determine "
-            "which user the memory belongs to. When disabled (default), role_id "
-            "is ignored and the login user from the request context is used instead."
-        ),
-    )
     link_enabled: bool = Field(
         default=False,
         description=(
@@ -117,13 +101,6 @@ class MemoryConfig(BaseModel):
             data = data.copy()
             data.setdefault("agent_memory_enabled", True)
         return data
-
-    @field_validator("agent_scope_mode")
-    @classmethod
-    def validate_agent_scope_mode(cls, value: str) -> str:
-        if value not in {"user+agent", "agent"}:
-            raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
-        return value
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "MemoryConfig":

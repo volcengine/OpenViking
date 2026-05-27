@@ -243,6 +243,25 @@ class InMemoryOpenVikingClient:
             "message_count": len(self.sessions[session_id]),
         }
 
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        **_: Any,
+    ) -> dict[str, Any]:
+        for message in messages:
+            self.add_message(
+                session_id=session_id,
+                role=message["role"],
+                content=message.get("content"),
+                parts=message.get("parts"),
+            )
+        return {
+            "session_id": session_id,
+            "message_count": len(self.sessions[session_id]),
+            "added": len(messages),
+        }
+
     def get_session(self, session_id: str, auto_create: bool = False) -> dict[str, Any]:
         if auto_create:
             self.create_session(session_id=session_id)

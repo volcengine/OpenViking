@@ -86,8 +86,7 @@ ov session new
     "session_id": "a1b2c3d4",
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     }
   },
   "time": 0.1
@@ -262,8 +261,7 @@ ov session get a1b2c3d4
     },
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     },
     "pending_tokens": 450
   }
@@ -568,13 +566,15 @@ ov session delete a1b2c3d4
 | parts | List[Part] | 条件必填 | - | 消息部分列表（Python SDK 必填；HTTP API 可选，与 content 二选一） |
 | content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
 | created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
-| role_id | str | 否 | None | 可选的显式参与者 ID，省略时由服务器推导 |
+| peer_id | str | 否 | None | 可选的稳定交互对象 ID |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
 > 2. **Parts 模式**：使用 `parts` 数组（完整 Part 支持）
 >
 > 如果同时提供 `content` 和 `parts`，`parts` 优先。
+>
+> 旧版 HTTP 字段 `role_id` 和消息级 `agent_id` 会作为 `peer_id` 的别名兼容处理；新客户端应只发送 `peer_id`。
 
 **Part 类型（Python SDK）**
 
@@ -595,7 +595,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://agent/skills/search-web/",
+    skill_uri="viking://user/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending"、"running"、"completed"、"error"
@@ -741,7 +741,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://user/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **Python SDK**
@@ -761,7 +761,7 @@ await client.session_used(
 await client.session_used(
     session_id="a1b2c3d4",
     skill={
-        "uri": "viking://agent/skills/search-web/",
+        "uri": "viking://user/skills/search-web/",
         "input": {"query": "OAuth"},
         "output": "Results...",
         "success": True

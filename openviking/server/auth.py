@@ -29,19 +29,27 @@ from openviking_cli.session.user_id import UserIdentifier
 _ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
 
-_ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
+_TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
+_API_KEY_PRIVILEGED_ALLOWED_PATHS = {
     "/api/v1/system/status",
     "/api/v1/system/wait",
     "/api/v1/debug/health",
 }
-_ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
+_API_KEY_PRIVILEGED_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
+    "/api/v1/console",
 )
-_ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS = {
-    "/api/v1/content/reindex",
-}
-_TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
+
+
+def _api_key_privileged_role_can_access_path(role: Role, path: str) -> bool:
+    if path in _API_KEY_PRIVILEGED_ALLOWED_PATHS:
+        return True
+    if path.startswith(_API_KEY_PRIVILEGED_ALLOWED_PREFIXES):
+        return True
+    if role == Role.ADMIN and path == "/api/v1/content/reindex":
+        return True
+    return False
 
 
 def _auth_mode(request: Request) -> AuthMode:
@@ -49,25 +57,6 @@ def _auth_mode(request: Request) -> AuthMode:
     if config is not None and hasattr(config, "get_effective_auth_mode"):
         return config.get_effective_auth_mode()
     return AuthMode.API_KEY
-
-
-def _root_request_requires_explicit_tenant(path: str) -> bool:
-    """Return True when a ROOT request targets tenant-scoped data APIs.
-
-    Root still needs access to admin and monitoring endpoints without a tenant
-    context. For data APIs, implicit fallback to default/default is misleading.
-    """
-    if path in _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS:
-        return False
-    if path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS:
-        return False
-    if path.startswith(_ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES):
-        return False
-    return True
-
-
-def _root_request_requires_explicit_account_only(path: str) -> bool:
-    return path in _ROOT_EXPLICIT_ACCOUNT_ONLY_PATHS
 
 
 def _trusted_request_requires_explicit_identity(path: str) -> bool:
@@ -190,31 +179,18 @@ async def _try_resolve_oauth_token(
     account_id = record.account_id
     user_id = record.user_id
 
-    # Header overrides mirror the API-key path: ROOT may override identity;
-    # ADMIN may override user within its own account. The OAuth claims pin the
-    # issuing identity, so any cross-account/user override beyond what each role
-    # can do is a 403.
-    if role == Role.ROOT:
-        effective_account = x_openviking_account or account_id
-        effective_user = x_openviking_user or user_id
-    elif role == Role.ADMIN:
-        if x_openviking_account and x_openviking_account != account_id:
-            raise PermissionDeniedError(
-                "X-OpenViking-Account cannot override the account for ADMIN OAuth tokens."
-            )
-        effective_account = account_id
-        effective_user = x_openviking_user or user_id
-    else:  # Role.USER
-        if x_openviking_account and x_openviking_account != account_id:
-            raise PermissionDeniedError(
-                "X-OpenViking-Account cannot override the account for USER OAuth tokens."
-            )
-        if x_openviking_user and x_openviking_user != user_id:
-            raise PermissionDeniedError(
-                "X-OpenViking-User cannot override the user for USER OAuth tokens."
-            )
-        effective_account = account_id
-        effective_user = user_id
+    # OAuth tokens are API-key-mode credentials with pinned claims. Header-based
+    # identity assertion belongs to trusted mode only, so headers may not change
+    # the effective account/user here.
+    if x_openviking_account:
+        raise PermissionDeniedError(
+            "X-OpenViking-Account can only assert identity in trusted mode."
+        )
+    if x_openviking_user:
+        raise PermissionDeniedError("X-OpenViking-User can only assert identity in trusted mode.")
+
+    effective_account = account_id
+    effective_user = user_id
 
     namespace_policy = AccountNamespacePolicy()
     if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
@@ -348,27 +324,16 @@ async def resolve_identity(
         return oauth_identity
 
     identity = api_key_manager.resolve(api_key)
-    if identity.role == Role.ROOT:
-        identity.account_id = x_openviking_account or identity.account_id or "default"
-        identity.user_id = x_openviking_user or identity.user_id or "default"
-        return identity
-
     identity.account_id = identity.account_id or "default"
-    if x_openviking_account and x_openviking_account != identity.account_id:
-        raise PermissionDeniedError(
-            "X-OpenViking-Account cannot override the account for ADMIN/USER API keys."
-        )
-
-    if identity.role == Role.ADMIN:
-        identity.user_id = x_openviking_user or identity.user_id or "default"
-        return identity
-
     identity.user_id = identity.user_id or "default"
-    if x_openviking_user and x_openviking_user != identity.user_id:
+
+    if x_openviking_account:
         raise PermissionDeniedError(
-            "USER API keys cannot override X-OpenViking-User; the effective user is derived "
-            "from the key."
+            "X-OpenViking-Account can only assert identity in trusted mode."
         )
+    if x_openviking_user:
+        raise PermissionDeniedError("X-OpenViking-User can only assert identity in trusted mode.")
+
     return identity
 
 
@@ -383,22 +348,14 @@ async def get_request_context(
     if (
         auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
-        and identity.role == Role.ROOT
+        and identity.role in {Role.ROOT, Role.ADMIN}
         and not identity.from_oauth
+        and not _api_key_privileged_role_can_access_path(identity.role, path)
     ):
-        account_header = request.headers.get("X-OpenViking-Account")
-        if _root_request_requires_explicit_account_only(path):
-            if not account_header:
-                raise InvalidArgumentError(
-                    "ROOT requests to reindex must include X-OpenViking-Account header."
-                )
-        elif _root_request_requires_explicit_tenant(path):
-            user_header = request.headers.get("X-OpenViking-User")
-            if not account_header or not user_header:
-                raise InvalidArgumentError(
-                    "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
-                    "and X-OpenViking-User headers. Use a user key for regular data access."
-                )
+        raise PermissionDeniedError(
+            "ROOT/ADMIN API keys cannot access tenant-scoped data APIs in api_key mode. "
+            "Use a user API key for data access, or trusted mode for upstream identity assertion."
+        )
 
     if auth_mode == AuthMode.TRUSTED:
         is_admin_path = path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)

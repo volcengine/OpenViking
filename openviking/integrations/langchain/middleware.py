@@ -66,7 +66,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         target_uri: str | list[str] = "",
         limit: int = 5,
@@ -88,7 +87,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
         )
         self.retriever = retriever or OpenVikingRetriever(
@@ -98,7 +96,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             target_uri=target_uri,
             limit=limit,
@@ -113,7 +110,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             target_uri=target_uri,
             limit=limit,

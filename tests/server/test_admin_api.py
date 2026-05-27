@@ -15,7 +15,6 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
-from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import OpenVikingError
@@ -154,14 +153,6 @@ def trusted_headers(
     if include_api_key:
         headers["X-API-Key"] = ROOT_KEY
     return headers
-
-
-async def create_agent_namespace(service: OpenVikingService, account_id: str, agent_id: str):
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "system", agent_id),
-        role=Role.ROOT,
-    )
-    await service.viking_fs.mkdir(f"viking://agent/{agent_id}", ctx=ctx, exist_ok=True)
 
 
 # ---- Account CRUD ----
@@ -451,31 +442,25 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_list_agents(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
-    """ROOT can list agent namespaces in an account."""
+async def test_list_agents(admin_client: httpx.AsyncClient):
+    """Deprecated list_agents endpoint returns an empty compatibility result."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    await create_agent_namespace(admin_service, acct, "research")
-    await create_agent_namespace(admin_service, acct, "writer")
 
     resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
 
     assert resp.status_code == 200
-    assert resp.json()["result"] == [
-        {"agent_id": "default", "uri": "viking://agent/default"},
-        {"agent_id": "research", "uri": "viking://agent/research"},
-        {"agent_id": "writer", "uri": "viking://agent/writer"},
-    ]
+    assert resp.json()["result"] == []
 
 
 async def test_list_agents_returns_default_for_new_account(
     admin_client: httpx.AsyncClient,
 ):
-    """New accounts should expose the initialized default agent namespace."""
+    """New accounts should not expose agent namespaces."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -486,16 +471,13 @@ async def test_list_agents_returns_default_for_new_account(
     resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
 
     assert resp.status_code == 200
-    assert resp.json()["result"] == [
-        {"agent_id": "default", "uri": "viking://agent/default"},
-    ]
+    assert resp.json()["result"] == []
 
 
 async def test_admin_can_list_agents_in_own_account(
     admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
 ):
-    """ADMIN can list agent namespaces in their own account."""
+    """ADMIN gets the same empty compatibility result in their own account."""
     acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
@@ -503,7 +485,6 @@ async def test_admin_can_list_agents_in_own_account(
         headers=root_headers(),
     )
     alice_key = resp.json()["result"]["user_key"]
-    await create_agent_namespace(admin_service, acct, "assistant")
 
     resp = await admin_client.get(
         f"/api/v1/admin/accounts/{acct}/agents",
@@ -511,17 +492,13 @@ async def test_admin_can_list_agents_in_own_account(
     )
 
     assert resp.status_code == 200
-    assert resp.json()["result"] == [
-        {"agent_id": "assistant", "uri": "viking://agent/assistant"},
-        {"agent_id": "default", "uri": "viking://agent/default"},
-    ]
+    assert resp.json()["result"] == []
 
 
 async def test_admin_cannot_list_agents_in_other_account(
     admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
 ):
-    """ADMIN cannot list agent namespaces in another account."""
+    """ADMIN still cannot access another account through the deprecated endpoint."""
     acct = _uid()
     other = _uid()
     resp = await admin_client.post(
@@ -535,7 +512,6 @@ async def test_admin_cannot_list_agents_in_other_account(
         json={"account_id": other, "admin_user_id": "eve"},
         headers=root_headers(),
     )
-    await create_agent_namespace(admin_service, other, "foreign")
 
     resp = await admin_client.get(
         f"/api/v1/admin/accounts/{other}/agents",

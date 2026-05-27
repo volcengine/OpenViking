@@ -151,10 +151,8 @@ class AsyncHTTPClient(BaseClient):
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
             user_id: User identifier. If not provided, defaults to "default".
-            account: Account identifier for multi-tenant auth. Required when using root key
-                     to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
-            user: User identifier for multi-tenant auth. Required when using root key
-                  to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
+            account: Optional account identity header for trusted deployments.
+            user: Optional user identity header for trusted deployments.
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
@@ -443,7 +441,7 @@ class AsyncHTTPClient(BaseClient):
         Args:
             session_id: Session ID
             messages: List of message dicts, each with "role" and optionally
-                      "content", "parts", "created_at", "role_id".
+                      "content", "parts", "created_at", "peer_id".
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:
@@ -676,7 +674,6 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -692,8 +689,6 @@ class AsyncHTTPClient(BaseClient):
         }
         if peer_id is not None:
             payload["peer_id"] = peer_id
-        if agent_id is not None:
-            payload["agent_id"] = agent_id
         response = await self._http.post("/api/v1/search/find", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -710,7 +705,6 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -728,8 +722,6 @@ class AsyncHTTPClient(BaseClient):
         }
         if peer_id is not None:
             payload["peer_id"] = peer_id
-        if agent_id is not None:
-            payload["agent_id"] = agent_id
         response = await self._http.post("/api/v1/search/search", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -906,7 +898,6 @@ class AsyncHTTPClient(BaseClient):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
@@ -918,7 +909,7 @@ class AsyncHTTPClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -933,8 +924,6 @@ class AsyncHTTPClient(BaseClient):
 
         if created_at is not None:
             payload["created_at"] = created_at
-        if role_id is not None:
-            payload["role_id"] = role_id
         if peer_id is not None:
             payload["peer_id"] = peer_id
         if telemetry is not False:

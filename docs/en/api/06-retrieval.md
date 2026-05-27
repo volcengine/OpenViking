@@ -171,7 +171,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills"
+    target_uri="viking://user/skills"
 )
 
 # Search in specific project

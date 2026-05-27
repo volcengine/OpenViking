@@ -178,7 +178,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
         OpenVikingConnection(
             api_key="test-key",
             user_id="test-user",
-            agent_id="test-agent",
         )
     )
 
@@ -186,7 +185,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
     assert client._initialized is True
     assert created["api_key"] == "test-key"
     assert created["user_id"] == "test-user"
-    assert created["agent_id"] == "test-agent"
     assert created["url"] is None
 
 
@@ -619,33 +617,9 @@ def test_langgraph_store_batch_rejects_ttl_writes():
             "viking://user/memories",
             "viking://user/default/memories",
         ),
-        (
-            "viking://user/memories/langgraph_store",
-            "viking://user/memories",
-            "viking://user/default/agent/support/memories",
-        ),
-        (
-            "viking://agent/memories/langgraph_store",
-            "viking://agent/memories",
-            "viking://agent/support/memories",
-        ),
-        (
-            "viking://agent/memories/langgraph_store",
-            "viking://agent/memories",
-            "viking://agent/support/user/default/memories",
-        ),
-        (
-            "viking://agent/skills/langgraph_store",
-            "viking://agent/skills",
-            "viking://agent/support/user/default/skills",
-        ),
     ],
     ids=[
         "user-memory",
-        "user-memory-isolated-by-agent",
-        "agent-memory",
-        "agent-memory-isolated-by-user",
-        "agent-skills-isolated-by-user",
     ],
 )
 def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root(

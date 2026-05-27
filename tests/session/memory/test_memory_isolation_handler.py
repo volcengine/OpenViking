@@ -273,51 +273,23 @@ class TestFillRoleIds:
 class TestPrepareMessages:
     """Tests for prepare_messages under the user/peer model."""
 
-    @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_prepare_messages_disabled_fills_missing_role_ids(self, mock_config):
-        mock_memory_config = MagicMock()
-        mock_memory_config.role_id_memory_isolation_enabled = False
-        mock_config.return_value.memory = mock_memory_config
-
+    def test_prepare_messages_keeps_legacy_metadata(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", None, "Hello"),
             create_message("assistant", None, "Hi"),
-            create_message("user", "user_b", "Hey"),
+            create_message("user", "user_b", "Hey", peer_id="web:visitor:alice"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         handler.prepare_messages()
 
-        assert messages[0].role_id == "login_user"
-        assert messages[1].role_id == "login_user"
+        assert messages[0].role_id is None
+        assert messages[1].role_id is None
         assert messages[2].role_id == "user_b"
+        assert messages[2].peer_id == "web:visitor:alice"
 
-    @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_prepare_messages_enabled_keeps_role_ids(self, mock_config):
-        mock_memory_config = MagicMock()
-        mock_memory_config.role_id_memory_isolation_enabled = True
-        mock_config.return_value.memory = mock_memory_config
-
-        ctx = create_ctx(user_id="login_user")
-        messages = [
-            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
-            create_message("assistant", "agent_a", "Hi"),
-        ]
-        extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(ctx, extract_ctx)
-        handler.prepare_messages()
-
-        assert messages[0].role_id == "user_a"
-        assert messages[0].peer_id == "web:visitor:alice"
-        assert messages[1].role_id == "agent_a"
-
-    @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_get_read_scope_with_prepare_disabled_uses_ctx_for_missing_role_ids(self, mock_config):
-        mock_memory_config = MagicMock()
-        mock_memory_config.role_id_memory_isolation_enabled = False
-        mock_config.return_value.memory = mock_memory_config
-
+    def test_get_read_scope_uses_ctx_user(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", None, "Hello"),
@@ -330,12 +302,7 @@ class TestPrepareMessages:
 
         assert scope.user_ids == ["login_user"]
 
-    @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_get_read_scope_with_prepare_enabled(self, mock_config):
-        mock_memory_config = MagicMock()
-        mock_memory_config.role_id_memory_isolation_enabled = True
-        mock_config.return_value.memory = mock_memory_config
-
+    def test_get_read_scope_collects_peer_id(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
@@ -348,20 +315,6 @@ class TestPrepareMessages:
 
         assert scope.user_ids == ["login_user"]
         assert scope.peer_ids == ["web:visitor:alice"]
-
-    @patch("openviking.session.memory.memory_isolation_handler.get_openviking_config")
-    def test_prepare_messages_no_config_fills_missing_role_ids(self, mock_config):
-        mock_config.return_value.memory = None
-
-        ctx = create_ctx(user_id="login_user")
-        messages = [
-            create_message("user", None, "Hello"),
-        ]
-        extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(ctx, extract_ctx)
-        handler.prepare_messages()
-
-        assert messages[0].role_id == "login_user"
 
 
 class TestCalculateMemoryUris:

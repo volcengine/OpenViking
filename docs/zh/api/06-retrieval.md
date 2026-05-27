@@ -172,7 +172,7 @@ results = client.find(
 # 仅在技能中搜索
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills"
+    target_uri="viking://user/skills"
 )
 
 # 在特定项目中搜索

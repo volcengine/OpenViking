@@ -63,7 +63,7 @@ class LocalClient(BaseClient):
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
-            user: Explicit user/account/agent identity for embedded mode
+            user: Explicit account/user identity for embedded mode
         """
         self._service = OpenVikingService(
             path=path,
@@ -301,7 +301,6 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -312,7 +311,7 @@ class LocalClient(BaseClient):
                 query=query,
                 ctx=self._ctx,
                 target_uri=target_uri,
-                peer_id=normalize_peer_id(peer_id, agent_id),
+                peer_id=normalize_peer_id(peer_id),
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
@@ -338,7 +337,6 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -352,7 +350,7 @@ class LocalClient(BaseClient):
                 query=query,
                 ctx=self._ctx,
                 target_uri=target_uri,
-                peer_id=normalize_peer_id(peer_id, agent_id),
+                peer_id=normalize_peer_id(peer_id),
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,
@@ -511,7 +509,6 @@ class LocalClient(BaseClient):
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
-        role_id: Optional[str] = None,
         peer_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
@@ -523,7 +520,7 @@ class LocalClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to derive it from the local context.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -536,7 +533,6 @@ class LocalClient(BaseClient):
                 content,
                 parts,
                 created_at,
-                role_id,
                 peer_id,
             ),
         )
@@ -552,7 +548,6 @@ class LocalClient(BaseClient):
         content: Optional[str],
         parts: Optional[List[Dict[str, Any]]],
         created_at: Optional[str],
-        role_id: Optional[str],
         peer_id: Optional[str],
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
@@ -567,15 +562,9 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        if role_id is None and role == "user":
-            role_id = self._ctx.user.user_id
-        elif role_id is None and role == "assistant":
-            role_id = self._ctx.user.user_id
-
         session.add_message(
             role,
             message_parts,
-            role_id=role_id,
             peer_id=peer_id,
             created_at=created_at,
         )
@@ -623,18 +612,14 @@ class LocalClient(BaseClient):
             else:
                 raise ValueError("Either content or parts must be provided")
 
-            role_id = message.get("role_id")
-            if role_id is None and role in {"user", "assistant"}:
-                role_id = self._ctx.user.user_id
-
             specs.append(
                 {
                     "role": role,
                     "parts": message_parts,
-                    "role_id": role_id,
                     "peer_id": normalize_peer_id(
                         message.get("peer_id"),
                         message.get("agent_id"),
+                        message.get("role_id"),
                     ),
                     "created_at": message.get("created_at"),
                 }

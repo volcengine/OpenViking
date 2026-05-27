@@ -35,7 +35,6 @@ class OpenVikingConnection:
     account: str | None = None
     user: str | None = None
     user_id: str | None = None
-    agent_id: str | None = None
     path: str | None = None
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
@@ -64,7 +63,6 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
                 account=connection.account,
                 user=connection.user,
                 user_id=connection.user_id,
-                agent_id=connection.agent_id,
                 timeout=connection.timeout,
                 extra_headers=connection.extra_headers,
             )

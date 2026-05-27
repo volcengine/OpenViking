@@ -112,14 +112,14 @@ def run_ingest(client: ov.SyncHTTPClient, session_id_prefix: str):
 
         total = len(conv_data)
         for i, msg in enumerate(conv_data, 1):
-            role_id = msg.get("role_id")
-            console.print(f"    [{i}/{total}] 添加 (role_id={role_id})")
+            peer_id = msg.get("role_id")
+            console.print(f"    [{i}/{total}] 添加 (peer_id={peer_id})")
             client.add_message(
                 session_id,
                 role=msg["role"],
                 content=msg["content"],
                 created_at=session_time_str,
-                role_id=role_id,
+                peer_id=peer_id,
             )
 
         console.print(f"    共 {total} 条消息，提交...")
@@ -175,7 +175,7 @@ def verify_isolation(url: str, api_key: str, account: str):
             api_key=api_key,
             account=account,
             user=search_user,
-            agent_id=search_agent,
+            extra_headers={"X-OpenViking-Agent": search_agent},
             timeout=180,
         )
         sc.initialize()
@@ -224,7 +224,6 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
         api_key=root_key,
         account=account,
         user="admin",
-        agent_id="default",
         timeout=180,
     )
     client.initialize()

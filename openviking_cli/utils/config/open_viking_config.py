@@ -257,15 +257,16 @@ class OpenVikingConfig(BaseModel):
 
             # Apply memory configuration
             if memory_config_data is not None:
-                if (
-                    isinstance(memory_config_data, dict)
-                    and "agent_scope_mode" in memory_config_data
-                ):
-                    _get_config_warning_logger().warning(
-                        "memory.agent_scope_mode is deprecated and ignored. "
-                        "User is the only data-plane namespace."
-                    )
-                instance.memory = MemoryConfig.from_dict(memory_config_data)
+                try:
+                    instance.memory = MemoryConfig.from_dict(memory_config_data)
+                except ValidationError as e:
+                    raise ValueError(
+                        format_validation_error(
+                            root_model=MemoryConfig,
+                            error=e,
+                            path_prefix="memory",
+                        )
+                    ) from e
 
             # Apply parser configurations
             for parser_type, parser_data in parser_configs.items():

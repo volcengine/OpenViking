@@ -25,8 +25,6 @@ export type FindResult = {
 };
 
 export type CaptureMode = "semantic" | "keyword";
-export type ScopeName = "user" | "agent";
-export type AgentScopeMode = "user_agent" | "agent";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
@@ -195,18 +193,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 const MEMORY_URI_PATTERNS = [
-  /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,
-  /^viking:\/\/agent\/(?:[^/]+(?:\/user\/[^/]+)?\/)?memories(?:\/|$)/,
+  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
 ];
-const USER_STRUCTURE_DIRS = new Set(["memories", "profile.md", ".abstract.md", ".overview.md"]);
-const AGENT_STRUCTURE_DIRS = new Set([
-  "memories",
-  "skills",
-  "instructions",
-  "workspaces",
-  ".abstract.md",
-  ".overview.md",
-]);
+const USER_STRUCTURE_DIRS = new Set(["memories", "skills", "profile.md", ".abstract.md", ".overview.md"]);
 const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
 
 export function isMemoryUri(uri: string): boolean {
@@ -299,7 +288,7 @@ export class OpenVikingClient {
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
-          X_OpenViking_Agent: effectiveAgentId,
+          runtime_agent_id: effectiveAgentId,
           X_OpenViking_Account: tenantHeaders.accountId ?? null,
           X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
@@ -316,7 +305,7 @@ export class OpenVikingClient {
     agentId?: string,
     requestTimeoutMs?: number,
   ): Promise<T> {
-    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
+    void agentId;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
@@ -330,9 +319,6 @@ export class OpenVikingClient {
       }
       if (tenantHeaders.userId) {
         headers.set("X-OpenViking-User", tenantHeaders.userId);
-      }
-      if (effectiveAgentId) {
-        headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
       if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
@@ -386,28 +372,18 @@ export class OpenVikingClient {
     }
   }
 
-  private async buildCanonicalRoot(scope: ScopeName, agentId?: string): Promise<string> {
+  private async buildCanonicalRoot(agentId?: string): Promise<string> {
     const identity = await this.getRuntimeIdentity(agentId);
-    if (scope === "user") {
-      const root = this.isolateUserScopeByAgent
-        ? `viking://user/${identity.userId}/agent/${identity.agentId}`
-        : `viking://user/${identity.userId}`;
-      return root;
-    }
-    const root = this.isolateAgentScopeByUser
-      ? `viking://agent/${identity.agentId}/user/${identity.userId}`
-      : `viking://agent/${identity.agentId}`;
-    return root;
+    return `viking://user/${identity.userId}`;
   }
 
   private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
     const trimmed = targetUri.trim().replace(/\/+$/, "");
-    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+    const match = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
     if (!match) {
       return trimmed;
     }
-    const scope = match[1] as ScopeName;
-    const rawRest = (match[2] ?? "").trim();
+    const rawRest = (match[1] ?? "").trim();
     if (!rawRest) {
       return trimmed;
     }
@@ -416,13 +392,13 @@ export class OpenVikingClient {
       return trimmed;
     }
 
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    if (!reservedDirs.has(parts[0]!)) {
+    let suffix = parts;
+    if (!USER_STRUCTURE_DIRS.has(suffix[0]!)) {
       return trimmed;
     }
 
-    const root = await this.buildCanonicalRoot(scope, agentId);
-    return `${root}/${parts.join("/")}`;
+    const root = await this.buildCanonicalRoot(agentId);
+    return `${root}/${suffix.join("/")}`;
   }
 
   async find(
@@ -447,7 +423,7 @@ export class OpenVikingClient {
     this.routingDebugLog?.(
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
         JSON.stringify({
-          X_OpenViking_Agent: effectiveAgentId,
+          runtime_agent_id: effectiveAgentId,
           X_OpenViking_Account: tenantHeaders.accountId ?? null,
           X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
@@ -731,19 +707,19 @@ export class OpenVikingClient {
     }>,
     agentId?: string,
     createdAt?: string,
-    roleId?: string,
+    peerId?: string,
   ): Promise<void> {
     const body: {
       role: string;
-      role_id?: string;
+      peer_id?: string;
       parts: typeof parts;
       created_at?: string;
     } = { role, parts };
     if (createdAt) {
       body.created_at = createdAt;
     }
-    if (roleId) {
-      body.role_id = roleId;
+    if (peerId) {
+      body.peer_id = peerId;
     }
     await this.emitRoutingDebug(
       "session message POST (with parts)",
@@ -751,7 +727,7 @@ export class OpenVikingClient {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
         sessionId,
         role,
-        role_id: roleId ?? null,
+        peer_id: peerId ?? null,
         partCount: parts.length,
         created_at: createdAt ?? null,
       },

@@ -81,24 +81,6 @@ class RequestContext:
     def account_id(self) -> str:
         return self.user.account_id
 
-    def resolve_role_id(self, message_role: str, override: Optional[str] = None) -> Optional[str]:
-        """Resolve the role_id for a message, with fallback to ctx identity.
-
-        `message_role` is the message-level role ("user" / "assistant"), distinct
-        from `RequestContext.role` (the authz role).
-
-        - If `override` is truthy, returns it as-is (caller-supplied wins).
-        - For message_role="user", falls back to `user.user_id`.
-        - For message_role="assistant", falls back to `user.user_id` because
-          agent_id is no longer an OpenViking identity dimension.
-        - Any other message_role returns None when no override is given.
-        """
-        if override:
-            return override
-        if message_role in {"user", "assistant"}:
-            return self.user.user_id
-        return None
-
 
 @dataclass
 class ToolContext:

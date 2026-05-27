@@ -326,13 +326,13 @@ class OpenVikingAPIClient:
         session_id: str,
         role: str,
         content: str,
-        role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/messages"
         url = self._build_url(self.server_url, endpoint)
         payload = {"role": role, "content": content}
-        if role_id is not None:
-            payload["role_id"] = role_id
+        if peer_id is not None:
+            payload["peer_id"] = peer_id
         return self._request_with_retry("POST", url, json=payload)
 
     def fs_ls(self, uri: str, simple: bool = False, recursive: bool = False) -> requests.Response:

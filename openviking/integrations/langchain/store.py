@@ -60,7 +60,6 @@ class OpenVikingStore(BaseStore):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         root_uri: str = "viking://user/memories/langgraph_store",
         index: bool | list[str] | None = None,
@@ -79,7 +78,6 @@ class OpenVikingStore(BaseStore):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             auto_initialize=auto_initialize,
         )

@@ -86,8 +86,7 @@ ov session new
     "session_id": "a1b2c3d4",
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     }
   },
   "time": 0.1
@@ -262,8 +261,7 @@ ov session get a1b2c3d4
     },
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     },
     "pending_tokens": 450
   }
@@ -568,13 +566,15 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 | parts | List[Part] | Conditional | - | List of message parts (Required for Python SDK; Optional for HTTP API, mutually exclusive with content) |
 | content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
 | created_at | str | No | None | Optional ISO 8601 timestamp to persist on the message |
-| role_id | str | No | None | Optional explicit participant ID, server-derived if omitted |
+| peer_id | str | No | None | Optional stable interaction peer identity |
 
 > **Note**: HTTP API supports two modes:
 > 1. **Simple mode**: Use `content` string (backward compatible)
 > 2. **Parts mode**: Use `parts` array (full Part support)
 >
 > If both `content` and `parts` are provided, `parts` takes precedence.
+>
+> Legacy HTTP fields `role_id` and message-level `agent_id` are accepted as aliases for `peer_id`, but new clients should send only `peer_id`.
 
 **Part Types (Python SDK)**
 
@@ -595,7 +595,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://agent/skills/search-web/",
+    skill_uri="viking://user/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending", "running", "completed", "error"
@@ -741,7 +741,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://user/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **Python SDK**
@@ -761,7 +761,7 @@ await client.session_used(
 await client.session_used(
     session_id="a1b2c3d4",
     skill={
-        "uri": "viking://agent/skills/search-web/",
+        "uri": "viking://user/skills/search-web/",
         "input": {"query": "OAuth"},
         "output": "Results...",
         "success": True

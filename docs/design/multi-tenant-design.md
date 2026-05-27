@@ -292,24 +292,7 @@ def get_request_context(identity) -> RequestContext  # 构造 RequestContext
 
 ### 4.3 Agent 归属
 
-Agent 目录由 `memory.agent_scope_mode` 配置决定：
-
-- 默认 `user+agent`：按 `user_id + agent_id` 共同决定，用户与 agent 的组合有独立数据空间
-- 可选 `agent`：仅按 `agent_id` 决定，同一 agent_id 的不同用户共享 agent 空间
-
-```
-# memory.agent_scope_mode = "user+agent"
-/{account_id}/agent/{md5(user_id:agent_id)[:12]}/memories/cases/
-/{account_id}/agent/{md5(user_id:agent_id)[:12]}/skills/
-/{account_id}/agent/{md5(user_id:agent_id)[:12]}/instructions/
-
-# memory.agent_scope_mode = "agent"
-/{account_id}/agent/{md5(agent_id)[:12]}/memories/cases/
-/{account_id}/agent/{md5(agent_id)[:12]}/skills/
-/{account_id}/agent/{md5(agent_id)[:12]}/instructions/
-```
-
-因此，alice 和 bob 使用同一 agent_id 时，是否共享 agent 记忆和技能空间取决于 `memory.agent_scope_mode`。
+Agent 不再通过配置决定单独命名空间。如果 Agent 需要独立数据空间，应注册为 User 并使用自己的 User Key；如果只是某个 User 的执行形态，则复用该 User 的数据空间。稳定交互对象使用 `peer_id` 表达，不作为鉴权主体。
 
 ### 4.4 Admin API
 
@@ -331,25 +314,17 @@ PUT    /api/v1/admin/accounts/{account_id}/users/{uid}/role 修改用户角色 (
 
 ### 5.1 三维隔离模型
 
-存储隔离有三个独立维度：account、user、agent。
+存储隔离有两个独立维度：account、user。
 
 - **account**：顶层隔离，不同租户之间完全不可见
 - **user**：同一 account 内，不同用户的私有数据互不可见。用户记忆、资源、session 属于用户本人
-- **agent**：同一 account 内，agent 目录默认由 user_id + agent_id 共同决定；也可通过 `memory.agent_scope_mode="agent"` 改为仅由 agent_id 决定（见 4.3）
 
-**Space 标识符**：`UserIdentifier` 提供两个方法 `user_space_name()` 和 `agent_space_name()`：
+**Space 标识符**：`UserIdentifier` 提供 `user_space_name()`：
 
 ```python
 def user_space_name(self) -> str:
     """用户级 space，不含 agent_id"""
     return f"{self._account_id}_{hashlib.md5(self._user_id.encode()).hexdigest()[:8]}"
-
-
-def agent_space_name(self) -> str:
-    """Agent 级 space，受 memory.agent_scope_mode 控制"""
-    if config.memory.agent_scope_mode == "agent":
-        return hashlib.md5(self._agent_id.encode()).hexdigest()[:12]
-    return hashlib.md5(f"{self._user_id}:{self._agent_id}".encode()).hexdigest()[:12]
 ```
 
 ### 5.2 各 Scope 的隔离方式
@@ -357,9 +332,9 @@ def agent_space_name(self) -> str:
 | scope | AGFS 路径 | 隔离维度 | 说明 |
 |-------|-----------|----------|------|
 | `user/memories` | `/{account_id}/user/{user_space}/memories/` | account + user | 用户偏好、实体、事件属于用户本人 |
-| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent scope | agent 的学习记忆，隔离粒度由 `memory.agent_scope_mode` 决定 |
-| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + agent scope | agent 的能力集，隔离粒度由 `memory.agent_scope_mode` 决定 |
-| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + agent scope | agent 的行为规则，隔离粒度由 `memory.agent_scope_mode` 决定 |
+| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent scope | 旧版 agent 学习记忆路径 |
+| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + agent scope | 旧版 agent 能力集路径 |
+| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + agent scope | 旧版 agent 行为规则路径 |
 | `resources/` | `/{account_id}/resources/` | account | account 内共享的知识资源 |
 | `session/` | `/{account_id}/session/{user_space}/{session_id}/` | account + user | 用户的对话记录 |
 | `redo/` | `/{account_id}/_system/redo/` | account | 崩溃恢复 redo 标记 |
@@ -1634,5 +1609,4 @@ Phase 2 涉及存储隔离，需新增隔离相关示例：
 #### Key 存储方案
 
 评审讨论了 key 存储结构的三种方案（user_id 做主键 / key 做主键 / 双索引），确定采用方案 A（user_id 做主键）。文件结构用于持久化和人工排查，运行时认证全走内存索引（`dict[key] → identity`），O(1) 查找。
-
 

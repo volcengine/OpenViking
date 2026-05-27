@@ -88,7 +88,6 @@ class SyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
@@ -100,7 +99,6 @@ class SyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
-            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
             peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
@@ -112,7 +110,6 @@ class SyncOpenViking:
                 content=content,
                 parts=parts,
                 created_at=created_at,
-                role_id=role_id,
                 peer_id=peer_id,
                 telemetry=telemetry,
             )
@@ -221,7 +218,6 @@ class SyncOpenViking:
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -239,7 +235,6 @@ class SyncOpenViking:
                 time_field=time_field,
                 level=level,
                 peer_id=peer_id,
-                agent_id=agent_id,
             )
         )
 
@@ -256,7 +251,6 @@ class SyncOpenViking:
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -272,7 +266,6 @@ class SyncOpenViking:
                 time_field,
                 level,
                 peer_id=peer_id,
-                agent_id=agent_id,
             )
         )
 
