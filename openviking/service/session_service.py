@@ -6,20 +6,22 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.session.compressor_v2 import SessionCompressorV2
 
 
 class SessionService:
@@ -29,7 +31,7 @@ class SessionService:
         self,
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
-        session_compressor: Optional[SessionCompressor] = None,
+        session_compressor: Optional["SessionCompressorV2"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
@@ -40,7 +42,7 @@ class SessionService:
         self,
         vikingdb: VikingDBManager,
         viking_fs: VikingFS,
-        session_compressor: SessionCompressor,
+        session_compressor: "SessionCompressorV2",
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb

@@ -28,7 +28,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
-    from openviking.session.compressor import SessionCompressor
+    from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 

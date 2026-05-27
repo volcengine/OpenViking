@@ -228,7 +228,7 @@ await client.add_skill({
 # Memory auto-extracted from session
 await session.commit()
 
-# Flow: MemoryExtractor → TreeBuilder(scope=user) → SemanticQueue
+# Flow: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
 
 ## Related Documents

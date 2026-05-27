@@ -7,7 +7,7 @@ Main service class that composes all sub-services and manages infrastructure lif
 """
 
 import os
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.crypto.config import bootstrap_encryption
@@ -22,7 +22,7 @@ from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import set_task_tracker
-from openviking.session import SessionCompressor, create_session_compressor
+from openviking.session import create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
@@ -40,6 +40,9 @@ from openviking_cli.utils.config.open_viking_config import initialize_openviking
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.session.compressor_v2 import SessionCompressorV2
 
 
 class OpenVikingService:
@@ -78,7 +81,7 @@ class OpenVikingService:
         self._embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
-        self._session_compressor: Optional[SessionCompressor] = None
+        self._session_compressor: Optional["SessionCompressorV2"] = None
         self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
@@ -177,7 +180,7 @@ class OpenVikingService:
         return self._lock_manager
 
     @property
-    def session_compressor(self) -> Optional[SessionCompressor]:
+    def session_compressor(self) -> Optional["SessionCompressorV2"]:
         """Get SessionCompressor instance."""
         return self._session_compressor
 

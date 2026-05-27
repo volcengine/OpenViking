@@ -29,7 +29,7 @@ From a usage perspective, these templates mainly serve the following processing 
 | `parsing` | `parsing.context_generation` | Document structure splitting and semantic node generation | Resource ingestion and parsing | Document chapter structure, node summaries, image summaries |
 | `semantic` | `semantic.document_summary` | File-level and directory-level summaries | Semantic indexing | File summaries, directory overviews, downstream retrieval quality |
 | `retrieval` | `retrieval.intent_analysis` | Retrieval intent analysis and query planning | Pre-retrieval analysis | Search query planning and context recall direction |
-| `compression` | `compression.memory_extraction` | Memory extraction, merging, compression, and summarization | Session commit / memory pipeline | Long-term memory extraction, session compression, memory merge results |
+| `compression` | `compression.ov_wm_v2` | Working-memory compression and archived-session summarization | Session commit / memory pipeline | Session compression and working-memory quality |
 | `memory` | `profile` | Memory type definitions | Memory persistence and updates | The organization and final content of different memory types |
 | `processing` | `processing.tool_chain_analysis` | Extracting experience from interactions or resource background | Post-processing and experience distillation | Strategy extraction, tool-chain experience, interaction learning results |
 | `indexing` | `indexing.relevance_scoring` | Candidate relevance evaluation | Retrieval and indexing support | Relevance scoring quality |
@@ -154,37 +154,19 @@ When reading this section, a simple rule helps:
 
 ### Compression
 
-These prompts are mainly used for session compression, memory extraction, memory merging, and field compression. They are a core part of long-term memory quality.
+These prompts are mainly used for session compression and working-memory updates. Long-term memory extraction uses the v2 schema-driven memory templates in the `memory` category.
 
-- `compression.dedup_decision`
-  - Effective stage: memory candidate deduplication and decision stage
-  - Affects: long-term memory deduplication and create/merge strategy
-  - Purpose: decides whether a new memory candidate should be skipped, created, or merged into existing memory
-  - Key inputs: `candidate_content`, `candidate_abstract`, `candidate_overview`, `existing_memories`
+- `compression.ov_wm_v2`
+  - Effective stage: first working-memory generation stage
+  - Affects: archived session overview and current working-memory quality
+  - Purpose: creates the initial structured working-memory document for a session
+  - Key inputs: `messages`
 
-- `compression.field_compress`
-  - Effective stage: memory field compression stage
-  - Affects: controllable length and readability of long fields such as tool memories
-  - Purpose: compresses field content while preserving key information
-  - Key inputs: `field_name`, `content`, `max_length`
-
-- `compression.memory_extraction`
-  - Effective stage: post-compression memory extraction stage
-  - Affects: long-term memory extraction quality and downstream recall hit rate
-  - Purpose: extracts memory candidates worth preserving from session summary and recent messages
-  - Key inputs: `summary`, `recent_messages`, `user`, `feedback`, `output_language`
-
-- `compression.memory_merge`
-  - Effective stage: single-memory merge stage
-  - Affects: content quality after updating existing memory
-  - Purpose: merges existing memory with new information into a more complete version
-  - Key inputs: `existing_content`, `new_content`, `category`, `output_language`
-
-- `compression.memory_merge_bundle`
-  - Effective stage: structured memory merge stage
-  - Affects: merged L0/L1/L2 memory output
-  - Purpose: returns merged `abstract`, `overview`, and `content` in one call
-  - Key inputs: `existing_abstract`, `existing_overview`, `existing_content`, `new_abstract`, `new_overview`, `new_content`, `category`, `output_language`
+- `compression.ov_wm_v2_update`
+  - Effective stage: incremental working-memory update stage
+  - Affects: archived session overview and current working-memory continuity
+  - Purpose: updates an existing working-memory document using keep, update, or append operations
+  - Key inputs: `previous_working_memory`, `messages`
 
 - `compression.structured_summary`
   - Effective stage: session archive summary generation stage
@@ -477,7 +459,7 @@ Example directory:
 ```text
 custom-prompts/
 ├── compression/
-│   └── memory_extraction.yaml
+│   └── ov_wm_v2.yaml
 ├── retrieval/
 │   └── intent_analysis.yaml
 └── semantic/
@@ -502,9 +484,9 @@ export OPENVIKING_PROMPT_TEMPLATES_DIR=/path/to/custom-prompts
 
 Impact examples:
 
-- Modifying `compression.memory_extraction`
-  - mainly affects the memory extraction stage
-  - ultimately affects long-term memory quality and downstream recall results
+- Modifying `compression.ov_wm_v2`
+  - mainly affects initial working-memory generation
+  - ultimately affects session archive quality and downstream recall results
 - Modifying `retrieval.intent_analysis`
   - mainly affects pre-retrieval query planning
   - ultimately affects search direction and recall quality

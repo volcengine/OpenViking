@@ -179,17 +179,12 @@ class TestAllowedDirectoriesList:
             mock_registry.list_all.return_value = [schema1, schema2]
             mock_registry_cls.return_value = mock_registry
 
-            # Also patch schema_model_generator and schema_prompt_generator
-            with (
-                patch("openviking.session.memory.extract_loop.SchemaModelGenerator") as mock_smg,
-                patch("openviking.session.memory.extract_loop.SchemaPromptGenerator") as mock_spg,
-            ):
+            # Also patch schema_model_generator.
+            with patch("openviking.session.memory.extract_loop.SchemaModelGenerator") as mock_smg:
                 mock_smg_instance = MagicMock()
                 mock_smg_instance.generate_all_models = MagicMock()
                 mock_smg_instance.get_llm_json_schema = MagicMock(return_value={})
                 mock_smg.return_value = mock_smg_instance
-
-                mock_spg.return_value = MagicMock()
 
                 # Create ExtractLoop
                 extract_loop = ExtractLoop(mock_vlm, mock_viking_fs)
