@@ -57,12 +57,6 @@ const zhCN = {
     theme: {
       toggle: '切换主题',
     },
-    serverMode: {
-      checking: '检测中',
-      devImplicit: '服务端身份',
-      explicitAuth: '显式鉴权',
-      offline: '未连接',
-    },
   },
   connection: {
     devMode: {
@@ -74,7 +68,7 @@ const zhCN = {
       title: '连接与身份',
     },
     identitySummary: {
-      devImplicit: '服务端隐式身份',
+      dev: '服务端隐式身份',
       named: '{{identity}}',
       unset: '未设置身份',
     },

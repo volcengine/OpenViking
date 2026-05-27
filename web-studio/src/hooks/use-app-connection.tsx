@@ -119,8 +119,8 @@ export function summarizeConnectionIdentity(
   connection: ConnectionDraft,
   serverMode: ServerMode,
 ): ConnectionIdentitySummary {
-  if (serverMode === 'dev-implicit') {
-    return { labelKey: 'identitySummary.devImplicit' }
+  if (serverMode === 'dev') {
+    return { labelKey: 'identitySummary.dev' }
   }
 
   const segments = [
