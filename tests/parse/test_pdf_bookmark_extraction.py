@@ -26,6 +26,31 @@ def _make_ref(objid):
     return SimpleNamespace(objid=objid)
 
 
+class _FakePDFStream(dict):
+    """Minimal pdfminer PDFStream-like object."""
+
+    def __init__(self, data: bytes, subtype: str = "Image"):
+        super().__init__({"Subtype": SimpleNamespace(name=subtype)})
+        self._data = data
+
+    def get_data(self):
+        return self._data
+
+
+class _FakePDFObjectRef:
+    """Minimal PDF object reference with a resolve() method."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def resolve(self):
+        return self._stream
+
+
+def _make_image_page(xobjects):
+    return SimpleNamespace(page_obj=SimpleNamespace(resources={"XObject": xobjects}))
+
+
 class _FakePage:
     """Minimal pdfplumber page stub for _convert_local tests."""
 
@@ -317,3 +342,47 @@ class TestConvertLocalBookmarks:
         assert [heading["title"] for heading in headings] == ["Heading", "Another heading"]
         assert [page.close_count for page in pages] == [2, 1, 1, 1]
         assert [page.flush_count for page in pages] == [2, 1, 1, 1]
+
+
+class TestExtractImages:
+    """Test PDF XObject image extraction."""
+
+    def setup_method(self):
+        self.parser = PDFParser()
+
+    def test_extract_image_reads_resolved_pdfstream_data(self):
+        page = _make_image_page(
+            {
+                "Im1": _FakePDFObjectRef(_FakePDFStream(b"first-image")),
+            }
+        )
+
+        assert self.parser._extract_image_from_page(page, {"name": "Im1"}) == b"first-image"
+
+    def test_extract_image_matches_requested_xobject_name(self):
+        page = _make_image_page(
+            {
+                "Im1": _FakePDFObjectRef(_FakePDFStream(b"first-image")),
+                "Im2": _FakePDFObjectRef(_FakePDFStream(b"second-image")),
+            }
+        )
+
+        assert self.parser._extract_image_from_page(page, {"name": "Im2"}) == b"second-image"
+
+    def test_extract_image_allows_leading_slash_name_variants(self):
+        page = _make_image_page(
+            {
+                "/Im1": _FakePDFObjectRef(_FakePDFStream(b"slash-image")),
+            }
+        )
+
+        assert self.parser._extract_image_from_page(page, {"name": "Im1"}) == b"slash-image"
+
+    def test_extract_image_returns_none_for_non_image_xobject(self):
+        page = _make_image_page(
+            {
+                "Form1": _FakePDFObjectRef(_FakePDFStream(b"form-data", subtype="Form")),
+            }
+        )
+
+        assert self.parser._extract_image_from_page(page, {"name": "Form1"}) is None

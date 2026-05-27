@@ -802,7 +802,11 @@ class Session:
                 role, parts, peer_id (optional), created_at (optional)
         """
         all_messages = []
-        for spec in messages_spec:
+        for i, spec in enumerate(messages_spec):
+            if "role" not in spec:
+                raise ValueError(f"messages_spec[{i}]: missing required key 'role'")
+            if "parts" not in spec:
+                raise ValueError(f"messages_spec[{i}]: missing required key 'parts'")
             role = spec["role"]
             parts = spec["parts"]
             created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()

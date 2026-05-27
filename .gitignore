@@ -195,6 +195,7 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 openviking/bin/
+openviking/web_studio/dist/
 third_party/agfs/bin/
 test_scripts/
 examples/data/

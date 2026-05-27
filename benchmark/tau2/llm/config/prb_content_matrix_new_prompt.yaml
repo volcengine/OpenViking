@@ -24,7 +24,7 @@ strategies:
     retrieval_mode: first_user
     retrieval_top_k: 4
     first_user_inject_top_k: 4
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_traj_fixed_prewrite_only
     label: PR-B new trajectory fixed-count prewrite top2
@@ -40,7 +40,7 @@ strategies:
     retrieval_top_k: 4
     prewrite_retrieval_top_k: 2
     prewrite_inject_top_k: 2
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_traj_fixed_first_user_prewrite
     label: PR-B new trajectory fixed-count first-user top4 + prewrite top2
@@ -57,7 +57,7 @@ strategies:
     first_user_inject_top_k: 4
     prewrite_retrieval_top_k: 2
     prewrite_inject_top_k: 2
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_exp_fixed_first_user
     label: PR-B new experience fixed-count first-user top2
@@ -72,7 +72,7 @@ strategies:
     retrieval_mode: first_user
     retrieval_top_k: 2
     first_user_inject_top_k: 2
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_exp_fixed_prewrite_only
     label: PR-B new experience fixed-count prewrite top2
@@ -88,7 +88,7 @@ strategies:
     retrieval_top_k: 2
     prewrite_retrieval_top_k: 2
     prewrite_inject_top_k: 2
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_exp_fixed_first_user_prewrite
     label: PR-B new experience fixed-count first-user + prewrite top2
@@ -105,7 +105,7 @@ strategies:
     first_user_inject_top_k: 2
     prewrite_retrieval_top_k: 2
     prewrite_inject_top_k: 2
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_traj_4000_prewrite_only
     label: PR-B new trajectory 4000-char prewrite
@@ -122,7 +122,7 @@ strategies:
     prewrite_retrieval_top_k: 8
     prewrite_inject_top_k: 8
     memory_inject_max_chars: 4000
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md
 
   - id: new_exp_4000_first_user_prewrite
     label: PR-B new experience 4000-char first-user + prewrite
@@ -140,4 +140,4 @@ strategies:
     prewrite_retrieval_top_k: 8
     prewrite_inject_top_k: 8
     memory_inject_max_chars: 4000
-    scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
+    scope_prompt_file: benchmark/tau2/llm/config/scope_prompts/generic_memory_scope.md

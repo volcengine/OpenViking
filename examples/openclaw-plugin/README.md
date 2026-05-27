@@ -40,7 +40,7 @@ Once installed, the plugin provides these agent tools:
 | `ov_archive_expand` | Expand an archive back to raw messages |
 | `add_resource` | Import documents, URLs, or Git repos |
 | `add_skill` | Import agent skills |
-| `memory_search` | Search imported resources and skills |
+| `ov_search` | Search imported resources and skills |
 
 ## Data Flow & Privacy
 
@@ -218,7 +218,7 @@ Beyond automatic behavior, the plugin exposes seven tools directly:
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
 - `add_skill`: import or register an OpenViking agent skill
-- `memory_search`: search OpenViking resources and skills, especially after importing them
+- `ov_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
 
@@ -228,7 +228,7 @@ They serve different roles:
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
 - `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
 - `add_skill` imports skills into OpenViking, while `add_resource` imports resources
-- `memory_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -244,8 +244,8 @@ The plugin also registers explicit slash commands for manual imports:
 ```text
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
 /add-skill ./skills/install-openviking-memory --wait
-/memory-search "OpenViking install" --uri viking://resources/openviking-readme
-/memory-search "memory install skill" --uri viking://user/skills
+/ov-search "OpenViking install" --uri viking://resources/openviking-readme
+/ov-search "memory install skill" --uri viking://user/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.

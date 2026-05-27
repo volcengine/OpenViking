@@ -50,10 +50,9 @@ async def ls(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -87,10 +86,9 @@ async def tree(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -110,10 +108,9 @@ async def stat(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=uri)
@@ -141,10 +138,9 @@ async def mkdir(
     try:
         await service.fs.mkdir(uri, ctx=_ctx, description=request.description)
     except AGFSClientError as e:
-        # Handle common AGFS errors
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result={"uri": uri})
 
@@ -164,9 +160,9 @@ async def rm(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=uri)
@@ -202,10 +198,9 @@ async def mv(
     except AGFSNotFoundError:
         raise NotFoundError(from_uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(from_uri, "file")
+        mapped = map_exception(e, resource=from_uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=from_uri)

@@ -14,7 +14,7 @@
     "tools": [
       "add_resource",
       "add_skill",
-      "memory_search",
+      "ov_search",
       "memory_recall",
       "memory_store",
       "memory_forget",
