@@ -101,15 +101,18 @@ def _get_cpu_count() -> int:
         return os.cpu_count() or 1
 
 
-_ABSTRACT_WORKER_COUNT = max(
-    1,
-    int(
-        os.getenv(
-            "OPENVIKING_LS_ABSTRACT_CONCURRENCY",
-            str(max(4, min(12, min(32, _get_cpu_count() + 4) // 2))),
-        )
-    ),
-)
+def _get_abstract_worker_count() -> int:
+    default = max(4, min(12, min(32, _get_cpu_count() + 4) // 2))
+    env_val = os.getenv("OPENVIKING_LS_ABSTRACT_CONCURRENCY")
+    if env_val is not None:
+        try:
+            return max(1, int(env_val))
+        except ValueError:
+            pass
+    return max(1, default)
+
+
+_ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
 
 
 # ========== Dataclass ==========
