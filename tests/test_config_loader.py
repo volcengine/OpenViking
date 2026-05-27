@@ -185,6 +185,20 @@ def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_rejects_memory_v1(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError, match="legacy memory v1 has been removed"):
+        OpenVikingConfig.from_dict({"memory": {"version": "v1"}})
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_memory_experimental_switch_defaults_agent_memory(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

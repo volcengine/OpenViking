@@ -1300,7 +1300,7 @@ owner_space: str = ""  # 所有者的 user_space_name() 或 agent_space_name()
 
 上游构造 Context 时需从 RequestContext 填入这两个字段：
 - `ResourceService` / `SkillProcessor` → `account_id=ctx.account_id`, `owner_space=ctx.user.user_space_name()` 或 `agent_space_name()`（取决于 scope）
-- `MemoryExtractor.create_memory()` → 同上
+- `SessionCompressorV2` memory writes → 同上
 - `DirectoryInitializer._ensure_directory()` → 同上
 
 ##### 8b. HierarchicalRetriever 注入多级过滤

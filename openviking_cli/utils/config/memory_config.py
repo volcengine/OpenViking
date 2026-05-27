@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -10,7 +10,7 @@ class MemoryConfig(BaseModel):
 
     version: str = Field(
         default="v2",
-        description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
+        description="Memory implementation version. Only 'v2' is supported.",
     )
     custom_templates_dir: str = Field(
         default="",
@@ -101,6 +101,13 @@ class MemoryConfig(BaseModel):
             data = data.copy()
             data.setdefault("agent_memory_enabled", True)
         return data
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str) -> str:
+        if value != "v2":
+            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
+        return value
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "MemoryConfig":

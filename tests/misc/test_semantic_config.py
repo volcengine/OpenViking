@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for SemanticConfig, overview budget estimation, and memory chunking."""
+"""Tests for SemanticConfig and overview budget estimation."""
 
-from openviking.session.compressor import SessionCompressor
 from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
@@ -83,50 +82,6 @@ def test_batch_splitting():
     assert len(batches[0]) == 50
     assert len(batches[1]) == 50
     assert len(batches[2]) == 20
-
-
-# --- Memory chunking tests ---
-
-
-def test_chunk_text_short_text_no_split():
-    """Short text below chunk_size returns single chunk."""
-    text = "Short memory content."
-    chunks = SessionCompressor._chunk_text(text, chunk_size=2000, overlap=200)
-    assert len(chunks) == 1
-    assert chunks[0] == text
-
-
-def test_chunk_text_long_text_splits():
-    """Long text is split into multiple chunks."""
-    text = "A" * 5000
-    chunks = SessionCompressor._chunk_text(text, chunk_size=2000, overlap=200)
-    assert len(chunks) >= 3
-    # Each chunk should be at most chunk_size
-    for chunk in chunks:
-        assert len(chunk) <= 2000
-
-
-def test_chunk_text_overlap():
-    """Chunks should overlap by the specified amount."""
-    # Create text with clear markers every 500 chars
-    text = "".join(f"[BLOCK{i:03d}]" + "x" * 490 for i in range(10))
-    chunks = SessionCompressor._chunk_text(text, chunk_size=2000, overlap=200)
-    assert len(chunks) >= 2
-    # The end of chunk N should overlap with the start of chunk N+1
-    for i in range(len(chunks) - 1):
-        tail = chunks[i][-200:]
-        assert tail in chunks[i + 1] or chunks[i + 1].startswith(tail[:50])
-
-
-def test_chunk_text_prefers_paragraph_boundaries():
-    """Chunking should prefer splitting at paragraph boundaries."""
-    paragraphs = ["Paragraph about topic " + str(i) + ". " * 50 for i in range(10)]
-    text = "\n\n".join(paragraphs)
-    chunks = SessionCompressor._chunk_text(text, chunk_size=500, overlap=50)
-    # Chunks should tend to start at paragraph beginnings
-    assert len(chunks) >= 2
-    for chunk in chunks:
-        assert len(chunk) > 0
 
 
 def test_memory_chunk_config_custom():

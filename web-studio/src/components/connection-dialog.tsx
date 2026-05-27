@@ -47,7 +47,7 @@ export function ConnectionDialog() {
     }
   }, [connection, isConnectionDialogOpen])
 
-  const isDevImplicit = serverMode === 'dev-implicit'
+  const isDevImplicit = serverMode === 'dev'
   const showIdentityFields = !isDevImplicit || showAdvancedInDevMode
 
   return (

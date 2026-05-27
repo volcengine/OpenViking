@@ -656,6 +656,29 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
+### query_planner
+
+可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，但只影响 `search()` 的意图分析和 query expansion。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
+
+只有在环境里已经部署好 planner 模型时才需要添加这一段配置。例如下面的 Ollama 模型需要先在本地 pull 并启动后才能使用。
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "api_base": "http://127.0.0.1:11434",
+    "temperature": 0.0,
+    "timeout": 60,
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
+
+适合用小模型承担检索规划，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
+
 ### feishu
 
 飞书/Lark 云端文档解析配置。支持的 URL 格式详见[资源管理](../api/02-resources.md)。

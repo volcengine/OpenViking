@@ -103,8 +103,8 @@ class TestGetReadScope:
 
         assert scope.user_ids == ["user_a"]
 
-    def test_collects_peer_ids_without_authorizing_them(self):
-        """peer_id is observable for extraction grouping, not a write owner."""
+    def test_message_peer_ids_do_not_expand_self_extraction_scope(self):
+        """Message peer_id should not make self extraction read or write peer memory."""
         ctx = create_ctx()
         messages = [
             create_message("user", "visitor_a", peer_id="web:visitor:alice"),
@@ -116,7 +116,7 @@ class TestGetReadScope:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["user_a"]
-        assert set(scope.peer_ids) == {"web:visitor:alice", "web:visitor:bob"}
+        assert scope.peer_ids == []
 
     def test_deduplicate_users(self):
         """Test that duplicate users are deduplicated."""
@@ -302,7 +302,7 @@ class TestPrepareMessages:
 
         assert scope.user_ids == ["login_user"]
 
-    def test_get_read_scope_collects_peer_id(self):
+    def test_get_read_scope_ignores_message_peer_id_without_target(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
             create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
@@ -314,7 +314,7 @@ class TestPrepareMessages:
         scope = handler.get_read_scope()
 
         assert scope.user_ids == ["login_user"]
-        assert scope.peer_ids == ["web:visitor:alice"]
+        assert scope.peer_ids == []
 
 
 class TestCalculateMemoryUris:
