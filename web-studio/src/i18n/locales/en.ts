@@ -57,12 +57,6 @@ const en = {
     theme: {
       toggle: 'Toggle theme',
     },
-    serverMode: {
-      checking: 'Detecting',
-      devImplicit: 'Server Identity',
-      explicitAuth: 'Explicit Auth',
-      offline: 'Offline',
-    },
   },
   connection: {
     devMode: {
@@ -74,7 +68,7 @@ const en = {
       title: 'Connection & Identity',
     },
     identitySummary: {
-      devImplicit: 'Server-managed identity',
+      dev: 'Server-managed identity',
       named: '{{identity}}',
       unset: 'Identity not set',
     },

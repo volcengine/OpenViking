@@ -632,7 +632,7 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
 
-👉 **[View: LangChain / LangGraph Integration](./docs/en/agent-integrations/06-langchain-langgraph.md)**
+👉 **[View: LangChain / LangGraph Integration](./docs/en/agent-integrations/07-langchain-langgraph.md)**
 
 \--
 

@@ -2,73 +2,44 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session management module."""
 
-from typing import Optional
-
-from openviking.session.compressor import ExtractionStats, SessionCompressor
+from typing import TYPE_CHECKING, Optional
 from openviking.session.memory_archiver import (
     ArchivalCandidate,
     ArchivalResult,
     MemoryArchiver,
 )
-from openviking.session.memory_deduplicator import (
-    DedupDecision,
-    DedupResult,
-    ExistingMemoryAction,
-    MemoryActionDecision,
-    MemoryDeduplicator,
-)
-from openviking.session.memory_extractor import (
-    CandidateMemory,
-    MemoryCategory,
-    MemoryExtractor,
-    ToolSkillCandidateMemory,
-)
 from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
 from openviking.storage import VikingDBManager
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.session.compressor_v2 import SessionCompressorV2
 
 
 def create_session_compressor(
     vikingdb: VikingDBManager,
     memory_version: Optional[str] = None,
     skill_processor=None,
-) -> SessionCompressor:
+) -> "SessionCompressorV2":
     """
-    Create a SessionCompressor instance based on configuration.
+    Create the v2 session compressor.
 
     Args:
         vikingdb: VikingDBManager instance
-        memory_version: Optional memory version override ("v1" or "v2").
-            If not provided, uses the version from config.
+        memory_version: Deprecated optional override. Only "v2" is supported.
 
     Returns:
-        SessionCompressor instance (v1 or v2 implementation)
+        SessionCompressorV2 instance
     """
-    # Determine which version to use
-    if memory_version is None:
-        try:
-            config = get_openviking_config()
-            memory_version = config.memory.version
-        except Exception as e:
-            logger.warning(f"Failed to get memory version from config, defaulting to v1: {e}")
-            memory_version = "v1"
+    if memory_version not in (None, "v2"):
+        raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
 
-    if memory_version == "v2":
-        logger.info("Using v2 memory compressor (templating system)")
-        try:
-            from openviking.session.compressor_v2 import SessionCompressorV2
+    logger.info("Using v2 memory compressor (templating system)")
+    from openviking.session.compressor_v2 import SessionCompressorV2
 
-            return SessionCompressorV2(vikingdb=vikingdb, skill_processor=skill_processor)
-        except Exception as e:
-            logger.warning(f"Failed to load v2 compressor, falling back to v1: {e}")
-            return SessionCompressor(vikingdb=vikingdb, skill_processor=skill_processor)
-
-    # Default to v1
-    logger.info("Using v1 memory compressor (legacy)")
-    return SessionCompressor(vikingdb=vikingdb, skill_processor=skill_processor)
+    return SessionCompressorV2(vikingdb=vikingdb, skill_processor=skill_processor)
 
 
 __all__ = [
@@ -78,22 +49,9 @@ __all__ = [
     "SessionMeta",
     "SessionStats",
     # Compressor
-    "SessionCompressor",
-    "ExtractionStats",
     "create_session_compressor",
     # Memory Archiver
     "MemoryArchiver",
     "ArchivalCandidate",
     "ArchivalResult",
-    # Memory Extractor
-    "MemoryExtractor",
-    "MemoryCategory",
-    "CandidateMemory",
-    "ToolSkillCandidateMemory",
-    # Memory Deduplicator
-    "MemoryDeduplicator",
-    "DedupDecision",
-    "MemoryActionDecision",
-    "ExistingMemoryAction",
-    "DedupResult",
 ]

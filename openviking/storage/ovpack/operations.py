@@ -69,6 +69,8 @@ from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
+OPTIONAL_SEMANTIC_SIDECARS = frozenset({".abstract.md", ".overview.md"})
+
 
 def _index_records_by_level(
     index_records: list[dict[str, Any]], rel_path: str
@@ -146,6 +148,38 @@ def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not is_excluded_rel_path(rel_path):
             exportable.append(entry)
     return exportable
+
+
+def _is_optional_semantic_sidecar(entry: dict[str, Any]) -> bool:
+    if entry.get("isDir"):
+        return False
+    rel_path = str(entry.get("rel_path") or "")
+    return leaf_name(rel_path) in OPTIONAL_SEMANTIC_SIDECARS
+
+
+async def _filter_existing_optional_sidecars(
+    viking_fs,
+    root_uri: str,
+    entries: list[dict[str, Any]],
+    ctx: RequestContext,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for entry in entries:
+        if not _is_optional_semantic_sidecar(entry):
+            filtered.append(entry)
+            continue
+
+        rel_path = str(entry.get("rel_path") or "")
+        uri = entry.get("uri") or join_uri(root_uri, rel_path)
+        try:
+            exists = await viking_fs.exists(uri, ctx=ctx)
+        except Exception:
+            exists = False
+        if exists:
+            filtered.append(entry)
+        else:
+            logger.info(f"[ovpack] Skipping missing semantic sidecar: {uri}")
+    return filtered
 
 
 async def _enqueue_direct_vectorization(
@@ -475,6 +509,7 @@ async def export_ovpack(
             ctx=ctx,
         )
     )
+    entries = await _filter_existing_optional_sidecars(viking_fs, uri, entries, ctx)
     if include_vectors:
         ensure_dense_snapshot_supported(vector_store)
         report = await check_index_consistency(
@@ -529,6 +564,7 @@ async def backup_ovpack(
         to = ensure_ovpack_extension(to)
 
     entries = await _backup_entries(viking_fs, ctx)
+    entries = await _filter_existing_optional_sidecars(viking_fs, "viking://", entries, ctx)
     if include_vectors:
         ensure_dense_snapshot_supported(vector_store)
         report = await check_index_consistency(

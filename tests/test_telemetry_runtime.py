@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
 from openviking.observability.context import (
     bind_operation_observability_context,
@@ -150,16 +150,27 @@ async def test_bind_telemetry_stage_propagates_across_async_tasks():
 @pytest.mark.asyncio
 async def test_embed_compat_binds_query_stage_for_embedding_tokens():
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    query = " ".join(f"token-{idx}" for idx in range(200))
 
-    class _TelemetryAwareAsyncEmbedder:
+    class _TelemetryAwareAsyncEmbedder(DenseEmbedderBase):
+        def __init__(self):
+            super().__init__("telemetry-test", config={"max_input_tokens": 20})
+
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("embed_async should be used")
+
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            assert text == "hello"
             assert is_query is True
+            assert text.endswith("...(truncated for embedding)")
+            assert "token-199" not in text
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
 
+        def get_dimension(self) -> int:
+            return 2
+
     with bind_telemetry(telemetry):
-        await embed_compat(_TelemetryAwareAsyncEmbedder(), "hello", is_query=True)
+        await embed_compat(_TelemetryAwareAsyncEmbedder(), query, is_query=True)
 
     summary = telemetry.finish().summary
     assert summary["tokens"]["stages"]["embed_query"]["embedding"] == {"total": 9}
