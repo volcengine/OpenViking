@@ -8,6 +8,41 @@ import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
+_OPENAI_NULL_OUTPUT_GUARD_APPLIED = False
+
+
+def _ensure_openai_response_output_null_guard() -> None:
+    """Guard OpenAI SDK parsing for Codex responses whose final output is null."""
+    global _OPENAI_NULL_OUTPUT_GUARD_APPLIED
+    if _OPENAI_NULL_OUTPUT_GUARD_APPLIED:
+        return
+    try:
+        from openai.lib._parsing import _responses as parsing_module
+        from openai.resources.responses import responses as responses_module
+    except Exception:
+        _OPENAI_NULL_OUTPUT_GUARD_APPLIED = True
+        return
+
+    original_parse_response = parsing_module.parse_response
+    if getattr(original_parse_response, "_openviking_null_output_guard", False):
+        _OPENAI_NULL_OUTPUT_GUARD_APPLIED = True
+        return
+
+    def guarded_parse_response(*args: Any, **kwargs: Any) -> Any:
+        response = kwargs.get("response")
+        if response is not None and getattr(response, "output", None) is None:
+            try:
+                response.output = []
+            except Exception:
+                pass
+        return original_parse_response(*args, **kwargs)
+
+    guarded_parse_response._openviking_null_output_guard = True  # type: ignore[attr-defined]
+    parsing_module.parse_response = guarded_parse_response
+    if getattr(responses_module, "parse_response", None) is original_parse_response:
+        responses_module.parse_response = guarded_parse_response
+    _OPENAI_NULL_OUTPUT_GUARD_APPLIED = True
+
 
 def _convert_content_for_responses(content: Any) -> Any:
     if isinstance(content, str):
@@ -218,6 +253,7 @@ class CodexCompletionsAdapter:
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
+        _ensure_openai_response_output_null_guard()
         with client.responses.stream(**response_kwargs) as stream:
             for event in stream:
                 event_type = getattr(event, "type", "")
