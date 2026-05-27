@@ -131,6 +131,65 @@ def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
     )
 
 
+@pytest.mark.asyncio
+async def test_timeline_conflict_synthesis_only_updates_conflicted_string_fields():
+    class FakeVLM:
+        def __init__(self):
+            self.messages = None
+
+        async def get_completion_async(self, messages):
+            self.messages = messages
+            return '{"fields": {"content": "ALPHA BETA gamma", "summary": "ignored"}}'
+
+    schema = MemoryTypeSchema(
+        memory_type="notes",
+        fields=[
+            MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            MemoryField(name="summary", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+        ],
+    )
+    current = MemoryFile(
+        uri="viking://agent/default/memories/notes/a.md",
+        content="ALPHA beta gamma",
+        extra_fields={"summary": "keep me"},
+    )
+    base = MemoryFile(uri=current.uri, content="alpha beta gamma", extra_fields={"summary": "old"})
+    operations = [
+        ResolvedOperation(
+            old_memory_file_content=base,
+            memory_type="notes",
+            uris=[current.uri],
+            memory_fields={"content": "ALPHA beta gamma", "summary": "not in conflict"},
+        )
+    ]
+    fake_vlm = FakeVLM()
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        synthesized = await compressor_v2_module._synthesize_timeline_conflict_fields(
+            vlm=fake_vlm,
+            uri=current.uri,
+            memory_type="notes",
+            schema=schema,
+            current_file=current,
+            resolved_ops=operations,
+            conflicts=[
+                {
+                    "uri": current.uri,
+                    "memory_type": "notes",
+                    "field": "content",
+                    "error": "Patch application failed",
+                }
+            ],
+            phase_metric_key="experience_single",
+        )
+
+    assert synthesized is not None
+    assert synthesized.content == "ALPHA BETA gamma"
+    assert synthesized.extra_fields["summary"] == "keep me"
+    assert fake_vlm.messages is not None
+    assert "queued_operations_in_arrival_order" in fake_vlm.messages[1]["content"]
+
+
 def test_operation_exact_lock_uris_include_deleted_link_endpoints():
     exp_uri = "viking://agent/default/memories/experiences/old.md"
     traj_uri = "viking://agent/default/memories/trajectories/t1.md"

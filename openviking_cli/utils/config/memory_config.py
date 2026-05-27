@@ -119,6 +119,16 @@ class MemoryConfig(BaseModel):
             "disable the window."
         ),
     )
+    operation_exact_apply_window_conflict_synthesis_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled, same-URI operation_exact apply-window timelines that hit a "
+            "SEARCH/REPLACE conflict may call the configured model once to synthesize "
+            "the final target fields from the latest locked file and queued patches. "
+            "This is only used as a conflict fallback; the normal path remains "
+            "deterministic patch replay."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(

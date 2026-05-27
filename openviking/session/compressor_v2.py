@@ -23,7 +23,12 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations, StoredLink
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    ResolvedOperation,
+    ResolvedOperations,
+    StoredLink,
+)
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
     ExtractContext,
@@ -435,6 +440,157 @@ def _convert_plain_string_patches_to_structured(
     return conversions
 
 
+def _jsonable_for_prompt(value: Any) -> Any:
+    try:
+        dumped = JsonUtils.dumps(value, indent=None)
+        return JsonUtils.loads(dumped)
+    except Exception:
+        return str(value)
+
+
+async def _synthesize_timeline_conflict_fields(
+    *,
+    vlm: Any,
+    uri: str,
+    memory_type: str,
+    schema: Any,
+    current_file: Optional[MemoryFile],
+    resolved_ops: list[ResolvedOperation],
+    conflicts: list[dict[str, Any]],
+    phase_metric_key: str,
+) -> Optional[MemoryFile]:
+    """Use the model once to reconcile same-file patch conflicts.
+
+    This is a narrow fallback for operation-exact apply windows. The normal
+    path replays structured patches deterministically; synthesis only runs
+    when replay hits a real SEARCH/REPLACE conflict in a same-URI timeline.
+    """
+
+    if current_file is None:
+        return None
+
+    conflicted_fields = list(
+        dict.fromkeys(str(conflict.get("field") or "") for conflict in conflicts)
+    )
+    conflicted_fields = [field for field in conflicted_fields if field]
+    if not conflicted_fields:
+        return None
+
+    schema_fields = {field.name: field for field in getattr(schema, "fields", []) or []}
+    eligible_fields = [
+        field
+        for field in conflicted_fields
+        if field in schema_fields and _field_type_value(schema_fields[field]) == "string"
+    ]
+    if not eligible_fields:
+        return None
+
+    def field_value(memory_file: Optional[MemoryFile], field: str) -> Optional[str]:
+        if memory_file is None:
+            return None
+        if field == "content":
+            return memory_file.plain_content()
+        value = (memory_file.extra_fields or {}).get(field)
+        return None if value is None else str(value)
+
+    current_fields = {field: field_value(current_file, field) for field in eligible_fields}
+    operations_payload = []
+    for index, op in enumerate(resolved_ops):
+        op_fields = {
+            field: _jsonable_for_prompt(value)
+            for field, value in (op.memory_fields or {}).items()
+            if field in eligible_fields
+        }
+        if not op_fields:
+            continue
+        operations_payload.append(
+            {
+                "index": index,
+                "base_fields_seen_by_model": {
+                    field: field_value(op.old_memory_file_content, field)
+                    for field in eligible_fields
+                },
+                "proposed_patch_fields": op_fields,
+            }
+        )
+
+    if not operations_payload:
+        return None
+
+    payload = {
+        "uri": uri,
+        "memory_type": memory_type,
+        "fields_to_reconcile": eligible_fields,
+        "latest_fields_after_successful_patch_replay": current_fields,
+        "patch_conflicts": conflicts,
+        "queued_operations_in_arrival_order": operations_payload,
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You reconcile concurrent memory updates for one memory file. "
+                "The server has already applied all non-conflicting patches in arrival order. "
+                "For the listed fields only, produce the final field values that preserve the "
+                "latest current content and incorporate the intent of the queued patches when "
+                "it is still applicable. Do not invent unrelated facts. If a patch conflicts "
+                "semantically, prefer the latest current content and include only compatible "
+                'information. Output JSON only: {"fields": {<field>: <full final string>}}.'
+            ),
+        },
+        {
+            "role": "user",
+            "content": JsonUtils.dumps(payload, indent=2),
+        },
+    ]
+
+    telemetry = get_current_telemetry()
+    prefix = f"memory.agent.extract.phase.{phase_metric_key}"
+    telemetry.count(f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis", 1)
+    started_at = asyncio.get_running_loop().time()
+    try:
+        response = await vlm.get_completion_async(messages=messages)
+        content = (
+            response if isinstance(response, str) else (getattr(response, "content", "") or "")
+        )
+        parsed = JsonUtils.loads(content) or {}
+        fields = parsed.get("fields") if isinstance(parsed, dict) else None
+        if not isinstance(fields, dict):
+            telemetry.count(
+                f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis_failed",
+                1,
+            )
+            return None
+
+        synthesized = current_file.model_copy(deep=True)
+        for field in eligible_fields:
+            if field not in fields:
+                continue
+            value = fields[field]
+            if value is None:
+                continue
+            if field == "content":
+                synthesized.content = str(value)
+            else:
+                synthesized.extra_fields[field] = str(value)
+        telemetry.add_duration(
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis",
+            (asyncio.get_running_loop().time() - started_at) * 1000,
+        )
+        return synthesized
+    except Exception:
+        telemetry.count(
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis_failed",
+            1,
+        )
+        logger.warning(
+            "operation-exact apply-window timeline conflict synthesis failed for %s",
+            uri,
+            exc_info=True,
+        )
+        return None
+
+
 def _operation_conflict_reason(operation: Any, registry: Any) -> str:
     getter = getattr(registry, "get", None)
     schema = getter(operation.memory_type) if callable(getter) else None
@@ -794,13 +950,23 @@ class SessionCompressorV2:
             isolation_handler=isolation_handler,
         )
 
-    def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
+    def _get_or_create_updater(
+        self,
+        registry,
+        transaction_handle=None,
+        timeline_conflict_synthesizer: Optional[
+            Callable[..., Awaitable[Optional[MemoryFile]]]
+        ] = None,
+    ) -> MemoryUpdater:
         """Create new MemoryUpdater instance for each request.
 
         Always create new instance to avoid cross-request state pollution.
         """
         return MemoryUpdater(
-            registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
+            registry=registry,
+            vikingdb=self.vikingdb,
+            transaction_handle=transaction_handle,
+            timeline_conflict_synthesizer=timeline_conflict_synthesizer,
         )
 
     def _split_operations_by_memory_type(
@@ -1873,7 +2039,42 @@ class SessionCompressorV2:
                     ],
                 )
                 registry = payloads[0]["provider"]._get_registry()
-                updater = self._get_or_create_updater(registry, lock_handle)
+                conflict_synthesis_enabled = bool(
+                    getattr(
+                        config.memory,
+                        "operation_exact_apply_window_conflict_synthesis_enabled",
+                        True,
+                    )
+                )
+
+                async def timeline_conflict_synthesizer(
+                    uri: str,
+                    memory_type: str,
+                    schema: Any,
+                    current_file: Optional[MemoryFile],
+                    resolved_ops: list[ResolvedOperation],
+                    conflicts: list[dict[str, Any]],
+                    _ctx: Any,
+                    _extract_context: Any,
+                ) -> Optional[MemoryFile]:
+                    if not conflict_synthesis_enabled:
+                        return None
+                    return await _synthesize_timeline_conflict_fields(
+                        vlm=vlm,
+                        uri=uri,
+                        memory_type=memory_type,
+                        schema=schema,
+                        current_file=current_file,
+                        resolved_ops=resolved_ops,
+                        conflicts=conflicts,
+                        phase_metric_key=payloads[0]["phase_metric_key"],
+                    )
+
+                updater = self._get_or_create_updater(
+                    registry,
+                    lock_handle,
+                    timeline_conflict_synthesizer=timeline_conflict_synthesizer,
+                )
                 apply_started_at = asyncio.get_running_loop().time()
                 memory_result = await updater.apply_operations(
                     combined_operations,

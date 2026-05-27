@@ -1060,6 +1060,97 @@ class TestConsecutivePatchesSameURI:
         assert parsed["content"] == "Step B"
 
     @pytest.mark.asyncio
+    async def test_same_uri_timeline_conflict_can_synthesize_final_fields(self):
+        """When same-window patch replay conflicts, a synthesizer can produce one final file."""
+
+        uri = "viking://user/test/memories/notes.md"
+        memory_type = "notes"
+
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description="notes",
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH)
+            ],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+
+        initial = MemoryFileUtils.write(MemoryFile(content="alpha beta gamma"))
+        store: dict[str, str] = {uri: initial}
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+
+        synth_calls = []
+
+        async def synthesize(uri, memory_type, schema, current_file, resolved_ops, conflicts, *_):
+            synth_calls.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "current": current_file.plain_content(),
+                    "conflicts": conflicts,
+                    "op_count": len(resolved_ops),
+                }
+            )
+            return MemoryFile(uri=uri, content="ALPHA BETA gamma")
+
+        updater = MemoryUpdater(
+            registry=registry,
+            timeline_conflict_synthesizer=synthesize,
+        )
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        base = MemoryFile(uri=uri, content="alpha beta gamma")
+        op1 = ResolvedOperation(
+            old_memory_file_content=base,
+            memory_fields={
+                "content": StrPatch(blocks=[SearchReplaceBlock(search="alpha", replace="ALPHA")])
+            },
+            memory_type=memory_type,
+            uris=[uri],
+        )
+        op2 = ResolvedOperation(
+            old_memory_file_content=base,
+            memory_fields={
+                "content": StrPatch(
+                    blocks=[
+                        SearchReplaceBlock(
+                            search="alpha beta gamma",
+                            replace="alpha BETA gamma",
+                        )
+                    ]
+                )
+            },
+            memory_type=memory_type,
+            uris=[uri],
+        )
+
+        await updater.apply_operations(
+            ResolvedOperations(upsert_operations=[op1, op2], delete_file_contents=[], errors=[]),
+            MagicMock(),
+        )
+
+        parsed = parse_memory_file_with_fields(store[uri])
+        assert parsed["content"] == "ALPHA BETA gamma"
+        assert len(synth_calls) == 1
+        assert synth_calls[0]["uri"] == uri
+        assert synth_calls[0]["memory_type"] == memory_type
+        assert synth_calls[0]["current"] == "ALPHA beta gamma"
+        assert synth_calls[0]["op_count"] == 2
+        assert len(synth_calls[0]["conflicts"]) == 1
+        assert synth_calls[0]["conflicts"][0]["field"] == "content"
+        assert "Patch application failed" in synth_calls[0]["conflicts"][0]["error"]
+
+    @pytest.mark.asyncio
     async def test_apply_upsert_skips_failed_field_and_keeps_other_fields(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"

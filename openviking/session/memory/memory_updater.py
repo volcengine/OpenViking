@@ -9,7 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -38,6 +38,20 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+TimelineConflictSynthesizer = Callable[
+    [
+        str,
+        str,
+        Any,
+        Optional[MemoryFile],
+        List[ResolvedOperation],
+        List[Dict[str, Any]],
+        Any,
+        Any,
+    ],
+    Awaitable[Optional[MemoryFile]],
+]
 
 
 def _is_structured_string_patch(value: Any) -> bool:
@@ -326,12 +340,17 @@ class MemoryUpdater:
     """
 
     def __init__(
-        self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None
+        self,
+        registry: Optional[MemoryTypeRegistry] = None,
+        vikingdb=None,
+        transaction_handle=None,
+        timeline_conflict_synthesizer: Optional[TimelineConflictSynthesizer] = None,
     ):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
+        self._timeline_conflict_synthesizer = timeline_conflict_synthesizer
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -532,6 +551,7 @@ class MemoryUpdater:
         resolved_op: ResolvedOperation,
         old_content: Optional[MemoryFile],
         schema: Any,
+        conflicts: Optional[List[Dict[str, Any]]] = None,
     ) -> MemoryFile:
         metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
 
@@ -565,6 +585,15 @@ class MemoryUpdater:
                     tracer.info(
                         f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
                     )
+                    if conflicts is not None:
+                        conflicts.append(
+                            {
+                                "uri": uri,
+                                "memory_type": resolved_op.memory_type,
+                                "field": field.name,
+                                "error": str(e),
+                            }
+                        )
                     if current_value is None:
                         metadata.pop(field.name, None)
                     else:
@@ -644,13 +673,28 @@ class MemoryUpdater:
             ctx,
             first.old_memory_file_content,
         )
+        conflicts: List[Dict[str, Any]] = []
         for resolved_op in resolved_ops:
             current = self._merge_upsert_into_memory_file(
                 uri=uri,
                 resolved_op=resolved_op,
                 old_content=current,
                 schema=schema,
+                conflicts=conflicts,
             )
+        if conflicts and self._timeline_conflict_synthesizer:
+            synthesized = await self._timeline_conflict_synthesizer(
+                uri,
+                memory_type,
+                schema,
+                current,
+                resolved_ops,
+                conflicts,
+                ctx,
+                extract_context,
+            )
+            if synthesized is not None:
+                current = synthesized
 
         new_full_content = MemoryFileUtils.write(
             current,

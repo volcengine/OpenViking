@@ -81,6 +81,9 @@ class TelemetrySummaryBuilder:
         "operation_exact_apply_window_coalesced_memory_apply_ms": (
             "operation_exact_apply_window_coalesced_memory_apply.duration_ms"
         ),
+        "operation_exact_apply_window_timeline_conflict_synthesis_ms": (
+            "operation_exact_apply_window_timeline_conflict_synthesis.duration_ms"
+        ),
     }
 
     @staticmethod
@@ -404,6 +407,18 @@ class TelemetrySummaryBuilder:
                         "operation_exact_apply_window_lock_path_count_total": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_lock_path_count_total"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_synthesis": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_synthesis"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_synthesis_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_synthesis_failed"
                             ),
                             0,
                         ),
