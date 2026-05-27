@@ -137,7 +137,6 @@ async def _run_agent(
     user_prompt: str,
     session_key: SessionKey,
     sender_id: str | None,
-    agent_id: str | None,
     keep_default_tools: bool,
     messages_output_path: Path | None,
 ) -> tuple[str | None, str | None, dict[str, int], int, str | None]:
@@ -148,7 +147,6 @@ async def _run_agent(
         ov_tools_enable=keep_default_tools,
         media=None,
         profile_user_list=[],
-        memory_users=agent_id,
     )
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
@@ -193,7 +191,6 @@ def main() -> None:
         help="If output file exists, skip running and exit",
     )
     parser.add_argument("--sender", default="tau2_user")
-    parser.add_argument("--agent-id", default="", help="airline_v0 domain split workspace")
     parser.add_argument("--session", default=None)
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument(
@@ -269,7 +266,6 @@ def main() -> None:
                 user_prompt,
                 session_key,
                 args.sender,
-                args.agent_id,
                 args.keep_default_tools,
                 messages_output_path,
             )
