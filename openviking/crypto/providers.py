@@ -46,6 +46,9 @@ def _record_encryption_metrics(
 # HKDF related constants
 HKDF_SALT = b"openviking-kek-salt-v1"
 HKDF_INFO_PREFIX = b"openviking:kek:v1:"
+DEFAULT_KEY_PURPOSE = "file-encryption"
+DEFAULT_DERIVATION_VERSION = "v2"
+LEGACY_DERIVATION_VERSION = "v1"
 
 # Provider types
 PROVIDER_LOCAL = 0x01
@@ -62,22 +65,50 @@ class RootKeyProvider(ABC):
         pass
 
     @abc.abstractmethod
-    async def derive_account_key(self, account_id: str) -> bytes:
+    async def derive_account_key(
+        self,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """Derive Account Key for the specified account."""
         pass
 
     @abc.abstractmethod
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Tuple[bytes, bytes]:
+    async def encrypt_file_key(
+        self,
+        plaintext_key: bytes,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> Tuple[bytes, bytes]:
         """Encrypt File Key."""
         pass
 
     @abc.abstractmethod
-    async def decrypt_file_key(self, encrypted_key: bytes, iv: bytes, account_id: str) -> bytes:
+    async def decrypt_file_key(
+        self,
+        encrypted_key: bytes,
+        iv: bytes,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """Decrypt File Key."""
         pass
 
     async def _hkdf_derive(
-        self, root_key: bytes, account_id: str, salt: bytes, info_prefix: bytes
+        self,
+        root_key: bytes,
+        account_id: str,
+        salt: bytes,
+        info_prefix: bytes,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
     ) -> bytes:
         """
         Derive key using HKDF.
@@ -87,6 +118,8 @@ class RootKeyProvider(ABC):
             account_id: Account ID
             salt: HKDF salt
             info_prefix: HKDF info prefix
+            key_purpose: Logical key purpose bound into HKDF info
+            derivation_version: Derivation domain version bound into HKDF info
 
         Returns:
             Derived key
@@ -101,7 +134,32 @@ class RootKeyProvider(ABC):
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=salt,
-                info=info_prefix + account_id.encode(),
+                info=(
+                    info_prefix
+                    + derivation_version.encode("utf-8")
+                    + b":"
+                    + key_purpose.encode("utf-8")
+                    + b":"
+                    + account_id.encode("utf-8")
+                ),
+            )
+            return hkdf.derive(root_key)
+        except ImportError:
+            raise ConfigError("cryptography library is required for encryption")
+
+    async def _hkdf_derive_legacy(
+        self, root_key: bytes, account_id: str, salt: bytes, info_prefix: bytes
+    ) -> bytes:
+        """Derive the pre-v2 account key for backwards-compatible decryption only."""
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                info=info_prefix + account_id.encode("utf-8"),
             )
             return hkdf.derive(root_key)
         except ImportError:
@@ -146,7 +204,14 @@ class BaseProvider(RootKeyProvider):
         except Exception as e:
             raise AuthenticationFailedError(f"Decryption failed: {e}")
 
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Tuple[bytes, bytes]:
+    async def encrypt_file_key(
+        self,
+        plaintext_key: bytes,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> Tuple[bytes, bytes]:
         """
         Encrypt File Key with Account Key.
 
@@ -157,12 +222,24 @@ class BaseProvider(RootKeyProvider):
         Returns:
             (encrypted_key, iv)
         """
-        account_key = await self.derive_account_key(account_id)
+        account_key = await self.derive_account_key(
+            account_id,
+            key_purpose=key_purpose,
+            derivation_version=derivation_version,
+        )
         iv = secrets.token_bytes(12)
         encrypted_key = await self._aes_gcm_encrypt(account_key, iv, plaintext_key)
         return encrypted_key, iv
 
-    async def decrypt_file_key(self, encrypted_key: bytes, iv: bytes, account_id: str) -> bytes:
+    async def decrypt_file_key(
+        self,
+        encrypted_key: bytes,
+        iv: bytes,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """
         Decrypt File Key with Account Key.
 
@@ -174,8 +251,23 @@ class BaseProvider(RootKeyProvider):
         Returns:
             Decrypted File Key
         """
-        account_key = await self.derive_account_key(account_id)
-        return await self._aes_gcm_decrypt(account_key, iv, encrypted_key)
+        account_key = await self.derive_account_key(
+            account_id,
+            key_purpose=key_purpose,
+            derivation_version=derivation_version,
+        )
+        try:
+            return await self._aes_gcm_decrypt(account_key, iv, encrypted_key)
+        except AuthenticationFailedError:
+            if derivation_version != DEFAULT_DERIVATION_VERSION:
+                raise
+
+        legacy_key = await self.derive_account_key(
+            account_id,
+            key_purpose=key_purpose,
+            derivation_version=LEGACY_DERIVATION_VERSION,
+        )
+        return await self._aes_gcm_decrypt(legacy_key, iv, encrypted_key)
 
 
 class LocalFileProvider(BaseProvider):
@@ -245,10 +337,27 @@ class LocalFileProvider(BaseProvider):
             logger.info("Created new root key at %s", self.key_file)
             return root_key
 
-    async def derive_account_key(self, account_id: str) -> bytes:
+    async def derive_account_key(
+        self,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """Derive Account Key from Root Key."""
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
+        if derivation_version == LEGACY_DERIVATION_VERSION:
+            return await self._hkdf_derive_legacy(
+                root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX
+            )
+        return await self._hkdf_derive(
+            root_key,
+            account_id,
+            HKDF_SALT,
+            HKDF_INFO_PREFIX,
+            key_purpose=key_purpose,
+            derivation_version=derivation_version,
+        )
 
 
 class VaultProvider(BaseProvider):
@@ -511,7 +620,13 @@ class VaultProvider(BaseProvider):
                 debug_message="Failed to record encryption key metrics for provider=vault",
             )
 
-    async def derive_account_key(self, account_id: str) -> bytes:
+    async def derive_account_key(
+        self,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """
         Derive Account Key using HKDF.
 
@@ -522,7 +637,18 @@ class VaultProvider(BaseProvider):
             Derived Account Key
         """
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
+        if derivation_version == LEGACY_DERIVATION_VERSION:
+            return await self._hkdf_derive_legacy(
+                root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX
+            )
+        return await self._hkdf_derive(
+            root_key,
+            account_id,
+            HKDF_SALT,
+            HKDF_INFO_PREFIX,
+            key_purpose=key_purpose,
+            derivation_version=derivation_version,
+        )
 
 
 class VolcengineKMSProvider(BaseProvider):
@@ -765,7 +891,13 @@ class VolcengineKMSProvider(BaseProvider):
                 debug_message="Failed to record encryption key metrics for provider=volcengine_kms",
             )
 
-    async def derive_account_key(self, account_id: str) -> bytes:
+    async def derive_account_key(
+        self,
+        account_id: str,
+        *,
+        key_purpose: str = DEFAULT_KEY_PURPOSE,
+        derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    ) -> bytes:
         """
         Derive Account Key using HKDF.
 
@@ -776,7 +908,18 @@ class VolcengineKMSProvider(BaseProvider):
             Derived Account Key
         """
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
+        if derivation_version == LEGACY_DERIVATION_VERSION:
+            return await self._hkdf_derive_legacy(
+                root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX
+            )
+        return await self._hkdf_derive(
+            root_key,
+            account_id,
+            HKDF_SALT,
+            HKDF_INFO_PREFIX,
+            key_purpose=key_purpose,
+            derivation_version=derivation_version,
+        )
 
 
 def create_root_key_provider(
