@@ -75,11 +75,6 @@ class MemoryIsolationHandler:
             if user_id:
                 user_ids.add(user_id)
 
-        messages = self._extract_context.messages if self._extract_context else []
-        for msg in messages:
-            peer_id = safe_peer_id(getattr(msg, "peer_id", None))
-            if peer_id:
-                peer_ids.add(peer_id)
         if self.target_peer_id:
             peer_ids.add(self.target_peer_id)
 
@@ -91,6 +86,8 @@ class MemoryIsolationHandler:
     def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
         user_ids = set()
         peer_ids = set()
+        if not self.target_peer_id:
+            item_dict.pop("peer_id", None)
 
         def add_role_id(role_ids, role_id, scope_ids):
             if role_id is None:
@@ -174,6 +171,8 @@ class MemoryIsolationHandler:
         operation.memory_fields["user_id"] = user_id
         operation.memory_fields.pop("agent_id", None)
         operation.memory_fields.pop("agent_ids", None)
+        if not self.target_peer_id:
+            operation.memory_fields.pop("peer_id", None)
 
         # 文件
         uris = set()

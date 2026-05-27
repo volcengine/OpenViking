@@ -38,6 +38,7 @@ logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
+_SELF_IDENTITY_MEMORY_TYPES = {"profile", "preferences", "entities", "events"}
 
 
 def _wm_debug(msg: str) -> None:
@@ -61,6 +62,21 @@ def _default_memory_counts() -> Dict[str, int]:
     counts = dict.fromkeys(sorted(DEFAULT_SELF_MEMORY_TYPES), 0)
     counts["total"] = 0
     return counts
+
+
+def _messages_without_peer(messages: List[Message]) -> List[Message]:
+    return [message for message in messages if not getattr(message, "peer_id", None)]
+
+
+def _has_peer_messages(messages: List[Message]) -> bool:
+    return any(getattr(message, "peer_id", None) for message in messages)
+
+
+def _messages_with_self_user_input(messages: List[Message]) -> List[Message]:
+    self_messages = _messages_without_peer(messages)
+    if any(message.role == "user" for message in self_messages):
+        return self_messages
+    return []
 
 
 # =====================================================================
@@ -1290,6 +1306,15 @@ class Session:
                         if effective_policy.self_memory.enabled and memory_extraction_enabled
                         else set()
                     )
+                    has_peer_messages = _has_peer_messages(extraction_messages)
+                    if has_peer_messages:
+                        self_identity_types = self_allowed_types & _SELF_IDENTITY_MEMORY_TYPES
+                        self_experience_types = self_allowed_types - _SELF_IDENTITY_MEMORY_TYPES
+                        self_identity_messages = _messages_with_self_user_input(extraction_messages)
+                    else:
+                        self_identity_types = set()
+                        self_experience_types = self_allowed_types
+                        self_identity_messages = []
                     peer_allowed_types = (
                         effective_policy.peer_allowed_types(registered_memory_types)
                         if effective_policy.peer_memory.enabled and memory_extraction_enabled
@@ -1366,11 +1391,17 @@ class Session:
                         extraction_tasks: List[Any] = [_run_archive_summary()]
                         extraction_labels = ["archive_summary"]
 
-                        if self_allowed_types or session_skill_extraction_enabled:
+                        if self_identity_types and self_identity_messages:
                             extraction_tasks.append(
-                                _extract_target(extraction_messages, self_allowed_types)
+                                _extract_target(self_identity_messages, self_identity_types)
                             )
-                            extraction_labels.append("self")
+                            extraction_labels.append("self_identity")
+
+                        if self_experience_types or session_skill_extraction_enabled:
+                            extraction_tasks.append(
+                                _extract_target(extraction_messages, self_experience_types)
+                            )
+                            extraction_labels.append("self_experience")
 
                         if peer_allowed_types:
                             peer_message_groups: Dict[str, List[Message]] = {}
