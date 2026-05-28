@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import shutil
 import unittest
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ class TestDataProcessor(unittest.TestCase):
             "geo": {"FieldType": "geo_point"},
             "uri": {"FieldType": "path"},
             "tags": {"FieldType": "list<string>"},
+            "abstract": {"FieldType": "string"},
         }
         self.processor = DataProcessor(self.fields_dict)
 
@@ -105,6 +107,32 @@ class TestDataProcessor(unittest.TestCase):
         }
         with self.assertRaises(ValidationError):
             self.processor.validate_and_process(data_invalid_dt)
+
+    def test_validate_and_process_sanitizes_lone_surrogates(self):
+        processed = self.processor.validate_and_process(
+            {"abstract": "bad \ud800", "tags": ["ok \udc00"], "uri": "/tmp/test"}
+        )
+
+        self.assertEqual(processed["abstract"], "bad \ufffd")
+        self.assertEqual(processed["tags"], ["ok \ufffd"])
+        processed["abstract"].encode("utf-8")
+
+    def test_convert_fields_for_index_sanitizes_lone_surrogates(self):
+        fields_json = '{"abstract": "bad \\ud800", "tags": ["ok \\udc00"], "uri": "/tmp/test"}'
+
+        converted_json = self.processor.convert_fields_for_index(fields_json)
+        converted_json.encode("utf-8")
+        converted = json.loads(converted_json)
+
+        self.assertEqual(converted["abstract"], "bad \ufffd")
+        self.assertEqual(converted["tags"], ["ok \ufffd"])
+
+    def test_convert_fields_for_index_preserves_valid_emoji(self):
+        fields_json = json.dumps({"abstract": "face \U0001f600", "uri": "/tmp/test"})
+
+        converted = json.loads(self.processor.convert_fields_for_index(fields_json))
+
+        self.assertEqual(converted["abstract"], "face \U0001f600")
 
 
 if __name__ == "__main__":

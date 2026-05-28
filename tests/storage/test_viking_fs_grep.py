@@ -36,7 +36,7 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
         }
         return entries.get(uri, [])
 
-    def fake_agfs_read(path, offset, size):
+    def fake_agfs_read(path, offset=0, size=-1):
         contents = {
             "/resources/dir_a/a1.md": "match a1 line1\nskip\nmatch a1 line3",
             "/resources/dir_a/a2.md": "match a2 line1",
@@ -92,7 +92,7 @@ async def test_grep_parallel_reads_respect_concurrency_limit(monkeypatch):
     active_reads = 0
     max_active_reads = 0
 
-    def fake_agfs_read(path, offset, size):
+    def fake_agfs_read(path, offset=0, size=-1):
         nonlocal active_reads, max_active_reads
         active_reads += 1
         max_active_reads = max(max_active_reads, active_reads)
@@ -129,7 +129,7 @@ async def test_grep_parallel_reads_work_with_blocking_agfs_read(monkeypatch):
             return [{"name": f"file{i}.md", "isDir": False} for i in range(8)]
         return []
 
-    def fake_agfs_read(path, offset, size):
+    def fake_agfs_read(path, offset=0, size=-1):
         time.sleep(0.05)
         return f"match from {path}".encode()
 
@@ -165,7 +165,7 @@ async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch)
 
     read_paths = []
 
-    def fake_agfs_read(path, offset, size):
+    def fake_agfs_read(path, offset=0, size=-1):
         read_paths.append(path)
         contents = {
             "/resources/file0.md": "match file0 line1\nmatch file0 line2",

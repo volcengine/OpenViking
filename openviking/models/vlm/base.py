@@ -4,21 +4,14 @@
 
 import logging
 import re
-import threading
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.model_retry import (
-    classify_api_error,
-    ERROR_CLASS_QUOTA_EXCEEDED,
-    ERROR_CLASS_TRANSIENT,
-    ERROR_CLASS_PERMANENT,
     PrimaryBackupSwitcher,
 )
-from openviking.utils.time_utils import format_iso8601
 from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
@@ -76,6 +69,7 @@ class VLMBase(ABC):
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.stream = config.get("stream", False)
+        self.thinking = config.get("thinking", False)
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
@@ -84,7 +78,7 @@ class VLMBase(ABC):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -101,13 +95,14 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -124,6 +119,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -131,7 +127,7 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -149,6 +145,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -156,7 +153,7 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -174,6 +171,7 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
+        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     def _clean_response(self, content: str) -> str:
@@ -367,12 +365,7 @@ class FailoverVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
-    def _get_completion_with_failover(
-        self,
-        method_name: str,
-        *args,
-        **kwargs
-    ):
+    def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
         Args:
@@ -414,12 +407,7 @@ class FailoverVLM(VLMBase):
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
-    async def _get_completion_with_failover_async(
-        self,
-        method_name: str,
-        *args,
-        **kwargs
-    ):
+    async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
         """Execute an async VLM method with failover support.
 
         Args:
@@ -567,9 +555,9 @@ class FailoverVLM(VLMBase):
     def get_token_usage(self) -> Dict[str, Any]:
         """Get combined token usage from both primary and backup instances."""
         from openviking.models.vlm.token_usage import TokenUsageTracker
+
         merged_tracker = TokenUsageTracker.merge(
-            self.primary._token_tracker,
-            self.backup._token_tracker
+            self.primary._token_tracker, self.backup._token_tracker
         )
         return merged_tracker.to_dict()
 

@@ -1,5 +1,34 @@
 # OpenViking 原生 OAuth 2.1（MCP 客户端授权）实施方案
 
+> **更新（Studio 迁移）**：本文档保留 Phase 1 的设计与术语作为历史记录。当前
+> 默认授权 UI 已经从独立的 `/console` (端口 8020) 迁移到主服务上的 OpenViking
+> Studio（同源、挂载在 `/studio`）。要点：
+>
+> - `provider.authorize()` 默认 redirect 到 `/studio/oauth/consent?pending=<id>`
+>   而不是 `/oauth/authorize/page`。consent SPA 跑在 Studio 自己的 tab 里，
+>   直接复用 `sessionStorage` 里已有的 API Key 调
+>   `POST /api/v1/auth/oauth-verify`（请求体改用 `pending_id` 取代
+>   `display_code`，并通过新增的公开端点
+>   `GET /api/v1/auth/oauth/pending/{pending_id}` 拿 client_name /
+>   redirect_host / scopes 渲染 consent 卡片）。
+> - 服务端 HTML 页面 `/oauth/authorize/page` 退化为**跨设备 fallback**：
+>   显示 6 字符 `display_code` + 引导文案，让用户在另一台已登录 Studio 的设备
+>   打开 `/studio/oauth/verify` 输入码完成授权。同设备的 quick-authorize
+>   面板（依赖 `sessionStorage.ov_console_api_key` 跨 tab 探测）已移除，
+>   不再需要把 API Key 写到 `localStorage`。
+> - OTP push 流程的入口也搬到 Studio：`ConnectionDialog` 增加了 "OAuth
+>   client OTP" 区块（共用 `IdentityPicker`），可一键生成短期 OTP 给 MCP
+>   客户端。`POST /api/v1/auth/otp` 后端端点未变。
+> - 旧的 `/console` 独立服务（8020 + `openviking.console` Python 包 +
+>   `python -m openviking.console.bootstrap`）已在 #2160 整体下线，本次迁移
+>   是该 PR commit message 里明确指向的 OAuth follow-up。Caddy 仍保留
+>   `:1934 → openviking:1933` 的 legacy 单上游反代以兼容旧书签，公网 HTTPS
+>   按 12-public-access 指南在 Caddyfile 里 append `:443` domain block。
+>
+> 下文的 "Phase 1" 描述仍然刻画了 device-flow OTP 的核心思路；新迁移在此
+> 之上把 UI 层从 `/console` 替换为 `/studio`，并把 Studio consent 作为同
+> 设备主路径。
+
 ## Context
 
 **问题**：Claude.ai / Claude Desktop / ChatGPT 等只接受 OAuth 2.1 的 MCP 客户端，必须经由社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) 的 Cloudflare Workers 代理才能连接 OpenViking 的 `/mcp`。痛点：

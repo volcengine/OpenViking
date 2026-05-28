@@ -38,6 +38,7 @@ class SyncHTTPClient:
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         self._async_client = AsyncHTTPClient(
             url=url,
@@ -48,6 +49,7 @@ class SyncHTTPClient:
             user=user,
             timeout=timeout,
             extra_headers=extra_headers,
+            profile_enabled=profile_enabled,
         )
         self._initialized = False
 
@@ -143,6 +145,31 @@ class SyncHTTPClient:
                 parts,
                 created_at,
                 role_id,
+                telemetry,
+            )
+        )
+
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
                 telemetry,
             )
         )

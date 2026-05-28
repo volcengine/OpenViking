@@ -20,6 +20,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
                 "account": "config-account",
                 "user": "config-user",
                 "timeout": 12.5,
+                "profile": True,
             }
         )
     )
@@ -33,6 +34,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5
+    assert client._profile_enabled is True
 
 
 def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monkeypatch):
@@ -44,6 +46,7 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
                 "api_key": "config-key",
                 "account": "config-account",
                 "timeout": 12.5,
+                "profile": True,
             }
         )
     )
@@ -54,17 +57,22 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
         api_key="explicit-key",
         account="explicit-account",
         timeout=33.0,
+        profile_enabled=False,
     )
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "explicit-key"
     assert client._account == "explicit-account"
     assert client._timeout == 33.0
+    assert client._profile_enabled is False
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_user_id_sets_openviking_user_header(monkeypatch):
+async def test_async_http_client_user_id_sets_openviking_user_header(tmp_path, monkeypatch):
     captured: dict[str, object] = {}
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     class FakeAsyncClient:
         def __init__(self, **kwargs):

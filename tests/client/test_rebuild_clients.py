@@ -1,9 +1,12 @@
+import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import openviking_cli.client.http as http_module
+import openviking_cli.utils.async_utils as async_utils
 from openviking import AsyncOpenViking, SyncOpenViking
 from openviking.client.local import LocalClient
 from openviking_cli.client.http import AsyncHTTPClient
@@ -119,3 +122,22 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     assert result == {"status": "accepted"}
     assert mock_run.called
     assert mock_reindex.called
+
+
+def test_run_async_from_foreign_event_loop_uses_shared_background_loop():
+    async_utils._shutdown_loop()
+    seen_threads: list[int] = []
+
+    async def _capture_thread_id():
+        seen_threads.append(threading.get_ident())
+        return "ok"
+
+    async def _outer():
+        return async_utils.run_async(_capture_thread_id())
+
+    try:
+        assert asyncio.run(_outer()) == "ok"
+        assert async_utils._loop_thread is not None
+        assert seen_threads == [async_utils._loop_thread.ident]
+    finally:
+        async_utils._shutdown_loop()

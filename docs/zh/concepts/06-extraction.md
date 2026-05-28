@@ -227,7 +227,7 @@ await client.add_skill({
 # 记忆从会话自动提取
 await session.commit()
 
-# 流程: MemoryExtractor → TreeBuilder(scope=user) → SemanticQueue
+# 流程: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
 
 ## 相关文档

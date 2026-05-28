@@ -1,6 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Read service for product Usage/Audit APIs."""
+"""Read service for product Usage/Audit APIs.
+
+The store always persists UTC. The viewer's timezone is resolved per request
+from the `?timezone=` query parameter (IANA name, e.g. `Asia/Shanghai`) and
+falls back to the server-default tz from config when absent or invalid.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 from .inventory import ContextInventoryProvider
 from .store import UsageAuditStore
-from .time import resolve_usage_timezone
+from .time import resolve_usage_timezone, resolve_user_timezone
 
 
 class UsageAuditQueryService:
@@ -27,24 +32,33 @@ class UsageAuditQueryService:
     ) -> None:
         self._store = store
         self._inventory = inventory
-        self._tz = resolve_usage_timezone(timezone_name)
+        self._default_tz = resolve_usage_timezone(timezone_name)
 
-    def today(self) -> str:
-        """Return today's date in the configured usage/audit timezone."""
-        return datetime.now(self._tz).date().isoformat()
+    def _resolve_tz(self, timezone_name: str | None):
+        return resolve_user_timezone(timezone_name, fallback=self._default_tz)
 
-    async def dashboard_summary(self, ctx: RequestContext) -> dict[str, Any]:
-        """Return all Dashboard top-card data."""
-        today = self.today()
+    def today(self, timezone_name: str | None = None) -> str:
+        """Return today's date in the viewer's timezone (or the default)."""
+        tz = self._resolve_tz(timezone_name)
+        return datetime.now(tz).date().isoformat()
+
+    async def dashboard_summary(
+        self, ctx: RequestContext, *, timezone_name: str | None = None
+    ) -> dict[str, Any]:
+        """Return all Dashboard top-card data for the viewer's tz."""
+        tz = self._resolve_tz(timezone_name)
+        today = datetime.now(tz).date().isoformat()
         context_counts = await self._inventory.get_counts(ctx)
-        today_tokens = await self._store.get_today_tokens(account_id=ctx.account_id, date=today)
+        today_tokens = await self._store.get_today_tokens(
+            account_id=ctx.account_id, user_date=today, tz=tz
+        )
         today_retrievals = await self._store.get_today_retrievals(
-            account_id=ctx.account_id,
-            date=today,
+            account_id=ctx.account_id, user_date=today, tz=tz
         )
         agent_overview = await self._store.get_agent_overview(
             account_id=ctx.account_id,
-            date=today,
+            user_date=today,
+            tz=tz,
             limit=5,
         )
         return {
@@ -61,14 +75,17 @@ class UsageAuditQueryService:
         start_date: str,
         end_date: str,
         bucket: str,
+        timezone_name: str | None = None,
     ) -> dict[str, Any]:
-        """Return token usage series for a date range."""
+        """Return token usage series in the viewer's tz."""
+        tz = self._resolve_tz(timezone_name)
         self._validate_date_range(start_date, end_date)
         items = await self._store.get_token_series(
             account_id=ctx.account_id,
-            start_date=start_date,
-            end_date=end_date,
+            start_user_date=start_date,
+            end_user_date=end_date,
             bucket=bucket,
+            tz=tz,
         )
         return {"start_date": start_date, "end_date": end_date, "bucket": bucket, "items": items}
 
@@ -79,14 +96,17 @@ class UsageAuditQueryService:
         start_date: str,
         end_date: str,
         bucket: str,
+        timezone_name: str | None = None,
     ) -> dict[str, Any]:
-        """Return context write heatmap rows for a date range."""
+        """Return context write heatmap rows in the viewer's tz."""
+        tz = self._resolve_tz(timezone_name)
         self._validate_date_range(start_date, end_date)
         items = await self._store.get_context_commit_heatmap(
             account_id=ctx.account_id,
-            start_date=start_date,
-            end_date=end_date,
+            start_user_date=start_date,
+            end_user_date=end_date,
             bucket=bucket,
+            tz=tz,
         )
         return {"start_date": start_date, "end_date": end_date, "bucket": bucket, "items": items}
 
@@ -100,7 +120,11 @@ class UsageAuditQueryService:
         page: int,
         page_size: int,
     ) -> dict[str, Any]:
-        """Return filtered request audit rows."""
+        """Return filtered request audit rows.
+
+        `created_at` is returned as a UTC ISO string; the client formats it in
+        the viewer's locale on render.
+        """
         return await self._store.query_audit_logs(
             account_id=ctx.account_id,
             request_id=request_id,

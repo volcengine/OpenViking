@@ -453,8 +453,8 @@ class NewAPIKeyManager:
     async def _write_json(self, path: str, data: dict) -> None:
         return await self._legacy._write_json(path, data)
 
-    def _ensure_parent_dirs(self, path: str) -> None:
-        return self._legacy._ensure_parent_dirs(path)
+    async def _ensure_parent_dirs_async(self, path: str) -> None:
+        return await self._legacy._ensure_parent_dirs_async(path)
 
     async def _save_accounts_json(self) -> None:
         return await self._legacy._save_accounts_json()

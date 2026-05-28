@@ -5,10 +5,11 @@
 Handles summarization and key information extraction.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -35,7 +36,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lifecycle_lock_handle_id: str = "",
+        lock: LockLease = NO_LOCK,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -59,6 +60,21 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
+        lock_handoff = lock.to_handoff()
+        target_preexisting_arg = kwargs.get("target_preexisting")
+
+        def resolve_target_preexisting(index: int, target_uri: str) -> Optional[bool]:
+            if target_preexisting_arg is None:
+                return None
+            if isinstance(target_preexisting_arg, dict):
+                value = target_preexisting_arg.get(target_uri)
+                return None if value is None else bool(value)
+            if isinstance(target_preexisting_arg, (list, tuple)):
+                if index >= len(target_preexisting_arg):
+                    return None
+                value = target_preexisting_arg[index]
+                return None if value is None else bool(value)
+            return bool(target_preexisting_arg)
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -80,7 +96,7 @@ class Summarizer:
             context_type = context_type_for_uri(uri)
 
             enqueue_units: List[Tuple[str, str]] = []
-            if is_resources_root(uri) and uri != temp_uri:
+            if is_resources_root(uri) and uri != temp_uri and lock_handoff is None:
                 children = await list_top_children(temp_uri)
                 if not children:
                     return {
@@ -93,7 +109,7 @@ class Summarizer:
             else:
                 enqueue_units.append((uri, temp_uri))
 
-            for target_uri, source_uri in enqueue_units:
+            for idx, (target_uri, source_uri) in enumerate(enqueue_units):
                 msg = SemanticMsg(
                     uri=source_uri,
                     context_type=context_type,
@@ -104,8 +120,9 @@ class Summarizer:
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
                     target_uri=target_uri if target_uri != source_uri else None,
-                    lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+                    lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
+                    target_preexisting=resolve_target_preexisting(idx, target_uri),
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

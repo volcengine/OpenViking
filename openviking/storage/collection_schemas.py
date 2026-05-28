@@ -21,6 +21,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
+    EmbeddingRebuildRequiredError,
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -32,7 +33,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
-from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
+from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -276,14 +277,19 @@ async def init_context_collection(storage) -> bool:
             )
         return False
 
-    logger.warning(
+    if existing_count == 0 and hasattr(storage, "update_collection_description"):
+        await storage.update_collection_description(
+            _encode_collection_description(
+                base_description or "Unified context collection",
+                embedding_meta,
+            )
+        )
+        return False
+
+    raise EmbeddingRebuildRequiredError(
         "Existing collection embedding metadata does not match current configuration. "
-        "existing=%s, current=%s. Continuing anyway — search quality may degrade if "
-        "the embedding model actually changed.",
-        existing_embedding_meta,
-        embedding_meta,
+        "Rebuild is required before using the current embedding model."
     )
-    return False
 
 
 class TextEmbeddingHandler(DequeueHandlerBase):
@@ -569,6 +575,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             )
                         except Exception:
                             pass
+
+                        if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+                            logger.error(error_msg)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
+                            report_error_args = (error_msg, data)
+                            return None
 
                         if error_class == ERROR_CLASS_PERMANENT:
                             logger.critical(error_msg)

@@ -34,7 +34,7 @@ COPY bridge/package*.json ./bridge/
 
 # Install Python dependencies - use pip install for openviking (no local build)
 ENV UV_HTTP_TIMEOUT=300
-RUN uv pip install --system --no-cache "openviking>=0.1.18" && \
+RUN uv pip install --system --no-cache "openviking>=0.3.9" && \
     uv pip install --system --no-cache .
 
 # Install global npm packages for sandbox

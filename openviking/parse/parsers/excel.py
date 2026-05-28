@@ -7,6 +7,7 @@ Converts Excel spreadsheets to Markdown then parses using MarkdownParser.
 Inspired by microsoft/markitdown approach.
 """
 
+import asyncio
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -53,11 +54,13 @@ class ExcelParser(BaseParser):
         if path.exists():
             # Use xlrd for legacy .xls, openpyxl for .xlsx/.xlsm
             if path.suffix.lower() == ".xls":
-                markdown_content = self._convert_xls_to_markdown(path)
+                markdown_content = await asyncio.to_thread(self._convert_xls_to_markdown, path)
             else:
                 import openpyxl
 
-                markdown_content = self._convert_to_markdown(path, openpyxl)
+                markdown_content = await asyncio.to_thread(
+                    self._convert_to_markdown, path, openpyxl
+                )
             result = await self._md_parser.parse_content(
                 markdown_content, source_path=str(path), instruction=instruction, **kwargs
             )

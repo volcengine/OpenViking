@@ -14,7 +14,9 @@ from starlette.requests import Request
 
 from openviking.message import Message
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.config import ServerConfig
+from openviking.server.app import create_app
+from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
+from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
 from openviking_cli.session.user_id import UserIdentifier
@@ -185,6 +187,93 @@ async def test_get_session_context_rejects_negative_token_budget(client: httpx.A
     assert body["error"]["details"] == {"field": "token_budget", "value": -1}
 
 
+async def test_tool_result_externalization_read_and_search(client: httpx.AsyncClient):
+    session_id = "tool-result-api-session"
+    raw = "alpha\n" + ("needle-" * 4000) + "\nomega"
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "tool",
+                    "tool_id": "call_api",
+                    "tool_name": "read_file",
+                    "tool_output": raw,
+                    "tool_status": "completed",
+                }
+            ],
+        ),
+    )
+    assert resp.status_code == 200
+
+    context_resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert context_resp.status_code == 200
+    part = context_resp.json()["result"]["messages"][0]["parts"][0]
+    assert part["tool_output_truncated"] is True
+    assert part["tool_output_ref"].startswith(f"viking://session/{session_id}/tool-results/")
+    assert raw not in part["tool_output"]
+
+    tool_result_id = part["tool_output_ref"].rsplit("/", 1)[-1]
+    read_resp = await client.get(
+        f"/api/v1/sessions/{session_id}/tool-results/{tool_result_id}?offset=0&limit=-1"
+    )
+    assert read_resp.status_code == 200
+    read_body = read_resp.json()["result"]
+    assert read_body["content"] == raw
+    assert read_body["offset_unit"] == "unicode_code_point"
+
+    search_resp = await client.get(
+        f"/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search",
+        params={"q": "needle", "limit": 1, "context_chars": 5},
+    )
+    assert search_resp.status_code == 200
+    matches = search_resp.json()["result"]["matches"]
+    assert len(matches) == 1
+    assert matches[0]["offset_unit"] == "unicode_code_point"
+    assert "needle" in matches[0]["snippet"]
+
+
+async def test_tool_result_externalization_respects_server_config_disabled(service):
+    app = create_app(
+        config=ServerConfig(
+            tool_output_externalization=ToolOutputExternalizationConfig(enabled=False)
+        ),
+        service=service,
+    )
+    set_service(service)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        session_id = "tool-result-disabled-session"
+        raw = "disabled-" * 4000
+
+        resp = await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request(
+                "user",
+                parts=[
+                    {
+                        "type": "tool",
+                        "tool_id": "call_disabled",
+                        "tool_name": "read_file",
+                        "tool_output": raw,
+                        "tool_status": "completed",
+                    }
+                ],
+            ),
+        )
+        assert resp.status_code == 200
+
+        context_resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+        assert context_resp.status_code == 200
+        part = context_resp.json()["result"]["messages"][0]["parts"][0]
+        assert part["tool_output"] == raw
+        assert "tool_output_ref" not in part
+        assert "tool_output_truncated" not in part
+
+
 async def test_get_session_context_includes_incomplete_archive_messages(
     client: httpx.AsyncClient, service
 ):
@@ -241,6 +330,39 @@ async def test_add_message(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 1
+
+
+async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "tool",
+                    "tool_id": "call_a",
+                    "tool_name": "tool_a",
+                    "tool_output": "a",
+                    "tool_status": "completed",
+                },
+                {
+                    "type": "tool",
+                    "tool_id": "call_b",
+                    "tool_name": "tool_b",
+                    "tool_output": "b",
+                    "tool_status": "completed",
+                },
+            ],
+        ),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["message_count"] == 2
 
 
 async def test_add_message_root_request_autofills_role_id(service, monkeypatch):

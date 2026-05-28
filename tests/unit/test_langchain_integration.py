@@ -22,6 +22,7 @@ from openviking.integrations.langchain import (
 )
 from openviking.integrations.langchain.client import (
     OpenVikingConnection,
+    call_openviking,
     ensure_client,
     maybe_commit_session,
 )
@@ -182,12 +183,180 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
         )
     )
 
-    assert isinstance(client, FakeHTTPClient)
     assert client._initialized is True
+    assert isinstance(client.get(), FakeHTTPClient)
     assert created["api_key"] == "test-key"
     assert created["user_id"] == "test-user"
     assert created["agent_id"] == "test-agent"
     assert created["url"] is None
+
+
+def test_ensure_client_keeps_local_path_clients_direct(monkeypatch, tmp_path):
+    created = {}
+
+    class FakeLocalClient:
+        def __init__(self, path):
+            created["path"] = path
+            self._initialized = False
+
+        def initialize(self):
+            self._initialized = True
+
+    import openviking.sync_client as sync_client_module
+
+    monkeypatch.setattr(sync_client_module, "SyncOpenViking", FakeLocalClient)
+
+    client = ensure_client(OpenVikingConnection(path=str(tmp_path)))
+
+    assert isinstance(client, FakeLocalClient)
+    assert client._initialized is True
+    assert created["path"] == str(tmp_path)
+
+
+def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatch):
+    instances = []
+
+    class FlakyHTTPClient:
+        def __init__(self, **_kwargs):
+            self.index = len(instances)
+            self.closed = False
+            self._initialized = False
+            instances.append(self)
+
+        def initialize(self):
+            self._initialized = True
+
+        def close(self):
+            self.closed = True
+
+        def find(self, **_kwargs):
+            if self.index == 0:
+                raise ConnectionError("OpenViking server was not ready")
+            return {
+                "memories": [
+                    {
+                        "uri": "viking://user/default/memories/profile.md",
+                        "abstract": "OpenViking recovered",
+                        "overview": "OpenViking recovered",
+                    }
+                ],
+                "resources": [],
+                "skills": [],
+            }
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
+
+    client = ensure_client(OpenVikingConnection(url="http://localhost:1933"))
+    result = call_openviking(client, "find", query="recover")
+
+    assert result["memories"][0]["abstract"] == "OpenViking recovered"
+    assert len(instances) == 2
+    assert instances[0].closed is True
+    assert instances[1]._initialized is True
+
+
+def test_openviking_client_handle_filters_kwargs_for_direct_calls(monkeypatch):
+    class FakeHTTPClient:
+        def __init__(self, **_kwargs):
+            self._initialized = False
+
+        def initialize(self):
+            self._initialized = True
+
+        def find(self, query):
+            return {"query": query}
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FakeHTTPClient)
+
+    client = ensure_client(OpenVikingConnection(url="http://localhost:1933"))
+    result = client.find("recover", unsupported="ignored")
+
+    assert result == {"query": "recover"}
+
+
+def test_openviking_client_evicts_but_does_not_retry_mutating_call(monkeypatch):
+    instances = []
+
+    class FlakyHTTPClient:
+        def __init__(self, **_kwargs):
+            self.closed = False
+            self._initialized = False
+            instances.append(self)
+
+        def initialize(self):
+            self._initialized = True
+
+        def close(self):
+            self.closed = True
+
+        def add_message(self, **_kwargs):
+            raise ConnectionError("OpenViking connection dropped during write")
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
+
+    client = ensure_client(OpenVikingConnection(url="http://localhost:1933"))
+    with pytest.raises(ConnectionError):
+        call_openviking(
+            client,
+            "add_message",
+            session_id="session-1",
+            role="user",
+            parts=[{"type": "text", "text": "hello"}],
+        )
+
+    assert len(instances) == 1
+    assert instances[0].closed is True
+
+
+def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
+    instances = []
+
+    class FlakyHTTPClient:
+        def __init__(self, **_kwargs):
+            self.index = len(instances)
+            self.closed = False
+            self._initialized = False
+            instances.append(self)
+
+        def initialize(self):
+            self._initialized = True
+
+        def close(self):
+            self.closed = True
+
+        def find(self, **_kwargs):
+            if self.index == 0:
+                raise RuntimeError("Event loop is closed")
+            return {
+                "memories": [],
+                "resources": [
+                    {
+                        "uri": "viking://resources/recovered.md",
+                        "level": 1,
+                        "abstract": "Recovered resource",
+                        "overview": "Recovered resource overview",
+                        "score": 1.0,
+                    }
+                ],
+                "skills": [],
+            }
+
+    import openviking.client as client_module
+
+    monkeypatch.setattr(client_module, "SyncHTTPClient", FlakyHTTPClient)
+
+    retriever = OpenVikingRetriever(url="http://localhost:1933")
+    docs = retriever.invoke("recover")
+
+    assert [doc.metadata["openviking_uri"] for doc in docs] == ["viking://resources/recovered.md"]
+    assert len(instances) == 2
+    assert instances[0].closed is True
 
 
 def test_chat_message_history_preserves_tool_parts():

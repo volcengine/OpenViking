@@ -40,7 +40,6 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
        container_name: openviking
        ports:
          - "1933:1933"
-         - "8020:8020"
        volumes:
          - ~/.openviking:/app/.openviking
        restart: unless-stopped
@@ -50,7 +49,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    docker-compose up -d
    ```
 
-   By default, the container starts the OpenViking API server on `1933`, the Console UI on `8020`, and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
+   By default, the container starts the OpenViking API server on `1933` (which also serves the Web Studio UI at `/studio`) and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
 
    On platforms that don't allow bind mounts, set `OPENVIKING_CONF_CONTENT` to the full config JSON to bootstrap on first start, or `docker exec` in and run `openviking-server init` after the container is up. See [Deployment Guide](../guides/03-deployment.md#when-docker--v-is-not-available) for details.
 
@@ -65,7 +64,6 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
 >   openviking:
 >     image: ghcr.io/volcengine/openviking:latest
 >     ports:
->       - "8020:8020"
 >       - "1933:1934" # Map host 1933 to container 1934
 >     volumes:
 >       - ~/.openviking:/app/.openviking
@@ -152,8 +150,11 @@ try:
 
     # Add resource (supports URL, file, or directory)
     # Local directory scans respect .gitignore by default.
+    # Wait until semantic processing completes before inspecting the resource.
+    print("Wait for semantic processing...")
     add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        wait=True,
     )
     root_uri = add_result['root_uri']
 
@@ -166,10 +167,6 @@ try:
     if glob_result['matches']:
         content = client.read(glob_result['matches'][0])
         print(f"Content preview: {content[:200]}...\n")
-
-    # Wait for semantic processing to complete
-    print("Wait for semantic processing...")
-    client.wait_processed()
 
     # Get abstract and overview of the resource
     abstract = client.abstract(root_uri)
@@ -198,12 +195,13 @@ python example.py
 ### Expected Output
 
 ```
+Wait for semantic processing...
+
 Directory structure:
 ...
 
 Content preview: ...
 
-Wait for semantic processing...
 Abstract:
 ...
 

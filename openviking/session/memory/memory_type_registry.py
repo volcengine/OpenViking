@@ -14,6 +14,7 @@ from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +57,19 @@ class MemoryTypeRegistry:
                 f"No memory schemas loaded from memory templates directory: {memory_templates_dir}"
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
+
+        # Load experimental memory templates when the experimental memory switch is enabled.
+        if getattr(config.memory, "experimental_memory_switch", False):
+            experimental_memory_dir = str(Path(memory_templates_dir) / "experimental_memory")
+            if os.path.exists(experimental_memory_dir):
+                experimental_memory_loaded = self.load_from_directory(
+                    experimental_memory_dir, replace=True
+                )
+                logger.info(
+                    "Loaded %s experimental memory schemas from: %s",
+                    experimental_memory_loaded,
+                    experimental_memory_dir,
+                )
 
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
@@ -128,14 +142,16 @@ class MemoryTypeRegistry:
         Returns:
             List of directory URIs from enabled schemas
         """
-        import jinja2
-
         uris = []
         for schema in self.list_all(include_disabled=False):
             if schema.directory:
-                env = jinja2.Environment(autoescape=False)
-                template = env.from_string(schema.directory)
-                dir_path = template.render(user_space=user_space, agent_space=agent_space)
+                dir_path = TemplateUtils.render(
+                    schema.directory,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
+                )
                 uris.append(dir_path)
         return uris
 
@@ -211,6 +227,7 @@ class MemoryTypeRegistry:
             fields=fields,
             filename_template=data.get("filename_template", ""),
             content_template=data.get("content_template"),
+            embedding_template=data.get("embedding_template"),
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
@@ -228,8 +245,6 @@ class MemoryTypeRegistry:
         Args:
             ctx: Request context (must have user with user_space_name and agent_space_name)
         """
-        import jinja2
-
         from openviking.storage.viking_fs import get_viking_fs
 
         logger = get_logger(__name__)
@@ -241,7 +256,6 @@ class MemoryTypeRegistry:
             f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"
         )
 
-        env = jinja2.Environment(autoescape=False)
         viking_fs = get_viking_fs()
 
         for schema in self.list_all(include_disabled=False):
@@ -262,13 +276,19 @@ class MemoryTypeRegistry:
 
             # Render directory and filename from schema
             try:
-                directory = env.from_string(schema.directory).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                directory = TemplateUtils.render(
+                    schema.directory,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
                 )
-                filename = env.from_string(schema.filename_template).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                filename = TemplateUtils.render(
+                    schema.filename_template,
+                    {
+                        "user_space": user_space,
+                        "agent_space": agent_space,
+                    },
                 )
             except Exception:
                 continue
@@ -283,16 +303,16 @@ class MemoryTypeRegistry:
                 pass
 
             # Add MEMORY_FIELDS comment with field metadata
-            # Template rendering is handled inside serialize_with_metadata
-            from openviking.session.memory.utils.content import serialize_with_metadata
+            from openviking.session.memory.dataclass import MemoryFile
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-            metadata = {
-                "memory_type": schema.memory_type,
-                **fields_with_init,
-                "content": "",  # content will come from content_template rendering
-            }
-            full_content = serialize_with_metadata(
-                metadata,
+            mf = MemoryFile(
+                uri=file_uri,
+                memory_type=schema.memory_type,
+                extra_fields=fields_with_init,
+            )
+            full_content = MemoryFileUtils.write(
+                mf,
                 content_template=schema.content_template,
             )
 

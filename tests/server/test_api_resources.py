@@ -825,7 +825,7 @@ async def test_monitor_marks_failed_on_queue_error(
 
     await asyncio.sleep(1.0)
 
-    task = get_task_tracker().get(task_id)
+    task = await get_task_tracker().get(task_id)
     assert task is not None
     assert task.status.value == "failed", f"Expected failed, got {task.status.value}"
     assert "queue processing failed" in task.error

@@ -14,6 +14,11 @@ from openviking_cli.exceptions import PermissionDeniedError
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _REMOTE_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
 
+# Shape of temp_file_ids minted by TempUploadStore. Used by MCP add_resource to
+# detect when an agent has passed a tfid as the `path` argument by mistake and
+# give them a hint to use the `temp_file_id` kwarg instead.
+TEMP_FILE_ID_RE = re.compile(r"^(upload_|shared_)[a-zA-Z0-9]+(\.[^/\\]+)?$")
+
 
 def is_remote_resource_source(source: str) -> bool:
     """Return True if *source* is a remotely fetchable resource location."""

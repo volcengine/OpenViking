@@ -25,6 +25,7 @@ pub struct CliContext {
     pub show_progress: Option<bool>,
     /// Whether to enable verbose output (override config)
     pub verbose: Option<bool>,
+    pub profile: Option<bool>,
 }
 
 impl CliContext {
@@ -37,6 +38,7 @@ impl CliContext {
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
+        profile: Option<bool>,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -49,6 +51,7 @@ impl CliContext {
             sudo,
             show_progress,
             verbose,
+            profile,
         ))
     }
 
@@ -62,6 +65,7 @@ impl CliContext {
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
+        profile: Option<bool>,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -79,6 +83,7 @@ impl CliContext {
             sudo,
             show_progress,
             verbose,
+            profile,
         }
     }
 
@@ -109,6 +114,7 @@ impl CliContext {
             self.config.account.clone(),
             self.config.user.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
+            self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
         )
     }
@@ -143,6 +149,10 @@ struct Cli {
     /// Use root API key for admin commands
     #[arg(long)]
     sudo: bool,
+
+    /// Enable HTTP request profiling for this command
+    #[arg(long, global = true)]
+    profile: bool,
 
     /// Show upload progress (legacy pre-command placement; prefer command-local --progress)
     #[arg(long, hide = true)]
@@ -715,6 +725,11 @@ enum TaskCommands {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Watch task management (auto-refresh subscriptions)
+    Watch {
+        #[command(subcommand)]
+        action: WatchCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -801,10 +816,70 @@ enum SessionCommands {
         #[arg(long)]
         content: String,
     },
+    /// Add multiple messages to a session
+    AddMessages {
+        /// Session ID
+        session_id: String,
+        /// Messages as JSON array of {role, content} objects
+        messages: String,
+    },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID
         session_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WatchCommands {
+    /// List watch tasks (auto-refresh subscriptions)
+    Ls {
+        /// Only show active (non-paused) tasks
+        #[arg(long, default_value_t = false)]
+        active_only: bool,
+    },
+    /// Show details of a single watch task
+    Show {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Delete a watch task
+    Rm {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Pause a watch task (preserves cadence, stops scheduling)
+    Pause {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Resume a paused watch task
+    Resume {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+    },
+    /// Update one or more mutable fields of a watch task.
+    /// At least one flag is required.
+    Update {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
+        /// New refresh interval in minutes (must be > 0)
+        #[arg(long)]
+        interval: Option<f64>,
+        /// Set active (true) / paused (false) — alternative to pause/resume shortcuts
+        #[arg(long)]
+        active: Option<bool>,
+        /// Human-readable reason for the watch task
+        #[arg(long)]
+        reason: Option<String>,
+        /// Processing instruction forwarded to the refresh handler
+        #[arg(long)]
+        instruction: Option<String>,
+    },
+    /// Trigger an immediate refresh, bypassing the schedule
+    Trigger {
+        /// task_id (UUID) or to_uri (viking:// URI)
+        key: String,
     },
 }
 
@@ -1096,6 +1171,7 @@ async fn main() {
         cli.sudo,
         None,
         None,
+        if cli.profile { Some(true) } else { None },
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -1215,6 +1291,63 @@ async fn main() {
                     ctx.compact,
                 )
                 .await
+            }
+            TaskCommands::Watch { action } => {
+                let client = ctx.get_client();
+                match action {
+                    WatchCommands::Ls { active_only } => {
+                        commands::watch::ls(
+                            &client,
+                            active_only,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                    WatchCommands::Show { key } => {
+                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Rm { key } => {
+                        commands::watch::rm(&client, &key, ctx.output_format, ctx.compact).await
+                    }
+                    WatchCommands::Pause { key } => {
+                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Resume { key } => {
+                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact)
+                            .await
+                    }
+                    WatchCommands::Update {
+                        key,
+                        interval,
+                        active,
+                        reason,
+                        instruction,
+                    } => {
+                        commands::watch::update(
+                            &client,
+                            &key,
+                            interval,
+                            active,
+                            reason,
+                            instruction,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                    WatchCommands::Trigger { key } => {
+                        commands::watch::trigger(
+                            &client,
+                            &key,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
+                    }
+                }
             }
         },
         Commands::Status => {
@@ -1538,6 +1671,7 @@ mod tests {
             verbose: false,
             upload: Default::default(),
             extra_headers: None,
+            profile: false,
         };
 
         let ctx = CliContext::from_config(
@@ -1548,6 +1682,7 @@ mod tests {
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
             false,
+            None,
             None,
             None,
         );
@@ -1571,6 +1706,7 @@ mod tests {
             echo_command: true,
             show_progress: false,
             verbose: false,
+            profile: false,
             upload: Default::default(),
             extra_headers: None,
         };
@@ -1586,6 +1722,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
@@ -1599,6 +1736,7 @@ mod tests {
             None,
             None,
             true,
+            None,
             None,
             None,
         );

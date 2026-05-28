@@ -18,6 +18,8 @@ class FunctionSig:
     params: str  # raw parameter string, e.g. "source, instruction, **kwargs"
     return_type: str  # e.g. "ParseResult" or ""
     docstring: str  # first line only
+    line_start: int = 0  # 1-indexed, inclusive; 0 = unknown (back-compat)
+    line_end: int = 0  # 1-indexed, inclusive; 0 = unknown
 
 
 @dataclass
@@ -26,6 +28,8 @@ class ClassSkeleton:
     bases: List[str]
     docstring: str
     methods: List[FunctionSig] = field(default_factory=list)
+    line_start: int = 0
+    line_end: int = 0
 
 
 @dataclass

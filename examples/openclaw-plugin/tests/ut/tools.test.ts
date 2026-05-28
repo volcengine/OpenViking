@@ -6,7 +6,7 @@ import { join } from "node:path";
 import contextEnginePlugin, {
   parseAddResourceCommandArgs,
   parseAddSkillCommandArgs,
-  parseMemorySearchCommandArgs,
+  parseOVSearchCommandArgs,
   tokenizeCommandArgs,
 } from "../../index.js";
 import type { FindResultItem } from "../../client.js";
@@ -470,7 +470,158 @@ describe("Tool: ov_archive_expand (behavioral)", () => {
   });
 });
 
-describe("Tool: add_resource, add_skill, and memory_search (registration)", () => {
+describe("Tool: OpenViking tool result access", () => {
+  it("registers read, search, and list tools", () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+
+    expect(tools.get("openviking_tool_result_read")).toBeDefined();
+    expect(tools.get("openviking_tool_result_search")).toBeDefined();
+    expect(tools.get("openviking_tool_result_list")).toBeDefined();
+  });
+
+  it("reads an externalized tool result chunk for the current session", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain("/api/v1/sessions/test-session/tool-results/tr_call_abc");
+      expect(url).toContain("offset=5");
+      expect(url).toContain("limit=10");
+      expect(url).toContain("include_metadata=true");
+      return okResponse({
+        tool_result_id: "tr_call_abc",
+        content: "raw",
+        offset: 5,
+        limit: 10,
+        offset_unit: "unicode_code_point",
+        total_chars: 42,
+        has_more: true,
+        metadata: {
+          storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+          tool_name: "read_file",
+        },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("openviking_tool_result_read")!;
+
+    const result = await tool.execute("tc-read", {
+      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      offset: 5,
+      limit: 10,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toBe("raw");
+    expect(result.details).toMatchObject({
+      action: "read",
+      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_result_id: "tr_call_abc",
+      offset: 5,
+      limit: 10,
+      returned_chars: 3,
+      total_chars: 42,
+      has_more: true,
+      next_offset: 8,
+    });
+  });
+
+  it("searches within an externalized tool result", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain("/api/v1/sessions/test-session/tool-results/tr_call_abc/search?");
+      expect(url).toContain("q=needle");
+      expect(url).toContain("limit=2");
+      expect(url).toContain("context_chars=15");
+      return okResponse({
+        tool_result_id: "tr_call_abc",
+        matches: [
+          {
+            offset: 12,
+            offset_unit: "unicode_code_point",
+            snippet: "hay needle stack",
+          },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("openviking_tool_result_search")!;
+
+    const result = await tool.execute("tc-search", {
+      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      query: "needle",
+      limit: 2,
+      context_chars: 15,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Found 1 match");
+    expect(result.content[0]!.text).toContain("offset 12");
+    expect(result.content[0]!.text).toContain("hay needle stack");
+    expect(result.details).toMatchObject({
+      action: "searched",
+      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_result_id: "tr_call_abc",
+      query: "needle",
+      match_count: 1,
+    });
+  });
+
+  it("lists externalized tool results for the current session", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain("/api/v1/sessions/test-session/tool-results?");
+      expect(url).toContain("tool_name=read_file");
+      expect(url).toContain("limit=5");
+      return okResponse({
+        tool_results: [
+          {
+            tool_result_id: "tr_call_abc",
+            storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+            tool_name: "read_file",
+            original_chars: 42000,
+            created_at: "2026-05-15T00:00:00Z",
+          },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("openviking_tool_result_list")!;
+
+    const result = await tool.execute("tc-list", {
+      tool_name: "read_file",
+      limit: 5,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("read_file");
+    expect(result.content[0]!.text).toContain("original_chars=42000");
+    expect(result.content[0]!.text).toContain("viking://session/test-session/tool-results/tr_call_abc");
+    expect(result.details).toMatchObject({
+      action: "listed",
+      session_id: "test-session",
+      tool_name: "read_file",
+      count: 1,
+    });
+  });
+
+  it("rejects refs from another session", async () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("openviking_tool_result_read")!;
+
+    const result = await tool.execute("tc-read", {
+      tool_output_ref: "viking://session/other-session/tool-results/tr_call_abc",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("another session");
+    expect(result.details.error).toBe("session_mismatch");
+  });
+});
+
+describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
   it("registers add_resource tool with expected parameters", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
@@ -507,11 +658,13 @@ describe("Tool: add_resource, add_skill, and memory_search (registration)", () =
     expect(props).not.toHaveProperty("parent");
   });
 
-  it("registers memory_search tool with natural-language trigger guidance", () => {
+  it("registers ov_search tool with natural-language trigger guidance", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const tool = tools.get("memory_search");
+    const tool = tools.get("ov_search");
     expect(tool).toBeDefined();
+    // Avoid colliding with OpenClaw's built-in memory_search tool.
+    expect(tools.get("memory_search")).toBeUndefined();
     expect(tool!.description).toContain("Search OpenViking resources and skills");
     expect(tool!.description).toContain("Use after importing");
     const props = (tool!.parameters as any).properties;
@@ -521,7 +674,7 @@ describe("Tool: add_resource, add_skill, and memory_search (registration)", () =
   });
 });
 
-describe("Tool: memory_search (behavioral)", () => {
+describe("Tool: ov_search (behavioral)", () => {
   it("searches resources and skills by default when no uri is provided", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
@@ -577,7 +730,7 @@ describe("Tool: memory_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("memory_search")!;
+    const search = tools.get("ov_search")!;
     const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("no");
@@ -632,7 +785,7 @@ describe("Tool: memory_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("memory_search")!;
+    const search = tools.get("ov_search")!;
     const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
 
     expect(result.details.resources).toHaveLength(1);
@@ -668,7 +821,7 @@ describe("Tool: memory_search (behavioral)", () => {
 
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    const search = tools.get("memory_search")!;
+    const search = tools.get("ov_search")!;
     const result = await search.execute("tc1", {
       query: "theme",
       uri: "viking://user/default/memories",
@@ -745,9 +898,9 @@ describe("OpenViking import command parsing", () => {
   });
 });
 
-describe("OpenViking memory_search command parsing", () => {
-  it("parses memory_search query and flags", () => {
-    expect(parseMemorySearchCommandArgs(`"OpenViking install" --uri viking://resources --limit=3`)).toMatchObject({
+describe("OpenViking ov_search command parsing", () => {
+  it("parses ov_search query and flags", () => {
+    expect(parseOVSearchCommandArgs(`"OpenViking install" --uri viking://resources --limit=3`)).toMatchObject({
       query: "OpenViking install",
       uri: "viking://resources",
       limit: 3,
@@ -755,7 +908,7 @@ describe("OpenViking memory_search command parsing", () => {
   });
 
   it("keeps multi-word unquoted slash-command queries intact", () => {
-    expect(parseMemorySearchCommandArgs(`OpenViking install --uri viking://resources`)).toMatchObject({
+    expect(parseOVSearchCommandArgs(`OpenViking install --uri viking://resources`)).toMatchObject({
       query: "OpenViking install",
       uri: "viking://resources",
     });
@@ -763,10 +916,10 @@ describe("OpenViking memory_search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 8 tools", () => {
+  it("registers all 11 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(8);
+    expect(api.registerTool).toHaveBeenCalledTimes(11);
   });
 
   it("registers add and search commands", () => {
@@ -780,7 +933,7 @@ describe("Plugin registration", () => {
       acceptsArgs: true,
       description: "Add a skill into OpenViking.",
     });
-    expect(commands.get("memory-search")).toMatchObject({
+    expect(commands.get("ov-search")).toMatchObject({
       acceptsArgs: true,
       description: "Search OpenViking resources and skills.",
     });
@@ -797,13 +950,13 @@ describe("Plugin registration", () => {
       args: "",
       commandBody: "/add-skill",
     });
-    const search = await commands.get("memory-search")!.handler({
+    const search = await commands.get("ov-search")!.handler({
       args: "",
-      commandBody: "/memory-search",
+      commandBody: "/ov-search",
     });
     expect(resource.text).toContain("Usage: /add-resource");
     expect(skill.text).toContain("Usage: /add-skill");
-    expect(search.text).toContain("Usage: /memory-search");
+    expect(search.text).toContain("Usage: /ov-search");
   });
 
   it("search command propagates agent identity when command ctx includes it", async () => {
@@ -818,9 +971,9 @@ describe("Plugin registration", () => {
     const { commands, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
 
-    await commands.get("memory-search")!.handler({
+    await commands.get("ov-search")!.handler({
       args: "test query --uri viking://resources",
-      commandBody: "/memory-search",
+      commandBody: "/ov-search",
       agentId: "worker",
       sessionId: "session-1",
       sessionKey: "agent:worker:session-1",
@@ -848,9 +1001,9 @@ describe("Plugin registration", () => {
     };
     contextEnginePlugin.register(api as any);
 
-    await commands.get("memory-search")!.handler({
+    await commands.get("ov-search")!.handler({
       args: "test query --uri viking://resources",
-      commandBody: "/memory-search",
+      commandBody: "/ov-search",
       agentId: "worker",
       sessionId: "session-1",
       sessionKey: "agent:worker:session-1",
@@ -962,9 +1115,9 @@ describe("Plugin registration", () => {
     };
     contextEnginePlugin.register(api as any);
 
-    const search = await commands.get("memory-search")!.handler({
+    const search = await commands.get("ov-search")!.handler({
       args: "test query --uri viking://resources",
-      commandBody: "/memory-search",
+      commandBody: "/ov-search",
       sessionKey: "agent:bypass:session-1",
     });
 

@@ -96,6 +96,7 @@ pub async fn handle_add_resource(
         ctx.config.account.clone(),
         ctx.config.user.clone(),
         effective_timeout,
+        ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
     );
     commands::resources::add_resource(
@@ -344,6 +345,19 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
                 &session_id,
                 &role,
                 &content,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        SessionCommands::AddMessages {
+            session_id,
+            messages,
+        } => {
+            commands::session::add_messages(
+                &client,
+                &session_id,
+                &messages,
                 ctx.output_format,
                 ctx.compact,
             )

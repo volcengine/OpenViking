@@ -10,6 +10,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
+from .async_client import AsyncAGFSClient
 from .client import AGFSClient, FileHandle
 from .exceptions import (
     AGFSAlreadyExistsError,
@@ -146,6 +147,7 @@ except Exception:
 
 __all__ = [
     "AGFSClient",
+    "AsyncAGFSClient",
     "AGFSBindingClient",
     "RAGFSBindingClient",
     "FileHandle",

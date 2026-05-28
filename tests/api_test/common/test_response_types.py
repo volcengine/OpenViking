@@ -2,6 +2,8 @@ import os
 import tempfile
 import uuid
 
+import pytest
+
 
 class TestResponseDataTypes:
     def test_fs_stat_response_types(self, api_client):
@@ -57,6 +59,11 @@ class TestResponseDataTypes:
 
     def test_find_response_types(self, api_client):
         find_resp = api_client.find(query="test", limit=5)
+        if find_resp.status_code == 401:
+            pytest.skip(
+                "Find API returned 401: embedding service unavailable "
+                "(PR CI cannot access VLM/Embedding API keys)."
+            )
         assert find_resp.status_code == 200
         data = find_resp.json()
         assert isinstance(data.get("status"), str), "status should be str"

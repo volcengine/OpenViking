@@ -83,7 +83,7 @@ Observability Event Bus
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用 Usage/Audit |
 | `backend` | `"sqlite"` | 当前仅支持 SQLite |
-| `sqlite_path` | `null` | SQLite 文件路径；为空时使用 OpenViking workspace 下的 `usage_audit.sqlite3` |
+| `sqlite_path` | `null` | SQLite 文件路径；为空时使用当前 OpenViking workspace 下的 `_system/usage_audit/usage_audit.sqlite3` |
 | `queue_size` | `10000` | 后台写入队列大小 |
 | `batch_size` | `500` | 单次批量写入的最大事件数 |
 | `flush_interval_seconds` | `1.0` | worker 定时 flush 间隔 |
@@ -91,7 +91,7 @@ Observability Event Bus
 | `usage_retention_days` | `14` | 统计聚合数据保留天数，包含 Token、检索、上下文写入热力图、Agent 活跃；`0` 表示不按天裁剪 |
 | `audit_retention_days` | `7` | 请求审计日志保留天数；`0` 表示不按天裁剪 |
 | `audit_retention_per_account` | `1000` | 每个 account 保留的最新请求审计条数；`0` 表示不按条数裁剪 |
-| `timezone` | `"local"` | 统计日期使用的时区；可填 `"local"`、`"UTC"` 或 IANA 时区名 |
+| `timezone` | `"local"` | Console 请求未传 `timezone` 时的兜底查询时区；写入始终按 UTC 保存。`"local"` 表示 server 进程所在机器/容器的本地时区 |
 | `inventory_ttl_seconds` | `10.0` | 上下文当前数据量查询缓存时间 |
 
 本地版使用 SQLite 没问题。分布式生产环境如果多实例同时提供 Console，建议后续增加共享
@@ -174,7 +174,6 @@ vector filter，也不从历史写入事件累计当前库存。
 - `/favicon.ico`
 - `/favicon.png`
 - `/apple-touch-icon.png`
-- `/console/*`
 - `/api/v1/console/*`
 
 ## Console BFF API
@@ -204,6 +203,12 @@ Console 前端通过 Console server 的 allowlist proxy 访问：
 ```text
 GET /api/v1/console/dashboard/summary
 ```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，用于确定"今日"的时区边界 |
 
 返回示例：
 
@@ -263,9 +268,10 @@ GET /api/v1/console/tokens?start_date=2026-05-01&end_date=2026-05-12&bucket=day
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD` |
-| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD` |
+| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
+| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
 | `bucket` | 否 | 当前仅支持 `day` |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，返回的 `date` 分桶按该时区 |
 
 返回中会补齐日期范围内没有数据的日期。
 
@@ -279,9 +285,10 @@ GET /api/v1/console/context-commits?start_date=2026-05-01&end_date=2026-05-12&bu
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD` |
-| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD` |
+| `start_date` | 是 | 开始日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
+| `end_date` | 是 | 结束日期，格式 `YYYY-MM-DD`（按 `timezone` 指定的时区解释） |
 | `bucket` | 否 | `hour` 或 `4h`，默认 `hour` |
+| `timezone` | 否 | IANA 时区名（如 `Asia/Shanghai`）；省略时回退到 server 时区，返回的 `date` / `hour` 分桶按该时区 |
 
 返回中会补齐日期和小时段范围内没有数据的 bucket。
 
@@ -375,9 +382,7 @@ curl "http://127.0.0.1:1933/api/v1/console/dashboard/summary" \
   openviking/observability/events.py \
   openviking/observability/usage_audit \
   openviking/server/routers/console.py \
-  openviking/console/app.py \
-  tests/observability \
-  tests/misc/test_console_proxy.py
+  tests/observability
 ```
 
 ## 常见问题
@@ -394,7 +399,8 @@ curl "http://127.0.0.1:1933/api/v1/console/dashboard/summary" \
 - VLM 需要产生 `vlm.call`
 - Embedding 需要产生 `embedding.call`
 
-统计日期使用 `server.observability.usage_audit.timezone`。如果时区配置不同，数据可能落在另一天。
+统计数据写入时按 UTC 保存；Console 查询会优先使用请求里的 `timezone` 参数做读端分桶。
+如果请求没有传 `timezone`，才会使用 `server.observability.usage_audit.timezone` 作为兜底。
 
 ### 为什么请求日志里没有 Console 自己的请求？
 
@@ -409,7 +415,7 @@ Console BFF 查询的是账号级聚合和审计明细，当前只允许 `ROOT` 
 如果没有配置 `sqlite_path`，默认在 OpenViking workspace 下：
 
 ```text
-<workspace>/usage_audit.sqlite3
+<workspace>/_system/usage_audit/usage_audit.sqlite3
 ```
 
 可以通过 `server.observability.usage_audit.sqlite_path` 显式指定。

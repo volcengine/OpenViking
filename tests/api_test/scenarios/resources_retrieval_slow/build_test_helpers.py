@@ -67,6 +67,8 @@ def assert_root_uri_valid(root_uri):
 def assert_resource_findable(api_client, root_uri, keyword, timeout=90, poll_interval=3):
     import time
 
+    import pytest
+
     api_client.wait_processed()
 
     start = time.time()
@@ -78,6 +80,11 @@ def assert_resource_findable(api_client, root_uri, keyword, timeout=90, poll_int
             api_client.wait_processed()
 
         find_resp = api_client.find(keyword, target_uri=root_uri)
+        if find_resp.status_code == 401:
+            pytest.skip(
+                "Find API returned 401: embedding service unavailable "
+                "(PR CI cannot access VLM/Embedding API keys)."
+            )
         if find_resp.status_code == 200:
             find_data = find_resp.json()
             if find_data.get("status") == "ok":

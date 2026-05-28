@@ -221,7 +221,6 @@ If the user already has a local config directory, prefer:
 ```bash
 docker run --rm \
   -p 1933:1933 \
-  -p 8020:8020 \
   -v ~/.openviking:/app/.openviking \
   ghcr.io/volcengine/openviking:latest
 ```
@@ -230,12 +229,13 @@ Notes:
 - The default config path inside the container is `/app/.openviking/ov.conf`
 - Inside the container, `HOME=/app`
 - Prefer mounting host `~/.openviking` to container `/app/.openviking` so config, CLI config, and workspace data persist
+- Web Studio is served by the OV server itself at `http://127.0.0.1:1933/studio` — no extra port needed
 
 ##### Option 2: Use `docker-compose.yml`
 
 If the user prefers compose, the repo already includes an example with:
 - image: `ghcr.io/volcengine/openviking:latest`
-- ports: `1933:1933`, `8020:8020`
+- ports: `1933:1933`
 - volume: `~/.openviking:/app/.openviking`
 
 In that case, have the user run this from the repo root:

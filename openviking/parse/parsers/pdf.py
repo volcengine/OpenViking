@@ -12,6 +12,7 @@ This design simplifies PDF handling by delegating structure analysis
 to the MarkdownParser after conversion.
 """
 
+import asyncio
 import re
 import time
 from collections import Counter, defaultdict
@@ -209,25 +210,16 @@ class PDFParser(BaseParser):
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
-        """
-        Convert PDF to Markdown using pdfplumber.
+        # pdfplumber / pdfminer 的解析与图片/表格提取通常是 CPU/IO 密集且为同步实现，
+        # 放到线程池中执行，避免阻塞事件循环。
+        return await asyncio.to_thread(self._convert_local_sync, pdf_path, storage, resource_name)
 
-        When the PDF contains bookmarks/outlines, these are extracted and
-        injected as markdown headings at the appropriate page positions.
-        This allows MarkdownParser to build a hierarchical directory tree
-        instead of producing flat numbered files.
+    def _convert_local_sync(
+        self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
+    ) -> tuple[str, Dict[str, Any]]:
+        """同步版：用 pdfplumber 将 PDF 转 Markdown。
 
-        Args:
-            pdf_path: Path to PDF file
-            storage: Optional StoragePath for saving images
-            resource_name: Resource name for organizing saved images
-
-        Returns:
-            Tuple of (markdown_content, metadata)
-
-        Raises:
-            ImportError: If pdfplumber not installed
-            Exception: If conversion fails
+        该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
         """
         pdfplumber = lazy_import("pdfplumber")
 
@@ -622,13 +614,18 @@ class PDFParser(BaseParser):
                 resources = page.page_obj.resources
                 if resources and "XObject" in resources:
                     xobjects = resources["XObject"]
-                    for obj_name in xobjects:
-                        obj = xobjects[obj_name]
+                    target_name = img_info.get("name") if isinstance(img_info, dict) else None
+                    normalized_target = str(target_name).lstrip("/") if target_name else None
+                    for obj_name, obj in xobjects.items():
+                        if normalized_target and str(obj_name).lstrip("/") != normalized_target:
+                            continue
                         if hasattr(obj, "resolve"):
                             resolved = obj.resolve()
                             if resolved.get("Subtype") and resolved["Subtype"].name == "Image":
+                                if hasattr(resolved, "get_data"):
+                                    return resolved.get_data()
                                 data = resolved.get("stream")
-                                if data:
+                                if data and hasattr(data, "get_data"):
                                     return data.get_data()
 
             return None

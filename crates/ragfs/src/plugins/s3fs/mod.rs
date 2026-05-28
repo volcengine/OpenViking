@@ -17,15 +17,185 @@ pub mod cache;
 pub mod client;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use cache::{S3ListDirCache, S3StatCache};
 use client::S3Client;
+use futures::stream::{self, StreamExt};
+use regex::Regex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::{
-    ConfigParameter, Error, FileInfo, FileSystem, PluginConfig, Result, ServicePlugin, WriteFlag,
+    ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
+    ServicePlugin, WriteFlag,
 };
+
+/// Check whether `path` is under `exclude_path` (including itself).
+fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
+    if exclude_path == "/" {
+        return true;
+    }
+
+    path == exclude_path
+        || path
+            .strip_prefix(exclude_path)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+/// Convert an absolute/plugin path to a query-root-relative grep match path.
+fn s3_relative_match_file(query_root: &str, path: &str) -> String {
+    let base = if query_root == "/" {
+        "/".to_string()
+    } else {
+        query_root.trim_end_matches('/').to_string()
+    };
+
+    if path == base {
+        return ".".to_string();
+    }
+
+    if base == "/" {
+        return path.trim_start_matches('/').to_string();
+    }
+
+    match path.strip_prefix(&base) {
+        Some(rest) => {
+            let rel = rest.trim_start_matches('/');
+            if rel.is_empty() {
+                ".".to_string()
+            } else {
+                rel.to_string()
+            }
+        }
+        None => path.trim_start_matches('/').to_string(),
+    }
+}
+
+/// Compute depth from a query-root-relative path.
+fn s3_relative_depth(rel: &str) -> usize {
+    if rel.is_empty() || rel == "." {
+        0
+    } else {
+        rel.split('/').filter(|p| !p.is_empty()).count()
+    }
+}
+
+/// Abstract trait for reading chunks from a file during grep.
+/// Extracted to allow unit testing chunk-boundary logic with mock providers.
+#[async_trait]
+trait ChunkReader: Send {
+    async fn read_chunk(&mut self, offset: u64, size: u64) -> Result<Vec<u8>>;
+}
+
+/// S3-backed chunk reader — delegates to `get_object_range`.
+struct S3ChunkReader<'a> {
+    client: &'a S3Client,
+    key: &'a str,
+}
+
+#[async_trait]
+impl ChunkReader for S3ChunkReader<'_> {
+    async fn read_chunk(&mut self, offset: u64, size: u64) -> Result<Vec<u8>> {
+        self.client.get_object_range(self.key, offset, size).await
+    }
+}
+
+/// Core streaming grep logic: reads chunks via a [`ChunkReader`],
+/// handles line-boundary stitching across chunk edges, and returns
+/// matches up to `remaining_limit`.
+async fn grep_stream(
+    rel_file: &str,
+    file_size: u64,
+    re: &Regex,
+    remaining_limit: usize,
+    chunk_size: u64,
+    max_partial_size: usize,
+    reader: &mut dyn ChunkReader,
+) -> Result<Vec<GrepMatch>> {
+    let mut offset: u64 = 0;
+    let mut partial = String::new();
+    let mut line_no: u64 = 0;
+    let mut matches = Vec::with_capacity(remaining_limit.min(64));
+
+    loop {
+        if matches.len() >= remaining_limit || offset >= file_size {
+            break;
+        }
+
+        let chunk = reader.read_chunk(offset, chunk_size).await?;
+
+        let is_last = chunk.is_empty()
+            || chunk.len() < chunk_size as usize
+            || offset + chunk_size >= file_size;
+
+        let chunk_str = String::from_utf8_lossy(&chunk);
+
+        let complete_end = if is_last {
+            chunk_str.len()
+        } else {
+            chunk_str.rfind('\n').map(|p| p + 1).unwrap_or(0)
+        };
+
+        if complete_end == 0 && !is_last {
+            partial.push_str(&chunk_str);
+            if partial.len() > max_partial_size {
+                return Ok(matches);
+            }
+            offset += chunk_size;
+            continue;
+        }
+
+        let (text, remainder) = if partial.is_empty() {
+            if complete_end == chunk_str.len() {
+                (chunk_str.into_owned(), String::new())
+            } else {
+                (
+                    chunk_str[..complete_end].to_string(),
+                    chunk_str[complete_end..].to_string(),
+                )
+            }
+        } else {
+            let merged = format!("{}{}", partial, &chunk_str[..complete_end]);
+            partial.clear();
+            (merged, chunk_str[complete_end..].to_string())
+        };
+
+        for line in text.lines() {
+            if matches.len() >= remaining_limit {
+                break;
+            }
+            line_no += 1;
+            if re.is_match(line) {
+                matches.push(GrepMatch {
+                    file: rel_file.to_string(),
+                    line: line_no,
+                    content: line.to_string(),
+                });
+            }
+        }
+
+        partial.push_str(&remainder);
+
+        if is_last {
+            break;
+        }
+        offset += chunk_size;
+    }
+
+    if !partial.is_empty() && matches.len() < remaining_limit {
+        line_no += 1;
+        if re.is_match(&partial) {
+            matches.push(GrepMatch {
+                file: rel_file.to_string(),
+                line: line_no,
+                content: partial,
+            });
+        }
+    }
+
+    Ok(matches)
+}
 
 /// S3-backed file system
 pub struct S3FileSystem {
@@ -107,10 +277,106 @@ impl S3FileSystem {
         if path == "/" {
             return "/".to_string();
         }
-        path.rsplit('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
+        path.rsplit('/').next().unwrap_or("").to_string()
+    }
+
+    /// Chunk size for streaming file reads during grep (64 KiB).
+    const GREP_CHUNK_SIZE: u64 = 65536;
+
+    /// Maximum allowed accumulated partial-line buffer to prevent OOM
+    /// when processing files with extremely long lines (16 MiB).
+    const GREP_MAX_PARTIAL_SIZE: usize = 16_777_216;
+
+    /// Default concurrency window for parallel grep.
+    fn default_grep_concurrency() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() * 2).clamp(16, 100))
+            .unwrap_or(16)
+    }
+
+    /// Stream a single file in fixed-size chunks, match lines against `re`,
+    /// and return matches up to `remaining_limit`.
+    async fn grep_one_file(
+        &self,
+        base_path: &str,
+        path: &str,
+        file_size: u64,
+        re: &Regex,
+        remaining_limit: usize,
+    ) -> Result<Vec<GrepMatch>> {
+        let normalized = Self::normalize_path(path);
+        let key = self.client.build_key(&normalized);
+        let rel_file = s3_relative_match_file(base_path, path);
+        let mut reader = S3ChunkReader {
+            client: &self.client,
+            key: &key,
+        };
+        grep_stream(
+            &rel_file,
+            file_size,
+            re,
+            remaining_limit,
+            Self::GREP_CHUNK_SIZE,
+            Self::GREP_MAX_PARTIAL_SIZE,
+            &mut reader,
+        )
+        .await
+    }
+
+    /// Parallel chunked grep over a pre-collected list of files with
+    /// sliding-window concurrency and lock-free early-termination.
+    async fn grep_files_concurrent(
+        &self,
+        base_path: &str,
+        files: Vec<(String, u64)>,
+        re: &Regex,
+        node_limit: Option<usize>,
+    ) -> Result<GrepResult> {
+        let limit = node_limit.unwrap_or(usize::MAX);
+        let result = Arc::new(Mutex::new(GrepResult::new()));
+        let matched_count = Arc::new(AtomicUsize::new(0));
+        let buf_size = Self::default_grep_concurrency().min(files.len());
+
+        let mut stream = stream::iter(files)
+            .map(|(path, file_size)| {
+                let result = Arc::clone(&result);
+                let matched_count = Arc::clone(&matched_count);
+                async move {
+                    let done = matched_count.load(Ordering::Acquire);
+                    if done >= limit {
+                        return Ok(());
+                    }
+
+                    let remaining = limit.saturating_sub(done);
+                    let matches = self
+                        .grep_one_file(base_path, &path, file_size, re, remaining)
+                        .await?;
+
+                    let mut r = result.lock().unwrap();
+                    for m in matches {
+                        if r.count >= limit {
+                            break;
+                        }
+                        r.matches.push(m);
+                        r.count += 1;
+                    }
+                    matched_count.store(r.count, Ordering::Release);
+
+                    Ok::<_, Error>(())
+                }
+            })
+            .buffer_unordered(buf_size);
+
+        while let Some(item) = stream.next().await {
+            item?;
+        }
+
+        let final_result = {
+            let mut guard = result.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+
+        Ok(final_result)
     }
 }
 
@@ -319,9 +585,7 @@ impl FileSystem for S3FileSystem {
         files.sort_by(|a, b| a.name.cmp(&b.name));
 
         // Cache
-        self.dir_cache
-            .put(normalized.clone(), files.clone())
-            .await;
+        self.dir_cache.put(normalized.clone(), files.clone()).await;
 
         Ok(files)
     }
@@ -424,9 +688,7 @@ impl FileSystem for S3FileSystem {
             let new_dir_key = format!("{}/", new_prefix_base);
 
             if self.client.head_object(&old_dir_key).await?.is_some() {
-                self.client
-                    .copy_object(&old_dir_key, &new_dir_key)
-                    .await?;
+                self.client.copy_object(&old_dir_key, &new_dir_key).await?;
             }
 
             // Copy all children
@@ -481,6 +743,94 @@ impl FileSystem for S3FileSystem {
         self.stat_cache.invalidate(&normalized).await;
 
         Ok(())
+    }
+
+    async fn grep(
+        &self,
+        path: &str,
+        pattern: &str,
+        recursive: bool,
+        case_insensitive: bool,
+        node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
+    ) -> Result<GrepResult> {
+        let normalized = Self::normalize_path(path);
+        let normalized_exclude = exclude_path.map(|p| Self::normalize_path(p));
+
+        let info = self.stat(&normalized).await?;
+
+        let re = if case_insensitive {
+            Regex::new(&format!("(?i){}", pattern))
+        } else {
+            Regex::new(pattern)
+        }
+        .map_err(|e| Error::invalid_operation(format!("Invalid regex: {}", e)))?;
+
+        if !info.is_dir {
+            if let Some(ref excl) = normalized_exclude {
+                if s3_is_excluded_path(&normalized, excl) {
+                    return Ok(GrepResult::new());
+                }
+            }
+            if let Some(limit) = level_limit {
+                let rel = s3_relative_match_file(&normalized, &normalized);
+                if s3_relative_depth(&rel) > limit {
+                    return Ok(GrepResult::new());
+                }
+            }
+            let files = vec![(normalized.clone(), info.size)];
+            return self
+                .grep_files_concurrent(&normalized, files, &re, node_limit)
+                .await;
+        }
+
+        let prefix = if normalized == "/" {
+            self.client.build_key("")
+        } else {
+            format!("{}/", self.client.build_key(&normalized))
+        };
+
+        let listing = self.client.list_objects(&prefix, None).await?;
+
+        let mut files: Vec<(String, u64)> = Vec::new();
+
+        for obj in &listing.files {
+            if obj.is_dir_marker || obj.key.ends_with('/') {
+                continue;
+            }
+
+            let fs_path = format!("/{}", self.client.strip_prefix(&obj.key));
+
+            if let Some(ref excl) = normalized_exclude {
+                if s3_is_excluded_path(&fs_path, excl) {
+                    continue;
+                }
+            }
+
+            if !recursive || level_limit.is_some() {
+                let rel = s3_relative_match_file(&normalized, &fs_path);
+                let depth = s3_relative_depth(&rel);
+
+                if !recursive && depth > 1 {
+                    continue;
+                }
+                if let Some(limit) = level_limit {
+                    if depth > limit {
+                        continue;
+                    }
+                }
+            }
+
+            files.push((fs_path, obj.size as u64));
+        }
+
+        if files.is_empty() {
+            return Ok(GrepResult::new());
+        }
+
+        self.grep_files_concurrent(&normalized, files, &re, node_limit)
+            .await
     }
 }
 
@@ -855,5 +1205,323 @@ mod tests {
             params,
         };
         assert!(plugin.validate(&config).await.is_ok());
+    }
+
+    #[test]
+    fn test_s3_is_excluded_path() {
+        assert!(
+            s3_is_excluded_path("/foo", "/"),
+            "exclude root excludes everything"
+        );
+        assert!(s3_is_excluded_path("/a", "/a"), "exclude exact match");
+        assert!(s3_is_excluded_path("/a/b", "/a"), "exclude prefix with '/'");
+        assert!(s3_is_excluded_path("/a/b/c", "/a"), "exclude nested prefix");
+
+        assert!(
+            !s3_is_excluded_path("/ab", "/a"),
+            "exclude /a does not exclude /ab"
+        );
+        assert!(
+            !s3_is_excluded_path("/b", "/a"),
+            "unrelated path not excluded"
+        );
+        assert!(s3_is_excluded_path("/a", "/"), "root exclude matches /a");
+    }
+
+    #[test]
+    fn test_s3_is_excluded_path_root_matches_all() {
+        assert!(s3_is_excluded_path("", "/"), "empty string excluded by /");
+        assert!(
+            s3_is_excluded_path("/anything", "/"),
+            "any path excluded by /"
+        );
+        assert!(
+            s3_is_excluded_path("/deep/nested/path", "/"),
+            "deep path excluded by /"
+        );
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_same_path() {
+        assert_eq!(s3_relative_match_file("/foo", "/foo"), ".");
+        assert_eq!(s3_relative_match_file("/", "/"), ".");
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_root_base() {
+        assert_eq!(s3_relative_match_file("/", "/a"), "a");
+        assert_eq!(s3_relative_match_file("/", "/a/b"), "a/b");
+        assert_eq!(
+            s3_relative_match_file("/", "/deep/nested/file"),
+            "deep/nested/file"
+        );
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_subdirectory() {
+        assert_eq!(s3_relative_match_file("/a", "/a/b"), "b");
+        assert_eq!(s3_relative_match_file("/a", "/a/b/c"), "b/c");
+        assert_eq!(s3_relative_match_file("/dir", "/dir/file.txt"), "file.txt");
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_no_prefix_match() {
+        assert_eq!(s3_relative_match_file("/a", "/b"), "b");
+        assert_eq!(s3_relative_match_file("/x", "/y/z"), "y/z");
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_trailing_slash_base() {
+        assert_eq!(s3_relative_match_file("/foo/", "/foo/bar"), "bar");
+        assert_eq!(s3_relative_match_file("/foo/", "/foo"), ".");
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_empty_remainder() {
+        assert_eq!(s3_relative_match_file("/dir", "/dir/"), ".");
+    }
+
+    #[test]
+    fn test_s3_relative_match_file_leading_slash_in_rest() {
+        assert_eq!(s3_relative_match_file("/dir", "/dir//sub"), "sub");
+    }
+
+    #[test]
+    fn test_s3_relative_depth() {
+        assert_eq!(s3_relative_depth("."), 0);
+        assert_eq!(s3_relative_depth(""), 0);
+        assert_eq!(s3_relative_depth("a"), 1);
+        assert_eq!(s3_relative_depth("a/b"), 2);
+        assert_eq!(s3_relative_depth("a/b/c"), 3);
+        assert_eq!(s3_relative_depth("deep/nested/path/to/file"), 5);
+    }
+
+    #[test]
+    fn test_s3_relative_depth_filters_empty_segments() {
+        assert_eq!(s3_relative_depth("a//b"), 2);
+        assert_eq!(s3_relative_depth("///"), 0);
+    }
+
+    #[test]
+    fn test_default_grep_concurrency() {
+        let n = S3FileSystem::default_grep_concurrency();
+        assert!(n >= 16, "concurrency should be at least 16, got {n}");
+        assert!(n <= 100, "concurrency should be at most 100, got {n}");
+    }
+
+    // ── Mock ChunkReader for testing grep_stream chunk-boundary logic ──
+
+    /// A mock chunk reader that serves slices from an in-memory byte buffer.
+    /// Returns the range `[offset, offset+size)` clamped to `data.len()`.
+    struct MockChunkReader {
+        data: Vec<u8>,
+    }
+
+    #[async_trait]
+    impl ChunkReader for MockChunkReader {
+        async fn read_chunk(&mut self, offset: u64, size: u64) -> Result<Vec<u8>> {
+            let start = offset as usize;
+            if start >= self.data.len() {
+                return Ok(Vec::new());
+            }
+            let end = ((offset + size) as usize).min(self.data.len());
+            Ok(self.data[start..end].to_vec())
+        }
+    }
+
+    fn build_re(pattern: &str) -> Regex {
+        Regex::new(pattern).unwrap()
+    }
+
+    // ── Case  3: 正则无效 ──
+
+    #[test]
+    fn test_grep_invalid_regex() {
+        assert!(
+            Regex::new("(unclosed").is_err(),
+            "unclosed group should fail"
+        );
+        assert!(
+            Regex::new("[invalid").is_err(),
+            "unclosed character class should fail"
+        );
+    }
+
+    // ── Case 17: case_insensitive 正则构建 ──
+
+    #[test]
+    fn test_case_insensitive_regex() {
+        let re = Regex::new(&format!("(?i){}", "hello")).unwrap();
+        assert!(re.is_match("HELLO"), "uppercase match");
+        assert!(re.is_match("hello"), "lowercase match");
+        assert!(re.is_match("Hello"), "mixed case match");
+        assert!(!re.is_match("world"), "non-match");
+
+        let re2 = Regex::new(&format!("(?i){}", "WORLD")).unwrap();
+        assert!(re2.is_match("world"), "uppercase pattern matches lowercase");
+    }
+
+    // ── Case  9: 文件大小恰好为 CHUNK_SIZE（单 chunk，is_last 靠 offset+size>=file_size） ──
+
+    #[tokio::test]
+    async fn test_grep_stream_exact_chunk_single() {
+        let data = b"hello\nworld\n";
+        let file_size = data.len() as u64;
+        let chunk_size = file_size;
+        let mut reader = MockChunkReader {
+            data: data.to_vec(),
+        };
+        let re = build_re(".");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(matches.len(), 2, "both lines should match '.'");
+        assert_eq!(matches[0].line, 1);
+        assert_eq!(matches[0].content, "hello");
+        assert_eq!(matches[1].line, 2);
+        assert_eq!(matches[1].content, "world");
+    }
+
+    // ── Case 10: 最后 chunk 恰好等于 CHUNK_SIZE（多 chunk 场景） ──
+
+    #[tokio::test]
+    async fn test_grep_stream_last_chunk_exact_size() {
+        let data = b"line1\nline2\nline3\nline4\n";
+        let file_size = data.len() as u64; // 24
+        let chunk_size = 12u64;
+        let mut reader = MockChunkReader {
+            data: data.to_vec(),
+        };
+        let re = build_re("line");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(matches.len(), 4, "all 4 lines should match");
+        assert_eq!(matches[3].content, "line4");
+    }
+
+    // ── Case 11: 跨 chunk 边界行的拼接 ──
+
+    #[tokio::test]
+    async fn test_grep_stream_cross_chunk_line() {
+        let data = b"hel\nlo wo\nrld\n";
+        let file_size = data.len() as u64; // 15
+        let chunk_size = 8u64;
+        let mut reader = MockChunkReader {
+            data: data.to_vec(),
+        };
+        let re = build_re("lo");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(matches.len(), 1, "only 'lo wo' contains 'lo'");
+        assert_eq!(matches[0].line, 2, "line number should be 2");
+        assert_eq!(matches[0].content, "lo wo", "stitched across boundary");
+    }
+
+    // ── Case 12: 连续多 chunk 无换行符 ──
+
+    #[tokio::test]
+    async fn test_grep_stream_multi_chunk_no_newline() {
+        let data = b"abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()"; // 46 bytes, no \n
+        let file_size = data.len() as u64;
+        let chunk_size = 10u64;
+        let mut reader = MockChunkReader {
+            data: data.to_vec(),
+        };
+        let re = build_re("xyz");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(matches.len(), 1, "one long line should match");
+        assert_eq!(matches[0].line, 1);
+        assert!(
+            matches[0].content.contains("xyz"),
+            "line contains xyz: {}",
+            matches[0].content
+        );
+    }
+
+    // ── Case 13: 超长行 > GREP_MAX_PARTIAL_SIZE ──
+
+    #[tokio::test]
+    async fn test_grep_stream_line_exceeds_max_partial() {
+        let content = "a".repeat(200);
+        let data = content.as_bytes();
+        let file_size = data.len() as u64; // 200
+        let chunk_size = 64u64;
+        let max_partial = 100usize;
+        let mut reader = MockChunkReader {
+            data: data.to_vec(),
+        };
+        let re = build_re("a");
+
+        let matches = grep_stream(
+            "f",
+            file_size,
+            &re,
+            100,
+            chunk_size,
+            max_partial,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches.is_empty(),
+            "should bail out early when partial exceeds max"
+        );
+    }
+
+    // ── Case 14: 二进制内容（含无效 UTF-8） ──
+
+    #[tokio::test]
+    async fn test_grep_stream_binary_content() {
+        let mut data: Vec<u8> = b"hello\nworld\n".to_vec();
+        data.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        data.extend_from_slice(b"\nvalid\n");
+        let file_size = data.len() as u64;
+        let chunk_size = 64u64;
+        let mut reader = MockChunkReader { data };
+        let re = build_re("world");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            matches.len(),
+            1,
+            "should match 'world' despite binary content"
+        );
+        assert_eq!(matches[0].content, "world");
+        assert_eq!(matches[0].line, 2);
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_binary_content_valid_line_after() {
+        let mut data: Vec<u8> = b"first\n".to_vec();
+        data.extend_from_slice(&[0xff, 0xfe, 0xfd, b'\n']);
+        data.extend_from_slice(b"last\n");
+        let file_size = data.len() as u64;
+        let chunk_size = 64u64;
+        let mut reader = MockChunkReader { data };
+        let re = build_re("last");
+
+        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+            .await
+            .unwrap();
+
+        assert_eq!(matches.len(), 1, "should match 'last' after binary line");
+        assert_eq!(matches[0].content, "last");
     }
 }

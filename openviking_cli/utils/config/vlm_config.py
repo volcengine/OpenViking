@@ -21,9 +21,17 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
 
-    backup: Optional["VLMConfig"] = Field(default=None, description="Backup VLM configuration for failover")
+    backup: Optional["VLMConfig"] = Field(
+        default=None, description="Backup VLM configuration for failover"
+    )
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
+    forward_api_key: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether to pass api_key through to LiteLLM. None uses provider-aware defaults."
+        ),
+    )
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
@@ -130,7 +138,7 @@ class VLMConfig(BaseModel):
                     raise ValueError(
                         "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
                     )
-            elif not self._get_effective_api_key():
+            elif provider_name != "litellm" and not self._get_effective_api_key():
                 raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
@@ -139,16 +147,30 @@ class VLMConfig(BaseModel):
         """Prevent recursive backup configurations"""
         if self.backup is not None:
             if self.backup.backup is not None:
-                raise ValueError("Backup VLM configuration cannot have its own backup (recursive backups are not allowed)")
+                raise ValueError(
+                    "Backup VLM configuration cannot have its own backup (recursive backups are not allowed)"
+                )
         return self
 
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
-        if self.api_key and self.provider:
+        if self.provider and (
+            self.api_key
+            or self.api_base
+            or self.extra_headers
+            or self.extra_request_body
+            or self.stream
+            or self.forward_api_key is not None
+        ):
             if self.provider not in self.providers:
                 self.providers[self.provider] = {}
-            if "api_key" not in self.providers[self.provider]:
+            if self.api_key and "api_key" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_key"] = self.api_key
+            if (
+                self.forward_api_key is not None
+                and "forward_api_key" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["forward_api_key"] = self.forward_api_key
             if self.api_base and "api_base" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_base"] = self.api_base
             if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
@@ -182,6 +204,8 @@ class VLMConfig(BaseModel):
         config = dict(self.providers.get(provider_name) or {})
         if self.api_key and "api_key" not in config:
             config["api_key"] = self.api_key
+        if self.forward_api_key is not None and "forward_api_key" not in config:
+            config["forward_api_key"] = self.forward_api_key
         if self.api_base and "api_base" not in config:
             config["api_base"] = self.api_base
         if self.extra_headers and "extra_headers" not in config:
@@ -194,6 +218,8 @@ class VLMConfig(BaseModel):
 
     def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
         if config.get("api_key"):
+            return True
+        if provider_name == "litellm":
             return True
         if provider_name == "openai-codex":
             has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
@@ -246,7 +272,7 @@ class VLMConfig(BaseModel):
         """Get VLM instance."""
         if self._vlm_instance is None:
             config_dict = self._build_vlm_config_dict()
-            from openviking.models.vlm import VLMFactory, FailoverVLM
+            from openviking.models.vlm import FailoverVLM, VLMFactory
 
             primary = VLMFactory.create(config_dict)
 
@@ -283,6 +309,8 @@ class VLMConfig(BaseModel):
         if config:
             if config.get("api_key"):
                 result["api_key"] = config.get("api_key")
+            if config.get("forward_api_key") is not None:
+                result["forward_api_key"] = config.get("forward_api_key")
             if config.get("api_base"):
                 result["api_base"] = config.get("api_base")
             if config.get("extra_headers"):
@@ -295,14 +323,15 @@ class VLMConfig(BaseModel):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return self.get_vlm_instance().get_completion(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -310,15 +339,16 @@ class VLMConfig(BaseModel):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return await self.get_vlm_instance().get_completion_async(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
@@ -330,21 +360,24 @@ class VLMConfig(BaseModel):
             has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
             return bool(self._get_effective_api_key() or has_codex_auth_available())
+        if self._resolve_provider_name() == "litellm":
+            return bool(self.model)
         return self._get_effective_api_key() is not None
 
     def get_vision_completion(
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return self.get_vlm_instance().get_vision_completion(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -353,15 +386,16 @@ class VLMConfig(BaseModel):
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
+        effective_thinking = self.thinking if thinking is None else thinking
         return await self.get_vlm_instance().get_vision_completion_async(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )

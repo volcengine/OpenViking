@@ -4,6 +4,8 @@ import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 # Ensure the project root is in sys.path
@@ -237,11 +239,18 @@ class TestQuickStartLite(unittest.TestCase):
             try:
                 os.chdir(os.path.dirname(script_path))
                 global_ns = {"__name__": "__main__", "__file__": script_path}
-                exec(code, global_ns)
+                output = StringIO()
+                with redirect_stdout(output):
+                    exec(code, global_ns)
             except Exception as e:
                 self.fail(f"Quick start script execution failed: {e}")
             finally:
                 os.chdir(original_cwd)
+
+            output_text = output.getvalue()
+            self.assertIn("Directory structure:", output_text)
+            self.assertNotIn("Directory structure:\n[]", output_text)
+            self.assertIn("Content preview:", output_text)
 
 
 if __name__ == "__main__":
