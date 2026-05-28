@@ -29,10 +29,7 @@
 
 ---
 
-<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 16px 24px; border-radius: 12px; margin: 20px 0; color: white;">
-  <span style="font-size: 20px; font-weight: bold;">📢 2026年5月アップデート</span><br>
-  <span style="font-size: 16px;">全てのベンチマーク結果を最新の GPT-4o-mini Judge で更新しました！下記の <strong>評価ハイライト</strong> セクションをご確認ください。</span>
-</div>
+✨ **2026年5月アップデート**：全てのベンチマーク結果を GPT-4o-mini Judge で更新 &rarr; [評価ハイライト](#評価ハイライト) をご確認ください。
 
 ## 概要
 

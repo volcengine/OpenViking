@@ -29,10 +29,7 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 ---
 
-<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 16px 24px; border-radius: 12px; margin: 20px 0; color: white;">
-  <span style="font-size: 20px; font-weight: bold;">📢 May 2026 Update</span><br>
-  <span style="font-size: 16px;">All benchmark results have been refreshed with the latest GPT-4o-mini judge! See the <strong>Evaluation Highlights</strong> section below.</span>
-</div>
+✨ **May 2026 Update**: All benchmark results refreshed with GPT-4o-mini judge &rarr; see [Evaluation Highlights](#evaluation-highlights).
 
 ## Overview
 
