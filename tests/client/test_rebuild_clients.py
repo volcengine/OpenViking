@@ -103,18 +103,51 @@ async def test_local_client_batch_add_messages_forwards_to_session():
         client,
         "batch-session",
         [
-            {"role": "user", "content": "hello"},
+            {
+                "role": "user",
+                "content": "hello",
+                "role_id": "explicit-user",
+                "created_at": "2026-05-28T00:00:00+00:00",
+            },
             {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
         ],
     )
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert fake_session.messages[0]["role"] == "user"
-    assert fake_session.messages[0]["role_id"] == "user-1"
+    assert fake_session.messages[0]["role_id"] == "explicit-user"
+    assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
     assert fake_session.messages[0]["parts"][0].text == "hello"
     assert fake_session.messages[1]["role"] == "assistant"
     assert fake_session.messages[1]["role_id"] == "agent-1"
     assert fake_session.messages[1]["parts"][0].text == "hi"
+
+
+async def test_async_http_client_batch_add_messages_posts_batch_payload():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"session_id": "batch-session", "message_count": 2, "added": 2}
+    }
+
+    messages = [
+        {
+            "role": "user",
+            "content": "hello",
+            "role_id": "explicit-user",
+            "created_at": "2026-05-28T00:00:00+00:00",
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+    ]
+
+    result = await client.batch_add_messages("batch-session", messages)
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/batch-session/messages/batch",
+        json={"messages": messages},
+    )
 
 
 async def test_async_http_client_reindex_posts_content_reindex():
@@ -162,6 +195,34 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     assert result == {"status": "accepted"}
     assert mock_run.called
     assert mock_reindex.called
+
+
+def test_sync_http_client_batch_add_messages_forwards_to_async_client():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    messages = [
+        {
+            "role": "user",
+            "content": "hello",
+            "role_id": "explicit-user",
+            "created_at": "2026-05-28T00:00:00+00:00",
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+    ]
+
+    with patch.object(
+        client._async_client,
+        "batch_add_messages",
+        return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
+    ) as mock_batch:
+        with patch(
+            "openviking_cli.client.sync_http.run_async",
+            return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
+        ) as mock_run:
+            result = client.batch_add_messages("batch-session", messages)
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert mock_run.called
+    mock_batch.assert_called_once_with("batch-session", messages, False)
 
 
 def test_run_async_from_foreign_event_loop_uses_shared_background_loop():
