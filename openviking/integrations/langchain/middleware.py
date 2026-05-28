@@ -26,11 +26,11 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     OpenVikingConnection,
+    apply_commit_policy,
     call_openviking,
     ensure_client,
     extract_message_text,
     get_latest_user_text,
-    maybe_commit_session,
 )
 from openviking.integrations.langchain.context import (
     OPENVIKING_CONTEXT_MARKER,
@@ -203,7 +203,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                 added += 1
         self._captured_signatures[session_id] = current_signatures
         if added:
-            maybe_commit_session(client, session_id, self.commit_policy)
+            apply_commit_policy(client, session_id, self.commit_policy)
         return None
 
     def _resolve_session_id(self, state: dict[str, Any], runtime: Any) -> str:
