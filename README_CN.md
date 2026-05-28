@@ -547,20 +547,91 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
 
 #### 1.1 各 Agent 基座上的 LOCOMO 测试结果
 
-| 实验编号 | 方案 | Query 平均耗时 | 问答准确率 | Agent 总输入 Token |
-|:-------:|:----|:-------------|-----------:|------------------:|
-| **OpenClaw 基座** | | | | |
-| 1 | OpenClaw + 原生 memory-core | 95.14s | 24.20% | 392,559,404 |
-| 2 | OpenClaw + Mem0 | **37.6s** | 56.62% | 42,118,285 |
-| 3 | OpenClaw + SuperMemory | 109.3s | 42.99% | 88,304,113 |
-| 4 | OpenClaw + 百炼记忆库 | 41.6s | 39.55% | 35,206,037 |
-| **5** | **OpenClaw + OpenViking** | **38.8s** | **82.08%** | **37,423,456** |
-| **Hermes 基座** | | | | |
-| 6 | Hermes Native Memory | 82.4s (3.57 轮/query) | 33.38% | 79,228,398 |
-| **7** | **Hermes + OpenViking** | **27.9s** (1.55 轮/query) | **82.86%** | **52,026,755** |
-| **Claude Code 基座** | | | | |
-| 8 | Claude Code Auto-Memory | 49.1s (7.2 轮/query) | 57.21% | 353,306,422 |
-| **9** | **Claude Code + OpenViking** | **20.4s** (2.6 轮/query) | **80.32%** | **129,968,899** |
+<table style="width: 100%;">
+  <thead>
+    <tr>
+      <th style="text-align: center;">实验编号</th>
+      <th style="text-align: left;">方案</th>
+      <th style="text-align: right;">Query 平均耗时</th>
+      <th style="text-align: right;">问答准确率</th>
+      <th style="text-align: right;">Agent 总输入 Token</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center; font-weight: bold;" colspan="5">OpenClaw 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">1</td>
+      <td style="text-align: left;">OpenClaw + 原生 memory-core</td>
+      <td style="text-align: right;">95.14s</td>
+      <td style="text-align: right;">24.20%</td>
+      <td style="text-align: right;">392,559,404</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">2</td>
+      <td style="text-align: left;">OpenClaw + Mem0</td>
+      <td style="text-align: right; font-weight: bold;">37.6s</td>
+      <td style="text-align: right;">56.62%</td>
+      <td style="text-align: right;">42,118,285</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">3</td>
+      <td style="text-align: left;">OpenClaw + SuperMemory</td>
+      <td style="text-align: right;">109.3s</td>
+      <td style="text-align: right;">42.99%</td>
+      <td style="text-align: right;">88,304,113</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">4</td>
+      <td style="text-align: left;">OpenClaw + 百炼记忆库</td>
+      <td style="text-align: right;">41.6s</td>
+      <td style="text-align: right;">39.55%</td>
+      <td style="text-align: right;">35,206,037</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">5</td>
+      <td style="text-align: left; font-weight: bold;">OpenClaw + OpenViking</td>
+      <td style="text-align: right; font-weight: bold;">38.8s</td>
+      <td style="text-align: right; font-weight: bold;">82.08%</td>
+      <td style="text-align: right; font-weight: bold;">37,423,456</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;" colspan="5">Hermes 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">6</td>
+      <td style="text-align: left;">Hermes Native Memory</td>
+      <td style="text-align: right;">82.4s (3.57 轮/query)</td>
+      <td style="text-align: right;">33.38%</td>
+      <td style="text-align: right;">79,228,398</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">7</td>
+      <td style="text-align: left; font-weight: bold;">Hermes + OpenViking</td>
+      <td style="text-align: right; font-weight: bold;">27.9s (1.55 轮/query)</td>
+      <td style="text-align: right; font-weight: bold;">82.86%</td>
+      <td style="text-align: right; font-weight: bold;">52,026,755</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;" colspan="5">Claude Code 基座</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">8</td>
+      <td style="text-align: left;">Claude Code Auto-Memory</td>
+      <td style="text-align: right;">49.1s (7.2 轮/query)</td>
+      <td style="text-align: right;">57.21%</td>
+      <td style="text-align: right;">353,306,422</td>
+    </tr>
+    <tr>
+      <td style="text-align: center; font-weight: bold;">9</td>
+      <td style="text-align: left; font-weight: bold;">Claude Code + OpenViking</td>
+      <td style="text-align: right; font-weight: bold;">20.4s (2.6 轮/query)</td>
+      <td style="text-align: right; font-weight: bold;">80.32%</td>
+      <td style="text-align: right; font-weight: bold;">129,968,899</td>
+    </tr>
+  </tbody>
+</table>
 
 #### 1.2 关键效率提升汇总
 
