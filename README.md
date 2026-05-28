@@ -29,6 +29,8 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 ***
 
+✨ **May 2026 Update**: Updated benchmark results across User Memory, Agent Memory, and Knowledge Base QA scenarios → see [Evaluation Highlights](#evaluation-highlights).
+
 ## Overview
 
 ### Challenges in Agent Development
@@ -66,7 +68,7 @@ OpenViking 1.0 has been evaluated across three scenarios: long-conversation user
 On the LoCoMo benchmark, OpenViking improves long-context QA accuracy while reducing both latency and token usage across multiple agent integrations:
 
 | Integration | Accuracy | Avg. Query Time | Total Input Tokens |
-| ----------- | -------- | --------------- | ------------------ |
+|:----------- | --------:| --------------:| -----------------:|
 | OpenClaw + native memory | 24.20% | 95.14s | 392,559,404 |
 | OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
 | Hermes native memory | 33.38% | 82.4s | 79,228,398 |
