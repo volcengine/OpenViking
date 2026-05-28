@@ -392,6 +392,28 @@ describe("Tool: memory_store (behavioral)", () => {
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
     expect(body.peer_id).toBe("wx_user-01_abc");
+
+    const createCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/sessions"),
+    );
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(String((createCall![1] as RequestInit).body))).toMatchObject({
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+
+    const commitCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/commit"),
+    );
+    expect(commitCall).toBeDefined();
+    expect(JSON.parse(String((commitCall![1] as RequestInit).body))).toMatchObject({
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
   });
 
   it("does not populate peer_id for user writes by default", async () => {

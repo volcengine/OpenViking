@@ -42,6 +42,16 @@ export type CommitSessionResult = {
   trace_id?: string;
 };
 
+export type OVMemoryTargetPolicy = {
+  enabled?: boolean;
+  types?: string[] | null;
+};
+
+export type OVMemoryPolicy = {
+  self?: OVMemoryTargetPolicy;
+  peer?: OVMemoryTargetPolicy;
+};
+
 export type TaskResult = {
   task_id: string;
   task_type: string;
@@ -350,6 +360,39 @@ export class OpenVikingClient {
 
   async healthCheck(): Promise<void> {
     await this.request<{ status: string }>("/health");
+  }
+
+  async createSession(
+    sessionId: string,
+    options?: { memoryPolicy?: OVMemoryPolicy },
+    agentId?: string,
+  ): Promise<{ session_id: string; user?: unknown }> {
+    const body: Record<string, unknown> = { session_id: sessionId };
+    if (options?.memoryPolicy) {
+      body.memory_policy = options.memoryPolicy;
+    }
+    return this.request<{ session_id: string; user?: unknown }>(
+      "/api/v1/sessions",
+      { method: "POST", body: JSON.stringify(body) },
+      agentId,
+    );
+  }
+
+  async ensureSession(
+    sessionId: string,
+    options?: { memoryPolicy?: OVMemoryPolicy },
+    agentId?: string,
+  ): Promise<boolean> {
+    try {
+      await this.createSession(sessionId, options, agentId);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("[ALREADY_EXISTS]")) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
@@ -794,6 +837,7 @@ export class OpenVikingClient {
        * preserves the pre-v2 "archive everything" behavior.
        */
       keepRecentCount?: number;
+      memoryPolicy?: OVMemoryPolicy;
     },
   ): Promise<CommitSessionResult> {
     const keepRecentCount =
@@ -813,6 +857,9 @@ export class OpenVikingClient {
     const body: Record<string, unknown> = {};
     if (keepRecentCount > 0) {
       body.keep_recent_count = keepRecentCount;
+    }
+    if (options?.memoryPolicy) {
+      body.memory_policy = options.memoryPolicy;
     }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,

@@ -331,6 +331,54 @@ describe("OpenVikingClient resource and skill import", () => {
       memories_extracted: { core: 1 },
     });
   });
+
+  it("sends memory_policy when creating a session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.createSession("s1", {
+      memoryPolicy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1933/api/v1/sessions");
+    expect(JSON.parse(String(init.body))).toEqual({
+      session_id: "s1",
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+  });
+
+  it("sends memory_policy when committing a session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({
+      session_id: "s1",
+      status: "accepted",
+      archived: true,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.commitSession("s1", {
+      memoryPolicy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+  });
 });
 
 describe("OpenVikingClient tenant headers (advanced accountId / userId overrides)", () => {

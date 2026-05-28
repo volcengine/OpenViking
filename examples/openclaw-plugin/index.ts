@@ -13,7 +13,13 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import { formatMessageFaithful, resolveMessagePeerId, resolveSearchPeerId, toPeerId } from "./context-engine.js";
+import {
+  defaultMemoryPolicyForPeerRole,
+  formatMessageFaithful,
+  resolveMessagePeerId,
+  resolveSearchPeerId,
+  toPeerId,
+} from "./context-engine.js";
 import {
   compileSessionPatterns,
   shouldBypassSession,
@@ -619,6 +625,7 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
+    const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
 
@@ -1257,6 +1264,13 @@ const contextEnginePlugin = {
               personPeerId: toPeerId(extractToolSenderId(ctx)),
               assistantPeerId: session.agentId,
             });
+            if (defaultMemoryPolicy) {
+              await c.ensureSession(
+                sessionId,
+                { memoryPolicy: defaultMemoryPolicy },
+                session.agentId,
+              );
+            }
             await c.addSessionMessage(
               sessionId,
               role,
@@ -1269,6 +1283,7 @@ const contextEnginePlugin = {
               wait: true,
               agentId: session.agentId,
               keepRecentCount: 0,
+              memoryPolicy: defaultMemoryPolicy,
             });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {

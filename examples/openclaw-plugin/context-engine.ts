@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
-import type { OpenVikingClient, OVMessage } from "./client.js";
+import type { OpenVikingClient, OVMemoryPolicy, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
@@ -85,6 +85,18 @@ export function resolveSearchPeerId(params: {
     ...params,
     role,
   });
+}
+
+export function defaultMemoryPolicyForPeerRole(
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"],
+): OVMemoryPolicy | undefined {
+  if (peerRole === "none") {
+    return undefined;
+  }
+  return {
+    self: { enabled: true },
+    peer: { enabled: true },
+  };
 }
 
 type IngestBatchResult = {
@@ -931,6 +943,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
   const diagEnabled = cfg.emitStandardDiagnostics;
   const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
+  const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
   const diag = (stage: string, sessionId: string, data: Record<string, unknown>) =>
     emitDiag(logger, stage, sessionId, data, diagEnabled);
 
@@ -962,6 +975,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         wait: true,
         agentId,
         keepRecentCount: 0,
+        memoryPolicy: defaultMemoryPolicy,
       });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
@@ -1389,6 +1403,13 @@ export function createMemoryOpenVikingContextEngine(params: {
         const client = await getClient();
         const createdAt = pickLatestCreatedAt(turnMessages);
         const senderPeerId = toPeerId(sender.senderId);
+        if (defaultMemoryPolicy) {
+          await client.ensureSession(
+            OVSessionId,
+            { memoryPolicy: defaultMemoryPolicy },
+            agentId,
+          );
+        }
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
@@ -1447,6 +1468,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: false,
           agentId,
           keepRecentCount: cfg.commitKeepRecentCount,
+          memoryPolicy: defaultMemoryPolicy,
         });
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
@@ -1544,6 +1566,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: true,
           agentId,
           keepRecentCount: 0,
+          memoryPolicy: defaultMemoryPolicy,
         });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
