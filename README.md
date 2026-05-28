@@ -29,7 +29,7 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 ---
 
-✨ **May 2026 Update**: All benchmark results refreshed with GPT-4o-mini judge &rarr; see [Evaluation Highlights](#evaluation-highlights).
+✨ **May 2026 Update**: Update benchmark results for User Memory, Agent Memory, and Knowledge Base QA scenarios &rarr; see [Evaluation Highlights](#evaluation-highlights).
 
 ## Overview
 
