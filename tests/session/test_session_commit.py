@@ -154,6 +154,36 @@ class TestCommit:
         assert result2.get("status") == "accepted"
         assert result2.get("task_id") is not None
 
+    async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
+        self, client: AsyncOpenViking
+    ):
+        session = client.session(session_id="commit_keep_recent_count_test")
+
+        session.add_message("user", [TextPart("Round 1 user")])
+        session.add_message("assistant", [TextPart("Round 1 assistant")])
+        session.add_message("user", [TextPart("Round 2 user")])
+        session.add_message("assistant", [TextPart("Round 2 assistant")])
+
+        result = await session.commit_async(keep_recent_count=2)
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert len(session.messages) == 2
+        assert [message.parts[0].text for message in session.messages] == [
+            "Round 2 user",
+            "Round 2 assistant",
+        ]
+
+        session_info = await client.get_session(session.session_id)
+        assert session_info["pending_tokens"] == 0
+
+        context = await session.get_session_context()
+        assert context["latest_archive_overview"]
+        assert [message["parts"][0]["text"] for message in context["messages"]] == [
+            "Round 2 user",
+            "Round 2 assistant",
+        ]
+
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
         self, client: AsyncOpenViking
     ):

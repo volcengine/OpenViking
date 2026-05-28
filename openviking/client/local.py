@@ -463,13 +463,20 @@ class LocalClient(BaseClient):
         await self._service.sessions.delete(session_id, self._ctx)
 
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        keep_recent_count: int = 0,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         execution = await run_with_telemetry(
             operation="session.commit",
             telemetry=telemetry,
-            fn=lambda: self._service.sessions.commit(session_id, self._ctx),
+            fn=lambda: self._service.sessions.commit(
+                session_id,
+                self._ctx,
+                keep_recent_count=keep_recent_count,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -518,6 +525,46 @@ class LocalClient(BaseClient):
             execution.result,
             execution.telemetry,
         )
+
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request."""
+        execution = await run_with_telemetry(
+            operation="session.batch_add_messages",
+            telemetry=telemetry,
+            fn=lambda: self._batch_add_messages_impl(session_id, messages),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _batch_add_messages_impl(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        added = 0
+        last_result: Dict[str, Any] = {"session_id": session_id, "message_count": 0}
+        for message in messages:
+            last_result = await self._add_message_impl(
+                session_id,
+                message["role"],
+                message.get("content"),
+                message.get("parts"),
+                message.get("created_at"),
+                message.get("role_id"),
+            )
+            added += 1
+        return {
+            "session_id": session_id,
+            "message_count": last_result["message_count"],
+            "added": added,
+        }
 
     async def _add_message_impl(
         self,

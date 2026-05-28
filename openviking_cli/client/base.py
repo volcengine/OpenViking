@@ -264,9 +264,18 @@ class BaseClient(ABC):
 
     @abstractmethod
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        keep_recent_count: int = 0,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Commit a session (archive and extract memories)."""
+        """Commit a session (archive and extract memories).
+
+        Args:
+            session_id: Session ID
+            keep_recent_count: Number of recent live messages to retain after commit.
+            telemetry: Whether to attach operation telemetry data to the result.
+        """
         ...
 
     @abstractmethod

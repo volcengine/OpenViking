@@ -249,6 +249,7 @@ class VikingSearchTool(OVFileTool):
     ) -> str:
         try:
             client = await self._get_client(tool_context)
+            await client._load_namespace_policy()
             search_client = client.admin_user_client or client.client
 
             # If no target_uri specified, use memory_user_ids to search specific user memories
