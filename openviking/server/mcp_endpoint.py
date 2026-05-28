@@ -32,11 +32,12 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.parse.parsers.code.ast.code_tools import (
+    CODE_SEARCH_CONCURRENCY,
     expand_symbol,
+    filter_code_uris,
     outline_file,
     search_symbols,
 )
-from openviking.parse.parsers.code.ast.extractor import get_extractor
 from openviking.server.auth import normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -53,6 +54,9 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+
+# Backwards-compatible alias for existing tests that import this private name.
+_filter_code_uris = filter_code_uris
 
 logger = get_logger(__name__)
 
@@ -787,10 +791,6 @@ async def forget(uri: str, recursive: bool = False) -> str:
 
 # -- code navigation -------------------------------------------------------
 
-_CODE_SEARCH_FILE_CAP = 200
-_CODE_SEARCH_CONCURRENCY = 10
-
-
 def _require_viking_uri(uri: str) -> Optional[str]:
     """Return error message if uri is not a viking:// URI, else None."""
     if not isinstance(uri, str) or not uri.startswith("viking://"):
@@ -801,42 +801,16 @@ def _require_viking_uri(uri: str) -> Optional[str]:
     return None
 
 
-def _entry_field(entry, key: str, fallback_key: str, default):
-    """ls entries are dicts (camelCase) or objects (snake_case); read both."""
-    if isinstance(entry, dict):
-        return entry.get(key, default)
-    return getattr(entry, fallback_key, default)
-
-
-def _filter_code_uris(entries) -> tuple[list[str], bool]:
-    """Pick file entries whose extension is supported by the AST extractor, capped.
-
-    Returns (uris, capped) where capped is True when the 200-file limit was hit
-    and there may be more matching files beyond the cap.
-    """
-    extractor = get_extractor()
-    uris: list[str] = []
-    for e in entries:
-        is_dir = _entry_field(e, "isDir", "is_dir", False)
-        if is_dir:
-            continue
-        entry_uri = _entry_field(e, "uri", "uri", "")
-        if not entry_uri:
-            continue
-        if extractor.supports(entry_uri):
-            uris.append(entry_uri)
-            if len(uris) > _CODE_SEARCH_FILE_CAP:
-                return uris[:_CODE_SEARCH_FILE_CAP], True
-    return uris, False
-
-
 @mcp.tool()
 async def code_outline(uri: str) -> str:
-    """Show a file's symbol structure — classes, functions, methods, and their line ranges.
-    Returns a structural map without reading implementation bodies.
+    """Show a confirmed viking:// source file's symbol structure: classes, functions,
+    methods, and line ranges. Returns a structural map without reading implementation bodies.
 
-    Use to survey a file before deciding what to read. More efficient than reading the whole
-    file when you only need to locate a method or understand a file's API surface.
+    Use only for source files inside an ingested code repository, after you know the exact
+    viking:// file URI. Do not use on directories, documentation-only files, plain text notes,
+    chat/session history, or files that are not supported source code.
+
+    Use read instead when you need the full file content.
     Typical workflow: code_search → code_outline → code_expand.
 
     uri must be a viking:// file URI (not a directory)."""
@@ -856,13 +830,17 @@ async def code_outline(uri: str) -> str:
 
 @mcp.tool()
 async def code_search(query: str, uri: str) -> str:
-    """Search symbol names (class / function / method) by substring across a viking://
-    directory. Returns structured results: symbol type, class context, file URI, line range.
+    """Search AST-supported symbol names (class / function / method) by substring across a
+    confirmed viking:// code repository or source subtree. Returns structured results:
+    symbol type, class context, file URI, line range.
 
-    Use when you don't know which file contains the symbol you're looking for. Returns
-    structural context (class ownership, location) that raw text search does not provide.
+    Use only after you have evidence that the uri contains supported source files. If you have
+    not confirmed that this is an ingested code repository, first use ls/glob/read or
+    add_resource output to verify it.
 
-    Skip if you already know the exact file; use code_outline or Read directly.
+    Do not use for general memory search, documentation-only resources, plain text notes,
+    chat/session history, or local filesystem paths. Skip if you already know the exact file;
+    use code_outline or read directly.
 
     Scans up to 200 source files. Narrow uri to a subdirectory for deeper coverage.
     uri is required to avoid accidentally walking the entire VikingFS."""
@@ -879,11 +857,11 @@ async def code_search(query: str, uri: str) -> str:
     except Exception as exc:
         return f"Error: failed to list {uri}: {exc}"
 
-    code_uris, capped = _filter_code_uris(entries or [])
+    code_uris, capped = filter_code_uris(entries or [])
     if not code_uris:
         return f"No supported source files found under {uri}"
 
-    semaphore = asyncio.Semaphore(_CODE_SEARCH_CONCURRENCY)
+    semaphore = asyncio.Semaphore(CODE_SEARCH_CONCURRENCY)
 
     async def _read(u: str) -> Optional[tuple[str, str]]:
         async with semaphore:
@@ -906,11 +884,13 @@ async def code_search(query: str, uri: str) -> str:
 
 @mcp.tool()
 async def code_expand(uri: str, symbol: str) -> str:
-    """Return the full source of a single named symbol (function, class, or method).
+    """Return the full source of a single named symbol from a confirmed viking:// source file.
     Reads only that symbol's body, avoiding the overhead of reading an entire file.
 
-    Use when you need the implementation of one specific symbol. For reading multiple
-    symbols from the same file, Read is often more efficient.
+    Use only after code_outline or other evidence shows the symbol exists in that file.
+    Do not use for broad exploration, non-code files, documentation, chat/session history,
+    or unverified viking:// resources. For reading multiple symbols from the same file,
+    read is often more efficient.
 
     `symbol` accepts 'bar' (top-level) or 'Foo.bar' (method).
     uri must be a viking:// file URI."""
