@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMemoryPolicy, OVMessage } from "./client.js";
-import type { MemoryOpenVikingConfig } from "./config.js";
+import type { MemoryOpenVikingConfig, ParsedMemoryOpenVikingConfig } from "./config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
-  buildAutoRecallContext,
+  buildGatedAgentExperienceRecallContext,
+  buildLongTermMemoryRecallContext,
+  buildOpenVikingContextBlock,
   prepareRecallQuery,
 } from "./auto-recall.js";
 import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnMessages,
+  stripOpenVikingContextInjection,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -196,7 +199,7 @@ type RecallQueryInput = {
   source: "latestUserMessage" | "prompt" | "none";
 };
 
-type AssembleRecall = Awaited<ReturnType<typeof buildAutoRecallContext>> & {
+type AssembleRecall = Awaited<ReturnType<typeof buildLongTermMemoryRecallContext>> & {
   queryChars: number;
 };
 
@@ -310,7 +313,11 @@ function extractAgentMessageText(message: AgentMessage | undefined): string {
 }
 
 function hasAutoRecallBlock(message: AgentMessage | undefined): boolean {
-  return extractAgentMessageText(message).includes(AUTO_RECALL_SOURCE_MARKER);
+  const text = extractAgentMessageText(message);
+  return (
+    text.includes(AUTO_RECALL_SOURCE_MARKER) ||
+    /<openviking-context\b/i.test(text)
+  );
 }
 
 function prependTextToMessageContent(content: unknown, text: string): unknown {
@@ -1094,7 +1101,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
-  cfg: Required<MemoryOpenVikingConfig>;
+  cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
@@ -1314,7 +1321,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       );
     }
 
-    const recall = await buildAutoRecallContext({
+    const recall = await buildLongTermMemoryRecallContext({
       cfg,
       client: params.client ?? await getClient(),
       agentId: params.agentId,
@@ -1456,7 +1463,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             latestRole: latestMessage?.role ?? null,
           });
         }
-        if (!cfg.autoRecall) {
+        const longTermRecallEnabled = cfg.autoRecall;
+        const experienceRecallEnabled = cfg.agentExperience.enabled;
+        if (!longTermRecallEnabled && !experienceRecallEnabled) {
           return assemblePassthrough(OVSessionId, "transform_context_auto_recall_disabled", messages, originalTokens);
         }
         if (hasAutoRecallBlock(latestMessage)) {
@@ -1472,23 +1481,63 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         try {
+          const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
           const peerId = resolveAssembleRecallPeerId(agentId, sender);
-          const recall = await buildRecallForAssemble({
-            ovSessionId: OVSessionId,
-            agentId,
-            peerId,
-            queryInput: recallQueryInput,
+          const recallQuery = prepareRecallQuery(recallQueryInput.text);
+          if (!recallQuery.query || recallQuery.query.length < 5) {
+            diag("assemble_recall_skip", OVSessionId, {
+              reason: "empty_or_short_query",
+              querySource: recallQueryInput.source,
+              queryChars: recallQuery.finalChars,
+              peerId: peerId ?? null,
+            });
+            return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
+          }
+          if (recallQuery.truncated) {
+            logger.info(
+              `openviking: recall query truncated (` +
+                `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+            );
+          }
+          const experienceRecall = experienceRecallEnabled
+            ? await buildGatedAgentExperienceRecallContext({
+                cfg,
+                client,
+                agentId,
+                queryText: recallQuery.query,
+                sessionKey,
+                runtimeContext: assembleParams.runtimeContext,
+                logger,
+                verbose: (message) => logger.info(message),
+              })
+            : { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
+          const longTermRecall = longTermRecallEnabled
+            ? await buildLongTermMemoryRecallContext({
+                cfg,
+                client,
+                agentId,
+                peerId,
+                queryText: recallQuery.query,
+                logger,
+                verbose: (message) => logger.info(message),
+              })
+            : { memoryCount: 0, estimatedTokens: 0 };
+          const longTermRecallWithQuery: AssembleRecall = { ...longTermRecall, queryChars: recallQuery.finalChars };
+
+          const combinedBlock = buildOpenVikingContextBlock({
+            sections: [experienceRecall.block, longTermRecallWithQuery.section],
           });
 
-          if (!recall.block) {
+          if (!combinedBlock) {
             return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
-              ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId }),
+              ...recallDiagFields({ recall: longTermRecallWithQuery, queryInput: recallQueryInput, peerId }),
+              experienceCount: experienceRecall.count,
             });
           }
 
-          const withRecall = prependRecallToLatestUserMessage(messages, recall.block);
+          const withRecall = prependRecallToLatestUserMessage(messages, combinedBlock);
           const estimatedTokens = roughEstimate(withRecall);
           diag("assemble_result", OVSessionId, {
             passthrough: false,
@@ -1496,7 +1545,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             outputMessagesCount: withRecall.length,
             inputTokenEstimate: originalTokens,
             estimatedTokens,
-            ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId, sender }),
+            ...recallDiagFields({ recall: longTermRecallWithQuery, queryInput: recallQueryInput, peerId, sender }),
+            autoRecallExperienceCount: experienceRecall.count,
+            autoRecallExperienceTokens: experienceRecall.estimatedTokens,
             messages: messageDigest(withRecall),
           });
           return { messages: withRecall, estimatedTokens };
@@ -1540,18 +1591,21 @@ export function createMemoryOpenVikingContextEngine(params: {
             });
           }
         }
+        const recallContextBlock = recall.section
+          ? buildOpenVikingContextBlock({ sections: [recall.section] })
+          : "";
         let ctx;
         try {
           ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
         } catch (ctxErr) {
-          if (recall.block) {
+          if (recallContextBlock) {
             return assembleRecallOnlyResult({
               ovSessionId: OVSessionId,
               reason: "recall_only_context_unavailable",
               baseMessages: messages,
               originalTokens,
               recall,
-              recallBlock: recall.block,
+              recallBlock: recallContextBlock,
               queryInput: recallQueryInput,
               peerId,
               sender,
@@ -1566,14 +1620,14 @@ export function createMemoryOpenVikingContextEngine(params: {
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
-          if (recall.block) {
+          if (recallContextBlock) {
             return assembleRecallOnlyResult({
               ovSessionId: OVSessionId,
               reason: "recall_only_no_ov_data",
               baseMessages: messages,
               originalTokens,
               recall,
-              recallBlock: recall.block,
+              recallBlock: recallContextBlock,
               queryInput: recallQueryInput,
               peerId,
               sender,
@@ -1604,8 +1658,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const outputMessages = recall.block
-          ? injectRecallIntoContext(sanitized, recall.block)
+        const outputMessages = recallContextBlock
+          ? injectRecallIntoContext(sanitized, recallContextBlock)
           : sanitized;
         const assembledTokens = roughEstimate(outputMessages) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
@@ -1749,11 +1803,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
             if (part.type === "text") {
-              // 清理 relevant-memories 块
-              const cleaned = part.text
-                .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
-                .replace(/\s+/g, " ")
-                .trim();
+              // Strip OpenViking-injected context blocks.
+              const cleaned = stripOpenVikingContextInjection(part.text);
               return { type: "text" as const, text: cleaned };
             } else {
               return {

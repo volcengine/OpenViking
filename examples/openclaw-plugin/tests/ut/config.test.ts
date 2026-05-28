@@ -27,6 +27,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
+    expect(cfg.agentExperience.enabled).toBe(false);
   });
 
   it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
@@ -82,6 +83,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ foo: 1 }),
     ).toThrow("unknown keys");
+  });
+
+  it("throws on unknown agentExperience keys", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        agentExperience: { autoRecall: true },
+      }),
+    ).toThrow("agentExperience has unknown keys");
   });
 
   it("resolves environment variables in apiKey", () => {
