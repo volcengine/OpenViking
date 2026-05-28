@@ -1,116 +1,106 @@
 #!/usr/bin/env python3
-"""Step 4: Benchmark grep performance for the current engine config.
+"""Step 2: Benchmark grep performance for the current engine config.
 
 Prerequisites:
-  1. Run step1_generate.py to create test data
-  2. Run step2_quick_add_resource.py to upload files (skip VLM+embedding)
-  3. Run step3_build_index.py to build index (embedding + content)
-  4. Set ov.conf grep config and restart the server
+  1. Run step1_add_resource.py to import repos (includes VLM+embedding)
+  2. Set ov.conf grep config and restart the server
 
 NOTE: `engine` and `switch_to_remote_threshold` are server-side config
 (ov.conf `grep` section). To benchmark different engines, update ov.conf
 and restart the server before each run.
 
+KEYWORDS: Fill the KEYWORDS list below with real terms from the imported
+repos. Each keyword will be tested individually, plus multi-keyword regex
+and no-match scenarios.
+
 Usage:
   # Run 1: benchmark with fs engine
   #   1. Set ov.conf: "grep": {"engine": "fs"}
   #   2. Restart server
-  python3 step4_benchmark.py --engine-label fs
+  python3 step2_benchmark.py --engine-label fs
 
   # Run 2: benchmark with auto engine (bm25)
   #   1. Set ov.conf: "grep": {"engine": "auto", "switch_to_remote_threshold": 0}
   #   2. Restart server
-  python3 step4_benchmark.py --engine-label auto --compare step4_result_fs.json
+  python3 step2_benchmark.py --engine-label auto --compare step2_result_fs.json
 
-Results are saved to step4_result_{engine_label}.json.
+Results are saved to step2_result_{engine_label}.json.
 When --compare is given, a side-by-side comparison table is printed.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import time
 
+from openviking.sync_client import SyncOpenViking
+
 BASE_URI = "viking://resources/benchmark"
-OV_CMD = ["ov", "--account", "default", "--user", "default"]
 RUNS = 3
 WARMUP = 1
 
-# Test cases: (label, pattern, uri)
-TEST_CASES = [
-    # --- Single keyword ---
-    ("single keyword (VikingDB)", "VikingDB", BASE_URI),
-    ("single keyword (FullText)", "FullText", BASE_URI),
-    # --- Multi-keyword (regex alternation) ---
-    ("2 keywords (VikingDB|FullText)", "VikingDB|FullText", BASE_URI),
-    ("3 keywords (VikingDB|FullText|bm25)", "VikingDB|FullText|bm25", BASE_URI),
-    # --- Rare keyword (lower hit count) ---
-    ("rare keyword (search_by_keywords)", "search_by_keywords", BASE_URI),
-    # --- Non-existent keyword (0 matches) ---
-    ("no-match 1 keyword (zzz_nonexistent)", "zzz_nonexistent", BASE_URI),
-    ("no-match 2 keywords (zzz_a|zzz_b)", "zzz_a|zzz_b", BASE_URI),
-    ("no-match 3 keywords (zzz_a|zzz_b|zzz_c)", "zzz_a|zzz_b|zzz_c", BASE_URI),
-    # --- Subdirectory scope (~8K files per level0 dir) ---
-    ("subdir level0_00, VikingDB (~8K files)", "VikingDB", f"{BASE_URI}/level0_00"),
-    ("subdir level0_00, no-match (~8K files)", "zzz_nonexistent", f"{BASE_URI}/level0_00"),
-]
+KEYWORDS: list[str] = []
 
 
-def run_grep(pattern: str, uri: str) -> tuple[float, int]:
-    """Run a single grep command, return (elapsed_seconds, match_count)."""
-    cmd = OV_CMD + ["--output", "json", "grep", "--uri", uri, "-n", "100000", pattern]
+def build_test_cases() -> list[tuple[str, str, str]]:
+    cases = []
 
-    start = time.monotonic()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    elapsed = time.monotonic() - start
+    for kw in KEYWORDS:
+        cases.append((f"keyword: {kw}", kw, BASE_URI))
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ov grep failed (exit={result.returncode}): {result.stderr.strip()[:200]}"
+    if len(KEYWORDS) >= 2:
+        cases.append(
+            (f"multi 2: {KEYWORDS[0]}|{KEYWORDS[1]}", f"{KEYWORDS[0]}|{KEYWORDS[1]}", BASE_URI)
+        )
+    if len(KEYWORDS) >= 3:
+        cases.append(
+            (
+                f"multi 3: {KEYWORDS[0]}|{KEYWORDS[1]}|{KEYWORDS[2]}",
+                f"{KEYWORDS[0]}|{KEYWORDS[1]}|{KEYWORDS[2]}",
+                BASE_URI,
+            )
         )
 
-    # Find JSON line in stdout (skip echo_command output)
-    json_line = None
-    for line in result.stdout.strip().splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            json_line = line
-            break
+    cases.append(("no-match: zzz_nonexistent_benchmark", "zzz_nonexistent_benchmark", BASE_URI))
+    cases.append(("no-match 2: zzz_a|zzz_b", "zzz_a|zzz_b", BASE_URI))
+
+    return cases
+
+
+def run_grep(client: SyncOpenViking, pattern: str, uri: str) -> tuple[float, int]:
+    start = time.monotonic()
+    result = client.grep(uri=uri, pattern=pattern, node_limit=100000)
+    elapsed = time.monotonic() - start
 
     match_count = 0
-    if json_line:
-        try:
-            resp = json.loads(json_line)
-            grep_result = resp.get("result", resp)
-            match_count = len(grep_result.get("matches", []))
-        except json.JSONDecodeError:
-            pass
+    if isinstance(result, dict):
+        matches = result.get("matches", [])
+        match_count = len(matches)
 
     return elapsed, match_count
 
 
-def benchmark_engine(engine_label: str) -> list[dict]:
-    """Run all test cases for the current engine config."""
+def benchmark_engine(client: SyncOpenViking, engine_label: str) -> list[dict]:
+    test_cases = build_test_cases()
     results = []
 
-    for label, pattern, uri in TEST_CASES:
+    for label, pattern, uri in test_cases:
         print(f"  {label} ...", end=" ", flush=True)
 
-        # Warmup
         for _ in range(WARMUP):
             try:
-                run_grep(pattern, uri)
+                run_grep(client, pattern, uri)
             except Exception:
                 pass
 
-        # Measured runs
         times = []
         match_count = 0
         failed = False
         for _ in range(RUNS):
             try:
-                elapsed, matches = run_grep(pattern, uri)
+                elapsed, matches = run_grep(client, pattern, uri)
                 times.append(elapsed)
                 match_count = matches
             except Exception as e:
@@ -143,8 +133,6 @@ def benchmark_engine(engine_label: str) -> list[dict]:
 def print_comparison(
     current_label: str, current: list[dict], compare_label: str, compare: list[dict]
 ):
-    """Print side-by-side comparison table."""
-    # Build lookup by label
     compare_by_label = {}
     for r in compare:
         if "error" not in r:
@@ -190,27 +178,34 @@ def main():
     parser.add_argument(
         "--compare",
         default=None,
-        help="Path to a previous step4_result_*.json file for side-by-side comparison",
+        help="Path to a previous step2_result_*.json file for side-by-side comparison",
     )
     args = parser.parse_args()
 
+    if not KEYWORDS:
+        print("WARNING: KEYWORDS list is empty. Fill it with real terms before running.")
+        print("         Edit step2_benchmark.py and add keywords to the KEYWORDS list.\n")
+
     print("=" * 80)
-    print(f"Step 4: Grep Performance Benchmark — engine={args.engine_label}")
+    print(f"Step 2: Grep Performance Benchmark — engine={args.engine_label}")
     print("=" * 80)
     print()
     print("Ensure ov.conf has the desired grep config and the server is restarted.")
     print()
 
-    # Run benchmark
-    results = benchmark_engine(args.engine_label)
+    client = SyncOpenViking()
+    client.initialize()
 
-    # Save results
-    output_file = f"step4_result_{args.engine_label}.json"
+    try:
+        results = benchmark_engine(client, args.engine_label)
+    finally:
+        client.close()
+
+    output_file = f"step2_result_{args.engine_label}.json"
     with open(output_file, "w") as f:
         json.dump({"engine_label": args.engine_label, "results": results}, f, indent=2)
     print(f"\nResults saved to {output_file}")
 
-    # Print current results table
     print()
     print(f"{'Label':<50} {'Avg(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} {'Matches':>10}")
     print("-" * 95)
@@ -224,7 +219,6 @@ def main():
             )
     print()
 
-    # Compare with previous results
     if args.compare:
         if not os.path.isfile(args.compare):
             print(f"Warning: compare file not found: {args.compare}")
