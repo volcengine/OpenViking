@@ -84,7 +84,7 @@ pub fn unwrap_success_envelope(json: Value, preserve_profile: bool) -> Value {
         return result.clone();
     }
 
-    let Some(profile) = json.get("profile") else {
+    let Some(profile) = json.get("profile").filter(|profile| !profile.is_null()) else {
         return result.clone();
     };
 
@@ -544,6 +544,26 @@ mod tests {
                     "line two"
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_drops_null_profile_for_value_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": null
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!([
+                {"id": "1"}
+            ])
         );
     }
 
