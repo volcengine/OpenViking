@@ -110,7 +110,7 @@ On multi-hop RAG tasks from HotpotQA, increasing OpenViking retrieval from top-5
 #### 3.1 Single-turn RAG Across 5 Open-source Datasets
 
 | Method | Retrieval Pattern | Average Accuracy | Indexing Tokens | Tokens / QA | Retrieval Latency |
-|:------ | :--------------- | ----------------:| --------------:| ----------:| ----------------:|
+|:-----: | :---------------:| ----------------:| --------------:| ----------:| ----------------:|
 | Naive RAG | Vector retrieval | 53.93% | 2,755,356 | 1,435 | **0.13s** |
 | PageIndex | Vector + tree structure | 36.75% | 5,609,206 | 710,480 | 84.60s |
 | HippoRAG 2 | Vector + knowledge graph | 44.50% | 124,963,618 | **637** | 18.83s |
