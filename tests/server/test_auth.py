@@ -523,7 +523,7 @@ async def test_root_tenant_scoped_requests_rejected_in_api_key_mode():
     request = _make_request("/api/v1/resources", auth_enabled=True)
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
-    with pytest.raises(PermissionDeniedError, match="ROOT/ADMIN API keys"):
+    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
         await get_request_context(request, identity)
 
 
@@ -551,7 +551,7 @@ async def test_root_tenant_scoped_requests_reject_explicit_identity_in_api_key_m
     )
     identity = ResolvedIdentity(role=Role.ROOT, account_id="acme", user_id="alice")
 
-    with pytest.raises(PermissionDeniedError, match="ROOT/ADMIN API keys"):
+    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
         await get_request_context(request, identity)
 
 
@@ -560,7 +560,7 @@ async def test_root_reindex_requests_rejected_in_api_key_mode():
     request = _make_request("/api/v1/content/reindex", auth_enabled=True)
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
-    with pytest.raises(PermissionDeniedError, match="ROOT/ADMIN API keys"):
+    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
         await get_request_context(request, identity)
 
 
@@ -604,7 +604,7 @@ async def test_root_debug_vector_requests_rejected_in_api_key_mode():
     request = _make_request("/api/v1/debug/vector/scroll", auth_enabled=True)
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
-    with pytest.raises(PermissionDeniedError, match="ROOT/ADMIN API keys"):
+    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
         await get_request_context(request, identity)
 
 

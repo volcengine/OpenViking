@@ -8,8 +8,8 @@ OpenViking uses a two-layer API key system:
 
 | Key Type | Created By | Role | Purpose |
 |----------|-----------|------|---------|
-| Root Key | Server config (`root_api_key`) | ROOT | Full access + admin operations |
-| User Key | Admin API | ADMIN or USER | Per-account access |
+| Root Key | Server config (`root_api_key`) | ROOT | Account management + selected system/monitoring operations |
+| User Key | Admin API | ADMIN or USER | Per-account data access; ADMIN can also manage users in its account |
 
 All API keys are plain random tokens with no embedded identity. The server resolves identity by first comparing against the root key, then looking up the user key index.
 
@@ -17,7 +17,7 @@ All API keys are plain random tokens with no embedded identity. The server resol
 
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
-| API key mode | `"api_key"` | API key. Data ownership is resolved from the user key. | Standard multi-tenant deployment |
+| API key mode | `"api_key"` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment |
 | Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
 | Dev mode | `"dev"` | No authentication, always ROOT | Local development only |
 
@@ -138,7 +138,9 @@ client = ov.SyncHTTPClient(
 }
 ```
 
-When you use a regular user key, the server derives `account` and `user` from the key. Do not send `X-OpenViking-Account` / `X-OpenViking-User` in `api_key` mode; those identity headers are accepted only in `trusted` mode.
+When you use a user key or admin key, the server derives `account` and `user`
+from the key. Do not send `X-OpenViking-Account` / `X-OpenViking-User` in
+`api_key` mode; those identity headers are accepted only in `trusted` mode.
 
 **CLI override flags**
 
@@ -176,7 +178,15 @@ The `--sudo` flag:
 
 ### Tenant Data Access
 
-Tenant-scoped data APIs (for example `ls`, `find`, resources, and sessions) must use a user key in `api_key` mode. Root/Admin keys are reserved for management and system APIs. If a deployment needs an upstream gateway to assert `account` / `user`, use `trusted` mode instead of passing identity headers with a Root/Admin key.
+Tenant-scoped data APIs (for example `ls`, `find`, resources, and sessions)
+must use a key that is bound to an account/user in `api_key` mode. That can be
+a `USER` key or an `ADMIN` key; an `ADMIN` key accesses data as its own user and
+cannot switch identity with `X-OpenViking-Account` / `X-OpenViking-User`.
+
+A `ROOT` key is not bound to a tenant user, so it cannot access tenant-scoped
+data APIs in `api_key` mode. If a deployment needs an upstream gateway to assert
+`account` / `user`, use `trusted` mode instead of passing identity headers with a
+root key.
 
 **ovcli.conf**
 

@@ -30,24 +30,22 @@ _ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
 
 _TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
-_API_KEY_PRIVILEGED_ALLOWED_PATHS = {
+_API_KEY_ROOT_ALLOWED_PATHS = {
     "/api/v1/system/status",
     "/api/v1/system/wait",
     "/api/v1/debug/health",
 }
-_API_KEY_PRIVILEGED_ALLOWED_PREFIXES = (
+_API_KEY_ROOT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
     "/api/v1/console",
 )
 
 
-def _api_key_privileged_role_can_access_path(role: Role, path: str) -> bool:
-    if path in _API_KEY_PRIVILEGED_ALLOWED_PATHS:
+def _api_key_root_can_access_path(path: str) -> bool:
+    if path in _API_KEY_ROOT_ALLOWED_PATHS:
         return True
-    if path.startswith(_API_KEY_PRIVILEGED_ALLOWED_PREFIXES):
-        return True
-    if role == Role.ADMIN and path == "/api/v1/content/reindex":
+    if path.startswith(_API_KEY_ROOT_ALLOWED_PREFIXES):
         return True
     return False
 
@@ -348,13 +346,14 @@ async def get_request_context(
     if (
         auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
-        and identity.role in {Role.ROOT, Role.ADMIN}
+        and identity.role == Role.ROOT
         and not identity.from_oauth
-        and not _api_key_privileged_role_can_access_path(identity.role, path)
+        and not _api_key_root_can_access_path(path)
     ):
         raise PermissionDeniedError(
-            "ROOT/ADMIN API keys cannot access tenant-scoped data APIs in api_key mode. "
-            "Use a user API key for data access, or trusted mode for upstream identity assertion."
+            "ROOT API keys cannot access tenant-scoped data APIs in api_key mode. "
+            "Use a user/admin API key for data access, or trusted mode for upstream "
+            "identity assertion."
         )
 
     if auth_mode == AuthMode.TRUSTED:

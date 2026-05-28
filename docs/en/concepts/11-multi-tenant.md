@@ -153,16 +153,24 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 This lets the server resolve identity directly from the key, without extra tenant headers.
 
-### 5. Only ROOT uses explicit tenant headers for tenant-scoped data APIs
+### 5. Data API identity comes from the user or admin key
 
-ROOT does not need tenant headers for Admin APIs, but it does need them for tenant-scoped data APIs such as `ls`, `find`, and `sessions`:
+In `api_key` mode, tenant-scoped data APIs such as `ls`, `find`, and `sessions`
+resolve the effective account and user from the API key itself. Do not send
+`X-OpenViking-Account` or `X-OpenViking-User` in this mode; header-based identity
+assertion belongs to trusted mode.
+
+An `ADMIN` key can call data APIs as its own account/user:
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: <root-key>" \
-  -H "X-OpenViking-Account: acme" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: <admin-user-key>"
 ```
+
+A `ROOT` key is for Admin APIs and selected system/monitoring APIs. It cannot
+access tenant-scoped data APIs in `api_key` mode because it is not bound to a
+tenant user. Use a user/admin key for data access, or trusted mode for upstream
+identity assertion.
 
 ## Integration Patterns
 
@@ -199,7 +207,9 @@ In `api_key` mode, a user key is already enough to express identity:
 - The plugin can provide `agent_prefix` for runtime identity labeling
 - Internally, the plugin writes user-scoped memory and uses `peer_id` for per-message speaker identity
 
-If you give the plugin a root key directly, normal tenant-scoped data APIs will lack `X-OpenViking-Account` and `X-OpenViking-User`, so that is not a good default for day-to-day access.
+If you give the plugin a root key directly, normal tenant-scoped data APIs will
+not have a key-bound tenant user, so that is not a good default for day-to-day
+access.
 
 ### Vikingbot: root key manages many end users
 
@@ -252,7 +262,8 @@ The root key is mainly for:
 - Regenerating keys
 - Operations and diagnostics
 
-Normal application traffic should prefer user keys.
+Normal application traffic should use user keys or admin keys, depending on the
+caller identity it should run as.
 
 ### 2. `peer_id` does not define the tenant
 

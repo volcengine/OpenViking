@@ -153,16 +153,23 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 这样服务端可以直接从 key 反解身份，无需额外传 `account` / `user`。
 
-### 5. 只有 ROOT 访问租户级数据 API 时才显式带租户头
+### 5. 数据 API 身份来自 user 或 admin key
 
-ROOT 访问 Admin API 不需要租户头，但访问 `ls`、`find`、`sessions` 这类租户级数据 API 时，必须显式指定目标租户：
+在 `api_key` 模式下，`ls`、`find`、`sessions` 这类租户级数据 API 会从 API
+key 自身解析有效的 account 和 user。不要在该模式下发送
+`X-OpenViking-Account` 或 `X-OpenViking-User`；基于 header 的身份断言只属于
+trusted mode。
+
+`ADMIN` key 可以用它自己的 account/user 身份访问数据 API：
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: <root-key>" \
-  -H "X-OpenViking-Account: acme" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: <admin-user-key>"
 ```
+
+`ROOT` key 用于 Admin API 以及少量 system/monitoring API。它在 `api_key`
+模式下不能访问租户级数据 API，因为它没有绑定到某个租户用户。数据访问请使用
+user/admin key；如果需要上游断言身份，请使用 trusted mode。
 
 ## 接入实践
 
@@ -199,7 +206,8 @@ openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefi
 - 插件可以提供 `agent_prefix` 作为运行时身份标签
 - 插件内部写入 user-scoped memory，并用 `peer_id` 表达每条消息的说话人
 
-如果给插件直接配置 root key，则普通租户数据 API 会缺少 `X-OpenViking-Account` / `X-OpenViking-User`，这不适合作为日常读写方式。
+如果给插件直接配置 root key，则普通租户数据 API 没有从 key 绑定出来的租户用户，
+这不适合作为日常读写方式。
 
 ### Vikingbot：root key 代管用户身份
 
@@ -252,7 +260,7 @@ Root key 主要用于：
 - 重置 key
 - 运维和调试
 
-正常业务请求优先使用 user key。
+正常业务请求应按调用者身份使用 user key 或 admin key。
 
 ### 2. `peer_id` 不决定 account
 
