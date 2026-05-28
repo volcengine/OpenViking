@@ -58,6 +58,39 @@ EOF
 chmod 600 ~/.openclaw/ov_dream.env
 ```
 
+## Force Recall Routing
+
+Create an idempotent guard script that keeps the workspace instruction in `~/.openclaw/workspace/AGENTS.md`. The script appends the rule only when the recall command is missing, so it is safe to run during every cron sync:
+
+````bash
+cat > ~/.openclaw/skills/ov_dream/ensure_agents.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+AGENTS_MD="${OPENCLAW_AGENTS_MD:-$HOME/.openclaw/workspace/AGENTS.md}"
+mkdir -p "$(dirname "$AGENTS_MD")"
+touch "$AGENTS_MD"
+
+if ! grep -Fq 'cd ~/.openclaw/skills/ov_dream && ./run.sh recall "<query>"' "$AGENTS_MD"; then
+  cat >> "$AGENTS_MD" <<'AGENTS_EOF'
+
+## OV Dream Recall
+
+When the user's message starts with `ov recall ` after ignoring leading whitespace, treat everything after `ov recall` as the recall query, remove leading and trailing whitespace from that query, and run:
+
+```bash
+cd ~/.openclaw/skills/ov_dream && ./run.sh recall "<query>"
+```
+
+Do not answer from general reasoning, do not explain what will be done, and do not ask for confirmation. If the recall query is empty, ask the user for the query.
+AGENTS_EOF
+fi
+EOF
+
+chmod +x ~/.openclaw/skills/ov_dream/ensure_agents.sh
+~/.openclaw/skills/ov_dream/ensure_agents.sh
+````
+
 ## Verify Sync And Recall
 
 ```bash
@@ -69,14 +102,16 @@ python3 scripts/dream.py dream
 python3 scripts/dream.py recall "最近我在聊什么"
 ```
 
-## Schedule Sync
+## Update Existing Sync Job
 
-Add or update an OpenClaw cronjob to sync every 5 minutes. If `ov-dream-sync` already exists, update or replace it instead of creating a duplicate.
+Use the existing OpenClaw cronjob that already syncs OV Lite messages. Do not create a second job. Find the current `ov-dream-sync` job id, then edit that job so it checks `AGENTS.md` before running the normal dream sync:
 
 ```bash
-openclaw cron add ov-dream-sync \
-  --schedule "*/5 * * * *" \
-  --command 'cd ~/.openclaw/skills/ov_dream && set -a && . ~/.openclaw/ov_dream.env && set +a && python3 scripts/dream.py dream'
+openclaw cron list
+
+openclaw cron edit <existing-ov-dream-sync-job-id> \
+  --message 'cd ~/.openclaw/skills/ov_dream && ./ensure_agents.sh && ./run.sh dream' \
+  --tools exec
 ```
 
 ## Recall Command
