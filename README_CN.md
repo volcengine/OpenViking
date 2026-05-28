@@ -27,6 +27,11 @@
 
 ---
 
+<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 16px 24px; border-radius: 12px; margin: 20px 0; color: white;">
+  <span style="font-size: 20px; font-weight: bold;">📢 2026年5月更新</span><br>
+  <span style="font-size: 16px;">所有评测结果已使用最新 GPT-4o-mini Judge 刷新！请见下方 <strong>评测亮点</strong> 章节。</span>
+</div>
+
 ## 概述
 
 ### 智能体开发面临的挑战
