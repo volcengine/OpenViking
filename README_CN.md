@@ -564,35 +564,35 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
     <tr>
       <td style="text-align: center;">1</td>
       <td style="text-align: left;">OpenClaw + 原生 memory-core</td>
-      <td style="text-align: right;">95.14s</td>
+      <td style="text-align: right; white-space: nowrap;">95.14s</td>
       <td style="text-align: right;">24.20%</td>
       <td style="text-align: right;">392,559,404</td>
     </tr>
     <tr>
       <td style="text-align: center;">2</td>
       <td style="text-align: left;">OpenClaw + Mem0</td>
-      <td style="text-align: right; font-weight: bold;">37.6s</td>
+      <td style="text-align: right; font-weight: bold; white-space: nowrap;">37.6s</td>
       <td style="text-align: right;">56.62%</td>
       <td style="text-align: right;">42,118,285</td>
     </tr>
     <tr>
       <td style="text-align: center;">3</td>
       <td style="text-align: left;">OpenClaw + SuperMemory</td>
-      <td style="text-align: right;">109.3s</td>
+      <td style="text-align: right; white-space: nowrap;">109.3s</td>
       <td style="text-align: right;">42.99%</td>
       <td style="text-align: right;">88,304,113</td>
     </tr>
     <tr>
       <td style="text-align: center;">4</td>
       <td style="text-align: left;">OpenClaw + 百炼记忆库</td>
-      <td style="text-align: right;">41.6s</td>
+      <td style="text-align: right; white-space: nowrap;">41.6s</td>
       <td style="text-align: right;">39.55%</td>
       <td style="text-align: right;">35,206,037</td>
     </tr>
     <tr>
       <td style="text-align: center; font-weight: bold;">5</td>
       <td style="text-align: left; font-weight: bold;">OpenClaw + OpenViking</td>
-      <td style="text-align: right; font-weight: bold;">38.8s</td>
+      <td style="text-align: right; font-weight: bold; white-space: nowrap;">38.8s</td>
       <td style="text-align: right; font-weight: bold;">82.08%</td>
       <td style="text-align: right; font-weight: bold;">37,423,456</td>
     </tr>
@@ -602,14 +602,14 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
     <tr>
       <td style="text-align: center;">6</td>
       <td style="text-align: left;">Hermes Native Memory</td>
-      <td style="text-align: right;">82.4s (3.57 轮/query)</td>
+      <td style="text-align: right; white-space: nowrap;">82.4s (3.57 轮/query)</td>
       <td style="text-align: right;">33.38%</td>
       <td style="text-align: right;">79,228,398</td>
     </tr>
     <tr>
       <td style="text-align: center; font-weight: bold;">7</td>
       <td style="text-align: left; font-weight: bold;">Hermes + OpenViking</td>
-      <td style="text-align: right; font-weight: bold;">27.9s (1.55 轮/query)</td>
+      <td style="text-align: right; font-weight: bold; white-space: nowrap;">27.9s (1.55 轮/query)</td>
       <td style="text-align: right; font-weight: bold;">82.86%</td>
       <td style="text-align: right; font-weight: bold;">52,026,755</td>
     </tr>
@@ -619,14 +619,14 @@ OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗�
     <tr>
       <td style="text-align: center;">8</td>
       <td style="text-align: left;">Claude Code Auto-Memory</td>
-      <td style="text-align: right;">49.1s (7.2 轮/query)</td>
+      <td style="text-align: right; white-space: nowrap;">49.1s (7.2 轮/query)</td>
       <td style="text-align: right;">57.21%</td>
       <td style="text-align: right;">353,306,422</td>
     </tr>
     <tr>
       <td style="text-align: center; font-weight: bold;">9</td>
       <td style="text-align: left; font-weight: bold;">Claude Code + OpenViking</td>
-      <td style="text-align: right; font-weight: bold;">20.4s (2.6 轮/query)</td>
+      <td style="text-align: right; font-weight: bold; white-space: nowrap;">20.4s (2.6 轮/query)</td>
       <td style="text-align: right; font-weight: bold;">80.32%</td>
       <td style="text-align: right; font-weight: bold;">129,968,899</td>
     </tr>
