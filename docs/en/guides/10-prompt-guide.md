@@ -248,6 +248,12 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: defines the storage structure for tool call statistics and tool-usage experience
   - Key fields: `tool_name`, `static_desc`, `call_count`, `success_time`, `when_to_use`, `optimal_params`
 
+- `trajectories`
+  - Effective stage: agent trajectory memory persistence stage (agent-only, add-only)
+  - Affects: reusable operation contracts distilled from agent task trajectories — multi-step decisions, tool calls, and execution traces
+  - Purpose: defines compact trajectory memory for "what reusable operation/contract emerged from a task trajectory"
+  - Key fields: `trajectory_name`, `outcome`, `retrieval_anchor`, `content`
+
 ### Parsing
 
 These prompts are mainly used to convert raw resource content into structured nodes, chapters, summaries, or image overviews that are easier to retrieve and understand.
