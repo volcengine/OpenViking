@@ -1,6 +1,6 @@
 # Memory Data Versioning 方案
 
-**日期：** 2026-05-27  
+**日期：** 2026-05-28  
 **状态：** Draft  
 **作者：** Codex / ChatGPT  
 
@@ -13,8 +13,205 @@
 1. 记忆文件支持版本历史。
 2. 检索时可基于 `data_version` 查看某个历史时刻的记忆状态。
 3. 不同版本的 diff 保存在记忆文件内部。
-4. 支持按版本还原记忆内容。
+4. 支持按版本读取和 materialize 记忆内容。
 5. 向量索引仅维护最新版本，避免多版本向量存储成本。
+
+---
+
+## 背景与动机
+
+引入 memory versioning 的核心原因，不只是为了“可回溯”或“可审计”，更重要的是为了支持 **on-policy memory update**。
+
+### 关键术语
+
+为避免歧义，本文统一使用以下术语：
+
+- **on-policy memory update**
+  - 指经验（experience / memory）的写入、消费、评估，都应基于同一历史策略视图（policy view）来分析。
+- **policy view**
+  - 指 Agent 在某个时刻真实可见的一组 memory / experience 状态。
+- **experience consumption**
+  - 指 Agent 在执行任务时，对 memory / experience 的实际读取和使用。
+- **historical memory state**
+  - 指 memory 在某个历史 `data_version` 下的状态，而不是当前 latest state。
+
+### 为什么需要 on-policy memory update
+
+在 experience system 中，memory 不是静态知识，而是会随着任务反馈持续更新的策略对象（policy object）。
+
+这意味着：
+
+- Agent 在任务 T1 执行时，依赖的是当时的 `policy view`；
+- 任务结束后，系统可能会把新的经验写入 memory；
+- 到任务 T2 时，Agent 消费的 memory 已经发生变化；
+- 因此，T1 和 T2 实际上处在不同的 `historical memory state` 下。
+
+如果系统只保留 latest state，而不保留 historical memory state，那么 experience consumption 的分析就会被“事后知识”污染，导致经验更新无法做真正的 on-policy 归因。
+
+### 示例：为什么需要 on-policy 视角
+
+假设有一个 game agent，在挑战同一个 Boss，目标是尽快学会稳定通关。
+
+#### 历史过程
+
+- 在 `data_version = v1` 时，memory 中还没有这条经验：
+  - **E1：Boss 放红圈大招前，会先抬手 1 秒，这时要立刻闪避，不要贪输出。**
+- **Task A**：Agent 第一次打 Boss。
+  - 当时的 `policy view = v1`
+  - Agent 看到 Boss 抬手，但不知道这是大招前摇，于是继续输出
+  - 结果被大招击杀
+- 任务结束后，系统抽取并写入新经验 E1
+- memory 更新到 `data_version = v2`
+- **Task B**：Agent 第二次打 Boss
+  - 当时的 `policy view = v2`
+  - Agent 看到 Boss 抬手，识别为大招前摇，立即闪避
+  - 结果成功存活，并完成通关
+
+#### 如果系统支持 on-policy memory update
+
+系统可以明确区分：
+
+- **Task A** 的 experience consumption 基于 `policy view(v1)`
+- **Task B** 的 experience consumption 基于 `policy view(v2)`
+
+这样在分析时就能得到正确结论：
+
+- Task A 失败，是因为当时的 historical memory state 中还没有 E1；
+- Task B 表现变好，很可能是因为 v2 中新增的经验 E1 已经进入了新的 policy view，并被实际消费了。
+
+#### 如果系统不支持 on-policy memory update
+
+如果系统只保留 latest state（即只看到 v2），那么回看 Task A 时会产生错误理解：
+
+- 当前 memory 明明已经写着“Boss 抬手后立刻闪避”；
+- 系统会误以为 Task A 执行时也拥有这条经验；
+- 从而错误地认为：
+  - Task A 是“明知道该闪避却还在贪输出”；
+  - 或者 Agent 执行不稳定；
+  - 而不是“当时的 policy view 中根本没有这条经验”。
+
+这就会带来几个典型问题：
+
+1. **历史决策被未来知识污染**
+   - 过去对局中的行为，会被后续才学到的经验反向解释。
+
+2. **经验效果归因错误**
+   - 无法判断 Task B 的改善究竟来自：
+     - experience update
+     - 随机发挥更好
+     - Boss 行为恰好更容易处理
+
+3. **经验生成与经验消费错位**
+   - 一条在 Task A 之后才生成的经验，会被错误地当成 Task A 执行时已存在的前提。
+
+4. **评估结果失真**
+   - 系统无法准确回答：
+     - 某条经验是否真的改变了后续对局行为；
+     - 某次表现提升是否来自 memory update；
+     - 某类经验是否值得保留或强化。
+
+### 图示：遵守 on-policy 与不遵守 on-policy 的区别
+
+下面用 Boss 战例子说明，为什么 experience system 需要遵守 on-policy memory update。
+
+#### 场景
+
+Agent 学到一条新经验：
+
+- **E1：Boss 放红圈大招前，会先抬手 1 秒，这时要立刻闪避，不要贪输出。**
+
+#### 情况 A：遵守 on-policy
+
+```text
+时间  ─────────────────────────────────────────────────────────→
+
+data_version        v1                              v2
+                    │                               │
+                    │                               │
+                    │   Task A: 第一次打 Boss        │
+                    │   ─────────────────────       │
+                    │   policy view = v1            │
+                    │   memory 中没有 E1            │
+                    │                               │
+                    │   Agent 行为：                 │
+                    │   - 看到 Boss 抬手             │
+                    │   - 不知道这是大招前摇         │
+                    │   - 继续输出                   │
+                    │   - 被秒杀                     │
+                    │                               │
+                    └──────────────┐                │
+                                   │                │
+                                   │ 写入经验 E1    │
+                                   │                │
+                                   │ E1:            │
+                                   │ “Boss 抬手 1 秒后
+                                   │  会放红圈大招，
+                                   │  应立即闪避”   
+                                   ▼                │
+                                                    │
+                                                    │   Task B: 第二次打 Boss
+                                                    │   ─────────────────────
+                                                    │   policy view = v2
+                                                    │   memory 中已有 E1
+                                                    │
+                                                    │   Agent 行为：
+                                                    │   - 看到 Boss 抬手
+                                                    │   - 识别为大招前摇
+                                                    │   - 立刻闪避
+                                                    │   - 成功存活并通关
+                                                    │
+结论：
+- Task A 基于 v1
+- Task B 基于 v2
+- 可以正确分析：Task B 的改善，很可能来自 E1 被写入并进入了新的 policy view
+```
+
+#### 情况 B：不遵守 on-policy
+
+也就是在事后分析时，只看 latest memory，而不回到当时的 historical memory state。
+
+```text
+真实执行时：
+- Task A 看的是 v1
+- Task B 看的是 v2
+
+错误回看时（只看 latest = v2）：
+- 回看 Task A，也拿 v2 解释
+- 回看 Task B，也拿 v2 解释
+```
+
+```text
+错误分析图：
+
+Task A（v1） --------> 写入 E1 --------> Task B（v2）
+   │                                         │
+   └──────────── 事后统一拿 latest(v2) 回看 ──┘
+
+结果：
+- Task A 被错误地当成“明明知道要闪避却还在贪输出”
+- Task B 的改善也无法准确归因到 E1
+```
+
+---
+
+### 本方案解决的问题
+
+因此，memory versioning 的本质，不只是“保存历史”，而是为 memory / experience 提供一个**时间维度上的 policy view**。
+
+这也是为什么本方案必须支持：
+
+- 按版本 `read`
+  - 用于恢复某次任务执行时的 historical memory state
+- 按版本 `search`
+  - 用于近似重建某次任务当时的 experience consumption 视图
+- 检索后 materialize 到目标版本
+  - 用于把 latest recall 映射回目标 `policy view`
+
+最终目标是让经验系统能够做到：
+
+- **写入是增量演化的**（memory update）
+- **消费是版本感知的**（experience consumption is version-aware）
+- **分析是 on-policy 的**（evaluation is based on the correct policy view）
 
 ---
 
@@ -99,11 +296,10 @@ search(query, data_version=X)
 - 使用 `diff-match-patch` 生成和应用整文件 reverse diff
 - 不自定义 diff 格式
 
-### 11. 历史读取与恢复范围
+### 11. 历史读取范围
 
-- 仅支持按版本 `search` 和按版本 `read`
-- 一期不提供 `restore` / `rollback` 接口
-- 历史版本仅用于查看，不用于将旧版本恢复成新的 head
+- 支持按版本 `search` 和按版本 `read`
+- 历史版本用于恢复某个时刻的 memory 视图
 
 ### 12. 历史版本保留策略
 
@@ -164,7 +360,7 @@ search(query, data_version=X)
 
 1. 正文（最新版本内容）
 2. `MEMORY_FIELDS`（普通业务元数据）
-3. `VERSION_HISTORY`（版本历史元数据）
+3. `VERSION_HISTORY`（系统版本元数据 + 版本链）
 
 其中：
 
@@ -334,7 +530,7 @@ materialize_memory_at_version(file_uri, data_version)
 
 流程：
 
-1. 读取最新文件正文与 metadata
+1. 读取最新文件正文、`MEMORY_FIELDS` 与 `VERSION_HISTORY`
 2. 获取 `VERSION_HISTORY.data_version`（当前正文版本）
 3. 若文件不存在任何 `<= X` 的历史版本：
    - 说明该文件在该版本视角下不存在可用状态，返回 not found / not visible
@@ -521,8 +717,7 @@ delete_memory(uri, data_version=batch_data_version)
 
 说明：
 
-- 一期不提供 `restore_memory` 或回滚接口
-- 历史版本仅支持按版本读取与按版本检索
+- 历史版本支持按版本读取与按版本检索
 
 ---
 
@@ -650,12 +845,10 @@ delete_memory(uri, data_version=batch_data_version)
 **建议改造：**
 
 - 为版本记录新增 dataclass / pydantic model，例如：
-  - `VersionHistoryEntry`
+  - `VersionHistoryItem`
   - `VersionHistory`
-- 为 `MemoryFile` 增加版本相关字段，例如：
+- 为 `MemoryFile` 增加版本相关字段：
   - `version_history`
-  - `version_status`（或等价字段）
-  - `version_data_version`（或等价字段）
 
 **注意：**
 
@@ -676,7 +869,7 @@ delete_memory(uri, data_version=batch_data_version)
   2. 生成新文件完整内容（正文 + 普通 `MEMORY_FIELDS`）
   3. 计算 `new -> old` 的 reverse diff
   4. 更新 `VERSION_HISTORY`
-  5. 写回最新正文 + 新 metadata + 新 version history
+  5. 写回最新正文 + 新 `MEMORY_FIELDS` + 新 `VERSION_HISTORY`
 - 在 delete 路径中支持逻辑删除：
   - 不物理删除文件
   - 改为写 `VERSION_HISTORY.status = "deleted"`
@@ -693,7 +886,7 @@ delete_memory(uri, data_version=batch_data_version)
 - 新文件：`create`
 - 普通更新：`update`
 - 逻辑删除：`delete`
-- 超过 100 个历史版本时裁剪最老 entry
+- 超过 100 个历史版本时裁剪最老 version item
 
 ---
 
@@ -1031,7 +1224,7 @@ data_version = max(now_ms, last_data_version + 1)
   - 不物理删除文件
   - 仅设置 `VERSION_HISTORY.status = "deleted"`
   - 追加 delete version item
-- 版本数超过 100 时裁剪最老项
+- 版本数超过 100 时裁剪最老 version item
 
 **建议新增测试：**
 - `test_apply_upsert_creates_initial_version_history()`
