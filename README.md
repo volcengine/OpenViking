@@ -57,6 +57,66 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 
 ***
 
+## Evaluation Highlights
+
+OpenViking 1.0 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
+
+### 1. User Memory on LoCoMo
+
+On the LoCoMo benchmark, OpenViking improves long-context QA accuracy while reducing both latency and token usage across multiple agent integrations:
+
+| Integration | Accuracy | Avg. Query Time | Total Input Tokens |
+| ----------- | -------- | --------------- | ------------------ |
+| OpenClaw + native memory | 24.20% | 95.14s | 392,559,404 |
+| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
+| Hermes native memory | 33.38% | 82.4s | 79,228,398 |
+| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
+| Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
+| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
+
+### 1.2 Key Efficiency Improvements
+
+| Agent | Accuracy Improvement | Latency Reduction | Token Reduction |
+| ----- | -------------------- | ----------------- | --------------- |
+| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
+| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
+| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
+
+### 2. Agent Experience Memory on tau2-bench
+
+For multi-turn agent tasks on tau2-bench, OpenViking's experience memory improves task success in both retail and airline domains:
+
+| Setting | Retail Accuracy | Airline Accuracy |
+| ------- | --------------- | ---------------- |
+| LLM without memory | 70.94% | 54.38% |
+| LLM + OpenViking experience memory | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
+
+### 3. Knowledge Base QA on HotpotQA
+
+On multi-hop RAG tasks from HotpotQA, increasing OpenViking retrieval from top-5 to top-20 delivers the highest accuracy in this comparison while keeping retrieval latency low:
+
+| Method | Retrieval Pattern | Accuracy | Tokens / QA | Latency / QA |
+| ------ | ----------------- | -------- | ----------- | ------------ |
+| Naive RAG | Vector retrieval | 62.50% | 1,290 | **0.11s** |
+| HippoRAG 2 | Vector + knowledge graph | 61.00% | 726 | 20s |
+| LightRAG | Vector + knowledge graph | 89.00% | 28,443 | 75s |
+| LangChain SQL (Agent) | SQL agent | 78.00% | 4,776 | 132s |
+| OpenViking (top-5) | Vector retrieval | 72.75% | 3,154 | 0.22s |
+| OpenViking (top-20) | Vector retrieval | **91.00%** | 12,533 | 0.23s |
+| Nanobot + OpenViking (Agent) | Vector retrieval + Agent | 87.00% | 71,300 | 61.6s |
+
+### 3.2 Single-turn RAG Across 5 Open-source Datasets
+
+| Method | Retrieval Pattern | Average Accuracy | Indexing Tokens | Tokens / QA | Retrieval Latency |
+| ------ | ----------------- | ---------------- | --------------- | ----------- | ----------------- |
+| Naive RAG | Vector retrieval | 53.93% | 2,755,356 | 1,435 | **0.13s** |
+| PageIndex | Vector + tree structure | 36.75% | 5,609,206 | 710,480 | 84.60s |
+| HippoRAG 2 | Vector + knowledge graph | 44.50% | 124,963,618 | **637** | 18.83s |
+| LightRAG | Vector + knowledge graph | **76.00%** | 62,705,469 | 27,035 | 9.19s |
+| **OpenViking** | **Vector retrieval** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
+
+> Datasets: FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA. OpenViking reaches 66.87% average accuracy with very low retrieval latency (0.19s), while indexing cost is only 13.8% of LightRAG.
+
 ## Quick Start
 
 ### Prerequisites
@@ -604,37 +664,6 @@ For production environments, we recommend running OpenViking as a standalone HTT
 To ensure optimal storage performance and data security, we recommend deploying on **Volcengine Elastic Compute Service (ECS)** using the **veLinux** operating system. We have prepared a detailed step-by-step guide to get you started quickly.
 
 👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
-
-## OpenClaw Context Plugin Details
-
-- Test Dataset: Effect testing based on LoCoMo10 (<https://github.com/snap-research/locomo>) long-range dialogues (1,540 cases in total after removing category5 without ground truth)
-- Experimental Groups: Since users may not disable OpenClaw's native memory when using OpenViking, we added experimental groups with native memory enabled or disabled
-- OpenViking Version: 0.1.18
-- Model: seed-2.0-code
-- Evaluation Script: <https://github.com/ZaynJarvis/openclaw-eval/tree/main>
-
-| Experimental Group                          | Task Completion Rate | Cost: Input Tokens (Total) |
-| ------------------------------------------- | -------------------- | -------------------------- |
-| OpenClaw(memory-core)                       | 35.65%               | 24,611,530                 |
-| OpenClaw + LanceDB (-memory-core)           | 44.55%               | 51,574,530                 |
-| OpenClaw + OpenViking Plugin (-memory-core) | 52.08%               | 4,264,396                  |
-| OpenClaw + OpenViking Plugin (+memory-core) | 51.23%               | 2,099,622                  |
-
-- Experimental Conclusions:
-  After integrating OpenViking:
-
-* With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
-* With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
-
-👉 **[View: OpenClaw Context Plugin](examples/openclaw-plugin/README.md)**
-
-👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
-
-👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
-
-👉 **[View: LangChain / LangGraph Integration](./docs/en/agent-integrations/07-langchain-langgraph.md)**
-
-\--
 
 ## Core Concepts
 

@@ -21,7 +21,7 @@
 
 👋 加入我们的社区
 
-📱 <a href="./docs/en/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="./docs/zh/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 </div>
 
@@ -276,7 +276,7 @@ openviking-server doctor
       "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
       "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
       "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-251215 或 text-embedding-3-large）
+      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名
     },
     "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
   },
@@ -285,7 +285,7 @@ openviking-server doctor
     "api_key"  : "<your-api-key>",     // 模型服务 API Key（openai-codex 可选）
     "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex 等)
     "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
-    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
+    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名
     "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
   }
 }
@@ -307,7 +307,7 @@ openviking-server doctor
   },
   "log": {
     "level": "INFO",
-    "output": "stdout"                 // 日志输出："stdout" 或 "file"
+    "output": "stdout"
   },
   "embedding": {
     "dense": {
@@ -341,7 +341,7 @@ openviking-server doctor
   },
   "log": {
     "level": "INFO",
-    "output": "stdout"                 // 日志输出："stdout" 或 "file"
+    "output": "stdout"
   },
   "embedding": {
     "dense": {
@@ -533,32 +533,104 @@ ov chat
 
 👉 **[查看：服务器部署与 ECS 设置指南](./docs/zh/getting-started/03-quickstart-server.md)**
 
+---
 
-## OpenClaw 上下文插件详情
+## 📊 评测结果
 
-* 测试集：基于 LoCoMo10(https://github.com/snap-research/locomo) 的长程对话进行效果测试（去除无真值的 category5 后，共 1540 条 case）
-* 实验组：因用户在使用 OpenViking 时可能不关闭 OpenClaw 原生记忆，所以增加是否开关原生记忆的实验组
-* OpenViking 版本：0.1.18
-* 模型：seed-2.0-code
-* 评测脚本：https://github.com/ZaynJarvis/openclaw-eval/tree/main
+OpenViking 的核心价值主张：**在更高问答准确率的同时，消耗更低的 Token，完成任务时延更低**。以下结果覆盖三个评测维度。
 
-| 实验组 |	任务完成率 | 成本：输入 token (总计) |
-|----------|------------------|------------------|
-| OpenClaw(memory-core) |	35.65% |	24,611,530 |
-| OpenClaw + LanceDB (-memory-core) |	44.55% |	51,574,530 |
-| OpenClaw + OpenViking Plugin (-memory-core)	| 52.08% |	4,264,396 |
-| OpenClaw + OpenViking Plugin (+memory-core)	| 51.23% |	2,099,622 |
+### 1. 用户记忆评测（User Memory）
 
-* 实验结论：
-结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
+**测试目标**：验证 OpenViking 作为不同 Agent 的外接记忆组件，在长对话记忆问答（LOCOMO 数据集）上的准确率、Token 效率和时延表现。
 
-👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README_CN.md)**
+#### 1.1 各 Agent 基座上的 LOCOMO 测试结果
 
-👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
+| 实验编号 | 方案 | Query 平均耗时 | 问答准确率 | Agent 总输入 Token |
+|---------|------|--------------|-----------|------------------|
+| **OpenClaw 基座** | | | | |
+| 1 | OpenClaw + 原生 memory-core | 95.14s | 24.20% | 392,559,404 |
+| 2 | OpenClaw + Mem0 | **37.6s** | 56.62% | 42,118,285 |
+| 3 | OpenClaw + SuperMemory | 109.3s | 42.99% | 88,304,113 |
+| 4 | OpenClaw + 百炼记忆库 | 41.6s | 39.55% | 35,206,037 |
+| **5** | **OpenClaw + OpenViking** | **38.8s** | **82.08%** | **37,423,456** |
+| **Hermes 基座** | | | | |
+| 6 | Hermes Native Memory | 82.4s (3.57 轮/query) | 33.38% | 79,228,398 |
+| **7** | **Hermes + OpenViking** | **27.9s** (1.55 轮/query) | **82.86%** | **52,026,755** |
+| **Claude Code 基座** | | | | |
+| 8 | Claude Code Auto-Memory | 49.1s (7.2 轮/query) | 57.21% | 353,306,422 |
+| **9** | **Claude Code + OpenViking** | **20.4s** (2.6 轮/query) | **80.32%** | **129,968,899** |
 
-👉 **[查看：Claude Code 记忆插件示例](examples/claude-code-memory-plugin/README_CN.md)**
+#### 1.2 关键效率提升汇总
 
-👉 **[查看：LangChain / LangGraph 集成](./docs/zh/agent-integrations/07-langchain-langgraph.md)**
+| Agent | 准确率提升 | 时延降低 | Token 消耗降低 |
+|------|-----------|---------|--------------|
+| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
+| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
+| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
+
+---
+
+### 2. Agent 经验记忆评测（Agent Memory）
+
+**测试目标**：验证 OpenViking 抽取并召回经验记忆前后，任务执行表现和 Token 节省的效果。
+
+OpenViking 的 Agent Memory 分为两层：
+
+| 层级 | 概念 | 说明 |
+|-----|------|------|
+| Layer 1 | **轨迹（Trajectory）** | 每次会话结束后自动提炼，记录"做了什么、怎么做的、结果如何" |
+| Layer 2 | **经验（Experience）** | 由多条相关轨迹归纳而来，跨会话可复用的策略性知识，"Situation / Approach / Reflect"三段式 |
+
+#### 2.1 经济仿真测试（ClawWork）
+
+港大数据科学实验室（HKUDS）构建的"实时经济生存 benchmark"，Agent 从 $10 起步，每次 LLM 调用自动扣费，收入来自完成专业任务（覆盖 44 个职业、220 个任务）。
+
+| 方案 | 完成 50 个任务后净收入 | 平均每小时 Token 消耗 |
+|-----|-------------------|------------------|
+| LLM only | $2,269.77 | 1,030.3K/h |
+| **LLM + OpenViking** | **$3,843.74 (+69.34%)** | **872.4K/h (-22.8%)** |
+
+#### 2.2 Tau-2 对话 Agent 测试
+
+Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两个领域。
+
+| 方案 | Retail 正确率 | Airline 正确率 |
+|-----|-------------|--------------|
+| LLM 无记忆 | 70.94% | 54.38% |
+| **LLM + OpenViking 经验记忆** | **77.81% (+6.87pp)** | **66.25% (+11.87pp)** |
+
+---
+
+### 3. 知识库问答评测（Knowledge Base QA）
+
+**测试目标**：对比 OpenViking 与其他 RAG 方案在开源 benchmark 上的准确率、Token 效率和时延表现。
+
+#### 3.1 多跳、多路 RAG 测试（HotpotQA 数据集）
+
+| 方案 | 检索范式 | Accuracy | 每 QA Token | 每 QA 耗时 |
+|-----|---------|---------|------------|---------|
+| Naive RAG | 向量检索 | 62.50% | 1,290 | **0.11s** |
+| HippoRAG 2 | 向量 + 知识图谱 | 61.00% | 726 | 20s |
+| LightRAG | 向量 + 知识图谱 | 89.00% | 28,443 | 75s |
+| LangChain SQL (Agent) | SQL + Agent | 78.00% | 4,776 | 132s |
+| OpenViking (top5) | 向量检索 | 72.75% | 3,154 | 0.22s |
+| **OpenViking (top20)** | **向量检索** | **91.00%** | **12,533** | **0.23s** |
+
+> 💡 **在本组对比中，OpenViking 在 HotpotQA top20 配置下取得最高准确率（91%）；同时检索延迟仅 0.23s，Token 消耗不到 LightRAG 的一半。**
+
+#### 3.2 单轮 RAG 测试（5 个开源数据集均值）
+
+| 方案 | 检索范式 | 平均 Accuracy | 建库 Token | 每 QA Token | 检索耗时 |
+|-----|---------|-------------|----------|------------|--------|
+| Naive RAG | 向量检索 | 53.93% | 2,755,356 | 1,435 | **0.13s** |
+| PageIndex | 向量 + 树结构 | 36.75% | 5,609,206 | 710,480 | 84.60s |
+| HippoRAG 2 | 向量 + 知识图谱 | 44.50% | 124,963,618 | **637** | 18.83s |
+| LightRAG | 向量 + 知识图谱 | **76.00%** | 62,705,469 | 27,035 | 9.19s |
+| **OpenViking** | **向量检索** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
+
+> 测试数据集：FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA。OpenViking 以极低耗时（0.19s）取得 66.87% 的平均准确率，建库成本仅为 LightRAG 的 13.8%。
+
+---
 
 ## VikingBot 部署详情
 
@@ -566,7 +638,7 @@ OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用
 
 👉 **[查看：使用 VikingBot 部署服务器](bot/README_CN.md)**
 
---
+---
 
 ## 核心概念
 
@@ -674,8 +746,8 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 - 为我们点亮一颗珍贵的 **Star**，给我们前进的动力。
 - 访问我们的[**官网**](https://www.openviking.ai)了解我们传达的理念，并通过[**文档**](https://www.openviking.ai/docs)在您的项目中使用它。感受它带来的变化，并给我们最真实的体验反馈。
 - 加入我们的社区，分享您的见解，帮助回答他人的问题，共同创造开放互助的技术氛围：
-  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/en/about/01-about-us.md#lark-group)
-  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/en/about/01-about-us.md#wechat-group)
+  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/zh/about/01-about-us.md#lark-group)
+  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/zh/about/01-about-us.md#wechat-group)
   - 🎮 **Discord**：[加入 Discord 服务器](https://discord.com/invite/eHvx8E9XF3)
   - 🐦 **X (Twitter)**：[关注我们](https://x.com/openvikingai)
 - 成为**贡献者**，无论是提交错误修复还是贡献新功能，您的每一行代码都将是 OpenViking 成长的重要基石。
@@ -708,7 +780,7 @@ OpenViking 项目不同组件采用不同的开源协议：
 [license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commcommits/main
+[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main
 [github-stars-shield]: https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47
 [github-stars-link]: https://github.com/volcengine/OpenViking
 [github-issues-shield]: https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb

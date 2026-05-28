@@ -10,7 +10,6 @@ mod utils;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use config::Config;
-use error::Result;
 use output::OutputFormat;
 use std::ffi::OsString;
 
@@ -29,30 +28,6 @@ pub struct CliContext {
 }
 
 impl CliContext {
-    pub fn new(
-        output_format: OutputFormat,
-        compact: bool,
-        account: Option<String>,
-        user: Option<String>,
-        sudo: bool,
-        show_progress: Option<bool>,
-        verbose: Option<bool>,
-        profile: Option<bool>,
-    ) -> Result<Self> {
-        let config = Config::load()?;
-        Ok(Self::from_config(
-            config,
-            output_format,
-            compact,
-            account,
-            user,
-            sudo,
-            show_progress,
-            verbose,
-            profile,
-        ))
-    }
-
     fn from_config(
         mut config: Config,
         output_format: OutputFormat,
@@ -1017,6 +992,17 @@ enum AdminCommands {
     },
 }
 
+impl Commands {
+    fn requires_cli_config_file(&self) -> bool {
+        !matches!(
+            self,
+            Commands::Config {
+                action: ConfigCommands::SetupCli | ConfigCommands::Switch,
+            } | Commands::Version
+        )
+    }
+}
+
 #[derive(Subcommand)]
 enum ConfigCommands {
     /// Show current configuration
@@ -1160,7 +1146,19 @@ async fn main() {
         std::process::exit(2);
     }
 
-    let ctx = match CliContext::new(
+    let config = match if cli.command.requires_cli_config_file() {
+        Config::load_required()
+    } else {
+        Config::load_default()
+    } {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(2);
+        }
+    };
+    let ctx = CliContext::from_config(
+        config,
         output_format,
         compact,
         cli.account.clone(),
@@ -1169,13 +1167,7 @@ async fn main() {
         None,
         None,
         if cli.profile { Some(true) } else { None },
-    ) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(2);
-        }
-    };
+    );
 
     // Check if --sudo is used but root_api_key is not configured
     if ctx.sudo && ctx.config.root_api_key.is_none() {
@@ -1552,6 +1544,28 @@ mod tests {
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn server_commands_require_existing_cli_config() {
+        let cli = Cli::try_parse_from(["ov", "ls"]).expect("ls should parse");
+        let health = Cli::try_parse_from(["ov", "health"]).expect("health should parse");
+
+        assert!(cli.command.requires_cli_config_file());
+        assert!(health.command.requires_cli_config_file());
+    }
+
+    #[test]
+    fn setup_switch_and_version_do_not_require_existing_cli_config() {
+        let setup = Cli::try_parse_from(["ov", "config", "setup-cli"])
+            .expect("config setup-cli should parse");
+        let switch =
+            Cli::try_parse_from(["ov", "config", "switch"]).expect("config switch should parse");
+        let version = Cli::try_parse_from(["ov", "version"]).expect("version should parse");
+
+        assert!(!setup.command.requires_cli_config_file());
+        assert!(!switch.command.requires_cli_config_file());
+        assert!(!version.command.requires_cli_config_file());
     }
 
     #[test]
