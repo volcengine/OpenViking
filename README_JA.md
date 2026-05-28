@@ -114,19 +114,6 @@ OpenVikingの中核的な価値は、**より高い回答精度**を実現しな
 
 > 対象データセット: FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA。OpenViking は非常に低い検索レイテンシ（0.19s）を維持しながら平均 66.87% の精度を達成し、インデックス構築コストは LightRAG の 13.8% にとどまります。
 
-## 学術的裏付け
-
-OpenVikingは、以下の論文で述べられている `VikingMem` システムのオープンソース版です。
-
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> *VLDB 2026 · Industry Track*
-> 浙江大学とByteDanceによる共同研究。
->
-> Citation:
-> Yifei Yang, Yeming Gong, Yuxin Wang, Yue Wu, Yihang Wang, Hengjie Wang, Chao Yang, Xudong Lu, and Xu Chu. *VikingMem: A Memory Base Management System for Stateful LLM-based Applications*. VLDB 2026, Industry Track.
->
-> 📄 [論文とコード](https://github.com/BytedanceFu/VikingMem)
-
 ## クイックスタート
 
 ### 前提条件

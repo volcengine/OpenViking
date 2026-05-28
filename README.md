@@ -117,19 +117,6 @@ On multi-hop RAG tasks from HotpotQA, increasing OpenViking retrieval from top-5
 
 > Datasets: FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA. OpenViking reaches 66.87% average accuracy with very low retrieval latency (0.19s), while indexing cost is only 13.8% of LightRAG.
 
-## Academic Backing
-
-OpenViking is the open-source version of the `VikingMem` system described in the following paper.
-
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> *VLDB 2026 · Industry Track*
-> Joint work by Zhejiang University and ByteDance.
->
-> Citation:
-> Yifei Yang, Yeming Gong, Yuxin Wang, Yue Wu, Yihang Wang, Hengjie Wang, Chao Yang, Xudong Lu, and Xu Chu. *VikingMem: A Memory Base Management System for Stateful LLM-based Applications*. VLDB 2026, Industry Track.
->
-> 📄 [Paper and code](https://github.com/BytedanceFu/VikingMem)
-
 ## Quick Start
 
 ### Prerequisites
