@@ -154,7 +154,7 @@ class BaseClient(ABC):
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Write text content to an existing file and refresh semantics/vectors."""
+        """Write text content to a file and refresh semantics/vectors. Modes: replace, append, create, or upsert."""
         ...
 
     # ============= Search =============

@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 
 
 class WriteContentRequest(BaseModel):
-    """Request to write, append, or create text content to a file."""
+    """Request to write, append, create, or upsert text content to a file."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -176,7 +176,7 @@ async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
+    """Write text content to a file (replace, append, create, or upsert) and refresh semantics/vectors."""
     service = get_service()
     uri = resolve_path_variables(request.uri)
     execution = await run_operation(

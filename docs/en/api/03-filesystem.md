@@ -174,7 +174,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-Update an existing file, or create a new one when `mode="create"`, and automatically refresh related semantics and vectors.
+Update an existing file, create a new one with `mode="create"`, or use explicit `mode="upsert"` to create-or-replace, then automatically refresh related semantics and vectors.
 
 **Parameters**
 
@@ -182,14 +182,14 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | File URI to write. For `mode="create"`, the file must not already exist |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace`, `append`, or `create` |
+| mode | str | No | `replace` | `replace`, `append`, `create`, or `upsert` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 
 **Notes**
 
-- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
-- `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
+- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists; `upsert` creates missing files and replaces existing files explicitly. Directories are always rejected.
+- `create` and the create branch of `upsert` only accept text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
 - Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.

@@ -283,7 +283,7 @@ class FSService:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Write to an existing file and refresh semantics/vectors."""
+        """Write to a file and refresh semantics/vectors. Modes: replace, append, create, or upsert."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs)

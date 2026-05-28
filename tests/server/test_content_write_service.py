@@ -423,10 +423,13 @@ async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatc
 class _FakeVikingFSForCreate:
     """Variant of _FakeVikingFS that supports 'file doesn't exist' scenarios."""
 
-    def __init__(self, file_uri: str, root_uri: str, file_exists: bool = True):
+    def __init__(
+        self, file_uri: str, root_uri: str, file_exists: bool = True, file_is_dir: bool = False
+    ):
         self._file_uri = file_uri
         self._root_uri = root_uri
         self._file_exists = file_exists
+        self._file_is_dir = file_is_dir
         self.delete_temp_calls = []
         self.write_file_calls = []
         self.rm_calls = []
@@ -436,7 +439,7 @@ class _FakeVikingFSForCreate:
         del ctx
         if uri == self._file_uri:
             if self._file_exists:
-                return {"isDir": False}
+                return {"isDir": self._file_is_dir}
             raise NotFoundError(uri, "file")
         if uri == self._root_uri:
             return {"isDir": True}
@@ -797,7 +800,19 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_replace_mode_missing_file_falls_back_to_create(monkeypatch):
+async def test_replace_mode_missing_file_stays_strict():
+    file_uri = "viking://user/default/memories/missing.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    with pytest.raises(NotFoundError):
+        await coordinator.write(uri=file_uri, content="updated", ctx=ctx, mode="replace")
+
+
+@pytest.mark.asyncio
+async def test_upsert_mode_missing_file_uses_create_path(monkeypatch):
     file_uri = "viking://user/default/memories/new-upsert.md"
     root_uri = "viking://user/default/memories"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -806,33 +821,88 @@ async def test_replace_mode_missing_file_falls_back_to_create(monkeypatch):
 
     captured = {}
 
-    async def _fake_create_and_write(*, uri, content, ctx, wait, timeout):
+    async def _fake_create_and_write(*, uri, content, ctx, wait, timeout, result_mode="create"):
         captured["uri"] = uri
         captured["content"] = content
         captured["ctx"] = ctx
         captured["wait"] = wait
         captured["timeout"] = timeout
-        return {"uri": uri, "mode": "create", "queue_status": None}
+        captured["result_mode"] = result_mode
+        return {"uri": uri, "mode": result_mode, "queue_status": None}
 
     monkeypatch.setattr(coordinator, "_create_and_write", _fake_create_and_write)
 
     result = await coordinator.write(
         uri=file_uri,
-        content="created via replace",
+        content="created via upsert",
         ctx=ctx,
-        mode="replace",
+        mode="upsert",
         wait=True,
         timeout=12.5,
     )
 
-    assert result["mode"] == "create"
+    assert result["mode"] == "upsert"
     assert captured == {
         "uri": file_uri,
-        "content": "created via replace",
+        "content": "created via upsert",
         "ctx": ctx,
         "wait": True,
         "timeout": 12.5,
+        "result_mode": "upsert",
     }
+
+
+@pytest.mark.asyncio
+async def test_upsert_mode_existing_directory_is_rejected():
+    file_uri = "viking://user/default/memories/existing-dir"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=file_uri, root_uri=root_uri, file_exists=True, file_is_dir=True
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError):
+        await coordinator.write(uri=file_uri, content="updated", ctx=ctx, mode="upsert")
+
+
+@pytest.mark.asyncio
+async def test_upsert_mode_existing_file_uses_replace_path(monkeypatch):
+    file_uri = "viking://user/default/memories/theme.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=True)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+
+    write_calls = []
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del ctx
+        write_calls.append((uri, content, mode))
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del uri, context_type, ctx
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        del kwargs
+
+    async def _fake_wait_for_queues(*, timeout):
+        del timeout
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+
+    result = await coordinator.write(
+        uri=file_uri, content="updated", ctx=ctx, mode="upsert", wait=True
+    )
+
+    assert result["mode"] == "upsert"
+    assert write_calls == [(file_uri, "updated", "replace")]
 
 
 @pytest.mark.asyncio

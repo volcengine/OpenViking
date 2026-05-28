@@ -67,17 +67,21 @@ class ContentWriteCoordinator:
                 timeout=timeout,
             )
 
-        stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=mode == "replace")
+        stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=mode == "upsert")
         if stat.get("isDir"):
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
-        if mode == "replace" and stat.get("not_found"):
+        if mode == "upsert" and stat.get("not_found"):
             return await self._create_and_write(
                 uri=normalized_uri,
                 content=content,
                 ctx=ctx,
                 wait=wait,
                 timeout=timeout,
+                result_mode="upsert",
             )
+
+        write_mode = "replace" if mode == "upsert" else mode
+        result_mode = "upsert" if mode == "upsert" else mode
 
         context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
@@ -89,7 +93,8 @@ class ContentWriteCoordinator:
                 uri=normalized_uri,
                 root_uri=root_uri,
                 content=content,
-                mode=mode,
+                mode=write_mode,
+                result_mode=result_mode,
                 wait=wait,
                 timeout=timeout,
                 ctx=ctx,
@@ -101,7 +106,8 @@ class ContentWriteCoordinator:
             uri=normalized_uri,
             root_uri=root_uri,
             content=content,
-            mode=mode,
+            mode=write_mode,
+            result_mode=result_mode,
             context_type=context_type,
             wait=wait,
             timeout=timeout,
@@ -168,6 +174,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
+        result_mode: str,
         context_type: str,
         wait: bool,
         timeout: Optional[float],
@@ -213,7 +220,7 @@ class ContentWriteCoordinator:
                 uri=uri,
                 root_uri=root_uri,
                 context_type=context_type,
-                mode=mode,
+                mode=result_mode,
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
@@ -253,7 +260,7 @@ class ContentWriteCoordinator:
             logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
 
     def _validate_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append", "create"}:
+        if mode not in {"replace", "append", "create", "upsert"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
 
     def _validate_target_uri(self, uri: str) -> None:
@@ -306,6 +313,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool,
         timeout: Optional[float],
+        result_mode: str = "create",
     ) -> Dict[str, Any]:
         self._validate_create_extension(uri)
 
@@ -324,6 +332,7 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 content=content,
                 mode="create",
+                result_mode=result_mode,
                 wait=wait,
                 timeout=timeout,
                 ctx=ctx,
@@ -336,6 +345,7 @@ class ContentWriteCoordinator:
             root_uri=root_uri,
             content=content,
             mode="create",
+            result_mode=result_mode,
             context_type=context_type,
             wait=wait,
             timeout=timeout,
@@ -481,6 +491,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
+        result_mode: str,
         wait: bool,
         timeout: Optional[float],
         ctx: RequestContext,
@@ -516,7 +527,7 @@ class ContentWriteCoordinator:
                 uri=uri,
                 root_uri=root_uri,
                 context_type="memory",
-                mode=mode,
+                mode=result_mode,
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,

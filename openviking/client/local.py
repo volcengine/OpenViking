@@ -267,7 +267,7 @@ class LocalClient(BaseClient):
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Write text content to an existing file and refresh semantics/vectors."""
+        """Write text content to a file and refresh semantics/vectors. Modes: replace, append, create, or upsert."""
         execution = await run_with_telemetry(
             operation="content.write",
             telemetry=telemetry,

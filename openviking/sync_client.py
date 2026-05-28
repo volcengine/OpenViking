@@ -268,7 +268,7 @@ class SyncOpenViking:
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Write text content to an existing file and refresh semantics/vectors."""
+        """Write text content to a file and refresh semantics/vectors. Modes: replace, append, create, or upsert."""
         return run_async(
             self._async_client.write(
                 uri=uri,

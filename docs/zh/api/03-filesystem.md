@@ -174,7 +174,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-修改一个已存在的文件，或在 `mode="create"` 时创建新文件，并自动刷新相关语义与向量。
+修改一个已存在的文件，在 `mode="create"` 时创建新文件，或用显式 `mode="upsert"` 执行创建或替换，并自动刷新相关语义与向量。
 
 **参数**
 
@@ -182,14 +182,14 @@ openviking read viking://resources/docs/api.md
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要写入的文件 URI。`mode="create"` 时目标文件必须不存在 |
 | content | str | 是 | - | 要写入的新内容 |
-| mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
+| mode | str | 否 | `replace` | `replace`、`append`、`create` 或 `upsert` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 
 **说明**
 
-- `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
-- `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
+- `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`；`upsert` 会显式创建缺失文件或替换已存在文件。目录始终会被拒绝。
+- `create` 和 `upsert` 的创建分支只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
 - 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
