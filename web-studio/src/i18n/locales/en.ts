@@ -83,6 +83,10 @@ const en = {
         label: 'Account',
         placeholder: 'default',
       },
+      agentId: {
+        label: 'Agent',
+        placeholder: 'web-studio',
+      },
       apiKey: {
         label: 'API Key',
         placeholder: 'Enter X-API-Key or Bearer token',

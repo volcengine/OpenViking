@@ -9,13 +9,9 @@ pub async fn wait(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let path = if let Some(t) = timeout {
-        format!("/api/v1/system/wait?timeout={}", t)
-    } else {
-        "/api/v1/system/wait".to_string()
-    };
-
-    let response: serde_json::Value = client.post(&path, &json!({})).await?;
+    let response: serde_json::Value = client
+        .post("/api/v1/system/wait", &json!({ "timeout": timeout }))
+        .await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

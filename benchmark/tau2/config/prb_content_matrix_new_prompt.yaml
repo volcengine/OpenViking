@@ -27,7 +27,7 @@ strategies:
     scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
 
   - id: new_traj_fixed_prewrite_only
-    label: PR-B new trajectory fixed-count prewrite top4
+    label: PR-B new trajectory fixed-count prewrite top2
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_operation_family_v1_success_only
@@ -38,12 +38,12 @@ strategies:
     search_memory_type: trajectories
     retrieval_mode: prewrite
     retrieval_top_k: 4
-    prewrite_retrieval_top_k: 4
-    prewrite_inject_top_k: 4
+    prewrite_retrieval_top_k: 2
+    prewrite_inject_top_k: 2
     scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
 
   - id: new_traj_fixed_first_user_prewrite
-    label: PR-B new trajectory fixed-count first-user + prewrite top4
+    label: PR-B new trajectory fixed-count first-user top4 + prewrite top2
     memory_backend: openviking
     train_required: true
     corpus_id: memory_v2_operation_family_v1_success_only
@@ -55,8 +55,8 @@ strategies:
     retrieval_mode: first_user_prewrite
     retrieval_top_k: 4
     first_user_inject_top_k: 4
-    prewrite_retrieval_top_k: 4
-    prewrite_inject_top_k: 4
+    prewrite_retrieval_top_k: 2
+    prewrite_inject_top_k: 2
     scope_prompt_file: benchmark/tau2/config/scope_prompts/generic_memory_scope.md
 
   - id: new_exp_fixed_first_user

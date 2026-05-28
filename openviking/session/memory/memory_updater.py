@@ -38,6 +38,47 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
+async def write_stored_links(
+    links: List[StoredLink],
+    ctx: RequestContext,
+    viking_fs: Any,
+    skip_uris: Optional[set] = None,
+) -> None:
+    """Write StoredLinks to their endpoint files' links/backlinks fields.
+
+    For each link: from_uri's ``links`` receives the forward link;
+    to_uri's ``backlinks`` receives the reverse reference.
+    Files listed in skip_uris are skipped (caller handles them in the same write).
+    """
+    from openviking.session.memory.merge_op.link_merge import merge_links
+
+    skip = skip_uris or set()
+    file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
+    for link in links:
+        if link.from_uri not in skip:
+            file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
+            file_links[link.from_uri]["links"].append(link)
+        if link.to_uri not in skip:
+            file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
+            file_links[link.to_uri]["backlinks"].append(link)
+
+    for uri, link_groups in file_links.items():
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+            if not content:
+                continue
+            mf = MemoryFileUtils.read(content, uri=uri)
+            if link_groups["links"]:
+                mf.links = merge_links(mf.links, [l.model_dump() for l in link_groups["links"]])
+            if link_groups["backlinks"]:
+                mf.backlinks = merge_links(
+                    mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
+                )
+            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+        except Exception as e:
+            tracer.error(f"Failed to apply links to {uri}: {e}")
+
+
 class ExtractContext:
     """Extract context for template rendering."""
 
@@ -475,9 +516,9 @@ class MemoryUpdater:
                     metadata[field.name] = new_value
 
             # Preserve system-managed metadata from the old file that is not
-            # covered by the schema (e.g. source_trajectories). These fields
-            # are written by the system, never by the LLM, so they would be
-            # silently dropped on every Update without this copy.
+            # covered by the schema. These fields are written by the system,
+            # never by the LLM, so they would be silently dropped on every
+            # Update without this copy.
             if old_content and old_content.extra_fields:
                 schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
                 for key, val in old_content.extra_fields.items():
@@ -563,66 +604,13 @@ class MemoryUpdater:
         ctx: RequestContext,
         deleted_uris: Optional[set[str]] = None,
     ) -> None:
-        """Apply links to endpoint files that are NOT in the current upsert batch.
-
-        Links go into from_uri's "links" field; backlinks go into to_uri's "backlinks" field.
-        """
-        from openviking.session.memory.merge_op.link_merge import merge_links
-
+        """Apply links to endpoint files that are NOT in the current upsert batch."""
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             return
-
-        # Collect URIs of files being upserted (links handled in _apply_upsert)
-        upserted_uris = set()
-        deleted_uris = deleted_uris or set()
-        for op in result.written_uris + result.edited_uris:
-            upserted_uris.add(op)
-
-        skipped_uris = upserted_uris | deleted_uris
-
-        # Group remaining links by target file and field
-        # file_links[uri]["links"] = forward links, file_links[uri]["backlinks"] = backlinks
-        file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
-        for link in resolved_links:
-            # Forward link -> from_uri's "links"
-            if link.from_uri not in skipped_uris:
-                file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
-                file_links[link.from_uri]["links"].append(link)
-            # Backlink -> to_uri's "backlinks"
-            if link.to_uri not in skipped_uris:
-                file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
-                file_links[link.to_uri]["backlinks"].append(link)
-
-        # Apply links to each remaining file
-        for uri, link_groups in file_links.items():
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if not content:
-                    continue
-                mf = MemoryFileUtils.read(content, uri=uri)
-
-                # Merge links
-                if link_groups["links"]:
-                    merged_links = merge_links(
-                        mf.links,
-                        [link.model_dump() for link in link_groups["links"]],
-                    )
-                    mf.links = merged_links
-
-                # Merge backlinks
-                if link_groups["backlinks"]:
-                    merged_backlinks = merge_links(
-                        mf.backlinks,
-                        [link.model_dump() for link in link_groups["backlinks"]],
-                    )
-                    mf.backlinks = merged_backlinks
-
-                # Re-serialize with updated links
-                new_full_content = MemoryFileUtils.write(mf)
-                await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-            except Exception as e:
-                tracer.error(f"Failed to apply links to existing file {uri}: {e}")
+        upserted_uris = set(result.written_uris + result.edited_uris)
+        skip = upserted_uris | (deleted_uris or set())
+        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

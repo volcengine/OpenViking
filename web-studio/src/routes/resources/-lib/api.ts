@@ -123,7 +123,8 @@ export async function fetchFileContent(
           uri,
           offset,
           limit,
-        },
+          raw: options.raw,
+        } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
       }),
     )
 

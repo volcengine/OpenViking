@@ -39,6 +39,9 @@ fields:
       - MACHINE READABILITY (IMPERATIVE VOICE): Address the future agent directly using commanding imperatives (e.g., "Ask the user for X", "Call tool Y").
       - ABSTRACTION MANDATE: Strip away specific entities, IDs, user names, or raw text from the past trajectory. Use generalized abstract descriptions so the rule applies universally.
       - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
+      - EXECUTION-FIRST PRINCIPLE: 'Approach' steps MUST describe direct tool invocations only. Strip all "I will now do X" / "I have completed X" communication steps.
+      - CONDITIONAL BRANCH PRESERVATION: Capture full decision trees as explicit IF/THEN/ELSE branches. NEVER collapse divergent user-driven branches into a single terminal action.
+      - ATOMIC SCOPE: Each experience MUST cover exactly ONE user intent and its associated tool-invocation sequence. Multiple distinct user intents → SEPARATE experiences. A 'Situation' listing more than one user goal is a violation: split immediately. Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
       - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
     merge_op: replace
