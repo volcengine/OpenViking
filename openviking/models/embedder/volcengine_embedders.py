@@ -301,6 +301,100 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
     def get_dimension(self) -> int:
         return self._dimension
 
+    @property
+    def supports_image_embedding(self) -> bool:
+        """Volcengine supports image embedding via multimodal API"""
+        return self.input_type == "multimodal"
+
+    @property
+    def supports_multimodal_embedding(self) -> bool:
+        """Volcengine supports multimodal (text + image) embedding"""
+        return self.input_type == "multimodal"
+
+    def embed_multimodal(
+        self,
+        text: Optional[str] = None,
+        image_b64: Optional[str] = None,
+        is_query: bool = False,
+    ) -> EmbedResult:
+        """Perform multimodal embedding on text and/or image.
+
+        Args:
+            text: Input text (optional)
+            image_b64: Base64 encoded image (optional)
+            is_query: Flag to indicate if this is a query embedding
+
+        Returns:
+            EmbedResult: Result containing dense_vector
+
+        Raises:
+            RuntimeError: When API call fails
+            ValueError: When neither text nor image is provided
+        """
+        if not text and not image_b64:
+            raise ValueError("At least one of text or image_b64 must be provided")
+
+        def _embed_call():
+            input_data = []
+            if text:
+                input_data.append({"type": "text", "text": text})
+            if image_b64:
+                input_data.append({"type": "image", "image": image_b64})
+
+            response = self.client.multimodal_embeddings.create(
+                input=input_data,
+                model=self.model_name,
+            )
+            self._update_telemetry_token_usage(response)
+            vector = response.data.embedding
+            vector = truncate_and_normalize(vector, self.dimension)
+            return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _embed_call,
+                logger=logger,
+                operation_name="Volcengine multimodal embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Volcengine multimodal embedding failed: {str(e)}") from e
+
+    async def embed_multimodal_async(
+        self,
+        text: Optional[str] = None,
+        image_b64: Optional[str] = None,
+        is_query: bool = False,
+    ) -> EmbedResult:
+        """Async perform multimodal embedding on text and/or image."""
+        if not text and not image_b64:
+            raise ValueError("At least one of text or image_b64 must be provided")
+
+        client = self._get_async_client()
+
+        async def _embed_call() -> EmbedResult:
+            input_data = []
+            if text:
+                input_data.append({"type": "text", "text": text})
+            if image_b64:
+                input_data.append({"type": "image", "image": image_b64})
+
+            response = await client.multimodal_embeddings.create(
+                input=input_data,
+                model=self.model_name,
+            )
+            self._update_telemetry_token_usage(response)
+            vector = response.data.embedding
+            return EmbedResult(dense_vector=truncate_and_normalize(vector, self.dimension))
+
+        try:
+            return await self._run_with_async_retry(
+                _embed_call,
+                logger=logger,
+                operation_name="Volcengine async multimodal embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Volcengine multimodal embedding failed: {str(e)}") from e
+
 
 class VolcengineSparseEmbedder(SparseEmbedderBase):
     """Volcengine Sparse Embedder Implementation

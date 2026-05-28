@@ -293,6 +293,16 @@ class EmbedderBase(ABC):
         """Check if result is hybrid (contains both dense and sparse vectors)"""
         return False
 
+    @property
+    def supports_image_embedding(self) -> bool:
+        """Check if embedder supports image embedding"""
+        return False
+
+    @property
+    def supports_multimodal_embedding(self) -> bool:
+        """Check if embedder supports multimodal (text + image) embedding"""
+        return False
+
     def _resolve_metrics_duration_seconds(self, duration_seconds: float = 0.0) -> float:
         """Resolve per-call metrics duration from an explicit value or the active call timer."""
         try:

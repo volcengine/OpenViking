@@ -41,12 +41,24 @@ class ContextLevel(int, Enum):
 
 class Vectorize:
     text: str = ""
-    # image: str = ""
-    # video: str = ""
-    # audio: str = ""
+    image_b64: Optional[str] = None
+    original_url: Optional[str] = None
+    add_reason: Optional[str] = None
+    image_metadata: Optional[Dict[str, Any]] = None
 
-    def __init__(self, text: str = ""):
+    def __init__(
+        self,
+        text: str = "",
+        image_b64: Optional[str] = None,
+        original_url: Optional[str] = None,
+        add_reason: Optional[str] = None,
+        image_metadata: Optional[Dict[str, Any]] = None,
+    ):
         self.text = text
+        self.image_b64 = image_b64
+        self.original_url = original_url
+        self.add_reason = add_reason
+        self.image_metadata = image_metadata
 
 
 class Context:
@@ -150,8 +162,11 @@ class Context:
 
     def get_vectorization_text(self) -> str:
         """Get text for vectorization."""
-        # todo: multi-modal support
         return self.vectorize.text
+
+    def has_image_data(self) -> bool:
+        """Check if context has image data for vectorization."""
+        return self.vectorize.image_b64 is not None
 
     def update_activity(self):
         """Update activity statistics."""

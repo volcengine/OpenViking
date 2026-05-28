@@ -93,7 +93,15 @@ class IndexEngineProxy:
 
         if filters is None:
             filters = {}
-        req.dsl = json.dumps(filters)
+        # Validate JSON round-trip to catch strings with problematic characters
+        # that would cause C++ engine parse errors (e.g., Unterminated string)
+        json_str = json.dumps(filters, ensure_ascii=False)
+        try:
+            json.loads(json_str)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Invalid filter JSON: {json_str}")
+            raise ValueError(f"Filter contains non-JSON-serializable values: {e}") from e
+        req.dsl = json_str
 
         if sparse_raw_terms and sparse_values:
             req.sparse_raw_terms = sparse_raw_terms

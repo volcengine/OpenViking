@@ -6,6 +6,7 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
+import base64
 import math
 import os
 from datetime import datetime, timezone
@@ -430,8 +431,58 @@ async def vectorize_file(
                             f"No summary available for {file_path}, skipping vectorization"
                         )
                         return
+        elif content_type == ResourceContentType.IMAGE:
+            # For image files: try to read and encode as base64 for multimodal embedding
+            image_b64 = None
+            image_metadata = summary_dict.get("image_metadata", {})
+            original_url = summary_dict.get("original_url")
+            add_reason = summary_dict.get("add_reason")
+
+            # Try to read the image file
+            try:
+                image_bytes = await viking_fs.read_file(file_path, ctx=ctx)
+                if isinstance(image_bytes, bytes):
+                    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                    # Add format info to metadata
+                    import imghdr
+                    img_format = imghdr.what(None, h=image_bytes)
+                    if img_format:
+                        image_metadata["format"] = img_format
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read image file for {file_path}, will use text-only embedding: {e}"
+                )
+
+            # Build text part of the embedding
+            text_parts = []
+            if summary:
+                text_parts.append(summary)
+
+            # Add metadata to text
+            if image_metadata:
+                meta_text = "\n".join([f"{k}: {v}" for k, v in image_metadata.items() if v])
+                if meta_text:
+                    text_parts.append(f"\nImage Metadata:\n{meta_text}")
+
+            text_for_embedding = "\n".join(text_parts) if text_parts else ""
+
+            # Set vectorize with image data if available
+            if image_b64:
+                context.set_vectorize(Vectorize(
+                    text=text_for_embedding,
+                    image_b64=image_b64,
+                    original_url=original_url,
+                    add_reason=add_reason,
+                    image_metadata=image_metadata
+                ))
+            elif text_for_embedding:
+                # Fallback to text-only if we couldn't read the image
+                context.set_vectorize(Vectorize(text=text_for_embedding))
+            else:
+                logger.debug(f"Skipping image file {file_path} (no content or summary)")
+                return
         elif summary:
-            # For non-text files, use summary
+            # For other non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")

@@ -25,7 +25,7 @@ class EmbeddingMsgConverter:
         Convert a Context object to EmbeddingMsg.
         """
         vectorization_text = context.get_vectorization_text()
-        if not vectorization_text:
+        if not vectorization_text and not context.has_image_data():
             return None
 
         context_data = context.to_dict()
@@ -72,5 +72,9 @@ class EmbeddingMsgConverter:
             message=vectorization_text,
             context_data=context_data,
             telemetry_id=get_current_telemetry().telemetry_id,
+            image_b64=context.vectorize.image_b64,
+            original_url=context.vectorize.original_url,
+            add_reason=context.vectorize.add_reason,
+            image_metadata=context.vectorize.image_metadata,
         )
         return embedding_msg
