@@ -41,6 +41,9 @@ Once installed, the plugin provides these agent tools:
 | `add_resource` | Import documents, URLs, or Git repos |
 | `add_skill` | Import agent skills |
 | `ov_search` | Search imported resources and skills |
+| `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
+| `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
+| `openviking_tool_result_list` | List externalized tool results in the current session |
 
 ## Data Flow & Privacy
 
