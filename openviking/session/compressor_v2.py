@@ -624,6 +624,234 @@ async def _synthesize_timeline_conflict_fields(
         return None
 
 
+def _create_new_experience_candidates(
+    operations: ResolvedOperations,
+) -> list[dict[str, Any]]:
+    if operations.delete_file_contents or operations.errors:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    source_links_by_uri: dict[str, list[str]] = {}
+    for link in operations.resolved_links or []:
+        if link.link_type != "derived_from":
+            continue
+        if "/trajectories/" not in link.to_uri:
+            continue
+        source_links_by_uri.setdefault(link.from_uri, []).append(link.to_uri)
+
+    for op in operations.upsert_operations:
+        if op.memory_type != "experiences":
+            continue
+        if op.old_memory_file_content is not None or len(op.uris) != 1:
+            continue
+        if str(op.memory_fields.get("supersedes") or "").strip():
+            continue
+        experience_name = str(op.memory_fields.get("experience_name") or "").strip()
+        content = str(op.memory_fields.get("content") or "").strip()
+        if not experience_name or not content:
+            continue
+        uri = op.uris[0]
+        candidates.append(
+            {
+                "candidate_index": len(candidates),
+                "operation": op,
+                "uri": uri,
+                "experience_name": experience_name,
+                "content": content,
+                "source_trajectory_uris": list(dict.fromkeys(source_links_by_uri.get(uri, []))),
+            }
+        )
+    return candidates
+
+
+def _remap_resolved_links_for_consolidation(
+    operations: ResolvedOperations,
+    uri_remap: dict[str, str],
+) -> None:
+    if not uri_remap:
+        return
+
+    remapped_links: list[StoredLink] = []
+    seen_links: set[tuple[str, str, str, str]] = set()
+    for link in operations.resolved_links or []:
+        from_uri = uri_remap.get(link.from_uri, link.from_uri)
+        to_uri = uri_remap.get(link.to_uri, link.to_uri)
+        if not from_uri or not to_uri or from_uri == to_uri:
+            continue
+        next_link = link
+        if from_uri != link.from_uri or to_uri != link.to_uri:
+            next_link = link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri})
+        key = (next_link.from_uri, next_link.to_uri, next_link.link_type, next_link.match_text or "")
+        if key in seen_links:
+            continue
+        seen_links.add(key)
+        remapped_links.append(next_link)
+    operations.resolved_links = remapped_links
+
+
+def _create_new_experience_window_keys(operations: ResolvedOperations) -> list[str]:
+    """Return synthetic apply-window keys for cross-URI experience creation.
+
+    Exact lock paths still protect the concrete files. These keys only decide
+    which concurrent create-new experience proposals are allowed to share one
+    apply window, so semantic consolidation can see proposals with different
+    generated filenames.
+    """
+
+    directories = sorted(
+        {
+            _parent_uri(item["uri"])
+            for item in _create_new_experience_candidates(operations)
+            if item.get("uri")
+        }
+    )
+    return [f"create-new-experience-window:{directory}" for directory in directories]
+
+
+async def _synthesize_create_new_experience_consolidation(
+    *,
+    vlm: Any,
+    operations: ResolvedOperations,
+    phase_metric_key: str,
+) -> dict[str, str]:
+    """Consolidate same-window cross-URI create-new experience proposals.
+
+    The apply window makes several independently generated create-new proposals
+    visible at once. This gate asks the model to cluster proposals that describe
+    the same durable experience, then rewrites the batch so only the canonical
+    experience is created and all source links point to it.
+    """
+
+    candidates = _create_new_experience_candidates(operations)
+    if len(candidates) < 2:
+        return {}
+
+    payload = {
+        "candidate_experiences": [
+            {
+                "candidate_index": item["candidate_index"],
+                "experience_name": item["experience_name"],
+                "content": item["content"],
+                "source_trajectory_uris": item["source_trajectory_uris"],
+            }
+            for item in candidates
+        ]
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You consolidate concurrent create-new experience memories. "
+                "Group candidates only when they describe the same reusable user intent, "
+                "same trigger boundary, and compatible tool/action sequence. Do not merge "
+                "different intents, different lifecycle transitions, or cases where one card "
+                "should remain a narrower exception. Choose one existing candidate_index as "
+                "canonical for each merged group. Keep singletons out of groups. For each "
+                "merged group, provide one final full content string that preserves all "
+                "compatible guidance without inventing facts. Output JSON only: "
+                "{\"groups\": [{\"canonical_index\": 0, \"member_indices\": [0, 2], "
+                "\"content\": \"<full final content>\"}]}"
+            ),
+        },
+        {"role": "user", "content": JsonUtils.dumps(payload, indent=2)},
+    ]
+
+    telemetry = get_current_telemetry()
+    prefix = f"memory.agent.extract.phase.{phase_metric_key}"
+    telemetry.count(
+        f"{prefix}.operation_exact_apply_window_create_new_consolidation_input_uris",
+        len(candidates),
+    )
+    started_at = asyncio.get_running_loop().time()
+    try:
+        response = await vlm.get_completion_async(messages=messages)
+        content = (
+            response if isinstance(response, str) else (getattr(response, "content", "") or "")
+        )
+        parsed = JsonUtils.loads(content) or {}
+    except Exception:
+        telemetry.count(f"{prefix}.operation_exact_apply_window_create_new_consolidation_failed", 1)
+        logger.warning("operation-exact create-new experience consolidation failed", exc_info=True)
+        return {}
+    finally:
+        telemetry.add_duration(
+            f"{prefix}.operation_exact_apply_window_create_new_consolidation",
+            (asyncio.get_running_loop().time() - started_at) * 1000,
+        )
+
+    groups = parsed.get("groups") if isinstance(parsed, dict) else None
+    if not isinstance(groups, list):
+        telemetry.count(f"{prefix}.operation_exact_apply_window_create_new_consolidation_failed", 1)
+        return {}
+
+    by_index = {item["candidate_index"]: item for item in candidates}
+    used_duplicates: set[int] = set()
+    duplicate_op_ids: set[int] = set()
+    uri_remap: dict[str, str] = {}
+    merged_group_count = 0
+
+    for raw_group in groups:
+        if not isinstance(raw_group, dict):
+            continue
+        try:
+            canonical_index = int(raw_group.get("canonical_index"))
+        except (TypeError, ValueError):
+            continue
+        raw_members = raw_group.get("member_indices")
+        if not isinstance(raw_members, list):
+            continue
+        member_indices: list[int] = []
+        for value in raw_members:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if index in by_index and index not in member_indices:
+                member_indices.append(index)
+        if canonical_index not in member_indices or len(member_indices) < 2:
+            continue
+        if any(index in used_duplicates for index in member_indices):
+            continue
+        canonical = by_index.get(canonical_index)
+        if canonical is None:
+            continue
+
+        final_content = raw_group.get("content")
+        if isinstance(final_content, str) and final_content.strip():
+            canonical["operation"].memory_fields["content"] = final_content.strip()
+
+        canonical_uri = canonical["uri"]
+        for index in member_indices:
+            if index == canonical_index:
+                continue
+            duplicate = by_index[index]
+            duplicate_uri = duplicate["uri"]
+            if duplicate_uri == canonical_uri:
+                continue
+            duplicate_op_ids.add(id(duplicate["operation"]))
+            used_duplicates.add(index)
+            uri_remap[duplicate_uri] = canonical_uri
+        merged_group_count += 1
+
+    if not uri_remap:
+        return {}
+
+    operations.upsert_operations = [
+        op for op in operations.upsert_operations if id(op) not in duplicate_op_ids
+    ]
+    _remap_resolved_links_for_consolidation(operations, uri_remap)
+
+    telemetry.count(
+        f"{prefix}.operation_exact_apply_window_create_new_consolidation_groups",
+        merged_group_count,
+    )
+    telemetry.count(
+        f"{prefix}.operation_exact_apply_window_create_new_consolidation_merged_uris",
+        len(uri_remap),
+    )
+    return uri_remap
+
+
 def _operation_conflict_reason(operation: Any, registry: Any) -> str:
     getter = getattr(registry, "get", None)
     schema = getter(operation.memory_type) if callable(getter) else None
@@ -2111,13 +2339,11 @@ class SessionCompressorV2:
                     return []
 
                 combined_operations = ResolvedOperations(
-                    upsert_operations=_order_upserts_for_coalesced_timeline(
-                        [
-                            op
-                            for payload in payloads
-                            for op in payload["memory_operations"].upsert_operations
-                        ]
-                    ),
+                    upsert_operations=[
+                        op
+                        for payload in payloads
+                        for op in payload["memory_operations"].upsert_operations
+                    ],
                     delete_file_contents=[],
                     errors=[],
                     resolved_links=[
@@ -2129,6 +2355,24 @@ class SessionCompressorV2:
                 leader_telemetry = payloads[0]["telemetry"]
                 leader_phase_key = payloads[0]["phase_metric_key"]
                 leader_prefix = f"memory.agent.extract.phase.{leader_phase_key}"
+                create_new_uri_remap: dict[str, str] = {}
+                if bool(
+                    getattr(
+                        config.memory,
+                        "operation_exact_apply_window_create_new_consolidation_enabled",
+                        True,
+                    )
+                ):
+                    create_new_uri_remap = (
+                        await _synthesize_create_new_experience_consolidation(
+                            vlm=vlm,
+                            operations=combined_operations,
+                            phase_metric_key=leader_phase_key,
+                        )
+                    )
+                combined_operations.upsert_operations = _order_upserts_for_coalesced_timeline(
+                    combined_operations.upsert_operations
+                )
                 timeline_groups, timeline_items = _same_uri_timeline_stats(
                     combined_operations.upsert_operations
                 )
@@ -2235,7 +2479,10 @@ class SessionCompressorV2:
                     )
                 results: list[Any] = []
                 for payload in payloads:
-                    payload_uris = _collect_operation_write_uris(payload["memory_operations"])
+                    payload_uris = [
+                        create_new_uri_remap.get(uri, uri)
+                        for uri in _collect_operation_write_uris(payload["memory_operations"])
+                    ]
                     edited_uris = [uri for uri in payload_uris if uri in edited_set]
                     written_uris = [uri for uri in payload_uris if uri in written_set]
 
@@ -2312,6 +2559,23 @@ class SessionCompressorV2:
                         ctx,
                         viking_fs,
                     )
+                    if bool(
+                        getattr(
+                            config.memory,
+                            "operation_exact_apply_window_create_new_consolidation_enabled",
+                            True,
+                        )
+                    ):
+                        create_new_window_keys = _create_new_experience_window_keys(
+                            memory_operations
+                        )
+                        window_key_paths.extend(create_new_window_keys)
+                        if create_new_window_keys:
+                            telemetry.count(
+                                f"memory.agent.extract.phase.{phase_metric_key}."
+                                "operation_exact_apply_window_create_new_key_count",
+                                len(create_new_window_keys),
+                            )
                     coalesce_key = _window_coalesce_key()
                     return await _enqueue_operation_exact_apply_window(
                         lock_manager=lock_manager,

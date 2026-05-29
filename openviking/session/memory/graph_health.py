@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -12,6 +13,9 @@ from openviking.session.memory.dataclass import LINK_TYPE_DEFAULT
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 _SKIP_MEMORY_FILENAMES = {".overview.md", ".abstract.md", ".graph.html"}
+_TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
+_PAIR_SIMILARITY_THRESHOLD = 0.5
+_PAIR_SCAN_LIMIT = 1000
 
 
 def _is_memory_markdown(entry: dict[str, Any]) -> bool:
@@ -67,6 +71,162 @@ def _append_sample(
     if detail:
         sample["detail"] = detail
     samples.append(sample)
+
+
+def _uri_stem(uri: str) -> str:
+    filename = uri.rsplit("/", 1)[-1]
+    if filename.endswith(".md"):
+        return filename[:-3]
+    return filename
+
+
+def _tokens(text: str) -> set[str]:
+    return {token.lower() for token in _TOKEN_RE.findall(text) if len(token) > 2}
+
+
+def _name_tokens(uri: str) -> set[str]:
+    return {
+        token.lower()
+        for token in _uri_stem(uri).replace("-", "_").split("_")
+        if len(token) > 2
+    }
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left and not right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _percentile(values: list[int], pct: float) -> float:
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    ordered = sorted(values)
+    idx = (len(ordered) - 1) * pct
+    lo = int(idx)
+    hi = min(lo + 1, len(ordered) - 1)
+    frac = idx - lo
+    return ordered[lo] * (1 - frac) + ordered[hi] * frac
+
+
+def _quality_pair(
+    left_uri: str,
+    right_uri: str,
+    score: float,
+    *,
+    shared_sources: set[str] | None = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "left_uri": left_uri,
+        "right_uri": right_uri,
+        "score": round(score, 4),
+    }
+    if shared_sources:
+        item["shared_sources"] = sorted(shared_sources)[:5]
+    return item
+
+
+def _summarize_experience_quality(
+    *,
+    nodes: dict[str, Any],
+    experience_uris: list[str],
+    experience_source_sets: dict[str, set[str]],
+    sample_limit: int,
+) -> dict[str, Any]:
+    """Summarize experience content granularity signals.
+
+    This is a lightweight diagnostic, not a semantic duplicate detector. It is
+    useful for corpus-build gates where graph links are healthy but concurrent
+    writes may have produced many near-identical experience cards.
+    """
+
+    lengths = [len(nodes[uri].plain_content()) for uri in experience_uris]
+    source_counts = [len(experience_source_sets.get(uri, set())) for uri in experience_uris]
+
+    source_set_to_uris: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for uri in experience_uris:
+        source_set = experience_source_sets.get(uri, set())
+        if source_set:
+            source_set_to_uris[tuple(sorted(source_set))].append(uri)
+
+    duplicate_source_sets = [
+        {"source_count": len(source_set), "uris": uris[:sample_limit]}
+        for source_set, uris in source_set_to_uris.items()
+        if len(uris) > 1
+    ]
+    duplicate_source_sets.sort(
+        key=lambda item: (len(item["uris"]), item["source_count"]),
+        reverse=True,
+    )
+
+    pair_counts = {"name": 0, "content": 0, "source": 0}
+    examples: dict[str, list[dict[str, Any]]] = {"name": [], "content": [], "source": []}
+    pair_scan_skipped = len(experience_uris) > _PAIR_SCAN_LIMIT
+    if not pair_scan_skipped:
+        name_tokens = {uri: _name_tokens(uri) for uri in experience_uris}
+        content_tokens = {uri: _tokens(nodes[uri].plain_content()) for uri in experience_uris}
+        for idx, left_uri in enumerate(experience_uris):
+            for right_uri in experience_uris[idx + 1 :]:
+                name_score = _jaccard(name_tokens[left_uri], name_tokens[right_uri])
+                content_score = _jaccard(content_tokens[left_uri], content_tokens[right_uri])
+                left_sources = experience_source_sets.get(left_uri, set())
+                right_sources = experience_source_sets.get(right_uri, set())
+                source_score = _jaccard(left_sources, right_sources)
+
+                if name_score >= _PAIR_SIMILARITY_THRESHOLD:
+                    pair_counts["name"] += 1
+                    if len(examples["name"]) < sample_limit:
+                        examples["name"].append(_quality_pair(left_uri, right_uri, name_score))
+                if content_score >= _PAIR_SIMILARITY_THRESHOLD:
+                    pair_counts["content"] += 1
+                    if len(examples["content"]) < sample_limit:
+                        examples["content"].append(
+                            _quality_pair(left_uri, right_uri, content_score)
+                        )
+                if (
+                    left_sources
+                    and right_sources
+                    and source_score >= _PAIR_SIMILARITY_THRESHOLD
+                ):
+                    pair_counts["source"] += 1
+                    if len(examples["source"]) < sample_limit:
+                        examples["source"].append(
+                            _quality_pair(
+                                left_uri,
+                                right_uri,
+                                source_score,
+                                shared_sources=left_sources & right_sources,
+                            )
+                        )
+
+    return {
+        "content_chars": {
+            "avg": round(sum(lengths) / len(lengths), 2) if lengths else 0.0,
+            "p50": round(_percentile(lengths, 0.50), 2),
+            "p95": round(_percentile(lengths, 0.95), 2),
+            "max": max(lengths) if lengths else 0,
+            "empty": sum(1 for value in lengths if value == 0),
+        },
+        "source_links_per_experience": {
+            "avg": round(sum(source_counts) / len(source_counts), 2) if source_counts else 0.0,
+            "p50": round(_percentile(source_counts, 0.50), 2),
+            "max": max(source_counts) if source_counts else 0,
+            "linkless": sum(1 for value in source_counts if value == 0),
+        },
+        "pair_similarity_threshold": _PAIR_SIMILARITY_THRESHOLD,
+        "pair_scan_limit": _PAIR_SCAN_LIMIT,
+        "pair_scan_skipped": pair_scan_skipped,
+        "name_similar_pair_count": pair_counts["name"],
+        "content_similar_pair_count": pair_counts["content"],
+        "source_overlap_pair_count": pair_counts["source"],
+        "duplicate_exact_source_set_count": len(duplicate_source_sets),
+        "duplicate_exact_source_set_examples": duplicate_source_sets[:sample_limit],
+        "examples": examples,
+    }
 
 
 async def inspect_memory_graph_health(
@@ -278,6 +438,21 @@ async def inspect_memory_graph_health(
             from_uri == uri and to_uri in trajectory_uris for from_uri, to_uri, _ in forward_edges
         )
     ]
+    experience_source_sets = {
+        uri: {
+            to_uri
+            for from_uri, to_uri, _link_type in forward_edges
+            if from_uri == uri and to_uri in trajectory_uris
+        }
+        for uri in experience_uris
+    }
+
+    experience_quality = _summarize_experience_quality(
+        nodes=nodes,
+        experience_uris=experience_uris,
+        experience_source_sets=experience_source_sets,
+        sample_limit=sample_limit,
+    )
 
     violation_count = (
         parse_error_count
@@ -298,6 +473,7 @@ async def inspect_memory_graph_health(
         "experience_to_trajectory_links": experience_to_trajectory_links,
         "trajectory_from_experience_backlinks": trajectory_from_experience_backlinks,
         "source_linkless_experience_count": len(source_linkless_experience_uris),
+        "experience_quality": experience_quality,
         "parse_error_count": parse_error_count,
         "malformed_link_count": malformed_link_count,
         "owner_mismatch_count": owner_mismatch_count,

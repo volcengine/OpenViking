@@ -84,6 +84,9 @@ class TelemetrySummaryBuilder:
         "operation_exact_apply_window_timeline_conflict_synthesis_ms": (
             "operation_exact_apply_window_timeline_conflict_synthesis.duration_ms"
         ),
+        "operation_exact_apply_window_create_new_consolidation_ms": (
+            "operation_exact_apply_window_create_new_consolidation.duration_ms"
+        ),
     }
 
     @staticmethod
@@ -479,6 +482,30 @@ class TelemetrySummaryBuilder:
                         "operation_exact_apply_window_cross_uri_create_new_uris": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_cross_uri_create_new_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_input_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_input_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_merged_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_merged_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_failed"
                             ),
                             0,
                         ),

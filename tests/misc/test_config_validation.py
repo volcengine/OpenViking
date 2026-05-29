@@ -282,20 +282,6 @@ def test_mount_agfs_backend_creates_queue_sqlite_dirs_for_sqlite_backend(tmp_pat
     assert queuefs_mount[2]["db_path"] == str(queue_db_path.resolve())
 
 
-def test_memory_config_accepts_deprecated_batch_experience_keys():
-    config = MemoryConfig.from_dict(
-        {
-            "agent_memory_enabled": True,
-            "agent_experience_consolidation_mode": "batch",
-            "agent_experience_batch_max_trajectories": 8,
-        }
-    )
-
-    assert config.agent_memory_enabled is True
-    assert config.agent_experience_consolidation_mode == "batch"
-    assert config.agent_experience_batch_max_trajectories == 8
-
-
 def test_memory_config_still_rejects_unknown_fields():
     with pytest.raises(ValueError, match="extra_forbidden"):
         MemoryConfig.from_dict({"agent_experience_batch_size": 8})

@@ -37,6 +37,7 @@ from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.merge_op.base import StrPatch
 from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.versioning import content_digest
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.telemetry.operation import TelemetrySummaryBuilder
@@ -86,6 +87,184 @@ def test_same_uri_timeline_stats_counts_only_replayed_groups():
     assert compressor_v2_module._same_uri_timeline_stats([op_a1, op_a2, op_b, op_multi]) == (1, 2)
 
 
+def test_create_new_experience_window_keys_group_cross_uri_candidates():
+    exp_dir = "viking://agent/default/memories/experiences"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[f"{exp_dir}/first.md"],
+                memory_fields={
+                    "experience_name": "first",
+                    "content": "First create-new experience.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[f"{exp_dir}/second.md"],
+                memory_fields={
+                    "experience_name": "second",
+                    "content": "Second create-new experience.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=MemoryFile(uri=f"{exp_dir}/existing.md"),
+                memory_type="experiences",
+                uris=[f"{exp_dir}/existing.md"],
+                memory_fields={
+                    "experience_name": "existing",
+                    "content": "Existing update should keep its exact URI key.",
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    assert compressor_v2_module._create_new_experience_window_keys(operations) == [
+        f"create-new-experience-window:{exp_dir}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_new_experience_consolidation_merges_same_window_duplicates():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            assert "candidate_experiences" in messages[1]["content"]
+            return (
+                '{"groups": ['
+                '{"canonical_index": 0, "member_indices": [0, 1], '
+                '"content": "## Situation\\n- User wants to cancel all pending orders\\n\\n'
+                '## Approach\\n- Verify identity, then cancel every pending order\\n\\n'
+                '## Reflect\\n- Do not merge delivered-order returns into this rule"}'
+                "]}"
+            )
+
+    canonical_uri = (
+        "viking://agent/default/memories/experiences/bulk_pending_order_cancellation.md"
+    )
+    duplicate_uri = (
+        "viking://agent/default/memories/experiences/pending_order_bulk_cancellation.md"
+    )
+    distinct_uri = "viking://agent/default/memories/experiences/pending_order_item_modification.md"
+    traj_1 = "viking://agent/default/memories/trajectories/one.md"
+    traj_2 = "viking://agent/default/memories/trajectories/two.md"
+    traj_3 = "viking://agent/default/memories/trajectories/three.md"
+
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[canonical_uri],
+                memory_fields={
+                    "experience_name": "bulk_pending_order_cancellation",
+                    "content": "Cancel all pending orders after verifying identity.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[duplicate_uri],
+                memory_fields={
+                    "experience_name": "pending_order_bulk_cancellation",
+                    "content": "Bulk-cancel pending orders after verifying identity.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[distinct_uri],
+                memory_fields={
+                    "experience_name": "pending_order_item_modification",
+                    "content": "Modify one item in a pending order.",
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(from_uri=canonical_uri, to_uri=traj_1, link_type="derived_from"),
+            StoredLink(from_uri=duplicate_uri, to_uri=traj_2, link_type="derived_from"),
+            StoredLink(from_uri=distinct_uri, to_uri=traj_3, link_type="derived_from"),
+        ],
+    )
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        remap = await compressor_v2_module._synthesize_create_new_experience_consolidation(
+            vlm=FakeVLM(),
+            operations=operations,
+            phase_metric_key="experience_single",
+        )
+
+    assert remap == {duplicate_uri: canonical_uri}
+    assert [op.uris[0] for op in operations.upsert_operations] == [canonical_uri, distinct_uri]
+    assert "Verify identity" in operations.upsert_operations[0].memory_fields["content"]
+    assert {(link.from_uri, link.to_uri) for link in operations.resolved_links or []} == {
+        (canonical_uri, traj_1),
+        (canonical_uri, traj_2),
+        (distinct_uri, traj_3),
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_new_experience_consolidation_ignores_overlapping_groups():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            return JsonUtils.dumps(
+                {
+                    "groups": [
+                        {
+                            "canonical_index": 0,
+                            "member_indices": [0, 1],
+                            "content": "Merged A and B",
+                        },
+                        {
+                            "canonical_index": 1,
+                            "member_indices": [1, 2],
+                            "content": "Invalid overlapping merge",
+                        },
+                    ]
+                }
+            )
+
+    uris = [
+        f"viking://agent/default/memories/experiences/card_{index}.md"
+        for index in range(3)
+    ]
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[uri],
+                memory_fields={
+                    "experience_name": f"card_{index}",
+                    "content": f"Experience card {index}",
+                },
+            )
+            for index, uri in enumerate(uris)
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[],
+    )
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        remap = await compressor_v2_module._synthesize_create_new_experience_consolidation(
+            vlm=FakeVLM(),
+            operations=operations,
+            phase_metric_key="experience_single",
+        )
+
+    assert remap == {uris[1]: uris[0]}
+    assert [op.uris[0] for op in operations.upsert_operations] == [uris[0], uris[2]]
+    assert operations.upsert_operations[0].memory_fields["content"] == "Merged A and B"
+    assert operations.upsert_operations[1].memory_fields["content"] == "Experience card 2"
+
+
 def test_agent_phase_summary_exposes_apply_window_quality_counters():
     prefix = "memory.agent.extract.phase.experience_single"
     summary = TelemetrySummaryBuilder.build(
@@ -102,6 +281,8 @@ def test_agent_phase_summary_exposes_apply_window_quality_counters():
             f"{prefix}.operation_exact_apply_window_result_written_uris": 4,
             f"{prefix}.operation_exact_apply_window_cross_uri_create_new_groups": 1,
             f"{prefix}.operation_exact_apply_window_cross_uri_create_new_uris": 4,
+            f"{prefix}.operation_exact_apply_window_create_new_consolidation_groups": 1,
+            f"{prefix}.operation_exact_apply_window_create_new_consolidation_merged_uris": 2,
             f"{prefix}.result_written_uris": 4,
             f"{prefix}.result_edited_uris": 1,
             f"{prefix}.supersedes_requested": 2,
@@ -125,6 +306,8 @@ def test_agent_phase_summary_exposes_apply_window_quality_counters():
     assert phase["operation_exact_apply_window_result_written_uris"] == 4
     assert phase["operation_exact_apply_window_cross_uri_create_new_groups"] == 1
     assert phase["operation_exact_apply_window_cross_uri_create_new_uris"] == 4
+    assert phase["operation_exact_apply_window_create_new_consolidation_groups"] == 1
+    assert phase["operation_exact_apply_window_create_new_consolidation_merged_uris"] == 2
     assert phase["result_written_uris"] == 4
     assert phase["result_edited_uris"] == 1
     assert phase["supersedes_requested"] == 2
@@ -1202,6 +1385,59 @@ async def test_operation_exact_apply_window_coalesces_same_key_payloads():
     lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
         handle,
         [shared_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_cross_uri_create_new_key():
+    first_path = "viking://agent/default/memories/experiences/first.md"
+    second_path = "viking://agent/default/memories/experiences/second.md"
+    create_new_key = "create-new-experience-window:viking://agent/default/memories/experiences"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str, lock_path: str):
+        async def coalesce_func(payloads, lock_handle):
+            events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+            return [f"result:{payload}" for payload in payloads]
+
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[lock_path, create_new_key],
+            lock_paths=[lock_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=("memory-upsert-window",),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(
+            worker("first", first_path),
+            worker("second", second_path),
+        )
+
+    assert results == ["result:first", "result:second"]
+    assert events == ["coalesce:first,second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [first_path, second_path],
         timeout=None,
     )
     lock_manager.release.assert_awaited_once_with(handle)

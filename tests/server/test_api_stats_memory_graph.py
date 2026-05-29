@@ -91,3 +91,63 @@ async def test_memory_graph_health_reports_missing_backlink(client, service):
     assert result["samples"][0]["kind"] == "missing_backlink"
     assert result["samples"][0]["uri"] == exp_uri
     assert result["samples"][0]["peer_uri"] == traj_uri
+
+
+async def test_memory_graph_health_reports_experience_quality_signals(client, service):
+    root_uri = "viking://agent/default/memories"
+    first_exp_uri = f"{root_uri}/experiences/refund_request_process.md"
+    second_exp_uri = f"{root_uri}/experiences/request_refund_processing.md"
+    traj_uri = f"{root_uri}/trajectories/refund.md"
+    first_link = {
+        "from_uri": first_exp_uri,
+        "to_uri": traj_uri,
+        "link_type": "derived_from",
+        "weight": 1.0,
+    }
+    second_link = {
+        "from_uri": second_exp_uri,
+        "to_uri": traj_uri,
+        "link_type": "derived_from",
+        "weight": 1.0,
+    }
+
+    await _write_memory(
+        service,
+        first_exp_uri,
+        MemoryFile(
+            content="Refund request requires checking eligibility before issuing refund.",
+            memory_type="experiences",
+            links=[first_link],
+        ),
+    )
+    await _write_memory(
+        service,
+        second_exp_uri,
+        MemoryFile(
+            content=(
+                "Request refund processing requires checking eligibility before issuing refund."
+            ),
+            memory_type="experiences",
+            links=[second_link],
+        ),
+    )
+    await _write_memory(
+        service,
+        traj_uri,
+        MemoryFile(
+            content="Refund trajectory",
+            memory_type="trajectories",
+            backlinks=[first_link, second_link],
+        ),
+    )
+
+    resp = await client.get("/api/v1/stats/memory-graph", params={"uri": root_uri})
+
+    assert resp.status_code == 200
+    quality = resp.json()["result"]["experience_quality"]
+    assert quality["name_similar_pair_count"] == 1
+    assert quality["content_similar_pair_count"] == 1
+    assert quality["source_overlap_pair_count"] == 1
+    assert quality["duplicate_exact_source_set_count"] == 1
+    assert quality["source_links_per_experience"]["linkless"] == 0
+    assert quality["content_chars"]["empty"] == 0

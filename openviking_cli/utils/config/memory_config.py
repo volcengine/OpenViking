@@ -67,21 +67,6 @@ class MemoryConfig(BaseModel):
             "safe behavior."
         ),
     )
-    agent_experience_consolidation_mode: str = Field(
-        default="per_trajectory",
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older "
-            "ov.conf files that enabled the removed batch experience consolidation mode."
-        ),
-    )
-    agent_experience_batch_max_trajectories: int = Field(
-        default=5,
-        ge=1,
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older "
-            "ov.conf files that configured the removed batch experience consolidation mode."
-        ),
-    )
     agent_experience_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
         default="tree",
         description=(
@@ -127,6 +112,15 @@ class MemoryConfig(BaseModel):
             "the final target fields from the latest locked file and queued patches. "
             "This is only used as a conflict fallback; the normal path remains "
             "deterministic patch replay."
+        ),
+    )
+    operation_exact_apply_window_create_new_consolidation_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled, operation_exact apply windows may consolidate concurrent "
+            "create-new agent experience proposals that describe the same durable "
+            "experience before applying the batch. This reduces cross-URI near-duplicate "
+            "experience creation caused by parallel session commits."
         ),
     )
     eager_prefetch: bool = Field(

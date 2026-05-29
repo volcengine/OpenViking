@@ -66,7 +66,7 @@ elif [[ "$PREFLIGHT" == true ]]; then
 fi
 
 if [[ "$EXECUTE" == true ]]; then
-  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" "${RUN_EVAL_EXTRA[@]}" --execute
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]+"${RUN_ARGS[@]}"}" "${RUN_EVAL_EXTRA[@]+"${RUN_EVAL_EXTRA[@]}"}" --execute
 else
-  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]}" "${RUN_EVAL_EXTRA[@]}" --plan-only
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/run_eval.py" --config "$CONFIG" "${RUN_ARGS[@]+"${RUN_ARGS[@]}"}" "${RUN_EVAL_EXTRA[@]+"${RUN_EVAL_EXTRA[@]}"}" --plan-only
 fi
