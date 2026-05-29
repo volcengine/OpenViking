@@ -167,8 +167,12 @@ function KeyResultCard({
   }
 
   async function copyKey(): Promise<void> {
-    await navigator.clipboard.writeText(result.apiKey)
-    toast.success(t('toast.copied'))
+    try {
+      await navigator.clipboard.writeText(result.apiKey)
+      toast.success(t('toast.copied'))
+    } catch (error) {
+      toast.error(t('toast.copyFailed', { message: getErrorMessage(error) }))
+    }
   }
 
   return (
@@ -325,7 +329,13 @@ function AddAccountDialog({
           className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            onCreate(draft)
+            const accountId = draft.accountId.trim()
+            const adminUserId =
+              draft.adminUserId.trim() || DEFAULT_USER_ID
+            if (!accountId) {
+              return
+            }
+            onCreate({ accountId, adminUserId })
           }}
         >
           <Field>
@@ -415,7 +425,7 @@ function AddUserDialog({
         userId: '',
       })
     }
-  }, [defaultAccountId, open])
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -430,7 +440,12 @@ function AddUserDialog({
           className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            onCreate(draft)
+            const accountId = draft.accountId.trim()
+            const userId = draft.userId.trim()
+            if (!accountId || !userId) {
+              return
+            }
+            onCreate({ accountId, role: draft.role, userId })
           }}
         >
           <Field>
@@ -708,8 +723,12 @@ function SettingsRoute() {
     if (!value) {
       return
     }
-    await navigator.clipboard.writeText(value)
-    toast.success(t('toast.copied'))
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(t('toast.copied'))
+    } catch (error) {
+      toast.error(t('toast.copyFailed', { message: getErrorMessage(error) }))
+    }
   }
 
   return (
@@ -736,7 +755,7 @@ function SettingsRoute() {
                   variant="outline"
                   className="border-primary/25 bg-background/80 text-primary"
                 >
-                  {t(`serverMode.${serverMode}`)}
+                  {t(`serverMode.${serverMode}`, { defaultValue: serverMode })}
                 </Badge>
               </div>
               <CardDescription className="mt-1">

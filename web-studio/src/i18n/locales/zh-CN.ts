@@ -215,6 +215,7 @@ const zhCN = {
       accountCreated: 'Account 已创建',
       connectionSaved: '连接已保存',
       copied: '已复制',
+      copyFailed: '复制到剪贴板失败：{{message}}',
       keyRegenerated: 'API key 已重新生成',
       userCreated: 'User 已创建',
     },
