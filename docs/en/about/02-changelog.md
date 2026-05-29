@@ -3,6 +3,45 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.21 (2026-05-27)
+
+### Highlights
+
+- **More retrievable trajectory memory**: The trajectory schema now has `retrieval_anchor` and an `embedding_template`, so vector indexing uses `trajectory_name + retrieval_anchor` instead of the full operation contract. Experiences and trajectories are connected with system-managed `derived_from` `StoredLink` records (forward `links` + reverse `backlinks`), replacing fragile `source_trajectories` metadata.
+- **Batch session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` and `ov session add-messages` to add multiple messages in one call (useful for history import and memory extraction); `ov add-memory` now uses the same stricter JSON message parser.
+- **OpenClaw search is now `ov_search`**: The OpenViking OpenClaw plugin no longer registers `memory_search`, avoiding collisions with OpenClaw built-ins. Use `ov_search` or `/ov-search` after importing resources or skills.
+- **Stronger URL and document parsing**: HTTP import detection now recognizes image, audio, video, Office, EPUB, and zip downloads, and re-checks headers after `GET` when `HEAD` is unreliable. Local Word/PowerPoint/Excel/EPUB/legacy-doc conversions now run in worker threads so they no longer block the event loop.
+- **Web Studio ships with Python installs**: `setup`/`build` now builds and bundles the Web Studio static assets, so `/studio` works from pip/pipx installs without Docker.
+- **NVIDIA NIM through LiteLLM VLM**: Model names containing `nvidia_nim` or `nemotron` now route through the NVIDIA NIM LiteLLM prefix and `NVIDIA_NIM_API_KEY`.
+- **tau2/VikingBot benchmark runner**: Added `benchmark/tau2/vikingbot` for cold start, train trajectory commits, repeated test averaging, and cross-epoch self-improvement; the previous tau2 LLM harness moved to `benchmark/tau2/llm`.
+
+### Upgrade Notes
+
+- OpenClaw users should migrate `/memory-search` and `memory_search` calls to `/ov-search` and `ov_search`.
+- pip/pipx and Docker builds now produce the Web Studio bundle through the Python build path; set `OV_SKIP_STUDIO_BUILD=1` to skip the Studio build during local development.
+- `content.read` adds a `raw=true` parameter; default reads still hide memory internals for compatibility.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.20...v0.3.21)
+
+## v0.3.20 (2026-05-25)
+
+### Highlights
+
+- **Request-scoped HTTP profiling**: Servers can enable `server.profile_enabled`; requests with `profile=1` then run `cProfile` for only that HTTP request and append `profile` lines to JSON responses. The `ov` CLI can enable and display this with `--profile`.
+- **Batch Session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` plus Python HTTP client and Session wrapper support via `batch_add_messages` (up to 100 messages per request), reducing HTTP round trips for LangChain/LangGraph-style integrations.
+- **Memory embedding templates**: Memory schemas now support a top-level `embedding_template`, replacing field-level `searchable` flags. The built-in `entities`, `events`, and `preferences` templates include key fields plus final content in embedding input.
+- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic DAG (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
+- **Embedding input guardrails**: Embedding queue input is truncated according to `embedding.max_input_tokens`, and oversized-input errors are classified as `input_too_large` to avoid repeated retries for unrecoverable payloads.
+
+### Upgrade Notes
+
+- If a custom memory schema still uses field-level `searchable: true`, migrate it to top-level `embedding_template`; field-level `searchable` no longer contributes to embedding text generation.
+- Rename `memory.enable_role_id_memory_isolate` to `memory.role_id_memory_isolation_enabled` in custom `ov.conf` files.
+- Treat `profile=1` as a debugging tool, not a high-traffic production default. Profile output is capped at about 16 KiB.
+- The batch message endpoint accepts up to 100 messages per request.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.19...v0.3.20)
+
 ## v0.3.19 (2026-05-22)
 
 ### Highlights
