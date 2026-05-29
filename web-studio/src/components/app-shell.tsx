@@ -506,7 +506,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-sm shadow-xs"
+              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
               role="group"
             >
               {LANGUAGE_OPTIONS.map((item) => {
@@ -518,7 +518,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'h-8 min-w-12 rounded-xl px-3 font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                      'h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       isActive && 'bg-foreground text-background shadow-sm',
                     )}
                     onClick={() => {
