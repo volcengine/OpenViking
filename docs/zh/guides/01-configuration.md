@@ -656,6 +656,29 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
+### query_planner
+
+可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，但只影响 `search()` 的意图分析和 query expansion。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
+
+只有在环境里已经部署好 planner 模型时才需要添加这一段配置。例如下面的 Ollama 模型需要先在本地 pull 并启动后才能使用。
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "api_base": "http://127.0.0.1:11434",
+    "temperature": 0.0,
+    "timeout": 60,
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
+
+适合用小模型承担检索规划，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
+
 ### feishu
 
 飞书/Lark 云端文档解析配置。支持的 URL 格式详见[资源管理](../api/02-resources.md)。
@@ -1065,6 +1088,7 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1072,6 +1096,7 @@ openviking-server --config /path/to/ov.conf
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
+| `version` | 记忆实现版本。仅支持 `"v2"`（#2264 已移除旧版 `"v1"`；传入 `"v1"` 会在配置加载时抛出 `ValueError`）。 | `"v2"` |
 | `agent_scope_mode` | 已废弃且被忽略。仅为兼容旧版 `ov.conf` 保留。当前 agent/user 命名空间行为由 account 级 namespace policy 控制。 | `"user+agent"` |
 
 `agent_scope_mode` 不再影响命名空间行为。服务端现在根据 account 级 namespace policy 在 `viking://agent/{agent_id}/...` 与 `viking://agent/{agent_id}/user/{user_id}/...` 之间选择。

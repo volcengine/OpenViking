@@ -527,74 +527,6 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
-    async def batch_add_messages(
-        self,
-        session_id: str,
-        messages: List[Dict[str, Any]],
-        telemetry: TelemetryRequest = False,
-    ) -> Dict[str, Any]:
-        """Add multiple messages to a session in a single request."""
-        execution = await run_with_telemetry(
-            operation="session.batch_add_messages",
-            telemetry=telemetry,
-            fn=lambda: self._batch_add_messages_impl(session_id, messages),
-        )
-        return attach_telemetry_payload(
-            execution.result,
-            execution.telemetry,
-        )
-
-    async def _batch_add_messages_impl(
-        self,
-        session_id: str,
-        messages: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
-        specs = []
-        for message in messages:
-            role = message["role"]
-            parts = message.get("parts")
-            content = message.get("content")
-
-            if parts is not None:
-                message_parts = self._message_parts_from_dicts(parts)
-            elif content is not None:
-                message_parts = self._text_message_parts(content)
-            else:
-                raise ValueError("Either content or parts must be provided")
-
-            role_id = message.get("role_id")
-            if role_id is None and role == "user":
-                role_id = self._ctx.user.user_id
-            elif role_id is None and role == "assistant":
-                role_id = self._ctx.user.agent_id
-
-            specs.append(
-                {
-                    "role": role,
-                    "parts": message_parts,
-                    "role_id": role_id,
-                    "created_at": message.get("created_at"),
-                }
-            )
-
-        added_messages = session.add_messages(specs)
-        return {
-            "session_id": session_id,
-            "message_count": len(session.messages),
-            "added": len(added_messages),
-        }
-
-    def _message_parts_from_dicts(self, parts: List[Dict[str, Any]]):
-        from openviking.message.part import part_from_dict
-
-        return [part_from_dict(p) for p in parts]
-
-    def _text_message_parts(self, content: str):
-        from openviking.message.part import TextPart
-
-        return [TextPart(text=content)]
-
     async def _add_message_impl(
         self,
         session_id: str,
@@ -625,6 +557,68 @@ class LocalClient(BaseClient):
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
+        }
+
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in one batch."""
+        execution = await run_with_telemetry(
+            operation="session.batch_add_messages",
+            telemetry=telemetry,
+            fn=lambda: self._batch_add_messages_impl(session_id, messages),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _batch_add_messages_impl(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        from openviking.message.part import Part, TextPart, part_from_dict
+
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
+        specs: list[dict[str, Any]] = []
+
+        for index, message in enumerate(messages):
+            role = message.get("role")
+            if not role:
+                raise ValueError(f"messages[{index}]: missing required key 'role'")
+
+            message_parts: list[Part]
+            if message.get("parts") is not None:
+                message_parts = [part_from_dict(part) for part in message["parts"]]
+            elif message.get("content") is not None:
+                message_parts = [TextPart(text=str(message["content"]))]
+            else:
+                raise ValueError(f"messages[{index}]: either content or parts must be provided")
+
+            role_id = message.get("role_id")
+            if role_id is None and role == "user":
+                role_id = self._ctx.user.user_id
+            elif role_id is None and role == "assistant":
+                role_id = self._ctx.user.agent_id
+
+            specs.append(
+                {
+                    "role": role,
+                    "parts": message_parts,
+                    "role_id": role_id,
+                    "created_at": message.get("created_at"),
+                }
+            )
+
+        added = session.add_messages(specs)
+        return {
+            "session_id": session_id,
+            "message_count": len(session.messages),
+            "added": len(added),
         }
 
     # ============= Pack =============

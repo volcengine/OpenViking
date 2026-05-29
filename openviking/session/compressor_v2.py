@@ -4,7 +4,7 @@
 Session Compressor V2 for OpenViking.
 
 Uses the new Memory Templating System with ReAct orchestrator.
-Maintains the same interface as compressor.py for backward compatibility.
+Maintains the service-facing compressor interface.
 """
 
 import asyncio
@@ -256,7 +256,7 @@ class SessionCompressorV2:
         registry = create_default_registry()
         await registry.initialize_memory_files(ctx)
 
-        # Initialize telemetry to 0 (matching v1 pattern)
+        # Initialize telemetry counters before extraction.
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
         telemetry.set("memory.extract.candidates.standard", 0)
@@ -382,7 +382,7 @@ class SessionCompressorV2:
                 )
                 logger.info(f"Wrote memory_diff.json to {archive_uri}")
 
-            # Report telemetry stats (matching v1 pattern)
+            # Report telemetry stats.
             telemetry = get_current_telemetry()
             telemetry.set(
                 "memory.extract.candidates.total",

@@ -11,6 +11,10 @@ from threading import Lock
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.embedding_input import (
+    resolve_embedding_max_input_tokens,
+    truncate_embedding_input,
+)
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
@@ -45,30 +49,28 @@ def _get_token_tracker():
     return _token_tracker_instance
 
 
-async def embed_compat(embedder: Any, text: str, *, is_query: bool = False) -> "EmbedResult":
-    """Call async embedding when available, otherwise fall back to sync embed()."""
+async def embed_compat(
+    embedder: "EmbedderBase", text: str, *, is_query: bool = False
+) -> "EmbedResult":
+    """Prepare input, then call the embedder's async-compatible entrypoint."""
     from openviking.telemetry import bind_telemetry_stage
 
     stage = "embed_query" if is_query else "embed_resource"
-    embed_async = getattr(embedder, "embed_async", None)
+    embedding_input = embedder.prepare_embedding_input(text)
     with bind_telemetry_stage(stage):
-        if callable(embed_async):
-            return await embed_async(text, is_query=is_query)
-        return embedder.embed(text, is_query=is_query)
+        return await embedder.embed_async(embedding_input, is_query=is_query)
 
 
 async def embed_batch_compat(
-    embedder: Any, texts: List[str], *, is_query: bool = False
+    embedder: "EmbedderBase", texts: List[str], *, is_query: bool = False
 ) -> List["EmbedResult"]:
-    """Call async batch embedding when available, otherwise fall back to sync embed_batch()."""
+    """Prepare inputs, then call the embedder's async-compatible batch entrypoint."""
     from openviking.telemetry import bind_telemetry_stage
 
     stage = "embed_query" if is_query else "embed_resource"
-    embed_batch_async = getattr(embedder, "embed_batch_async", None)
+    embedding_inputs = embedder.prepare_embedding_inputs(texts)
     with bind_telemetry_stage(stage):
-        if callable(embed_batch_async):
-            return await embed_batch_async(texts, is_query=is_query)
-        return embedder.embed_batch(texts, is_query=is_query)
+        return await embedder.embed_batch_async(embedding_inputs, is_query=is_query)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -136,6 +138,7 @@ class EmbedderBase(ABC):
         """
         self.model_name = model_name
         self.config = config or {}
+        self.max_input_tokens = resolve_embedding_max_input_tokens(self.config)
         self.max_retries = int(self.config.get("max_retries", 3))
         self.max_concurrent = int(self.config.get("max_concurrent", 10))
         self.provider = self.config.get("provider", "unknown")
@@ -143,6 +146,18 @@ class EmbedderBase(ABC):
         # Token usage tracking
         self._token_tracker = _get_token_tracker()
         self._active_call_started_at: float | None = None
+
+    def prepare_embedding_input(self, text: str) -> str:
+        """Apply this embedder's input guard before provider calls."""
+        if self.max_input_tokens is None:
+            return text
+        return truncate_embedding_input(text, self.max_input_tokens)
+
+    def prepare_embedding_inputs(self, texts: List[str]) -> List[str]:
+        """Apply this embedder's input guard to a batch."""
+        if self.max_input_tokens is None:
+            return texts
+        return [self.prepare_embedding_input(text) for text in texts]
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -498,14 +513,19 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
     def __init__(self, dense_embedder: DenseEmbedderBase, sparse_embedder: SparseEmbedderBase):
         """Initialize with two separate embedders"""
-        super().__init__(model_name=f"{dense_embedder.model_name}+{sparse_embedder.model_name}")
+        super().__init__(
+            model_name=f"{dense_embedder.model_name}+{sparse_embedder.model_name}",
+            config={},
+        )
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
-        dense_res = self.dense_embedder.embed(text, is_query=is_query)
-        sparse_res = self.sparse_embedder.embed(text, is_query=is_query)
+        dense_input = self.dense_embedder.prepare_embedding_input(text)
+        sparse_input = self.sparse_embedder.prepare_embedding_input(text)
+        dense_res = self.dense_embedder.embed(dense_input, is_query=is_query)
+        sparse_res = self.sparse_embedder.embed(sparse_input, is_query=is_query)
 
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
@@ -513,8 +533,10 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Combine batch results"""
-        dense_results = self.dense_embedder.embed_batch(texts, is_query=is_query)
-        sparse_results = self.sparse_embedder.embed_batch(texts, is_query=is_query)
+        dense_inputs = self.dense_embedder.prepare_embedding_inputs(texts)
+        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(texts)
+        dense_results = self.dense_embedder.embed_batch(dense_inputs, is_query=is_query)
+        sparse_results = self.sparse_embedder.embed_batch(sparse_inputs, is_query=is_query)
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
@@ -522,9 +544,11 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         ]
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        dense_input = self.dense_embedder.prepare_embedding_input(text)
+        sparse_input = self.sparse_embedder.prepare_embedding_input(text)
         dense_res, sparse_res = await asyncio.gather(
-            self.dense_embedder.embed_async(text, is_query=is_query),
-            self.sparse_embedder.embed_async(text, is_query=is_query),
+            self.dense_embedder.embed_async(dense_input, is_query=is_query),
+            self.sparse_embedder.embed_async(sparse_input, is_query=is_query),
         )
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
@@ -533,9 +557,11 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     async def embed_batch_async(
         self, texts: List[str], is_query: bool = False
     ) -> List[EmbedResult]:
+        dense_inputs = self.dense_embedder.prepare_embedding_inputs(texts)
+        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(texts)
         dense_results, sparse_results = await asyncio.gather(
-            self.dense_embedder.embed_batch_async(texts, is_query=is_query),
-            self.sparse_embedder.embed_batch_async(texts, is_query=is_query),
+            self.dense_embedder.embed_batch_async(dense_inputs, is_query=is_query),
+            self.sparse_embedder.embed_batch_async(sparse_inputs, is_query=is_query),
         )
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)

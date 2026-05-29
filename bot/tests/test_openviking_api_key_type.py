@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.tools.ov_file import VikingSearchTool
+from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingSearchTool
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -62,11 +62,14 @@ class _DummyHTTPClient:
     async def admin_remove_user(self, _account_id, _user_id):
         return None
 
-    async def find(self, *args, **kwargs):
-        return SimpleNamespace(memories=[])
+    async def find(self, *_args, **_kwargs):
+        return []
 
-    async def search(self, *args, **kwargs):
-        return {"memories": []}
+    async def search(self, *_args, **_kwargs):
+        return {"memories": [], "resources": [], "skills": []}
+
+    async def grep(self, *_args, **_kwargs):
+        return {"matches": []}
 
     async def close(self):
         return None
@@ -946,6 +949,49 @@ async def test_skill_memory_uri_respects_namespace_policy(monkeypatch):
     )
 
 
+def test_openviking_grep_schema_requires_single_string_pattern():
+    tool = VikingGrepTool()
+
+    assert tool.parameters["properties"]["pattern"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_openviking_grep_passes_admin_user_id(monkeypatch):
+    tool = VikingGrepTool()
+    calls = []
+
+    class _FakeClient:
+        admin_user_id = "admin"
+
+        async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
+            calls.append((uri, pattern, case_insensitive, user_id))
+            return {
+                "matches": [
+                    {
+                        "uri": "viking://resources/doc.md",
+                        "line": 3,
+                        "content": "hello admin scoped grep",
+                    }
+                ]
+            }
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    result = await tool.execute(
+        SimpleNamespace(workspace_id="workspace"),
+        uri="viking://resources/",
+        pattern="hello",
+        case_insensitive=True,
+    )
+
+    assert calls == [("viking://resources/", "hello", True, "admin")]
+    assert "Found 1 match for pattern 'hello':" in result
+    assert "viking://resources/doc.md" in result
+
+
 @pytest.mark.asyncio
 async def test_openviking_search_uses_policy_scoped_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
@@ -963,17 +1009,17 @@ async def test_openviking_search_uses_policy_scoped_user_namespace(monkeypatch):
             }
         ]
 
-    async def _search(query, target_uri=None, limit=20):
+    async def _search(query, target_uri=None, limit=20, user_id=None):
         calls.append(target_uri)
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
-    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
-    monkeypatch.setattr(client.client, "search", _search)
-
-    async def _get_client(_tool_context):
+    async def _fake_get_client(_tool_context):
         return client
 
-    monkeypatch.setattr(tool, "_get_client", _get_client)
+    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
+    monkeypatch.setattr(client, "search", _search)
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+    await client._load_namespace_policy()
 
     tool_context = SimpleNamespace(workspace_id="workspace", memory_user_ids=["sender-1"])
     result = await tool.execute(tool_context, query="hello")
@@ -990,16 +1036,15 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20):
+    async def _search(query, target_uri=None, limit=20, user_id=None):
         calls.append(target_uri)
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
-    monkeypatch.setattr(client.client, "search", _search)
-
-    async def _get_client(_tool_context):
+    async def _fake_get_client(_tool_context):
         return client
 
-    monkeypatch.setattr(tool, "_get_client", _get_client)
+    monkeypatch.setattr(client, "search", _search)
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
 
     tool_context = SimpleNamespace(
         workspace_id="workspace", memory_user_ids=["sender-1", "sender-2"]

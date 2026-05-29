@@ -686,6 +686,29 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### query_planner
+
+Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
+
+Only add this section when the planner model is already available in your environment. For example, the Ollama model below must be pulled and served locally before use.
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "api_base": "http://127.0.0.1:11434",
+    "temperature": 0.0,
+    "timeout": 60,
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
+
+Use `query_planner` when you want a smaller or cheaper model to handle retrieval planning while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
+
 ### feishu
 
 Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-resources.md) for supported URL patterns.
@@ -1093,6 +1116,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1100,6 +1124,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
 | `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
 `agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.

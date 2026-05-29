@@ -1,18 +1,16 @@
 import { getHealth } from '#/lib/ov-client'
 
-export type ServerMode =
-  | 'checking'
-  | 'dev-implicit'
-  | 'explicit-auth'
-  | 'offline'
+export type ServerAuthMode = 'api_key' | 'trusted' | 'dev'
+export type ServerMode = ServerAuthMode | 'checking' | 'offline'
 
-export type ServerModeBadge = {
-  labelKey: string
-  variant: 'default' | 'secondary' | 'outline' | 'destructive'
-}
+const SERVER_AUTH_MODES = new Set<ServerAuthMode>(['api_key', 'trusted', 'dev'])
 
 export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
+}
+
+function isServerAuthMode(value: unknown): value is ServerAuthMode {
+  return typeof value === 'string' && SERVER_AUTH_MODES.has(value as ServerAuthMode)
 }
 
 export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
@@ -30,24 +28,9 @@ export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
       throwOnError: true,
     })
 
-    const data = response.data as { user_id?: string }
-    return typeof data.user_id === 'string' && data.user_id.length > 0
-      ? 'dev-implicit'
-      : 'explicit-auth'
+    const data = response.data as { auth_mode?: string }
+    return isServerAuthMode(data.auth_mode) ? data.auth_mode : 'api_key'
   } catch {
     return 'offline'
-  }
-}
-
-export function describeServerMode(serverMode: ServerMode): ServerModeBadge {
-  switch (serverMode) {
-    case 'dev-implicit':
-      return { labelKey: 'serverMode.devImplicit', variant: 'secondary' }
-    case 'explicit-auth':
-      return { labelKey: 'serverMode.explicitAuth', variant: 'outline' }
-    case 'offline':
-      return { labelKey: 'serverMode.offline', variant: 'destructive' }
-    default:
-      return { labelKey: 'serverMode.checking', variant: 'outline' }
   }
 }

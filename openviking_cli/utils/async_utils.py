@@ -64,15 +64,16 @@ def run_async(coro: Coroutine[None, None, T]) -> T:
     Returns:
         The result of coroutine
     """
-    # Detect re-entrancy: if the current thread already has a running event
-    # loop, we cannot use run_until_complete or block on the shared loop.
-    # Spawn a helper thread with its own loop instead.
+    # Detect re-entrancy. If this is called from the shared loop's own thread we
+    # cannot block on that same loop, so use a helper thread. Calls from other
+    # async runtimes should still use the shared loop so stateful async clients
+    # stay attached to the loop where they were initialized.
     try:
         running_loop = asyncio.get_running_loop()
     except RuntimeError:
         running_loop = None
 
-    if running_loop is not None:
+    if running_loop is not None and running_loop is _loop:
         result_box: list = []
         error_box: list = []
 

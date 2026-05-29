@@ -188,6 +188,20 @@ def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_rejects_memory_v1(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError, match="legacy memory v1 has been removed"):
+        OpenVikingConfig.from_dict({"memory": {"version": "v1"}})
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_accepts_role_id_memory_isolation_enabled(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
