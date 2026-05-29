@@ -43,15 +43,15 @@ def get_openviking_session_id(
 
 
 def reset_openviking_state(session: Session, *, rotate_session_id: bool = False) -> None:
-    state = get_openviking_state(session)
-    get_openviking_session_id(session, rotate=rotate_session_id)
-    state["last_synced_local_index"] = -1
-    state["last_sender_synced_local_indexes"] = {}
-    state["last_pending_tokens"] = 0
-    state["last_commit_local_index"] = -1
-    state["last_sync_status"] = "reset"
-    state.pop("last_commit_performed", None)
-    state.pop("last_sync_error", None)
+    session_id = get_openviking_session_id(session, rotate=rotate_session_id)
+    session.metadata["openviking"] = {
+        "session_id": session_id,
+        "last_synced_local_index": -1,
+        "last_sender_synced_local_indexes": {},
+        "last_pending_tokens": 0,
+        "last_commit_local_index": -1,
+        "last_sync_status": "reset",
+    }
 
 
 def get_unsynced_messages(

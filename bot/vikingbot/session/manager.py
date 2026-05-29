@@ -303,7 +303,9 @@ class SessionManager:
                 continue
 
             current = merged[key]
-            if isinstance(current, dict) and isinstance(value, dict):
+            if key == "openviking":
+                merged[key] = value
+            elif isinstance(current, dict) and isinstance(value, dict):
                 merged[key] = cls._merge_metadata(current, value)
             elif isinstance(current, list) and isinstance(value, list):
                 merged[key] = current + [item for item in value if item not in current]

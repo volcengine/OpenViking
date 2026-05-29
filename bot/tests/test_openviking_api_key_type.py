@@ -8,6 +8,8 @@ from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount import ov_server as ov_server_module
 from vikingbot.openviking_mount.ov_server import VikingClient
+from vikingbot.openviking_mount.session_state import reset_openviking_state
+from vikingbot.session.manager import SessionManager
 
 
 class _DummySession:
@@ -324,6 +326,40 @@ async def test_compact_hook_session_context_commits_admin_and_sender_sessions(mo
     assert state["last_sync_status"] == "success"
     assert state["last_commit_local_index"] == len(session.messages) - 1
     assert "last_commit_at" in state
+
+
+@pytest.mark.asyncio
+async def test_reset_openviking_state_replaces_persisted_sender_cursors(temp_dir):
+    manager = SessionManager(temp_dir / "bot")
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="chat-1")
+    session = manager.get_or_create(session_key, skip_heartbeat=True)
+    session.metadata["openviking"] = {
+        "session_id": session_key.safe_name(),
+        "last_synced_local_index": 19,
+        "last_sender_synced_local_indexes": {"user-1": 19},
+        "last_pending_tokens": 100,
+        "last_commit_local_index": 19,
+        "last_commit_performed": True,
+        "last_sync_error": "old error",
+    }
+    await manager.save(session)
+
+    session.clear()
+    reset_openviking_state(session)
+    await manager.save(session)
+
+    manager._cache.clear()
+    persisted_session = manager.get_or_create(session_key, skip_heartbeat=True)
+    state = persisted_session.metadata["openviking"]
+    assert state == {
+        "session_id": session_key.safe_name(),
+        "last_synced_local_index": -1,
+        "last_sender_synced_local_indexes": {},
+        "last_pending_tokens": 0,
+        "last_commit_local_index": -1,
+        "last_sync_status": "reset",
+    }
+    assert persisted_session.messages == []
 
 
 @pytest.mark.asyncio
