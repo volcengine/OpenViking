@@ -2,10 +2,11 @@ use colored::Colorize;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    config::{Config, default_config_path},
+    config::{Config, display_config_home},
     config_wizard::ConfigKind,
     error::Error,
-    i18n::Language,
+    error_classifier::looks_like_auth_error,
+    i18n::{Language, copy},
     theme,
 };
 
@@ -283,13 +284,6 @@ pub(crate) fn render_switch_validation_failure(name: &str, error: &Error) -> Str
     )
 }
 
-fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
-    match language {
-        Language::En => en,
-        Language::ZhCn => zh,
-    }
-}
-
 fn unknown(language: Language) -> &'static str {
     copy(language, "unknown", "未知")
 }
@@ -372,22 +366,6 @@ fn unknown_value(value: &str) -> String {
     theme::muted(value).to_string()
 }
 
-fn display_config_home() -> String {
-    let path = default_config_path()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-    let Some(path) = path else {
-        return "~/.openviking".to_string();
-    };
-    let Some(home) = dirs::home_dir() else {
-        return path.display().to_string();
-    };
-    if let Ok(stripped) = path.strip_prefix(&home) {
-        return format!("~/{}", stripped.display());
-    }
-    path.display().to_string()
-}
-
 #[derive(Debug, Clone, Copy)]
 enum ValidationFailureKind {
     Network,
@@ -447,15 +425,6 @@ impl ValidationFailureKind {
             },
         }
     }
-}
-
-fn looks_like_auth_error(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("api key")
-        || message.contains("unauthorized")
-        || message.contains("forbidden")
-        || message.contains("authentication")
-        || message.contains("auth")
 }
 
 #[cfg(test)]

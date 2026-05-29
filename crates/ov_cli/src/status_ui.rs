@@ -3,10 +3,10 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    config::{Config, default_config_path},
+    config::{Config, display_config_home},
     config_wizard::{ConfigKind, ConfigStore},
     error::Result,
-    i18n::Language,
+    i18n::{Language, copy},
     theme,
 };
 
@@ -211,13 +211,6 @@ fn status_title(language: Language) -> String {
     theme::brand_title(copy(language, "OPENVIKING STATUS", "OPENVIKING 状态"))
         .bold()
         .to_string()
-}
-
-fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
-    match language {
-        Language::En => en,
-        Language::ZhCn => zh,
-    }
 }
 
 fn unknown(language: Language) -> &'static str {
@@ -644,22 +637,6 @@ fn compact_number(value: u64) -> String {
     } else {
         value.to_string()
     }
-}
-
-fn display_config_home() -> String {
-    let path = default_config_path()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-    let Some(path) = path else {
-        return "~/.openviking".to_string();
-    };
-    let Some(home) = dirs::home_dir() else {
-        return path.display().to_string();
-    };
-    if let Ok(stripped) = path.strip_prefix(&home) {
-        return format!("~/{}", stripped.display());
-    }
-    path.display().to_string()
 }
 
 #[cfg(test)]

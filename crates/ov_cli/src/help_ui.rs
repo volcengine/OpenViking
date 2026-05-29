@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use colored::Colorize;
 use unicode_width::UnicodeWidthStr;
 
-use crate::{i18n::Language, theme};
+use crate::{
+    i18n::{Language, copy},
+    theme,
+};
 
 const BOX_WIDTH: usize = 74;
 const COMMAND_WIDTH: usize = 16;
@@ -2003,13 +2006,6 @@ fn render_command_help(spec: &CommandHelpSpec) -> String {
     );
 
     format!("{}\n", lines.join("\n"))
-}
-
-fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
-    match language {
-        Language::En => en,
-        Language::ZhCn => zh,
-    }
 }
 
 fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {

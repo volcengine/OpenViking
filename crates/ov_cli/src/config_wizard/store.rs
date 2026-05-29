@@ -9,12 +9,11 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, default_config_path},
+    config::{Config, DEFAULT_SELF_MANAGED_PORT, default_config_path},
     error::{Error, Result},
 };
 
 pub const VOLCENGINE_CLOUD_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
-const SELF_MANAGED_DEFAULT_PORT: &str = "1933";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigKind {
@@ -137,6 +136,10 @@ impl ConfigStore {
             }
 
             let Ok(config) = Config::from_file(&path.to_string_lossy()) else {
+                eprintln!(
+                    "Warning: skipped invalid OpenViking config '{}'",
+                    path.display()
+                );
                 continue;
             };
 
@@ -226,17 +229,67 @@ impl ConfigStore {
     }
 
     pub fn is_config_name_active(&self, name: &str) -> Result<bool> {
-        Ok(self.primary_active_config_name()?.as_deref() == Some(name))
-    }
+        let Some(active_config) = self.load_active()? else {
+            return Ok(false);
+        };
+        let path = self.saved_config_path(name)?;
+        if !path.exists() {
+            return Ok(false);
+        }
+        let Ok(saved_config) = Config::from_file(&path.to_string_lossy()) else {
+            return Ok(false);
+        };
+        if !configs_equivalent(&active_config, &saved_config)? {
+            return Ok(false);
+        }
 
-    fn primary_active_config_name(&self) -> Result<Option<String>> {
+        // Saved configs are file copies, so duplicate files can be equivalent to the active
+        // config. Keep the UI's single-active invariant by treating the first equivalent saved
+        // config as active, matching list_configs().
         Ok(self
-            .list_configs()?
-            .into_iter()
-            .find(|entry| entry.is_active)
-            .map(|entry| entry.name))
+            .primary_equivalent_config_name(&active_config)?
+            .is_some_and(|active_name| active_name == name))
     }
 
+    fn primary_equivalent_config_name(&self, active_config: &Config) -> Result<Option<String>> {
+        if !self.config_dir.exists() {
+            return Ok(None);
+        }
+
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.config_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let Some(filename) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(name) = filename.strip_prefix("ovcli.conf.") else {
+                continue;
+            };
+            if name == "bak" || validate_config_name(name).is_err() {
+                continue;
+            }
+
+            let Ok(config) = Config::from_file(&path.to_string_lossy()) else {
+                eprintln!(
+                    "Warning: skipped invalid OpenViking config '{}'",
+                    path.display()
+                );
+                continue;
+            };
+
+            if configs_equivalent(active_config, &config)? {
+                names.push(name.to_string());
+            }
+        }
+
+        names.sort();
+        Ok(names.into_iter().next())
+    }
 }
 
 fn normalize_active_config(configs: &mut [ConfigEntry]) {
@@ -334,12 +387,26 @@ pub(crate) fn self_managed_allows_empty_api_key(url: &str) -> bool {
     };
     matches!(
         parsed.host_str().map(|host| host.to_ascii_lowercase()),
-        Some(host) if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
+        Some(host) if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]")
     )
 }
 
 pub(crate) fn normalize_self_managed_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.eq_ignore_ascii_case("::1") || trimmed.eq_ignore_ascii_case("[::1]") {
+        return format!("http://[::1]:{DEFAULT_SELF_MANAGED_PORT}");
+    }
+    if let Some(port) = trimmed.strip_prefix("[::1]:") {
+        if !port.trim().is_empty() {
+            return format!("http://[::1]:{port}");
+        }
+    }
+    if let Some(port) = trimmed.strip_prefix("::1:") {
+        if !port.trim().is_empty() {
+            return format!("http://[::1]:{port}");
+        }
+    }
+
     if Url::parse(trimmed).is_ok() {
         return trimmed.to_string();
     }
@@ -350,7 +417,7 @@ pub(crate) fn normalize_self_managed_url(url: &str) -> String {
         "localhost" | "127.0.0.1"
     ) {
         if port.trim().is_empty() {
-            format!("http://{host}:{SELF_MANAGED_DEFAULT_PORT}")
+            format!("http://{host}:{DEFAULT_SELF_MANAGED_PORT}")
         } else {
             format!("http://{host}:{port}")
         }
@@ -490,14 +557,6 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
         Error::Config(format!("Failed to replace config file: {}", error.error))
     })?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(path, permissions)?;
-    }
-
     Ok(())
 }
 
@@ -574,6 +633,26 @@ mod tests {
         assert_eq!(configs[0].name, "local");
         assert_eq!(configs[0].config.url, "http://local");
         assert!(!configs[0].is_active);
+    }
+
+    #[test]
+    fn config_listing_skips_corrupted_saved_config() {
+        let dir = unique_dir("list-corrupted");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        write_config(
+            &dir.join("ovcli.conf.local"),
+            &sample_config("http://local", None),
+        );
+        fs::write(dir.join("ovcli.conf.broken"), "{not json")
+            .expect("corrupted config should be written");
+
+        let store = ConfigStore::for_config_dir(dir);
+        let configs = store
+            .list_configs()
+            .expect("valid configs should still load");
+
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "local");
     }
 
     #[test]
@@ -719,6 +798,10 @@ mod tests {
         for (input, expected) in [
             ("127.0.0.1", "http://127.0.0.1:1933"),
             ("localhost", "http://localhost:1933"),
+            ("::1", "http://[::1]:1933"),
+            ("[::1]", "http://[::1]:1933"),
+            ("::1:1944", "http://[::1]:1944"),
+            ("[::1]:1944", "http://[::1]:1944"),
         ] {
             let draft = ConfigDraft {
                 name: "local".to_string(),
@@ -729,7 +812,8 @@ mod tests {
                 user: Some("default".to_string()),
             };
 
-            let config = build_config(&draft).expect("bare loopback should be local");
+            let config = build_config(&draft)
+                .unwrap_or_else(|error| panic!("{input} should be treated as local: {error}"));
 
             assert_eq!(config.url, expected);
         }

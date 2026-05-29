@@ -3,7 +3,12 @@ use std::ffi::OsString;
 use colored::Colorize;
 use unicode_width::UnicodeWidthStr;
 
-use crate::{error::Error, i18n::Language, theme};
+use crate::{
+    error::Error,
+    error_classifier::looks_like_auth_error,
+    i18n::{Language, copy},
+    theme,
+};
 
 const CARD_WIDTH: usize = 72;
 
@@ -276,13 +281,6 @@ pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
     output
 }
 
-fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
-    match language {
-        Language::En => en,
-        Language::ZhCn => zh,
-    }
-}
-
 trait OptionalUsage {
     fn with_optional_usage(self, usage: Option<String>) -> Self;
 }
@@ -469,14 +467,6 @@ fn first_error_line(clap_output: &str) -> String {
         .find_map(|line| line.trim().strip_prefix("error: "))
         .map(ToString::to_string)
         .unwrap_or_else(|| "Command could not be parsed.".to_string())
-}
-
-fn looks_like_auth_error(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("auth")
-        || lower.contains("api key")
-        || lower.contains("unauthorized")
-        || lower.contains("forbidden")
 }
 
 #[cfg(test)]

@@ -50,6 +50,13 @@ impl Language {
     }
 }
 
+pub(crate) fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CliSettings {
     language: Option<Language>,
@@ -123,7 +130,7 @@ pub(crate) fn language_from_locale(value: &str) -> Option<Language> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Language, language_from_locale, load_saved_language_from_path, save_language_to_path,
+        Language, copy, language_from_locale, load_saved_language_from_path, save_language_to_path,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -160,5 +167,11 @@ mod tests {
         assert_eq!(language_from_locale("zh-Hans"), Some(Language::ZhCn));
         assert_eq!(language_from_locale("en_US.UTF-8"), Some(Language::En));
         assert_eq!(language_from_locale("fr_FR.UTF-8"), None);
+    }
+
+    #[test]
+    fn copy_returns_language_specific_text() {
+        assert_eq!(copy(Language::En, "Config", "配置"), "Config");
+        assert_eq!(copy(Language::ZhCn, "Config", "配置"), "配置");
     }
 }

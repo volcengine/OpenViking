@@ -5,6 +5,7 @@ mod config;
 mod config_command_ui;
 mod config_wizard;
 mod error;
+mod error_classifier;
 mod error_ui;
 mod handlers;
 mod health_ui;
@@ -1761,7 +1762,7 @@ mod tests {
         language_gate_action, language_required_message, legacy_upload_option_error,
         preprocess_privacy_args,
     };
-    use crate::config::Config;
+    use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
     use crate::handlers;
     use crate::output::OutputFormat;
     use clap::{CommandFactory, Parser};
@@ -2067,7 +2068,7 @@ mod tests {
     #[test]
     fn cli_context_overrides_identity_from_cli_flags() {
         let config = Config {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: Some("test-key".to_string()),
             root_api_key: None,
             account: Some("from-config-account".to_string()),
@@ -2104,7 +2105,7 @@ mod tests {
     #[test]
     fn cli_context_uses_root_api_key_with_sudo() {
         let config = Config {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
             account: None,

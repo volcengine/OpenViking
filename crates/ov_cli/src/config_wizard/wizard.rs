@@ -16,9 +16,9 @@ use uuid::Uuid;
 
 use crate::{
     base_client::BaseClient,
-    config::Config,
+    config::{Config, DEFAULT_SELF_MANAGED_URL},
     error::{Error, Result},
-    i18n::{self, Language},
+    i18n::{self, Language, copy},
     theme::{self, Rgb},
 };
 use serde_json::Value;
@@ -31,10 +31,9 @@ use super::store::{
 
 const VOLCENGINE_API_KEY_URL: &str =
     "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing";
-const SELF_MANAGED_DEFAULT_URL: &str = "http://127.0.0.1:1933";
 const HEADER_TAGLINE: &str = "Context Database for AI Agents";
 const HEADER_TAGLINE_ZH: &str = "AI Agent 上下文数据库";
-const STATUS_BOX_PROBE_TIMEOUT_SECS: f64 = 1.5;
+const STATUS_BOX_PROBE_TIMEOUT_SECS: f64 = 3.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IdentityMode {
@@ -175,13 +174,6 @@ fn header_version_text() -> String {
 
 fn status_box_width() -> usize {
     wordmark_width()
-}
-
-fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
-    match language {
-        Language::En => en,
-        Language::ZhCn => zh,
-    }
 }
 
 fn nav_hint() -> &'static str {
@@ -1265,7 +1257,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
     let mut stage = Stage::Kind;
     let mut kind = ConfigKind::SelfManaged;
     let mut name: Option<String> = None;
-    let mut url = SELF_MANAGED_DEFAULT_URL.to_string();
+    let mut url = DEFAULT_SELF_MANAGED_URL.to_string();
     let mut api_key: Option<String> = None;
     let mut account: Option<String> = None;
     let mut user: Option<String> = None;
@@ -1297,7 +1289,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
                 PromptResult::Value(1) => {
                     kind = ConfigKind::SelfManaged;
-                    url = SELF_MANAGED_DEFAULT_URL.to_string();
+                    url = DEFAULT_SELF_MANAGED_URL.to_string();
                     name = None;
                     api_key = None;
                     account = None;
@@ -1328,7 +1320,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         account = None;
                         user = None;
                         identity_mode = None;
-                        url = SELF_MANAGED_DEFAULT_URL.to_string();
+                        url = DEFAULT_SELF_MANAGED_URL.to_string();
                         stage = Stage::Kind;
                     }
                     PromptResult::Quit => {
@@ -2668,8 +2660,8 @@ fn prompt_text(
                         return Ok(PromptResult::Quit);
                     }
                     KeyCode::Backspace => {
-                        if value.pop().is_some() {
-                            raw_write("\x08 \x08")?;
+                        if let Some(ch) = value.pop() {
+                            raw_write(erase_sequence_for_char(ch, secret))?;
                             io::stdout().flush()?;
                         }
                     }
@@ -2689,6 +2681,15 @@ fn prompt_text(
             }
         }
     }
+}
+
+fn erase_sequence_for_char(ch: char, secret: bool) -> String {
+    let width = if secret {
+        1
+    } else {
+        UnicodeWidthChar::width(ch).unwrap_or(1).max(1)
+    };
+    "\x08 \x08".repeat(width)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2965,13 +2966,14 @@ mod tests {
         add_config_name_label, add_save_action_labels, allocate_config_name, box_content_line,
         box_footer_line, box_title_line, cloud_validation_failure_choices, config_select_label,
         display_config_home, display_width, edit_api_key_choice_labels, edit_save_action_labels,
-        extract_models_from_status_payload, identity_prompt_parts, input_live_lines,
-        logo_glass_color_for_theme, main_action_labels, next_step_copy, ov_logo_width,
-        saved_summary_render_parts, select_live_lines, self_managed_api_key_helper_lines,
-        self_managed_validation_failure_choices, should_prompt_root_identity, status_box_lines,
-        status_box_lines_with_runtime, status_box_width, status_payload_is_healthy,
-        tagline_ice_color_for_theme, validate_config_name, volcengine_api_key_helper_lines,
-        wizard_header_lines, wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
+        erase_sequence_for_char, extract_models_from_status_payload, identity_prompt_parts,
+        input_live_lines, logo_glass_color_for_theme, main_action_labels, next_step_copy,
+        ov_logo_width, saved_summary_render_parts, select_live_lines,
+        self_managed_api_key_helper_lines, self_managed_validation_failure_choices,
+        should_prompt_root_identity, status_box_lines, status_box_lines_with_runtime,
+        status_box_width, status_payload_is_healthy, tagline_ice_color_for_theme,
+        validate_config_name, volcengine_api_key_helper_lines, wizard_header_lines,
+        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{ApiKeyRole, ConfigEntry, ConfigKind, ConfigStore};
@@ -3000,6 +3002,13 @@ mod tests {
         assert!(!header.contains("profile manager"));
         assert!(!header.contains("↑/↓ choose"));
         assert!(!header.contains("OpenViking CLI v"));
+    }
+
+    #[test]
+    fn erase_sequence_matches_display_width() {
+        assert_eq!(erase_sequence_for_char('a', false), "\x08 \x08");
+        assert_eq!(erase_sequence_for_char('中', false), "\x08 \x08\x08 \x08");
+        assert_eq!(erase_sequence_for_char('中', true), "\x08 \x08");
     }
 
     #[test]
