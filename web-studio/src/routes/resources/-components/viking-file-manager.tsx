@@ -109,13 +109,7 @@ export function VikingFileManager({
   useEffect(() => {
     const normalized = normalizeDirUri(initialUri || 'viking://')
     setCurrentUri(normalized)
-    setExpandedKeys((prev) => {
-      const next = new Set(prev)
-      for (const ancestor of getAncestorUris(normalized)) {
-        next.add(ancestor)
-      }
-      return next
-    })
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [initialUri])
 
   useEffect(() => {
@@ -150,6 +144,7 @@ export function VikingFileManager({
     const normalized = normalizeDirUri(uri)
     setCurrentUri(normalized)
     setSelectedFile(null)
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [])
 
   const handleOpenDirectory = useCallback((entry: VikingFsEntry) => {
@@ -160,6 +155,7 @@ export function VikingFileManager({
       uri: normalized,
       isDir: true,
     })
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [])
 
   const handleNavigateFromSearch = useCallback((uri: string) => {
@@ -167,9 +163,11 @@ export function VikingFileManager({
       const normalized = normalizeDirUri(uri)
       setCurrentUri(normalized)
       setSelectedFile(null)
+      setExpandedKeys(new Set(getAncestorUris(normalized)))
     } else {
       const dirUri = parentUri(uri)
-      setCurrentUri(normalizeDirUri(dirUri))
+      const normalizedDir = normalizeDirUri(dirUri)
+      setCurrentUri(normalizedDir)
       const name = uri.split('/').pop() || uri
       setSelectedFile({
         uri: normalizeFileUri(uri),
@@ -182,6 +180,7 @@ export function VikingFileManager({
         abstract: '',
         overview: '',
       })
+      setExpandedKeys(new Set(getAncestorUris(normalizedDir)))
     }
   }, [])
 

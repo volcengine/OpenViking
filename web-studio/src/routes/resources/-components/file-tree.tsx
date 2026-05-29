@@ -115,7 +115,16 @@ function TreeNode({
 
   const handleToggle = useCallback(() => {
     const next = new Set(expandedKeys)
-    isOpen ? next.delete(entry.uri) : next.add(entry.uri)
+    if (isOpen) {
+      next.delete(entry.uri)
+    } else {
+      for (const key of next) {
+        if (key !== entry.uri && key.startsWith(entry.uri)) {
+          next.delete(key)
+        }
+      }
+      next.add(entry.uri)
+    }
     onExpandedKeysChange(next)
   }, [expandedKeys, isOpen, entry.uri, onExpandedKeysChange])
 
