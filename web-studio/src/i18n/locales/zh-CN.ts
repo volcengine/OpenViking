@@ -461,6 +461,9 @@ const zhCN = {
     directlyUploadMedia: '直接上传媒体文件',
     'directlyUploadMedia.hint':
       '开启时，媒体文件（图片、音频、视频）原样存储。关闭后，媒体文件会先通过 AI 视觉/音频管道提取内容再存储。',
+    createParent: '自动创建父文件夹',
+    'createParent.hint':
+      '开启时，若目标父目录不存在则自动创建。',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',

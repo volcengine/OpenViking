@@ -469,6 +469,9 @@ const en = {
     directlyUploadMedia: 'Directly Upload Media',
     'directlyUploadMedia.hint':
       'When enabled, media files (images, audio, video) are stored as-is. When disabled, media files are processed through AI vision/audio pipeline for content extraction first.',
+    createParent: 'Auto-create Parent Folder',
+    'createParent.hint':
+      'When enabled, automatically creates the parent directory if it does not exist.',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',
