@@ -130,6 +130,7 @@ Read L2 full content.
 | uri | str | Yes | - | Viking URI |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
+| raw | bool | No | false | Return raw stored content without memory-field cleanup. HTTP API only (Python SDK does not expose it yet). |
 
 **Notes**
 
