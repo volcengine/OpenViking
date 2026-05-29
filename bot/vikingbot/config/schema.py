@@ -434,8 +434,8 @@ class AgentsConfig(BaseModel):
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False
-    session_context_token_budget: int = 12000
-    commit_token_threshold: int = 6000
+    session_context_token_budget: int = 3000
+    commit_token_threshold: int = 20000
     commit_keep_recent_count: int = 10
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
