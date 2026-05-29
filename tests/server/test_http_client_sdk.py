@@ -261,6 +261,31 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
     assert post_commit["messages"][0]["parts"][0]["text"] == "Keep me live"
 
 
+async def test_sdk_commit_session_keeps_telemetry_as_second_positional_argument():
+    calls = []
+
+    class _FakeHTTP:
+        async def post(self, path, json):
+            calls.append((path, json))
+            return httpx.Response(
+                200,
+                json={"status": "success", "result": {"task_id": "task-1"}},
+            )
+
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    client._http = _FakeHTTP()
+
+    result = await client.commit_session("s1", True)
+
+    assert result == {"task_id": "task-1"}
+    assert calls == [
+        (
+            "/api/v1/sessions/s1/commit",
+            {"keep_recent_count": 0, "telemetry": True},
+        )
+    ]
+
+
 async def test_sdk_get_session_archive(http_client):
     client, _ = http_client
 

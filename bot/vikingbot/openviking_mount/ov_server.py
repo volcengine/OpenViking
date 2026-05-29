@@ -486,23 +486,24 @@ class VikingClient:
 
         for message in messages:
             role = str(message.get("role") or "").strip().lower()
-            if role not in {"user", "assistant"}:
+            if role not in {"user", "assistant", "system", "tool"}:
                 continue
 
-            content = message.get("content")
-            if not isinstance(content, str) or not content.strip():
+            content = self._session_message_content(message)
+            if not content:
                 continue
 
+            ov_role = "user" if role == "user" else "assistant"
             payload = {
-                "role": role,
+                "role": ov_role,
                 "content": content,
                 "created_at": message.get("created_at") or message.get("timestamp"),
             }
 
             role_id = message.get("role_id")
-            if not role_id and role == "user":
+            if not role_id and ov_role == "user":
                 role_id = message.get("sender_id") or default_user_role_id
-            elif not role_id and role == "assistant":
+            elif not role_id and ov_role == "assistant":
                 role_id = assistant_role_id
 
             if role_id:
@@ -511,6 +512,32 @@ class VikingClient:
             normalized.append(payload)
 
         return normalized
+
+    def _session_message_content(self, message: dict[str, Any]) -> str:
+        content = message.get("content")
+        parts: list[str] = []
+        if isinstance(content, str) and content.strip():
+            parts.append(content.strip())
+
+        tools_used = message.get("tools_used")
+        if isinstance(tools_used, list):
+            tool_blocks = []
+            for tool in tools_used:
+                if not isinstance(tool, dict):
+                    continue
+                tool_name = str(tool.get("tool_name") or "unknown")
+                result = tool.get("result")
+                args = tool.get("args")
+                block_parts = [f"tool={tool_name}"]
+                if args:
+                    block_parts.append(f"args={args}")
+                if result:
+                    block_parts.append(f"result={result}")
+                tool_blocks.append("; ".join(block_parts))
+            if tool_blocks:
+                parts.append("Tool results:\n" + "\n".join(tool_blocks))
+
+        return "\n\n".join(parts).strip()
 
     async def ensure_session(
         self, session_id: str, user_id: Optional[str] = None

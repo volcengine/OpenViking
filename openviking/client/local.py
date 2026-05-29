@@ -465,8 +465,9 @@ class LocalClient(BaseClient):
     async def commit_session(
         self,
         session_id: str,
-        keep_recent_count: int = 0,
         telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         execution = await run_with_telemetry(
@@ -548,23 +549,51 @@ class LocalClient(BaseClient):
         session_id: str,
         messages: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        added = 0
-        last_result: Dict[str, Any] = {"session_id": session_id, "message_count": 0}
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
+        specs = []
         for message in messages:
-            last_result = await self._add_message_impl(
-                session_id,
-                message["role"],
-                message.get("content"),
-                message.get("parts"),
-                message.get("created_at"),
-                message.get("role_id"),
+            role = message["role"]
+            parts = message.get("parts")
+            content = message.get("content")
+
+            if parts is not None:
+                message_parts = self._message_parts_from_dicts(parts)
+            elif content is not None:
+                message_parts = self._text_message_parts(content)
+            else:
+                raise ValueError("Either content or parts must be provided")
+
+            role_id = message.get("role_id")
+            if role_id is None and role == "user":
+                role_id = self._ctx.user.user_id
+            elif role_id is None and role == "assistant":
+                role_id = self._ctx.user.agent_id
+
+            specs.append(
+                {
+                    "role": role,
+                    "parts": message_parts,
+                    "role_id": role_id,
+                    "created_at": message.get("created_at"),
+                }
             )
-            added += 1
+
+        added_messages = session.add_messages(specs)
         return {
             "session_id": session_id,
-            "message_count": last_result["message_count"],
-            "added": added,
+            "message_count": len(session.messages),
+            "added": len(added_messages),
         }
+
+    def _message_parts_from_dicts(self, parts: List[Dict[str, Any]]):
+        from openviking.message.part import part_from_dict
+
+        return [part_from_dict(p) for p in parts]
+
+    def _text_message_parts(self, content: str):
+        from openviking.message.part import TextPart
+
+        return [TextPart(text=content)]
 
     async def _add_message_impl(
         self,

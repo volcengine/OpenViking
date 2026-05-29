@@ -297,7 +297,7 @@ async def test_compact_hook_session_context_commits_admin_and_sender_sessions(mo
     assert result["success"] is True
     assert result["admin_result"]["committed"] is True
     assert result["users_count"] == 2
-    assert fake_client.append_calls[0] == (
+    assert fake_client.append_calls[-1] == (
         "cli__default__chat-1",
         ["admin answer", "u1 asks", "u1 reply", "u2 asks"],
         "admin",
@@ -391,8 +391,8 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
 
     assert result["success"] is True
     assert fake_client.append_calls == [
-        ("cli__default__chat-1", ["new reply"]),
         ("cli__default__chat-1_u1", ["new reply"]),
+        ("cli__default__chat-1", ["new reply"]),
     ]
     assert ("cli__default__chat-1", 2, "admin") in fake_client.commit_calls
     assert ("cli__default__chat-1_u1", 2, "u1") in fake_client.commit_calls
@@ -544,12 +544,19 @@ async def test_compact_hook_session_context_sender_failure_does_not_advance_sync
 
     assert result["success"] is False
     assert "sender append failed" in result["error"]
+    assert fake_client.append_calls == [("cli__default__chat-1_u1", ["u1 asks", "u1 reply"])]
+    assert fake_client.commit_calls == []
     state = session.metadata["openviking"]
     assert state["last_sync_status"] == "error"
     assert "sender append failed" in state["last_sync_error"]
     assert state["last_synced_local_index"] == -1
     assert state["last_commit_performed"] is False
 
+
+@pytest.mark.asyncio
+async def test_compact_hook_session_context_commits_when_message_threshold_reached(
+    monkeypatch,
+):
     from vikingbot.hooks.builtins import openviking_hooks as hooks_module
 
     monkeypatch.setattr(
@@ -619,12 +626,105 @@ async def test_compact_hook_session_context_sender_failure_does_not_advance_sync
     assert result["success"] is True
     assert result["admin_result"]["committed"] is True
     assert fake_client.append_calls == [
-        ("cli__default__chat-1", ["m3"]),
         ("cli__default__chat-1_u1", ["m3"]),
+        ("cli__default__chat-1", ["m3"]),
     ]
     assert ("cli__default__chat-1", 2, "admin") in fake_client.commit_calls
     assert ("cli__default__chat-1_u1", 2, "u1") in fake_client.commit_calls
     assert session.metadata["openviking"]["last_commit_local_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_compact_hook_sender_commit_failure_does_not_commit_admin_and_retry_dedupes(
+    monkeypatch,
+):
+    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
+
+    monkeypatch.setattr(
+        hooks_module,
+        "load_config",
+        lambda: _make_config(
+            "root",
+            session_context_enabled=True,
+            commit_token_threshold=100,
+            commit_keep_recent_count=2,
+        ),
+    )
+
+    class _FakeClient:
+        def __init__(self):
+            self.append_calls = []
+            self.commit_calls = []
+            self.fail_sender_commit = True
+
+        async def append_messages(
+            self,
+            session_id,
+            messages,
+            default_user_role_id=None,
+            session_user_id=None,
+        ):
+            self.append_calls.append((session_id, [message["content"] for message in messages]))
+            return {"session_id": session_id, "added": len(messages)}
+
+        async def get_session(self, session_id, user_id=None):
+            return {"session_id": session_id, "pending_tokens": 120}
+
+        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
+            self.commit_calls.append((session_id, keep_recent_count, user_id))
+            if session_id.endswith("_u1") and self.fail_sender_commit:
+                raise RuntimeError("sender commit failed")
+            return {"session_id": session_id, "status": "accepted"}
+
+    fake_client = _FakeClient()
+    hook = OpenVikingCompactHook()
+
+    async def _fake_get_client(_workspace_id):
+        return fake_client
+
+    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+
+    context = HookContext(
+        event_type="message.compact",
+        workspace_id="ws",
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+    )
+    session = SimpleNamespace(
+        messages=[
+            {"sender_id": "u1", "role": "user", "content": "u1 asks"},
+            {"sender_id": "u1", "role": "assistant", "content": "u1 reply"},
+        ],
+        metadata={"openviking": {"session_id": "cli__default__chat-1"}},
+    )
+
+    first = await hook.execute(context, session=session)
+
+    assert first["success"] is False
+    assert "sender commit failed" in first["error"]
+    assert fake_client.append_calls == [
+        ("cli__default__chat-1_u1", ["u1 asks", "u1 reply"]),
+        ("cli__default__chat-1", ["u1 asks", "u1 reply"]),
+    ]
+    assert fake_client.commit_calls == [("cli__default__chat-1_u1", 2, "u1")]
+    state = session.metadata["openviking"]
+    assert state["last_sync_status"] == "error"
+    assert state["last_synced_local_index"] == 1
+    assert state["last_sender_synced_local_indexes"] == {"u1": 1}
+    assert state["last_commit_performed"] is False
+
+    fake_client.fail_sender_commit = False
+    fake_client.append_calls.clear()
+    fake_client.commit_calls.clear()
+
+    second = await hook.execute(context, session=session, force_commit=True)
+
+    assert second["success"] is True
+    assert fake_client.append_calls == []
+    assert fake_client.commit_calls == [
+        ("cli__default__chat-1_u1", 2, "u1"),
+        ("cli__default__chat-1", 2, "admin"),
+    ]
+    assert session.metadata["openviking"]["last_commit_performed"] is True
 
 
 @pytest.mark.asyncio
@@ -700,10 +800,61 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
     assert result["success"] is True
     assert result["admin_result"]["committed"] is False
     assert fake_client.append_calls == [
-        ("cli__default__chat-1", ["m3"]),
         ("cli__default__chat-1_u1", ["m3"]),
+        ("cli__default__chat-1", ["m3"]),
     ]
     assert fake_client.commit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_viking_client_normalizes_system_tool_and_tool_result_messages(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(agent_id="workspace")
+
+    normalized = client._normalize_session_messages(
+        [
+            {
+                "role": "system",
+                "content": "system context",
+                "timestamp": "2026-05-01T12:00:00Z",
+            },
+            {
+                "role": "tool",
+                "content": "tool response",
+                "timestamp": "2026-05-01T12:00:01Z",
+            },
+            {
+                "role": "assistant",
+                "content": "assistant answer",
+                "tools_used": [
+                    {
+                        "tool_name": "read_file",
+                        "args": {"path": "README.md"},
+                        "result": "file content",
+                    }
+                ],
+                "timestamp": "2026-05-01T12:00:02Z",
+            },
+        ],
+        default_user_role_id="admin",
+    )
+
+    assert [message["role"] for message in normalized] == [
+        "assistant",
+        "assistant",
+        "assistant",
+    ]
+    assert [message["role_id"] for message in normalized] == [
+        "workspace",
+        "workspace",
+        "workspace",
+    ]
+    assert normalized[0]["content"] == "system context"
+    assert normalized[1]["content"] == "tool response"
+    assert normalized[2]["content"] == (
+        "assistant answer\n\nTool results:\n"
+        "tool=read_file; args={'path': 'README.md'}; result=file content"
+    )
 
 
 @pytest.mark.asyncio

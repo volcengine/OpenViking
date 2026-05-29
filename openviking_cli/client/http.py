@@ -878,8 +878,9 @@ class AsyncHTTPClient(BaseClient):
     async def commit_session(
         self,
         session_id: str,
-        keep_recent_count: int = 0,
         telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)

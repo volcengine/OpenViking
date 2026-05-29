@@ -3,6 +3,8 @@
 
 """Message management tests"""
 
+import pytest
+
 from openviking import AsyncOpenViking
 from openviking.message import ContextPart, TextPart, ToolPart
 from openviking.session import Session
@@ -132,6 +134,35 @@ class TestAddMessage:
         assert context["messages"][1]["parts"][1]["type"] == "tool"
         assert context["messages"][1]["parts"][1]["tool_status"] == "completed"
         assert context["messages"][1]["parts"][1]["tool_output"] == "Found a result"
+
+    async def test_batch_add_messages_is_atomic_when_later_message_is_invalid(
+        self, client: AsyncOpenViking
+    ):
+        session_id = "batch_message_atomicity_test"
+        await client.create_session(session_id=session_id)
+
+        with pytest.raises(ValueError, match="Either content or parts must be provided"):
+            await client.batch_add_messages(
+                session_id,
+                [
+                    {"role": "user", "content": "first valid message"},
+                    {"role": "assistant"},
+                ],
+            )
+
+        context = await client.get_session_context(session_id)
+        assert context["messages"] == []
+
+        result = await client.batch_add_messages(
+            session_id,
+            [{"role": "user", "content": "first valid message"}],
+        )
+
+        assert result["added"] == 1
+        context = await client.get_session_context(session_id)
+        assert [message["parts"][0]["text"] for message in context["messages"]] == [
+            "first valid message"
+        ]
 
 
 class TestUpdateToolPart:
