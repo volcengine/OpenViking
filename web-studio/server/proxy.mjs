@@ -34,7 +34,8 @@ const PKG_ROOT = resolve(__dirname, '..')
 
 const env = process.env
 const HOST = env.OV_STUDIO_HOST || '0.0.0.0'
-const PORT = Number.parseInt(env.OV_STUDIO_PORT || '3000', 10)
+// Honor PORT first so Railway / Fly / Render / Heroku auto-injection works.
+const PORT = Number.parseInt(env.PORT || env.OV_STUDIO_PORT || '3000', 10)
 const DIST_DIR = resolve(env.OV_STUDIO_DIST_DIR || join(PKG_ROOT, 'dist'))
 const UPSTREAM = (env.OV_STUDIO_UPSTREAM || '').trim().replace(/\/+$/, '')
 const API_KEY = (env.OV_STUDIO_API_KEY || '').trim()

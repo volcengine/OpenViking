@@ -57,6 +57,45 @@ Then open <http://localhost:3000>.
   `X-OpenViking-User` from incoming requests so a malicious client can't pass
   alternative credentials downstream.
 
+## Docker
+
+A multi-stage `Dockerfile` lives one level up at `web-studio/Dockerfile`.
+Build context is the `web-studio` directory.
+
+```bash
+cd web-studio
+docker build -t openviking-studio-proxy .
+docker run --rm -p 3000:3000 \
+  -e OV_STUDIO_UPSTREAM=https://ov-api.example.com \
+  -e OV_STUDIO_API_KEY=$ROOT_API_KEY \
+  openviking-studio-proxy
+```
+
+The runtime image is `node:22-alpine` + the built SPA + `server/proxy.mjs`.
+No production `node_modules` — the proxy is zero-dep — so the image stays
+around 150 MB.
+
+## Railway
+
+`web-studio/railway.toml` wires the Dockerfile build + healthcheck.
+
+1. On Railway, create a new service from the repo containing this branch.
+2. **Service → Settings → Source** → set **Root Directory** to `web-studio`.
+   Railway then auto-detects the Dockerfile.
+3. **Variables** → add:
+   - `OV_STUDIO_UPSTREAM` — your OV server origin, e.g. `https://ov.example.com`.
+   - `OV_STUDIO_API_KEY` — the root API key the proxy injects upstream.
+   - (optional) `OV_STUDIO_ACCOUNT_ID`, `OV_STUDIO_USER_ID` to pin identity.
+4. Deploy. Railway injects `$PORT`; the proxy honors it automatically (no
+   `OV_STUDIO_PORT` needed). The generated public URL is the studio entry —
+   anyone who can open it acts with the configured server identity.
+
+## Fly.io / Render / generic Docker host
+
+Anything that runs Docker works the same way. Pass the env vars above,
+expose port 3000 (or pass `PORT` / `OV_STUDIO_PORT`), and route HTTPS to the
+container.
+
 ## Why not nginx?
 
 The nginx layout in the main README is still the right answer when you already
