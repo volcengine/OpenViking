@@ -57,10 +57,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '#/components/ui/sidebar'
-import {
-  AppConnectionProvider,
-  useAppConnection,
-} from '#/hooks/use-app-connection'
+import { AppConnectionProvider } from '#/hooks/use-app-connection'
 import {
   useSessionList,
   useCreateSession,
@@ -353,7 +350,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const { openConnectionDialog } = useAppConnection()
   const { setTheme, resolvedTheme } = useTheme()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
@@ -362,6 +358,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ??
     LANGUAGE_OPTIONS[0]
   const [oauthSetupOpen, setOauthSetupOpen] = React.useState(false)
+  const settingsActive = pathname === '/settings'
   const oauthSetupActive =
     pathname === '/oauth/setup' || pathname.startsWith('/oauth/setup/')
 
@@ -456,7 +453,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={openConnectionDialog}
+                render={<Link to="/settings" />}
+                isActive={settingsActive}
                 tooltip={t('footer.connection', { ns: 'appShell' })}
                 className="text-base"
               >

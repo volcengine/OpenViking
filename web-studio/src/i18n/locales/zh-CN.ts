@@ -111,6 +111,114 @@ const zhCN = {
       generateError: '生成 OTP 失败：{{message}}',
     },
   },
+  settings: {
+    actions: {
+      addAccount: '新增 account',
+      addUser: '新增 user',
+      cancel: '取消',
+      copy: '复制',
+      refresh: '刷新',
+      regenerate: '重新生成',
+      save: '保存',
+      use: '使用',
+    },
+    connection: {
+      adminError: '加载 admin 身份失败：{{message}}',
+      description:
+        '选择 Studio 调用 OpenViking API 时要携带的 account 和 user。',
+      noKey:
+        '输入具备 admin 权限的 API key 后，可以加载 account 和 user 可选项。',
+      title: '连接设置',
+    },
+    dialogs: {
+      addAccount: {
+        description:
+          '创建一个工作区 account 和第一个 admin user。新 key 只会在创建后展示一次。',
+        title: '新增 account',
+      },
+      addUser: {
+        description:
+          '在已有 account 下注册 user。生成的 key 只会在创建后展示一次。',
+        title: '新增 user',
+      },
+      regenerate: {
+        description:
+          '要重新生成 {{account}} / {{user}} 的 API key 吗？当前 key 会立即失效。',
+        title: '重新生成 API key？',
+      },
+    },
+    empty: {
+      adminDescription:
+        '使用 root 或 account admin API key 后，可以列出用户、复制 key、新增身份或轮换凭证。',
+      adminTitle: '需要 admin 权限',
+      usersDescription: '创建一个 user 来生成第一个 API key。',
+      usersTitle: '当前 account 下没有 user',
+    },
+    fields: {
+      account: 'Account',
+      adminUser: 'Admin user',
+      agent: 'Agent',
+      apiKey: 'API key',
+      baseUrl: '服务地址',
+      role: '角色',
+      user: 'User',
+    },
+    keyResult: {
+      description:
+        '请现在复制保存。离开当前状态后，OpenViking 可能只展示前缀。',
+      dismiss: '收起',
+      title: '新的 API key',
+    },
+    loading: '正在加载身份...',
+    management: {
+      accountFilter: '管理的 account',
+      description:
+        '查看某个 account 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+      title: '用户管理',
+    },
+    page: {
+      description:
+        '在 Studio 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
+      title: '连接与身份',
+    },
+    placeholders: {
+      account: 'team-account',
+      agent: 'web-studio',
+      apiKey: '输入 X-API-Key 或 Bearer token',
+      baseUrl: 'http://127.0.0.1:1933',
+      user: 'default',
+    },
+    roles: {
+      admin: 'Admin',
+      user: 'User',
+    },
+    serverMode: {
+      api_key: 'API key 模式',
+      checking: '检查中...',
+      dev: '开发模式',
+      offline: '离线',
+      trusted: 'Trusted 模式',
+    },
+    stats: {
+      accounts: 'Accounts 总数',
+      apiKeys: '可见 API keys',
+      users: 'Users',
+    },
+    table: {
+      account: 'Account',
+      actions: '操作',
+      apiKey: 'API key',
+      role: '角色',
+      user: 'User',
+    },
+    toast: {
+      accountCreated: 'Account 已创建',
+      connectionSaved: '连接已保存',
+      copied: '已复制',
+      keyRegenerated: 'API key 已重新生成',
+      userCreated: 'User 已创建',
+    },
+  },
   oauthSetup: {
     page: {
       title: 'OAuth 设置',
