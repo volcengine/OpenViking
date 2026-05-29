@@ -854,10 +854,38 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
     ]
     assert normalized[0]["content"] == "system context"
     assert normalized[1]["content"] == "tool response"
-    assert normalized[2]["content"] == (
-        "assistant answer\n\nTool results:\n"
-        "tool=read_file; args={'path': 'README.md'}; result=file content"
+    assert normalized[2]["content"] == "assistant answer"
+
+
+@pytest.mark.asyncio
+async def test_viking_client_append_messages_chunks_batches_at_server_limit(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(agent_id="workspace")
+
+    async def _exists(_session_id):
+        return True
+
+    calls = []
+
+    async def _batch_add_messages(session_id, messages):
+        calls.append((session_id, list(messages)))
+        return {
+            "session_id": session_id,
+            "added": len(messages),
+            "message_count": sum(len(batch) for _, batch in calls),
+        }
+
+    monkeypatch.setattr(client.client, "session_exists", _exists)
+    monkeypatch.setattr(client.client, "batch_add_messages", _batch_add_messages)
+
+    result = await client.append_messages(
+        "session-1",
+        [{"role": "user", "content": f"message {index}"} for index in range(101)],
+        default_user_role_id="admin",
     )
+
+    assert [len(messages) for _, messages in calls] == [100, 1]
+    assert result == {"session_id": "session-1", "added": 101, "message_count": 101}
 
 
 @pytest.mark.asyncio

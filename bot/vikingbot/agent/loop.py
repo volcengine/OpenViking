@@ -908,6 +908,8 @@ class AgentLoop:
                     event_type=OutboundEventType.NO_REPLY,
                 )
 
+            await self._evaluate_previous_response_outcome(session, msg)
+
             # Consolidate memory before processing if session is too large
             if self._ov_session_context_enabled():
                 await self._maybe_commit_openviking_before_turn(session, msg)
@@ -919,8 +921,6 @@ class AgentLoop:
                 await self.sessions.save(session)
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=False)
-
-            await self._evaluate_previous_response_outcome(session, msg)
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)

@@ -563,29 +563,9 @@ class VikingClient:
 
     def _session_message_content(self, message: dict[str, Any]) -> str:
         content = message.get("content")
-        parts: list[str] = []
         if isinstance(content, str) and content.strip():
-            parts.append(content.strip())
-
-        tools_used = message.get("tools_used")
-        if isinstance(tools_used, list):
-            tool_blocks = []
-            for tool in tools_used:
-                if not isinstance(tool, dict):
-                    continue
-                tool_name = str(tool.get("tool_name") or "unknown")
-                result = tool.get("result")
-                args = tool.get("args")
-                block_parts = [f"tool={tool_name}"]
-                if args:
-                    block_parts.append(f"args={args}")
-                if result:
-                    block_parts.append(f"result={result}")
-                tool_blocks.append("; ".join(block_parts))
-            if tool_blocks:
-                parts.append("Tool results:\n" + "\n".join(tool_blocks))
-
-        return "\n\n".join(parts).strip()
+            return content.strip()
+        return ""
 
     async def ensure_session(
         self, session_id: str, user_id: Optional[str] = None
@@ -625,7 +605,16 @@ class VikingClient:
         if not batch:
             return {"session_id": session_id, "added": 0, "message_count": 0}
         client = await self._session_client_for_user(session_user_id)
-        return await client.batch_add_messages(session_id=session_id, messages=batch)
+        total_added = 0
+        message_count = 0
+        for start in range(0, len(batch), 100):
+            result = await client.batch_add_messages(
+                session_id=session_id,
+                messages=batch[start : start + 100],
+            )
+            total_added += int(result.get("added", 0) or 0)
+            message_count = int(result.get("message_count", message_count) or 0)
+        return {"session_id": session_id, "added": total_added, "message_count": message_count}
 
     async def commit_session(
         self,

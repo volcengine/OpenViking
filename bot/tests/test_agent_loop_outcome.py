@@ -33,6 +33,10 @@ class _FakeLangfuseClient:
         self.calls.append((response_id, metadata))
         return metadata
 
+    def update_response_outcome(self, response_id, outcome_label, outcome_payload):
+        self.calls.append((response_id, outcome_label, outcome_payload))
+        return outcome_payload
+
 
 class _FakeOVClient:
     def __init__(self, *, context_payload=None, pending_tokens=None):
@@ -117,6 +121,73 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_tu
     assert outcome_event.metadata["response_outcome_evaluated"]["outcome_label"] == "reasked"
     assert outcome_event.metadata["response_outcome_evaluated"]["reask_within_10m"] is True
 
+    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_precommit_clear(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    async def fake_run_agent_loop(self, **kwargs):
+        return "final answer", None, [], {"prompt_tokens": 1, "completion_tokens": 1}, 1
+
+    fake_langfuse = _FakeLangfuseClient()
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: fake_langfuse),
+    )
+
+    bus = MessageBus()
+    config = Config(
+        storage_workspace=str(temp_dir),
+        agents={
+            "session_context_enabled": True,
+            "commit_token_threshold": 1,
+            "commit_keep_recent_count": 0,
+        },
+    )
+    loop = AgentLoop(
+        bus=bus,
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    async def fake_precommit(session, msg):
+        session.clear()
+        await loop.sessions.save(session)
+
+    monkeypatch.setattr(loop, "_maybe_commit_openviking_before_turn", fake_precommit)
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-precommit-clear")
+    session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    session.add_message(
+        "assistant",
+        "hello",
+        sender_id="user-1",
+        response_id="resp-123",
+        timestamp="2026-04-30T00:00:00",
+    )
+    await loop.sessions.save(session)
+
+    await loop._process_message(
+        InboundMessage(
+            session_key=session_key,
+            sender_id="user-1",
+            content="that did not help",
+            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+        )
+    )
+
+    outcome_event = await bus.consume_outbound()
+    assert outcome_event.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
+    assert outcome_event.response_id == "resp-123"
     persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
     assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
 
