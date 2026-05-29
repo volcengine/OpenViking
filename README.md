@@ -819,4 +819,4 @@ The OpenViking project uses different licenses for different components:
 ## Community Integrations
 
 - [openviking-claude-desktop](https://github.com/itzsamehfawzi/openviking-claude-desktop)
-  — Claude Desktop MCP bridge + Claude Code auto-recall/capture for Windows (by Sameh Khalifa.)
+  — Claude Desktop MCP bridge + Claude Code auto-recall/capture for Windows (by Sameh Khalifa)
