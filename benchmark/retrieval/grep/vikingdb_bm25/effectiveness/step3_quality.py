@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-"""Step 3: Retrieval quality evaluation — compare auto (bm25) vs fs grep.
+"""Step 3 (Effectiveness): Evaluate retrieval quality for real code repos.
+
+Compares SDK grep results against local regex ground truth.
+Computes Recall, Precision, F1 per query pattern.
 
 Prerequisites:
-  1. Run step1_add_resource.py to import repos (includes VLM+embedding)
-  2. Ensure ov.conf has:
-       "grep": {"engine": "auto", "switch_to_remote_threshold": 0}
-     (switch_to_remote_threshold = 0 forces VikingDB BM25 for all queries)
-  3. Restart the server after changing ov.conf
-
-Approach:
-  - Ground truth: scan local repo files with Python regex (equivalent to fs engine)
-  - Test: call SDK grep to get structured results
-  - Compare: compute Recall, Precision, F1 per query pattern
+  1. Run step1_add_resource.py to import repos (no indexing)
+  2. Run step2_reindex.py to build vector indexes
+  3. Ensure ov.conf has the desired grep engine config
 
 KEYWORDS: Fill the KEYWORDS list below with real terms from the imported
-repos. Each keyword will be tested for retrieval quality.
+repos before running.
 
 Usage:
-  python3 step3_retrieval_quality.py
+  python3 step3_quality.py
 """
 
 from __future__ import annotations
@@ -28,23 +24,19 @@ import time
 
 from openviking.sync_client import SyncOpenViking
 
-BASE_URI = "viking://resources/benchmark"
-DATA_DIR = os.path.expanduser("~/.openviking/data")
+BASE_URI = "viking://resources/benchmark/effectiveness"
+DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark")
 
 KEYWORDS: list[str] = []
 
 
 def build_test_patterns() -> list[tuple[str, str]]:
     patterns = []
-
     for kw in KEYWORDS:
         patterns.append((f"keyword: {kw}", kw))
-
     if len(KEYWORDS) >= 2:
         patterns.append((f"multi 2: {KEYWORDS[0]}|{KEYWORDS[1]}", f"{KEYWORDS[0]}|{KEYWORDS[1]}"))
-
-    patterns.append(("no-match: zzz_nonexistent_benchmark", "zzz_nonexistent_benchmark"))
-
+    patterns.append(("no-match: zzz_nonexistent_quality", "zzz_nonexistent_quality"))
     return patterns
 
 
@@ -52,7 +44,6 @@ def run_sdk_grep(client: SyncOpenViking, uri: str, pattern: str) -> tuple[set[st
     t0 = time.monotonic()
     result = client.grep(uri=uri, pattern=pattern, node_limit=100000)
     elapsed = time.monotonic() - t0
-
     uris = set()
     if isinstance(result, dict):
         for match in result.get("matches", []):
@@ -119,7 +110,6 @@ def compute_metrics(truth: set[str], predicted: set[str]) -> dict:
         return {"recall": 1.0, "precision": 1.0, "f1": 1.0, "tp": 0, "fp": 0, "fn": 0}
     if not truth:
         return {"recall": 0.0, "precision": 0.0, "f1": 0.0, "tp": 0, "fp": len(predicted), "fn": 0}
-
     tp = len(truth & predicted)
     fp = len(predicted - truth)
     fn = len(truth - predicted)
@@ -140,39 +130,31 @@ def main():
 
     if not KEYWORDS:
         print("WARNING: KEYWORDS list is empty. Fill it with real terms before running.")
-        print("         Edit step3_retrieval_quality.py and add keywords to the KEYWORDS list.\n")
+        print("         Edit step2_quality.py and add keywords to the KEYWORDS list.\n")
 
     test_patterns = build_test_patterns()
 
     print("=" * 110)
-    print("Retrieval Quality Evaluation: auto (bm25+fs) vs local fs (ground truth)")
+    print("Effectiveness Evaluation: SDK grep vs local regex (ground truth)")
     print("=" * 110)
     print(f"URI:       {uri}")
     print(f"Data dir:  {DATA_DIR}/benchmark/")
-    print(f"Local dirs: {search_dirs}")
     print(f"Patterns:  {len(test_patterns)}")
-    print()
-    print("Ensure ov.conf has:")
-    print('  "grep": {"engine": "auto", "switch_to_remote_threshold": 0}')
-    print("And the server has been restarted.")
     print()
 
     results = []
-
     client = SyncOpenViking()
     client.initialize()
 
     try:
         for label, pattern in test_patterns:
             print(f"--- {label} (pattern: {pattern}) ---")
-
             truth_uris, fs_elapsed = compute_ground_truth(pattern, search_dirs)
             print(f"  Ground truth (local fs): {len(truth_uris)} matches ({fs_elapsed:.2f}s)")
-
             try:
                 auto_uris, auto_elapsed = run_sdk_grep(client, uri, pattern)
             except Exception as e:
-                print(f"  Auto grep FAILED: {e}")
+                print(f"  SDK grep FAILED: {e}")
                 results.append(
                     {
                         "label": label,
@@ -182,7 +164,7 @@ def main():
                     }
                 )
                 continue
-            print(f"  Auto grep (bm25+fs):   {len(auto_uris)} matches ({auto_elapsed:.2f}s)")
+            print(f"  SDK grep:              {len(auto_uris)} matches ({auto_elapsed:.2f}s)")
 
             metrics = compute_metrics(truth_uris, auto_uris)
             print(
@@ -195,20 +177,14 @@ def main():
             if metrics["fp"] > 0:
                 print(f"  Extra (FP): {metrics['fp']}")
 
-            if metrics["fn"] > 0:
-                missed = sorted(truth_uris - auto_uris)[:5]
-                print("  Sample missed URIs:")
-                for u in missed:
-                    print(f"    {u}")
-
             results.append(
                 {
                     "label": label,
                     "pattern": pattern,
                     "truth_count": len(truth_uris),
-                    "auto_count": len(auto_uris),
+                    "found_count": len(auto_uris),
                     "fs_elapsed_s": round(fs_elapsed, 3),
-                    "auto_elapsed_s": round(auto_elapsed, 3),
+                    "sdk_elapsed_s": round(auto_elapsed, 3),
                     **metrics,
                 }
             )
@@ -218,7 +194,7 @@ def main():
     print()
     print("=" * 120)
     print(
-        f"{'Label':<45} {'Truth':>6} {'Auto':>6} {'Recall':>8} {'Prec':>8} {'F1':>8} {'Missed':>8}"
+        f"{'Label':<45} {'Truth':>6} {'Found':>6} {'Recall':>8} {'Prec':>8} {'F1':>8} {'Missed':>8}"
     )
     print("-" * 120)
     for r in results:
@@ -229,27 +205,8 @@ def main():
             )
         else:
             print(
-                f"{r['label']:<45} {r['truth_count']:>6} {r['auto_count']:>6} "
+                f"{r['label']:<45} {r['truth_count']:>6} {r['found_count']:>6} "
                 f"{r['recall']:>8.4f} {r['precision']:>8.4f} {r['f1']:>8.4f} {r['fn']:>8}"
-            )
-    print()
-
-    has_recall_loss = any(r.get("fn", 0) > 0 for r in results)
-    has_precision_loss = any(r.get("fp", 0) > 0 for r in results)
-    if not has_recall_loss and not has_precision_loss:
-        print(
-            "VERDICT: All queries achieved perfect recall and precision. bm25 recall is complete."
-        )
-    else:
-        if has_recall_loss:
-            print("VERDICT: Recall loss detected — some files not recalled by bm25.")
-            print(
-                "  Possible causes: content field truncation, tokenizer mismatch, or incomplete reindex."
-            )
-        if has_precision_loss:
-            print("VERDICT: Precision loss detected — unexpected matches in auto results.")
-            print(
-                "  This should not happen (phase 2 regex guarantees precision). Investigate URI format."
             )
     print()
 
