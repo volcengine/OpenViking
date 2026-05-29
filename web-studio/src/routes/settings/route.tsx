@@ -723,7 +723,7 @@ function SettingsRoute() {
         </p>
       </header>
 
-      <Card className="overflow-hidden border-primary/25 bg-primary/[0.025] shadow-sm ring-1 ring-primary/10">
+      <Card className="gap-0 overflow-hidden border-primary/25 bg-primary/[0.025] py-0 shadow-sm ring-1 ring-primary/10">
         <CardHeader className="gap-2 border-b border-primary/15 bg-primary/[0.07] px-5 py-3.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">

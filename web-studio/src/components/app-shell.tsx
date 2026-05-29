@@ -506,7 +506,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-base shadow-xs"
+              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-sm shadow-xs"
               role="group"
             >
               {LANGUAGE_OPTIONS.map((item) => {
