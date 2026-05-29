@@ -2,7 +2,6 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  CheckIcon,
   CopyIcon,
   KeyRoundIcon,
   PlusIcon,
@@ -1006,21 +1005,6 @@ function SettingsRoute() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              setDraft((current) => ({
-                                ...current,
-                                accountId: user.accountId,
-                                userId: user.userId,
-                              }))
-                            }
-                          >
-                            <CheckIcon />
-                            {t('actions.use')}
-                          </Button>
                           <Button
                             type="button"
                             variant="outline"

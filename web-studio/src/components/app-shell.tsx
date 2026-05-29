@@ -8,7 +8,6 @@ import {
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
-  LanguagesIcon,
   LoaderIcon,
   MessageSquareIcon,
   MoonIcon,
@@ -119,14 +118,14 @@ const NAV_ITEMS: readonly NavItem[] = [
 
 const LANGUAGE_OPTIONS = [
   {
+    shortLabel: '中',
+    title: '中文',
+    value: 'zh-CN',
+  },
+  {
     shortLabel: 'EN',
     title: 'English',
     value: 'en',
-  },
-  {
-    shortLabel: '中文',
-    title: '中文',
-    value: 'zh-CN',
   },
 ] as const
 
@@ -517,10 +516,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="flex h-9 items-center gap-0.5 rounded-md border bg-muted/60 p-0.5 text-sm"
+              className="flex h-9 items-center rounded-full border border-border/80 bg-muted/60 p-1 text-sm"
               role="group"
             >
-              <LanguagesIcon className="mx-1 size-4 text-muted-foreground" />
               {LANGUAGE_OPTIONS.map((item) => {
                 const isActive = item.value === currentLanguage
 
@@ -530,8 +528,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'h-7 rounded-sm px-2 font-medium text-muted-foreground transition-colors hover:text-foreground',
-                      isActive && 'bg-background text-foreground shadow-xs',
+                      'h-7 min-w-10 rounded-full px-3 font-semibold text-muted-foreground transition-colors hover:text-foreground',
+                      isActive && 'bg-foreground text-background shadow-sm',
                     )}
                     onClick={() => {
                       if (!isActive) {
