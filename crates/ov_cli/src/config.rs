@@ -49,6 +49,8 @@ pub struct Config {
     pub upload: UploadConfig,
     #[serde(default, alias = "extra_header")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub git_credentials: Option<std::collections::HashMap<String, String>>,
 }
 
 fn default_url() -> String {
@@ -92,6 +94,7 @@ impl Default for Config {
             profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
+            git_credentials: None,
         }
     }
 }

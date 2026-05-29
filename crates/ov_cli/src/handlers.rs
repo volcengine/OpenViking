@@ -57,6 +57,24 @@ pub async fn handle_add_resource(
         path = unescaped_path;
     }
 
+    // Auto-inject git token from config if the path is a git URL and
+    // credentials are configured for the target host.
+    if is_url {
+        if let Some(ref creds) = ctx.config.git_credentials {
+            if let Some(host) = crate::git_credentials::extract_url_host(&path) {
+                let bare_host = host.split(':').next().unwrap_or(&host);
+                if let Some(token) = creds.get(&host).or_else(|| creds.get(bare_host)) {
+                    let original = path.clone();
+                    path = crate::git_credentials::inject_token(&path, token);
+                    if ctx.is_verbose() {
+                        let masked = crate::git_credentials::mask_token_in_url(&original);
+                        eprintln!("Injected git token for {masked}");
+                    }
+                }
+            }
+        }
+    }
+
     // Check that only one of --to, --parent, or --parent-auto-create is set
     let mut exclusive_count = 0;
     if to.is_some() {
@@ -596,6 +614,7 @@ pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> 
         },
         ConfigCommands::SetupCli => handle_setup_cli().await,
         ConfigCommands::Switch => handle_config_switch().await,
+        ConfigCommands::GitCredentials => handle_configure_git_credentials().await,
     }
 }
 
@@ -698,6 +717,18 @@ async fn handle_setup_cli() -> Result<()> {
         }
     }
 
+    // Step 6: Optionally configure git credentials for private repos
+    println!();
+    println!(
+        "{}",
+        "Configure git credentials for private repositories? (optional)".blue()
+    );
+    let creds_prompt = "Add credentials now? [y/N]: ";
+    let creds_input = rl.readline(creds_prompt).unwrap_or_default();
+    if creds_input.trim().to_lowercase() == "y" || creds_input.trim().to_lowercase() == "yes" {
+        configure_git_credentials_interactive(&mut rl, &mut config)?;
+    }
+
     println!();
     println!("{}", "✓ Setup complete!".bold().green());
     println!(
@@ -708,6 +739,71 @@ async fn handle_setup_cli() -> Result<()> {
         "{}",
         "Use 'ov config switch' to switch between saved configurations.".dimmed()
     );
+
+    Ok(())
+}
+
+/// Interactive prompt to collect git credentials and store them in the config.
+fn configure_git_credentials_interactive(
+    rl: &mut rustyline::DefaultEditor,
+    config: &mut Config,
+) -> Result<()> {
+    use colored::Colorize;
+
+    println!();
+    println!("{}", "Git Credentials Setup".bold());
+
+    let creds = config.git_credentials.get_or_insert_with(std::collections::HashMap::new);
+
+    loop {
+        println!();
+        let prompt = "Hostname (e.g. github.com, gitlab.com) [skip to finish]: ";
+        let host_input = rl.readline(prompt).unwrap_or_default();
+        if host_input.trim().is_empty() {
+            break;
+        }
+        let host = host_input.trim().to_string();
+
+        let token_prompt = format!("Personal Access Token for {host}: ");
+        let token_input = rl.readline(token_prompt.as_str()).unwrap_or_default();
+        if token_input.trim().is_empty() {
+            println!("  Token is required — skipping this entry.");
+            continue;
+        }
+        let token = token_input.trim().to_string();
+
+        creds.insert(host.clone(), token);
+        println!("  {} Token saved for {host}.", "✓".green());
+    }
+
+    // Persist updated config to disk.
+    let _ = std::fs::create_dir_all(
+        crate::config::default_config_path()?.parent().unwrap(),
+    );
+    config.save_default()?;
+    println!();
+    println!("{}", "Git credentials saved.".green());
+
+    Ok(())
+}
+
+/// Standalone command: ov config git-credentials
+async fn handle_configure_git_credentials() -> Result<()> {
+    use colored::Colorize;
+    use rustyline::DefaultEditor;
+
+    println!("{}", "Git Credentials Setup".bold().green());
+    println!();
+
+    let mut config = match Config::load_default() {
+        Ok(c) => c,
+        Err(_) => Config::default(),
+    };
+
+    let mut rl = DefaultEditor::new()
+        .map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
+
+    configure_git_credentials_interactive(&mut rl, &mut config)?;
 
     Ok(())
 }

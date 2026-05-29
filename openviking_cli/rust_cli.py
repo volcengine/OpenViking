@@ -39,6 +39,39 @@ def _exec_binary(binary: str, argv: list[str]) -> None:
         os.execv(binary, [binary] + argv)
 
 
+def _preprocess_add_resource_token(argv: list[str]) -> list[str]:
+    """Extract ``--token VALUE`` from add-resource args, inject token into URL.
+
+    Returns a new argv list with the token injected into the URL and
+    ``--token VALUE`` removed, ready to pass to the Rust binary.
+    If no ``--token`` flag is present the original list is returned unchanged.
+    """
+    from openviking_cli.utils.git_credentials import inject_token, is_git_url
+
+    token: str | None = None
+    token_indices: list[int] = []
+
+    for i, arg in enumerate(argv):
+        if arg == "--token" and i + 1 < len(argv):
+            token = argv[i + 1]
+            token_indices = [i, i + 1]
+            break
+
+    if not token:
+        return argv
+
+    # Remove --token VALUE from the arg list
+    new_argv = [a for i, a in enumerate(argv) if i not in token_indices]
+
+    # Inject the token into the first git URL argument
+    for i, arg in enumerate(new_argv):
+        if is_git_url(arg):
+            new_argv[i] = inject_token(arg, token)
+            break
+
+    return new_argv
+
+
 def main():
     """
     极简入口点：查找 ov 二进制并执行
@@ -54,6 +87,11 @@ def main():
         from openviking_cli.doctor import main as doctor_main
 
         sys.exit(doctor_main())
+
+    # 0b. ov add-resource --token <TOKEN> <URL>  (or any ordering)
+    #     Preprocess: inject token into URL, strip --token flag, then exec Rust.
+    if len(sys.argv) > 1 and sys.argv[1] == "add-resource" and "--token" in sys.argv:
+        sys.argv = [sys.argv[0]] + _preprocess_add_resource_token(sys.argv[1:])
     # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory

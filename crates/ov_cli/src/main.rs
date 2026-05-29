@@ -3,6 +3,7 @@ mod client;
 mod commands;
 mod config;
 mod error;
+mod git_credentials;
 mod handlers;
 mod output;
 mod tui;
@@ -1013,6 +1014,8 @@ enum ConfigCommands {
     SetupCli,
     /// Switch between saved configurations
     Switch,
+    /// Configure git credentials for private repository access
+    GitCredentials,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
@@ -1683,6 +1686,7 @@ mod tests {
             verbose: false,
             upload: Default::default(),
             extra_headers: None,
+            git_credentials: None,
             profile: false,
         };
 
@@ -1721,6 +1725,7 @@ mod tests {
             profile: false,
             upload: Default::default(),
             extra_headers: None,
+            git_credentials: None,
         };
 
         // Without sudo: use api_key

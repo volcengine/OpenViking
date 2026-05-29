@@ -27,6 +27,7 @@ from openviking.utils.code_hosting_utils import (
     validate_git_ssh_uri,
 )
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.git_credentials import mask_token_in_url
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -195,14 +196,15 @@ class GitAccessor(DataAccessor):
             return LocalResource(
                 path=local_dir,
                 source_type=SourceType.GIT,
-                original_source=source_str,  # Full original URL (critical for TreeBuilder!)
+                original_source=mask_token_in_url(source_str),  # token-free for storage/display
                 meta=meta,
                 is_temporary=True,
             )
 
         except Exception as e:
             logger.error(
-                f"[GitAccessor] Failed to access git repository {source}: {e}", exc_info=True
+                f"[GitAccessor] Failed to access git repository {mask_token_in_url(source_str)}: {e}",
+                exc_info=True,
             )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
@@ -337,8 +339,12 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
+            cmd_str = " ".join(
+                mask_token_in_url(a) if a.startswith(("http://", "https://")) else a
+                for a in args[1:]
+            )
             raise RuntimeError(
-                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
+                f"{user_msg} Command: git {cmd_str}. Details: {error_msg}"
             )
         return stdout.decode().strip()
 
@@ -369,7 +375,7 @@ class GitAccessor(DataAccessor):
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
-        logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        logger.info(f"[GitAccessor] Cloning {mask_token_in_url(url)} to {target_dir}...")
 
         clone_args = [
             "git",
@@ -415,13 +421,13 @@ class GitAccessor(DataAccessor):
                     )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
+                        raise RuntimeError(f"Failed to fetch commit {commit} from {mask_token_in_url(url)}")
             await self._run_git(["git", "-C", target_dir, "checkout", commit])
 
-        # Add .git_source_repo marker file with original URL (for consistency)
+        # Add .git_source_repo marker file with sanitized URL (no embedded token)
         def _write_marker():
             marker_file = Path(target_dir) / ".git_source_repo"
-            marker_file.write_text(url, encoding="utf-8")
+            marker_file.write_text(mask_token_in_url(url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -444,6 +450,11 @@ class GitAccessor(DataAccessor):
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
+        # Extract token from embedded URL userinfo (injected client-side), fall back to env.
+        # Supports both "token@host" (GitHub) and "oauth2:token@host" (GitLab) formats.
+        token_from_url = parsed.password or parsed.username
+        github_token = token_from_url or os.environ.get("GITHUB_TOKEN")
+
         if branch:
             zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{branch}.zip"
         else:
@@ -458,7 +469,6 @@ class GitAccessor(DataAccessor):
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
-            github_token = os.environ.get("GITHUB_TOKEN")
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
 
@@ -469,7 +479,7 @@ class GitAccessor(DataAccessor):
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
+            raise RuntimeError(f"Failed to download GitHub ZIP {mask_token_in_url(zip_url)}: {exc}")
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
@@ -513,10 +523,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add .git_source_repo marker file with sanitized URL (no embedded token)
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(mask_token_in_url(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
@@ -541,9 +551,18 @@ class GitAccessor(DataAccessor):
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
+        # Extract token from embedded URL userinfo (injected client-side), fall back to env.
+        # Supports both "token@host" (GitHub) and "oauth2:token@host" (GitLab) formats.
+        token_from_url = parsed.password or parsed.username
+        gitlab_token = token_from_url or os.environ.get("GITLAB_TOKEN")
+
         ref = branch or "HEAD"
+        # Build zip_url using only the hostname (netloc without userinfo) to avoid leaking token.
+        clean_host = parsed.hostname or parsed.netloc
+        if parsed.port:
+            clean_host = f"{clean_host}:{parsed.port}"
         # GitLab uses the format: /{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
-        zip_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo_slug}/-/archive/{ref}/{repo_slug}-{ref}.zip"
+        zip_url = f"{parsed.scheme}://{clean_host}/{owner}/{repo_slug}/-/archive/{ref}/{repo_slug}-{ref}.zip"
 
         logger.info(f"[GitAccessor] Downloading GitLab ZIP: {zip_url}")
 
@@ -554,6 +573,8 @@ class GitAccessor(DataAccessor):
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
+            if gitlab_token:
+                headers["Authorization"] = f"Bearer {gitlab_token}"
 
             req = urllib.request.Request(zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
@@ -562,7 +583,7 @@ class GitAccessor(DataAccessor):
         try:
             await asyncio.to_thread(_download)
         except Exception as exc:
-            raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
+            raise RuntimeError(f"Failed to download GitLab ZIP {mask_token_in_url(zip_url)}: {exc}")
 
         # Safe extraction with Zip Slip validation (non-blocking)
         def _extract_zip():
@@ -606,10 +627,10 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
+        # Add .git_source_repo marker file with sanitized URL (no embedded token)
         def _write_marker():
             marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
+            marker_file.write_text(mask_token_in_url(repo_url), encoding="utf-8")
 
         await asyncio.to_thread(_write_marker)
 
