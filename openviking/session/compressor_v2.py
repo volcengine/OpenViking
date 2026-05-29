@@ -681,7 +681,12 @@ def _remap_resolved_links_for_consolidation(
         next_link = link
         if from_uri != link.from_uri or to_uri != link.to_uri:
             next_link = link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri})
-        key = (next_link.from_uri, next_link.to_uri, next_link.link_type, next_link.match_text or "")
+        key = (
+            next_link.from_uri,
+            next_link.to_uri,
+            next_link.link_type,
+            next_link.match_text or "",
+        )
         if key in seen_links:
             continue
         seen_links.add(key)
@@ -749,8 +754,8 @@ async def _synthesize_create_new_experience_consolidation(
                 "canonical for each merged group. Keep singletons out of groups. For each "
                 "merged group, provide one final full content string that preserves all "
                 "compatible guidance without inventing facts. Output JSON only: "
-                "{\"groups\": [{\"canonical_index\": 0, \"member_indices\": [0, 2], "
-                "\"content\": \"<full final content>\"}]}"
+                '{"groups": [{"canonical_index": 0, "member_indices": [0, 2], '
+                '"content": "<full final content>"}]}'
             ),
         },
         {"role": "user", "content": JsonUtils.dumps(payload, indent=2)},
@@ -2363,12 +2368,10 @@ class SessionCompressorV2:
                         True,
                     )
                 ):
-                    create_new_uri_remap = (
-                        await _synthesize_create_new_experience_consolidation(
-                            vlm=vlm,
-                            operations=combined_operations,
-                            phase_metric_key=leader_phase_key,
-                        )
+                    create_new_uri_remap = await _synthesize_create_new_experience_consolidation(
+                        vlm=vlm,
+                        operations=combined_operations,
+                        phase_metric_key=leader_phase_key,
                     )
                 combined_operations.upsert_operations = _order_upserts_for_coalesced_timeline(
                     combined_operations.upsert_operations

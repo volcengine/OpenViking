@@ -86,9 +86,7 @@ def _tokens(text: str) -> set[str]:
 
 def _name_tokens(uri: str) -> set[str]:
     return {
-        token.lower()
-        for token in _uri_stem(uri).replace("-", "_").split("_")
-        if len(token) > 2
+        token.lower() for token in _uri_stem(uri).replace("-", "_").split("_") if len(token) > 2
     }
 
 
@@ -187,11 +185,7 @@ def _summarize_experience_quality(
                         examples["content"].append(
                             _quality_pair(left_uri, right_uri, content_score)
                         )
-                if (
-                    left_sources
-                    and right_sources
-                    and source_score >= _PAIR_SIMILARITY_THRESHOLD
-                ):
+                if left_sources and right_sources and source_score >= _PAIR_SIMILARITY_THRESHOLD:
                     pair_counts["source"] += 1
                     if len(examples["source"]) < sample_limit:
                         examples["source"].append(

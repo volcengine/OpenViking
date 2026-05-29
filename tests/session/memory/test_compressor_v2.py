@@ -36,8 +36,8 @@ from openviking.session.memory.memory_updater import (
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.merge_op.base import StrPatch
 from openviking.session.memory.merge_op.patch import PatchOp
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.versioning import content_digest
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.telemetry.operation import TelemetrySummaryBuilder
@@ -137,17 +137,13 @@ async def test_create_new_experience_consolidation_merges_same_window_duplicates
                 '{"groups": ['
                 '{"canonical_index": 0, "member_indices": [0, 1], '
                 '"content": "## Situation\\n- User wants to cancel all pending orders\\n\\n'
-                '## Approach\\n- Verify identity, then cancel every pending order\\n\\n'
+                "## Approach\\n- Verify identity, then cancel every pending order\\n\\n"
                 '## Reflect\\n- Do not merge delivered-order returns into this rule"}'
                 "]}"
             )
 
-    canonical_uri = (
-        "viking://agent/default/memories/experiences/bulk_pending_order_cancellation.md"
-    )
-    duplicate_uri = (
-        "viking://agent/default/memories/experiences/pending_order_bulk_cancellation.md"
-    )
+    canonical_uri = "viking://agent/default/memories/experiences/bulk_pending_order_cancellation.md"
+    duplicate_uri = "viking://agent/default/memories/experiences/pending_order_bulk_cancellation.md"
     distinct_uri = "viking://agent/default/memories/experiences/pending_order_item_modification.md"
     traj_1 = "viking://agent/default/memories/trajectories/one.md"
     traj_2 = "viking://agent/default/memories/trajectories/two.md"
@@ -230,10 +226,7 @@ async def test_create_new_experience_consolidation_ignores_overlapping_groups():
                 }
             )
 
-    uris = [
-        f"viking://agent/default/memories/experiences/card_{index}.md"
-        for index in range(3)
-    ]
+    uris = [f"viking://agent/default/memories/experiences/card_{index}.md" for index in range(3)]
     operations = ResolvedOperations(
         upsert_operations=[
             ResolvedOperation(

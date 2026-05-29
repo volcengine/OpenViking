@@ -180,8 +180,9 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(
         user=SimpleNamespace(user_id="user-1", agent_id="agent-1"),
-        resolve_role_id=lambda role, override=None: override
-        or {"user": "user-1", "assistant": "agent-1"}.get(role),
+        resolve_role_id=lambda role, override=None: (
+            override or {"user": "user-1", "assistant": "agent-1"}.get(role)
+        ),
     )
 
     result = await LocalClient.batch_add_messages(
