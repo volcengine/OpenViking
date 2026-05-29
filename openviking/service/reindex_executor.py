@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -47,6 +48,17 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
+
+# When set to True for the duration of a reindex run, every
+# ``_upsert_context`` call first deletes the existing vector record(s)
+# for its URI via ``viking_fs._delete_from_vector_store`` before
+# re-upserting. Threaded through with a contextvar (rather than a
+# parameter on every internal call) because _upsert_context is invoked
+# from many sites; using a contextvar keeps the call sites untouched
+# and is async-task safe (asyncio inherits contextvars per task).
+_FORCE_DROP_CORRUPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "openviking.reindex_force_drop_corrupt", default=False
+)
 
 _reindex_executor: "ReindexExecutor | None" = None
 
@@ -94,6 +106,7 @@ class ReindexExecutor:
         mode: str,
         wait: bool,
         ctx: RequestContext,
+        force: bool = False,
     ) -> dict[str, Any]:
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
@@ -116,6 +129,7 @@ class ReindexExecutor:
                 object_type=object_type,
                 mode=mode,
                 ctx=ctx,
+                force=force,
             )
 
         task = await tracker.create_if_no_running(
@@ -138,6 +152,7 @@ class ReindexExecutor:
                 object_type=object_type,
                 mode=mode,
                 ctx=ctx,
+                force=force,
             )
         )
         return {
@@ -339,6 +354,7 @@ class ReindexExecutor:
         object_type: str,
         mode: str,
         ctx: RequestContext,
+        force: bool = False,
     ) -> dict[str, Any]:
         service = get_service()
         if service.viking_fs is None or service.vikingdb_manager is None:
@@ -358,6 +374,10 @@ class ReindexExecutor:
         if telemetry_id:
             wait_tracker.register_request(telemetry_id)
 
+        # Publish ``force`` to all nested _upsert_context calls via a
+        # contextvar (async-task safe; reset in finally so other reindex
+        # runs aren't affected).
+        force_token = _FORCE_DROP_CORRUPT.set(force)
         try:
             async with LockContext(get_lock_manager(), [path], lock_mode="tree") as lock_handle:
                 run = _ReindexRunContext(
@@ -421,6 +441,7 @@ class ReindexExecutor:
                         wait_tracker.build_queue_status(telemetry_id),
                     )
         finally:
+            _FORCE_DROP_CORRUPT.reset(force_token)
             if telemetry_id:
                 wait_tracker.cleanup(telemetry_id)
 
@@ -445,6 +466,7 @@ class ReindexExecutor:
         object_type: str,
         mode: str,
         ctx: RequestContext,
+        force: bool = False,
     ) -> None:
         tracker = get_task_tracker()
         await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
@@ -454,6 +476,7 @@ class ReindexExecutor:
                 object_type=object_type,
                 mode=mode,
                 ctx=ctx,
+                force=force,
             )
             await tracker.complete(
                 task_id,
@@ -1310,6 +1333,20 @@ class ReindexExecutor:
     ) -> None:
         service = get_service()
         assert service.vikingdb_manager is not None
+
+        # ``force=True`` reindex pre-deletes any existing vector record(s)
+        # at this URI before re-upserting. This evicts corrupted records
+        # whose deserialization fails (see _FORCE_DROP_CORRUPT docstring
+        # at module top). Best-effort: a delete failure is logged but
+        # does not block the upsert.
+        if _FORCE_DROP_CORRUPT.get():
+            try:
+                viking_fs = get_viking_fs()
+                await viking_fs._delete_from_vector_store([uri], ctx=ctx)
+            except Exception as exc:
+                logger.warning(
+                    "[reindex force] pre-delete failed for %s: %s", uri, exc
+                )
 
         context = Context(
             uri=uri,

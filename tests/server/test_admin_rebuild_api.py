@@ -91,10 +91,11 @@ async def test_reindex_resource_vectors_only_wait_true(monkeypatch):
     seen = {}
 
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, force, ctx):
             seen["uri"] = uri
             seen["mode"] = mode
             seen["wait"] = wait
+            seen["force"] = force
             seen["ctx"] = ctx
             return {
                 "status": "completed",
@@ -134,7 +135,7 @@ async def test_reindex_resource_vectors_only_wait_false(monkeypatch):
     from openviking.server.routers.content import ReindexRequest, reindex
 
     class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx):
+        async def reindex(self, *, uri, mode, wait, force, ctx):
             return {
                 "task_id": "rbld_123",
                 "status": "accepted",
@@ -1588,10 +1589,11 @@ async def test_openviking_service_reindex_uses_default_root_context(monkeypatch)
     seen = {}
 
     class FakeExecutor:
-        async def execute(self, *, uri, mode, wait, ctx):
+        async def execute(self, *, uri, mode, wait, force, ctx):
             seen["uri"] = uri
             seen["mode"] = mode
             seen["wait"] = wait
+            seen["force"] = force
             seen["ctx"] = ctx
             return {"status": "completed", "uri": uri}
 

@@ -46,6 +46,9 @@ class ReindexRequest(BaseModel):
     uri: str
     mode: str = "vectors_only"
     wait: bool = True
+    # When true, every per-URI upsert during this reindex first deletes
+    # the existing vector record(s) for that URI before re-upserting.
+    force: bool = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -211,6 +214,7 @@ async def reindex(
         uri=uri,
         mode=body.mode,
         wait=body.wait,
+        force=body.force,
         ctx=ctx,
     )
     return Response(status="ok", result=result)

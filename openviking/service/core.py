@@ -409,9 +409,14 @@ class OpenVikingService:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        force: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
-        """Reindex semantic/vector artifacts for a URI."""
+        """Reindex semantic/vector artifacts for a URI.
+
+        ``force=True`` causes every per-URI upsert to first delete the
+        existing vector record(s) at that URI before re-upserting.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -422,6 +427,7 @@ class OpenVikingService:
             uri=uri,
             mode=mode,
             wait=wait,
+            force=force,
             ctx=effective_ctx,
         )
 
