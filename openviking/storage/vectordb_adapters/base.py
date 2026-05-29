@@ -370,6 +370,9 @@ class CollectionAdapter(ABC):
             scalar_index_fields=scalar_index_fields,
         )
 
+    def normalize_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        return self._normalize_record_for_write(record)
+
     def normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return self._normalize_record_for_read(record)
 
