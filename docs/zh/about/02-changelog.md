@@ -3,6 +3,45 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.3.21 (2026-05-27)
+
+### 重点更新
+
+- **Trajectory 记忆更适合检索与复盘**：trajectory schema 新增 `retrieval_anchor` 和 `embedding_template`，索引文本从完整内容收敛为 `trajectory_name + retrieval_anchor`；experience 与 trajectory 之间改为系统维护的 `derived_from` `StoredLink`，写入正向 `links` 与反向 `backlinks`，替代易丢失的 `source_trajectories` 元数据。
+- **会话消息支持批量写入**：REST API 新增 `POST /api/v1/sessions/{session_id}/messages/batch`，CLI 新增 `ov session add-messages`，适合导入历史对话或一次写入多轮消息；`ov add-memory` 也复用同一套严格 JSON 消息解析。
+- **OpenClaw 搜索工具改名为 `ov_search`**：OpenViking OpenClaw 插件不再注册 `memory_search`，避免与 OpenClaw 内置工具冲突；导入 resource/skill 后统一使用 `ov_search` 和 `/ov-search`。
+- **资源解析与二进制 URL 判断增强**：HTTP accessor 扩展图片、音频、视频和 Office/EPUB/zip 文档类型识别；当 `HEAD` 不可靠时会在 `GET` 后用响应头重新判断。Word、PowerPoint、Excel、EPUB、legacy doc 等本地转换路径改为线程中执行，不再阻塞事件循环。
+- **Web Studio 随 Python 安装包分发**：`setup`/`build` 会构建并打包 Web Studio 静态资源，pip/pipx 安装后 `/studio` 可直接使用，无需 Docker。
+- **LiteLLM VLM 增加 NVIDIA NIM 路由**：模型名中包含 `nvidia_nim` 或 `nemotron` 时可自动走 NVIDIA NIM 的 LiteLLM 前缀和 `NVIDIA_NIM_API_KEY` 环境变量。
+- **tau2/VikingBot 评测升级**：新增 `benchmark/tau2/vikingbot` 端到端 runner，支持 cold start、train trajectory commit、test 多次平均和跨 epoch 自改进评测；原 tau2 LLM harness 移到 `benchmark/tau2/llm`。
+
+### 升级说明
+
+- OpenClaw 用户需要把旧的 `/memory-search` 和 `memory_search` 调用迁移到 `/ov-search` 与 `ov_search`。
+- pip/pipx 和 Docker 构建链路现在统一通过 Python build 流程产出 Web Studio bundle；本地开发若不希望构建 Studio，可使用 `OV_SKIP_STUDIO_BUILD=1` 跳过。
+- `content.read` 新增 `raw=true` 参数；默认行为仍会隐藏 memory 内部字段，兼容已有调用方。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.20...v0.3.21)
+
+## v0.3.20 (2026-05-25)
+
+### 重点更新
+
+- **请求级 HTTP profiling**：服务端新增 `server.profile_enabled` 开关。开启后，请求带 `profile=1` 时会对当前 HTTP 请求启用 `cProfile`，并在 JSON 响应中追加 `profile` 行数组。`ov` CLI 新增 `--profile` 入口并能保留、展示 profile 输出。
+- **批量 Session 消息写入**：新增 `POST /api/v1/sessions/{session_id}/messages/batch` 和 Python HTTP client / Session wrapper 的 `batch_add_messages`，一次请求最多写入 100 条消息，减少 LangChain/LangGraph 等集成连续写消息时的 HTTP 往返。
+- **记忆向量化输入模板**：记忆 schema 新增顶层 `embedding_template`，替代字段级 `searchable` 标记。默认的 `entities`、`events`、`preferences` 模板现在会把关键字段和正文一起用于 embedding，提高语义召回命中。
+- **语义索引与锁稳定性**：resource 处理会先把 temp source 同步到 target 后再执行语义 DAG，diff 结果使用 target URI；语义锁 handoff 失效时会尝试重新获取 tree lock，锁冲突类错误会重排队而不是误触发 API circuit breaker。
+- **Embedding 输入保护**：embedding 队列会按 `embedding.max_input_tokens` 截断输入，并把过大输入错误分类为 `input_too_large`，避免对不可恢复的大输入反复重试。
+
+### 升级说明
+
+- 自定义 memory schema 如果还在字段上使用 `searchable: true`，应迁移到顶层 `embedding_template`。字段级 `searchable` 已不再参与 embedding 文本生成。
+- 配置项 `memory.enable_role_id_memory_isolate` 已统一为 `memory.role_id_memory_isolation_enabled`，请更新自定义 `ov.conf`。
+- `profile=1` 是调试能力，不建议在高流量生产路径默认开启；返回内容最多保留约 16 KiB profile 文本。
+- 批量消息 API 单次最多接受 100 条消息。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.19...v0.3.20)
+
 ## v0.3.19 (2026-05-22)
 
 ### 重点更新
