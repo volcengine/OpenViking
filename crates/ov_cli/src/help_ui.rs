@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 
 use colored::Colorize;
+use unicode_width::UnicodeWidthStr;
+
+use crate::{i18n::Language, theme};
 
 const BOX_WIDTH: usize = 74;
 const COMMAND_WIDTH: usize = 16;
@@ -162,6 +165,11 @@ const CONFIG_STATUS: &[HelpCommand] = &[
     HelpCommand {
         name: "config switch",
         description: "Switch active config",
+        badge: None,
+    },
+    HelpCommand {
+        name: "language",
+        description: "Choose CLI display language",
         badge: None,
     },
     HelpCommand {
@@ -1635,6 +1643,32 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["language"],
+        purpose: "Choose the OpenViking CLI display language.",
+        usage: "ov language [en|zh-CN]",
+        examples: &[
+            HelpItem {
+                label: "ov language",
+                description: "Open the language selector.",
+            },
+            HelpItem {
+                label: "ov language zh-CN",
+                description: "Switch display text to Simplified Chinese.",
+            },
+        ],
+        arguments: &[HelpItem {
+            label: "language",
+            description: "Optional language code: en or zh-CN.",
+        }],
+        common_options: &[],
+        advanced_options: &[],
+        subcommands: &[],
+        next_steps: &[HelpItem {
+            label: "ov config",
+            description: "Open the config manager.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["version"],
         purpose: "Print the OpenViking CLI version.",
         usage: "ov version",
@@ -1782,7 +1816,10 @@ pub(crate) fn is_top_level_help_request(args: &[OsString]) -> bool {
         return false;
     }
 
-    matches!(args[1].to_string_lossy().as_ref(), "--help" | "-h" | "help")
+    matches!(
+        args[1].to_string_lossy().as_ref(),
+        "--help" | "-h" | "-help" | "help"
+    )
 }
 
 pub(crate) fn render_command_help_request(args: &[OsString]) -> Option<String> {
@@ -1792,28 +1829,61 @@ pub(crate) fn render_command_help_request(args: &[OsString]) -> Option<String> {
 }
 
 pub(crate) fn render_top_level_help() -> String {
+    render_top_level_help_with_language(Language::current())
+}
+
+pub(crate) fn render_top_level_help_with_language(language: Language) -> String {
     let mut lines = Vec::new();
 
     lines.push(format!(
         "{} {}",
-        "OpenViking".truecolor(234, 253, 247).bold(),
-        version().truecolor(50, 214, 196)
+        theme::brand_title("OpenViking").bold(),
+        theme::version(version())
     ));
     lines.push(
-        "Context Database for AI Agents"
-            .truecolor(50, 214, 196)
-            .bold()
-            .to_string(),
+        theme::heading(copy(
+            language,
+            "Context Database for AI Agents",
+            "AI Agent 上下文数据库",
+        ))
+        .bold()
+        .to_string(),
     );
     lines.push(String::new());
-    lines.push(format!("{}", "Usage:".yellow().bold()));
-    lines.push(format!("  {}", "ov <command> [options]".white().bold()));
+    lines.push(format!(
+        "{}",
+        theme::warning(copy(language, "Usage:", "用法：")).bold()
+    ));
+    lines.push(format!("  {}", theme::strong("ov <command> [options]")));
     lines.push(String::new());
-    lines.push(format!("{}", "Start here:".bold()));
-    lines.push(start_here_line("ov config", "Add, edit, or delete configs"));
-    lines.push(start_here_line("ov health", "Check server reachability"));
-    lines.push(start_here_line("ov status", "Inspect server status"));
-    lines.push(start_here_line("ov tui", "Browse OpenViking interactively"));
+    lines.push(format!(
+        "{}",
+        theme::strong(copy(language, "Start here:", "从这里开始："))
+    ));
+    lines.push(start_here_line(
+        "ov config",
+        copy(
+            language,
+            "Add, edit, or delete configs",
+            "添加、编辑或删除配置",
+        ),
+    ));
+    lines.push(start_here_line(
+        "ov health",
+        copy(language, "Check server reachability", "检查服务器连接"),
+    ));
+    lines.push(start_here_line(
+        "ov status",
+        copy(language, "Inspect server status", "查看服务器状态"),
+    ));
+    lines.push(start_here_line(
+        "ov tui",
+        copy(
+            language,
+            "Browse OpenViking interactively",
+            "交互式浏览 OpenViking",
+        ),
+    ));
     lines.push(String::new());
 
     for section in HELP_SECTIONS {
@@ -1821,49 +1891,125 @@ pub(crate) fn render_top_level_help() -> String {
         lines.push(String::new());
     }
 
-    lines.push(format!("{}", "Global options:".bold()));
-    lines.push(option_line("-o, --output <table|json>", "Output format"));
-    lines.push(option_line("-c, --compact", "Compact output"));
-    lines.push(option_line("--account <account>", "Override account"));
-    lines.push(option_line("--user <user>", "Override user"));
-    lines.push(option_line("--agent-id <agent>", "Override agent"));
-    lines.push(option_line("--sudo", "Use root API key for admin commands"));
-    lines.push(option_line("-h, --help", "Show help"));
-    lines.push(option_line("-V, --version", "Show version"));
+    lines.push(format!(
+        "{}",
+        theme::strong(copy(language, "Global options:", "全局选项："))
+    ));
+    lines.push(option_line(
+        "-o, --output <table|json>",
+        copy(language, "Output format", "输出格式"),
+    ));
+    lines.push(option_line(
+        "-c, --compact",
+        copy(language, "Compact output", "紧凑输出"),
+    ));
+    lines.push(option_line(
+        "--account <account>",
+        copy(language, "Override account", "覆盖账户"),
+    ));
+    lines.push(option_line(
+        "--user <user>",
+        copy(language, "Override user", "覆盖用户"),
+    ));
+    lines.push(option_line(
+        "--agent-id <agent>",
+        copy(language, "Override agent", "覆盖 Agent"),
+    ));
+    lines.push(option_line(
+        "--sudo",
+        copy(
+            language,
+            "Use root API key for admin commands",
+            "管理命令使用 root API Key",
+        ),
+    ));
+    lines.push(option_line(
+        "-h, --help",
+        copy(language, "Show help", "显示帮助"),
+    ));
+    lines.push(option_line(
+        "-V, --version",
+        copy(language, "Show version", "显示版本"),
+    ));
     lines.push(String::new());
-    lines.push(format!("{}", "More:".bold()));
+    lines.push(format!(
+        "{}",
+        theme::strong(copy(language, "More:", "更多："))
+    ));
     lines.push(start_here_line(
         "ov <command> --help",
-        "Show command details",
+        copy(language, "Show command details", "查看命令详情"),
     ));
-    lines.push(start_here_line("ov config", "Configure the CLI"));
+    lines.push(start_here_line(
+        "ov config",
+        copy(language, "Configure the CLI", "配置 CLI"),
+    ));
 
     format!("{}\n", lines.join("\n"))
 }
 
 fn render_command_help(spec: &CommandHelpSpec) -> String {
     let mut lines = Vec::new();
+    let language = Language::current();
     let command = command_display(spec.path);
 
     lines.push(format!(
         "{} {} {}",
-        "OpenViking".truecolor(234, 253, 247).bold(),
-        version().truecolor(50, 214, 196),
-        format!("· {command}").dimmed()
+        theme::brand_title("OpenViking").bold(),
+        theme::version(version()),
+        theme::muted(format!("· {command}"))
     ));
-    lines.push(spec.purpose.to_string());
+    lines.push(theme::body(localized_command_purpose(spec, language)).to_string());
     lines.push(String::new());
-    lines.push(format!("{}", "Usage:".yellow().bold()));
-    lines.push(format!("  {}", spec.usage.white().bold()));
-    push_section(&mut lines, "Examples", spec.examples);
-    push_section(&mut lines, "Arguments", spec.arguments);
-    push_section(&mut lines, "Subcommands", spec.subcommands);
-    push_section(&mut lines, "Common options", spec.common_options);
-    push_section(&mut lines, "Advanced options", spec.advanced_options);
-    push_section(&mut lines, "Global options", GLOBAL_OPTIONS);
-    push_section(&mut lines, "Next", spec.next_steps);
+    lines.push(format!(
+        "{}",
+        theme::warning(copy(language, "Usage:", "用法：")).bold()
+    ));
+    lines.push(format!("  {}", theme::strong(spec.usage)));
+    push_section(
+        &mut lines,
+        copy(language, "Examples", "示例"),
+        spec.examples,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Arguments", "参数"),
+        spec.arguments,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Subcommands", "子命令"),
+        spec.subcommands,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Common options", "常用选项"),
+        spec.common_options,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Advanced options", "高级选项"),
+        spec.advanced_options,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Global options", "全局选项"),
+        GLOBAL_OPTIONS,
+    );
+    push_section(
+        &mut lines,
+        copy(language, "Next", "下一步"),
+        spec.next_steps,
+    );
 
     format!("{}\n", lines.join("\n"))
+}
+
+fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
 }
 
 fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {
@@ -1872,54 +2018,106 @@ fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", title.truecolor(50, 214, 196).bold()));
+    lines.push(format!("{}", theme::heading(title).bold()));
     for item in items {
         lines.push(help_item_line(item));
     }
 }
 
 fn help_item_line(item: &HelpItem) -> String {
-    if item.label.chars().count() > COMMAND_HELP_LEFT_WIDTH {
+    let language = Language::current();
+    let description = localized_help_item_description(item.label, item.description, language);
+    if display_width(item.label) > COMMAND_HELP_LEFT_WIDTH {
         return format!(
             "  {}\n      {}",
-            item.label.truecolor(234, 253, 247),
-            item.description
+            theme::command(item.label),
+            theme::body(description)
         );
     }
 
     format!(
         "  {} {}",
-        format!("{:<COMMAND_HELP_LEFT_WIDTH$}", item.label).truecolor(234, 253, 247),
-        item.description
+        theme::command(pad_to_display_width(item.label, COMMAND_HELP_LEFT_WIDTH)),
+        theme::body(description)
     )
+}
+
+fn localized_command_purpose<'a>(spec: &'a CommandHelpSpec, language: Language) -> &'a str {
+    if language == Language::En {
+        return spec.purpose;
+    }
+    match spec.path {
+        ["config"] => "添加、编辑、删除、显示、验证或切换 OpenViking CLI 配置。",
+        ["config", "show"] => "显示当前 CLI 配置，并隐藏敏感信息。",
+        ["config", "validate"] => "解析当前配置，并探测 OpenViking 服务器。",
+        ["config", "switch"] => "切换到已保存的 CLI 配置。",
+        ["health"] => "快速检查服务器是否可连接。",
+        ["status"] => "查看 OpenViking 服务器诊断状态。",
+        ["language"] => "选择 OpenViking CLI 显示语言。",
+        _ => spec.purpose,
+    }
+}
+
+fn localized_help_item_description<'a>(
+    label: &str,
+    description: &'a str,
+    language: Language,
+) -> &'a str {
+    if language == Language::En {
+        return description;
+    }
+    match label {
+        "ov config" => "打开交互式配置管理。",
+        "ov config validate" => "验证当前配置。",
+        "show" => "显示当前配置，并隐藏敏感信息。",
+        "validate" => "探测当前服务器和认证配置。",
+        "switch" => "切换当前已保存配置。",
+        "ov --help" => "查看所有命令。",
+        "ov health" => "快速健康检查。",
+        "ov status" => "查看详细后端状态。",
+        "ov config show" => "确认新的当前配置。",
+        "ov config switch" => "选择一个已保存配置并设为当前配置。",
+        "ov language" => "打开语言选择器。",
+        "ov language zh-CN" => "将显示语言切换为简体中文。",
+        "language" => "可选语言代码：en 或 zh-CN。",
+        "-o, --output <table|json>" => "选择表格输出或机器可读 JSON。",
+        "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
+        "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
+        "--user <user>" => "覆盖本次命令的 X-OpenViking-User。",
+        "--agent-id <agent>" => "覆盖本次命令的 X-OpenViking-Agent。",
+        "--sudo" => "使用 root API Key 执行管理命令。",
+        _ => description,
+    }
 }
 
 fn start_here_line(command: &str, description: &str) -> String {
     format!(
         "  {} {}",
-        format!("{command:<22}").truecolor(50, 214, 196).bold(),
-        description
+        theme::command(pad_to_display_width(command, 22)).bold(),
+        theme::body(description)
     )
 }
 
 fn option_line(option: &str, description: &str) -> String {
     format!(
         "  {} {}",
-        format!("{option:<26}").truecolor(50, 214, 196),
-        description
+        theme::command(pad_to_display_width(option, 26)),
+        theme::body(description)
     )
 }
 
 fn section_lines(section: &HelpSection) -> Vec<String> {
     let mut lines = Vec::new();
-    let title = format!("─ {} ", section.title);
-    let fill = BOX_WIDTH.saturating_sub(2 + title.chars().count());
+    let language = Language::current();
+    let title_text = localized_section_title(section.title, language);
+    let title = format!("─ {title_text} ");
+    let fill = BOX_WIDTH.saturating_sub(2 + display_width(&title));
     lines.push(format!(
         "{}{}{}{}",
-        "╭".truecolor(50, 214, 196),
-        title.truecolor(50, 214, 196).bold(),
-        "─".repeat(fill).truecolor(50, 214, 196),
-        "╮".truecolor(50, 214, 196)
+        theme::border("╭"),
+        theme::border(title).bold(),
+        theme::border("─".repeat(fill)),
+        theme::border("╮")
     ));
 
     for command in section.commands {
@@ -1928,39 +2126,132 @@ fn section_lines(section: &HelpSection) -> Vec<String> {
 
     lines.push(format!(
         "{}{}{}",
-        "╰".truecolor(50, 214, 196),
-        "─"
-            .repeat(BOX_WIDTH.saturating_sub(2))
-            .truecolor(50, 214, 196),
-        "╯".truecolor(50, 214, 196)
+        theme::border("╰"),
+        theme::border("─".repeat(BOX_WIDTH.saturating_sub(2))),
+        theme::border("╯")
     ));
     lines
 }
 
 fn command_line(command: &HelpCommand) -> String {
+    let language = Language::current();
+    let command_description =
+        localized_command_description(command.name, command.description, language);
     let description = match command.badge {
         Some(badge) => {
-            let used = command.description.chars().count() + badge.chars().count();
+            let used = display_width(command_description)
+                + display_width(localized_badge(badge, language));
             let spacer = DESCRIPTION_WIDTH.saturating_sub(used).max(1);
             format!(
                 "{}{}{}",
-                command.description,
+                command_description,
                 " ".repeat(spacer),
-                badge.dimmed()
+                theme::muted(localized_badge(badge, language))
             )
         }
-        None => format!("{:<DESCRIPTION_WIDTH$}", command.description),
+        None => format!(
+            "{}{}",
+            command_description,
+            " ".repeat(DESCRIPTION_WIDTH.saturating_sub(display_width(command_description)))
+        ),
     };
 
     format!(
         "{} {} {} {}",
-        "│".truecolor(50, 214, 196),
-        format!("{:<COMMAND_WIDTH$}", command.name)
-            .truecolor(234, 253, 247)
-            .bold(),
-        description,
-        "│".truecolor(50, 214, 196)
+        theme::border("│"),
+        theme::command(pad_to_display_width(command.name, COMMAND_WIDTH)).bold(),
+        theme::body(description),
+        theme::border("│")
     )
+}
+
+fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(value)
+}
+
+fn pad_to_display_width(value: &str, width: usize) -> String {
+    format!(
+        "{}{}",
+        value,
+        " ".repeat(width.saturating_sub(display_width(value)))
+    )
+}
+
+fn localized_section_title(title: &str, language: Language) -> &str {
+    if language == Language::En {
+        return title;
+    }
+    match title {
+        "Core Workflow" => "核心流程",
+        "Filesystem" => "文件系统",
+        "Search & Context" => "搜索与上下文",
+        "Config & Status" => "配置与状态",
+        "Import, Export & Sessions" => "导入、导出与会话",
+        "Interactive & Admin" => "交互与管理",
+        _ => title,
+    }
+}
+
+fn localized_badge<'a>(badge: &'a str, language: Language) -> &'a str {
+    match (language, badge) {
+        (Language::ZhCn, "experimental") => "实验性",
+        _ => badge,
+    }
+}
+
+fn localized_command_description<'a>(
+    name: &str,
+    description: &'a str,
+    language: Language,
+) -> &'a str {
+    if language == Language::En {
+        return description;
+    }
+    match name {
+        "add-resource" => "添加文件、文件夹、URL 或仓库",
+        "find" => "语义检索相关上下文",
+        "read" => "读取精确资源内容",
+        "write" => "更新已有资源",
+        "add-memory" => "直接添加记忆",
+        "ls" => "列出目录内容",
+        "tree" => "查看范围内的资源树",
+        "mkdir" => "创建目录",
+        "rm" => "删除资源",
+        "mv" => "移动或重命名资源",
+        "stat" => "查看资源元数据",
+        "get" => "下载文件",
+        "search" => "上下文感知检索",
+        "grep" => "模式搜索",
+        "glob" => "Glob 路径搜索",
+        "overview" => "生成资源概览",
+        "abstract" => "生成资源摘要",
+        "relations" => "列出资源关系",
+        "link" => "创建关系链接",
+        "unlink" => "删除关系链接",
+        "config" => "添加、编辑、删除或切换配置",
+        "config show" => "显示当前配置",
+        "config validate" => "验证当前配置",
+        "config switch" => "切换当前配置",
+        "health" => "快速检查服务器连接",
+        "status" => "查看系统状态",
+        "wait" => "等待异步任务完成",
+        "task" => "查看异步任务",
+        "observer" => "观察服务器组件",
+        "session" => "管理会话",
+        "import" => "导入 .ovpack",
+        "export" => "导出为 .ovpack",
+        "backup" => "创建仅恢复备份",
+        "restore" => "恢复备份",
+        "tui" => "打开交互式浏览器",
+        "chat" => "与 VikingBot 对话",
+        "admin" => "管理账户、用户和 API Key",
+        "system" => "系统维护命令",
+        "privacy" => "管理隐私策略",
+        "reindex" => "重建语义和向量索引",
+        "version" => "显示版本信息",
+        "language" => "选择 CLI 显示语言",
+        _ => description,
+    }
 }
 
 fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
@@ -2047,6 +2338,7 @@ fn canonical_command_token(token: &str) -> String {
         "list" => "ls",
         "del" | "delete" => "rm",
         "rename" => "mv",
+        "lang" => "language",
         other => other,
     }
     .to_string()
@@ -2072,7 +2364,7 @@ fn is_bare_group_help_command(command: &str) -> bool {
 }
 
 fn is_help_flag(token: &str) -> bool {
-    matches!(token, "--help" | "-h")
+    matches!(token, "--help" | "-h" | "-help")
 }
 
 fn consumes_value(token: &str) -> bool {
@@ -2089,7 +2381,8 @@ fn consumes_value(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HELP_SECTIONS, command_help_path, render_command_help_request, render_top_level_help,
+        HELP_SECTIONS, command_help_path, display_width, render_command_help_request,
+        render_top_level_help,
     };
     use super::{command_spec, is_top_level_help_request};
     use std::ffi::OsString;
@@ -2122,6 +2415,7 @@ mod tests {
     fn detects_only_top_level_help_requests() {
         assert!(is_top_level_help_request(&os_args(&["ov", "--help"])));
         assert!(is_top_level_help_request(&os_args(&["ov", "-h"])));
+        assert!(is_top_level_help_request(&os_args(&["ov", "-help"])));
         assert!(is_top_level_help_request(&os_args(&["ov", "help"])));
 
         assert!(!is_top_level_help_request(&os_args(&[
@@ -2176,7 +2470,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with(['╭', '│', '╰']))
         {
-            assert_eq!(line.chars().count(), 74, "bad line width: {line}");
+            assert_eq!(display_width(line), 74, "bad line width: {line}");
         }
     }
 
@@ -2207,6 +2501,18 @@ mod tests {
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
         assert!(rendered.contains("ov read <uri>"));
+    }
+
+    #[test]
+    fn renders_curated_command_help_for_single_dash_help_alias() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "find", "-help"]))
+                .expect("find -help should render"),
+        );
+
+        assert!(rendered.contains("OpenViking v"));
+        assert!(rendered.contains("ov find <query>"));
+        assert!(rendered.contains("Usage:"));
     }
 
     #[test]

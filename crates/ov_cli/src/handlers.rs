@@ -4,7 +4,9 @@ use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
+use crate::theme;
 use crate::tui;
+use colored::Colorize;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -581,6 +583,7 @@ use crate::ConfigCommands;
 use crate::config::Config;
 use crate::config_command_ui::{self, SwitchConfigRow};
 use crate::config_wizard::{self, ConfigStore};
+use crate::i18n::{self, Language};
 use crate::output;
 
 // Config commands intentionally edit the persisted ovcli.conf files. Runtime
@@ -626,10 +629,84 @@ pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Res
     }
 }
 
+pub async fn handle_language(value: Option<String>) -> Result<()> {
+    let language = match value {
+        Some(value) => Language::from_code(&value).ok_or_else(|| {
+            Error::Config(format!(
+                "Unsupported language '{value}'. Use 'en' or 'zh-CN'."
+            ))
+        })?,
+        None => {
+            let current = Language::current();
+            println!("{}", language_title(current));
+            println!(
+                "{} {}",
+                theme::muted(language_label("Current:", "当前语言：", current)),
+                theme::command(current.label()).bold()
+            );
+            println!();
+            let choices = vec![
+                Language::En.label().to_string(),
+                Language::ZhCn.label().to_string(),
+            ];
+            match prompt_select(language_prompt(current), &choices, 0)? {
+                SelectOutcome::Selected(0) => Language::En,
+                SelectOutcome::Selected(1) => Language::ZhCn,
+                SelectOutcome::Back | SelectOutcome::Quit => {
+                    println!("{}", theme::muted(language_no_change(current)));
+                    return Ok(());
+                }
+                SelectOutcome::Selected(_) => {
+                    unreachable!("selection is constrained by language list")
+                }
+            }
+        }
+    };
+
+    i18n::save_language(language)?;
+    println!("{}", theme::success(language_saved(language)).bold());
+    Ok(())
+}
+
+fn language_title(language: Language) -> String {
+    theme::brand_title(match language {
+        Language::En => "OPENVIKING LANGUAGE".to_string(),
+        Language::ZhCn => "OPENVIKING 语言设置".to_string(),
+    })
+    .bold()
+    .to_string()
+}
+
+fn language_prompt(language: Language) -> &'static str {
+    match language {
+        Language::En => "Choose language",
+        Language::ZhCn => "选择语言",
+    }
+}
+
+fn language_label<'a>(en: &'a str, zh: &'a str, language: Language) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
+fn language_saved(language: Language) -> &'static str {
+    match language {
+        Language::En => "Language set to English.",
+        Language::ZhCn => "语言已切换为简体中文。",
+    }
+}
+
+fn language_no_change(language: Language) -> &'static str {
+    match language {
+        Language::En => "Language was not changed.",
+        Language::ZhCn => "语言未更改。",
+    }
+}
+
 /// Interactive configuration switcher
 async fn handle_config_switch() -> Result<()> {
-    use colored::Colorize;
-
     let store = ConfigStore::new()?;
     let configs = store.list_configs()?;
 
@@ -657,10 +734,15 @@ async fn handle_config_switch() -> Result<()> {
             })
             .collect();
         let labels = config_command_ui::switch_labels(&rows);
-        let index = match prompt_select("Choose config", &labels, 0)? {
+        let language = Language::current();
+        let index = match prompt_select(
+            config_switch_prompt(language, "Choose config", "选择配置"),
+            &labels,
+            0,
+        )? {
             SelectOutcome::Selected(index) => index,
             SelectOutcome::Back | SelectOutcome::Quit => {
-                println!("{}", "No config was changed.".dimmed());
+                println!("{}", theme::muted(config_not_changed(language)));
                 return Ok(());
             }
         };
@@ -669,19 +751,19 @@ async fn handle_config_switch() -> Result<()> {
         if selected.is_active {
             println!(
                 "{}",
-                format!("Config '{}' is already active.", selected.name).dimmed()
+                theme::muted(config_already_active(language, &selected.name))
             );
             return Ok(());
         }
 
         let confirmation = switch_confirmation_labels();
         match switch_confirmation_decision(prompt_select(
-            &format!("Switch active config to {}?", selected.name),
+            &config_switch_confirm_prompt(language, &selected.name),
             &confirmation,
             0,
         )?) {
             SwitchConfirmationDecision::Confirm => {
-                println!("{}", "Validating target config...".dimmed());
+                println!("{}", theme::muted(validating_target_config(language)));
                 if let Err(error) = config_wizard::validate_config(&selected.config).await {
                     print!(
                         "{}",
@@ -698,7 +780,7 @@ async fn handle_config_switch() -> Result<()> {
             }
             SwitchConfirmationDecision::Back => continue,
             SwitchConfirmationDecision::Quit => {
-                println!("{}", "No config was changed.".dimmed());
+                println!("{}", theme::muted(config_not_changed(language)));
                 return Ok(());
             }
         }
@@ -835,7 +917,10 @@ fn live_select_block(lines: &[String]) -> String {
 }
 
 fn switch_confirmation_labels() -> Vec<String> {
-    vec!["Yes".to_string(), "No".to_string()]
+    match Language::current() {
+        Language::En => vec!["Yes".to_string(), "No".to_string()],
+        Language::ZhCn => vec!["是".to_string(), "否".to_string()],
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -854,24 +939,81 @@ fn switch_confirmation_decision(outcome: SelectOutcome) -> SwitchConfirmationDec
 }
 
 fn select_lines(prompt: &str, items: &[String], selected: usize) -> Vec<String> {
-    use colored::Colorize;
-
+    let language = Language::current();
     let mut lines = Vec::new();
-    lines.push(format!("{} {}", "?".yellow().bold(), prompt.bold()));
     lines.push(format!(
-        "  {}",
-        "↑/↓ choose · Enter select · Esc back · Ctrl+C exit".dimmed()
+        "{} {}",
+        theme::prompt("?").bold(),
+        theme::strong(prompt)
     ));
+    lines.push(format!("  {}", theme::muted(select_hint(language))));
     lines.push(String::new());
     for (index, item) in items.iter().enumerate() {
         let marker = if index == selected {
-            "›".green().bold().to_string()
+            theme::selection("›").bold().to_string()
         } else {
             " ".to_string()
         };
-        lines.push(format!("  {marker} {item}"));
+        lines.push(format!(
+            "  {marker} {}",
+            style_select_item(item, index == selected)
+        ));
     }
     lines
+}
+
+fn style_select_item(item: &str, selected: bool) -> String {
+    if contains_ansi_escape(item) {
+        return item.to_string();
+    }
+    if selected {
+        theme::selection(item).bold().to_string()
+    } else {
+        theme::body(item).to_string()
+    }
+}
+
+fn contains_ansi_escape(value: &str) -> bool {
+    value.contains("\u{1b}[")
+}
+
+fn select_hint(language: Language) -> &'static str {
+    match language {
+        Language::En => "↑/↓ choose · Enter select · Esc back · Ctrl+C exit",
+        Language::ZhCn => "↑/↓ 选择 · Enter 确认 · Esc 返回 · Ctrl+C 退出",
+    }
+}
+
+fn config_switch_prompt<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    language_label(en, zh, language)
+}
+
+fn config_switch_confirm_prompt(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Switch active config to {name}?"),
+        Language::ZhCn => format!("切换当前配置为 {name}？"),
+    }
+}
+
+fn config_not_changed(language: Language) -> &'static str {
+    match language {
+        Language::En => "No config was changed.",
+        Language::ZhCn => "配置未更改。",
+    }
+}
+
+fn config_already_active(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Config '{name}' is already active."),
+        Language::ZhCn => format!("配置 '{name}' 已是当前配置。"),
+    }
+}
+
+fn validating_target_config(language: Language) -> &'static str {
+    match language {
+        Language::En => "Validating target config...",
+        Language::ZhCn => "正在验证目标配置...",
+    }
 }
 
 pub async fn handle_read(uri: String, ctx: CliContext) -> Result<()> {

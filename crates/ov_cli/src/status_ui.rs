@@ -1,23 +1,19 @@
 use colored::Colorize;
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{Config, default_config_path},
     config_wizard::{ConfigKind, ConfigStore},
     error::Result,
+    i18n::Language,
+    theme,
 };
 
 const LABEL_WIDTH: usize = 14;
 const ACTION_WIDTH: usize = 26;
 const COMPONENT_WIDTH: usize = 15;
 const HEALTH_WIDTH: usize = 11;
-const PEARL: (u8, u8, u8) = (234, 253, 247);
-const JADE: (u8, u8, u8) = (50, 214, 196);
-const ORANGE: (u8, u8, u8) = (255, 140, 58);
-const ICE: (u8, u8, u8) = (182, 219, 255);
-const HEALTHY: (u8, u8, u8) = (103, 255, 182);
-const WARNING: (u8, u8, u8) = (255, 211, 92);
-const ERROR: (u8, u8, u8) = (255, 91, 91);
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StatusConfigMeta {
@@ -54,59 +50,76 @@ pub(crate) fn render_status(
     config: &Config,
     active_name: Option<&str>,
 ) -> Result<String> {
-    let kind = ConfigKind::from_config(config).label();
-    let active = active_name.unwrap_or("unknown");
+    render_status_with_language(payload, config, active_name, Language::current())
+}
+
+pub(crate) fn render_status_with_language(
+    payload: &Value,
+    config: &Config,
+    active_name: Option<&str>,
+    language: Language,
+) -> Result<String> {
+    let kind = kind_label(ConfigKind::from_config(config), language);
+    let active = active_name.unwrap_or_else(|| unknown(language));
     let queue = queue_summary(component_status(payload, "queue"));
     let models = models_summary(component_status(payload, "models"));
 
     let mut lines = Vec::new();
-    lines.push(status_title());
+    lines.push(status_title(language));
     lines.push(String::new());
-    lines.push(section_title("Config"));
+    lines.push(section_title(copy(language, "Config", "配置")));
     lines.push(detail_line_styled(
-        "Active",
+        copy(language, "Active", "当前配置"),
         active_config_value(active, kind),
     ));
-    lines.push(detail_line_styled("Server", path_value(&config.url)));
     lines.push(detail_line_styled(
-        "Config home",
+        copy(language, "Server", "服务器"),
+        path_value(&config.url),
+    ));
+    lines.push(detail_line_styled(
+        copy(language, "Config home", "配置目录"),
         path_value(&display_config_home()),
     ));
     lines.push(String::new());
-    lines.push(section_title("System"));
+    lines.push(section_title(copy(language, "System", "系统")));
     lines.push(detail_line_styled(
-        "Status",
+        copy(language, "Status", "状态"),
         if system_is_healthy(payload) {
-            status_value("Connected (Healthy)")
+            status_value(copy(language, "Connected (Healthy)", "已连接（健康）"))
         } else {
-            unhealthy_value("Connected (Unhealthy)")
+            unhealthy_value(copy(language, "Connected (Unhealthy)", "已连接（不健康）"))
         },
     ));
     lines.push(detail_line_styled(
-        "Pending",
+        copy(language, "Pending", "待处理"),
         activity_count_value(queue.pending),
     ));
     lines.push(detail_line_styled(
-        "In progress",
+        copy(language, "In progress", "处理中"),
         activity_count_value(queue.in_progress),
     ));
     lines.push(detail_line_styled(
-        "Errors",
+        copy(language, "Errors", "错误"),
         error_count_value(queue.errors),
     ));
     lines.push(String::new());
-    lines.push(section_title("Models"));
+    lines.push(section_title(copy(language, "Models", "模型")));
     lines.push(detail_line_styled(
         "VLM",
-        model_value(models.vlm.as_deref().unwrap_or("unknown")),
+        model_value(models.vlm.as_deref().unwrap_or_else(|| unknown(language))),
     ));
     lines.push(detail_line_styled(
-        "Embedding",
-        model_value(models.embedding.as_deref().unwrap_or("unknown")),
+        copy(language, "Embedding", "Embedding"),
+        model_value(
+            models
+                .embedding
+                .as_deref()
+                .unwrap_or_else(|| unknown(language)),
+        ),
     ));
     lines.push(String::new());
-    lines.push(section_title("Components"));
-    lines.push(component_header_line());
+    lines.push(section_title(copy(language, "Components", "组件")));
+    lines.push(component_header_line(language));
     for component in [
         "queue",
         "vikingdb",
@@ -115,16 +128,24 @@ pub(crate) fn render_status(
         "retrieval",
         "filesystem",
     ] {
-        lines.push(component_line(component, payload, &queue, &models));
+        lines.push(component_line(
+            component, payload, &queue, &models, language,
+        ));
     }
     lines.push(String::new());
-    lines.push(section_title("Details"));
+    lines.push(section_title(copy(language, "Details", "详情")));
     lines.push(action_line(
         "ov status --verbose",
-        "Show full component tables",
+        copy(language, "Show full component tables", "显示完整组件表"),
     ));
-    lines.push(action_line("ov observer queue", "Inspect queue details"));
-    lines.push(action_line("ov observer models", "Inspect model usage"));
+    lines.push(action_line(
+        "ov observer queue",
+        copy(language, "Inspect queue details", "查看队列详情"),
+    ));
+    lines.push(action_line(
+        "ov observer models",
+        copy(language, "Inspect model usage", "查看模型使用情况"),
+    ));
 
     Ok(format!("{}\n", lines.join("\n")))
 }
@@ -134,141 +155,174 @@ pub(crate) fn render_unreachable_status(
     active_name: Option<&str>,
     saved_count: usize,
 ) -> String {
-    let kind = ConfigKind::from_config(config).label();
-    let active = active_name.unwrap_or("unknown");
+    let language = Language::current();
+    let kind = kind_label(ConfigKind::from_config(config), language);
+    let active = active_name.unwrap_or_else(|| unknown(language));
     let mut lines = Vec::new();
 
-    lines.push(status_title());
+    lines.push(status_title(language));
     lines.push(String::new());
-    lines.push(section_title("Config"));
+    lines.push(section_title(copy(language, "Config", "配置")));
     lines.push(detail_line_styled(
-        "Active",
+        copy(language, "Active", "当前配置"),
         active_config_value(active, kind),
     ));
-    lines.push(detail_line_styled("Server", path_value(&config.url)));
     lines.push(detail_line_styled(
-        "Config home",
+        copy(language, "Server", "服务器"),
+        path_value(&config.url),
+    ));
+    lines.push(detail_line_styled(
+        copy(language, "Config home", "配置目录"),
         path_value(&display_config_home()),
     ));
     lines.push(String::new());
-    lines.push(section_title("System"));
-    lines.push(detail_line_styled("Status", error_value("Unreachable")));
+    lines.push(section_title(copy(language, "System", "系统")));
     lines.push(detail_line_styled(
-        "Saved configs",
+        copy(language, "Status", "状态"),
+        error_value(copy(language, "Unreachable", "无法连接")),
+    ));
+    lines.push(detail_line_styled(
+        copy(language, "Saved configs", "已保存配置"),
         plain_value(&saved_count.to_string()),
     ));
     lines.push(String::new());
-    lines.push(section_title("What to try"));
+    lines.push(section_title(copy(language, "What to try", "可以尝试")));
     lines.push(action_line(
         "ov config validate",
-        "Check config, auth, and server reachability",
+        copy(
+            language,
+            "Check config, auth, and server reachability",
+            "检查配置、认证和服务器连接",
+        ),
     ));
-    lines.push(action_line("ov config", "Edit or switch config"));
-    lines.push(action_line("ov health", "Run a quick health check"));
+    lines.push(action_line(
+        "ov config",
+        copy(language, "Edit or switch config", "编辑或切换配置"),
+    ));
+    lines.push(action_line(
+        "ov health",
+        copy(language, "Run a quick health check", "快速健康检查"),
+    ));
 
     format!("{}\n", lines.join("\n"))
 }
 
-fn status_title() -> String {
-    "OPENVIKING STATUS"
-        .truecolor(PEARL.0, PEARL.1, PEARL.2)
+fn status_title(language: Language) -> String {
+    theme::brand_title(copy(language, "OPENVIKING STATUS", "OPENVIKING 状态"))
         .bold()
         .to_string()
 }
 
+fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
+fn unknown(language: Language) -> &'static str {
+    copy(language, "unknown", "未知")
+}
+
+fn kind_label(kind: ConfigKind, language: Language) -> &'static str {
+    match language {
+        Language::En => kind.label(),
+        Language::ZhCn => match kind {
+            ConfigKind::VolcengineCloud => "火山引擎云",
+            ConfigKind::SelfManaged => "自托管",
+        },
+    }
+}
+
 fn section_title(title: &str) -> String {
-    title.truecolor(JADE.0, JADE.1, JADE.2).bold().to_string()
+    theme::heading(title).bold().to_string()
 }
 
 fn detail_line_styled(label: &str, value: String) -> String {
-    let label = format!("{label:<LABEL_WIDTH$}").dimmed();
+    let label = theme::muted(pad_to_display_width(label, LABEL_WIDTH));
     format!("  {label}{value}")
 }
 
 fn action_line(command: &str, description: &str) -> String {
-    let command = format!("{command:<ACTION_WIDTH$}")
-        .truecolor(JADE.0, JADE.1, JADE.2)
-        .bold();
-    format!("  {command}{}", description.dimmed())
+    let command = theme::command(pad_to_display_width(command, ACTION_WIDTH)).bold();
+    format!("  {command}{}", theme::muted(description))
 }
 
 fn active_config_value(name: &str, kind: &str) -> String {
     format!(
         "{} {}",
-        name.truecolor(ORANGE.0, ORANGE.1, ORANGE.2).bold(),
-        format!("({kind})").white().bold()
+        theme::config_name(name).bold(),
+        theme::strong(format!("({kind})"))
     )
 }
 
 fn path_value(value: &str) -> String {
-    if value == "unknown" {
+    if value == "unknown" || value == "未知" {
         unknown_value(value)
     } else {
-        value.truecolor(ICE.0, ICE.1, ICE.2).to_string()
+        theme::value(value).to_string()
     }
 }
 
 fn model_value(value: &str) -> String {
-    if value == "unknown" {
+    if value == "unknown" || value == "未知" {
         unknown_value(value)
     } else {
-        value.truecolor(ICE.0, ICE.1, ICE.2).bold().to_string()
+        theme::value(value).bold().to_string()
     }
 }
 
 fn status_value(value: &str) -> String {
-    value
-        .truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2)
-        .bold()
-        .to_string()
+    theme::success(value).bold().to_string()
 }
 
 fn unhealthy_value(value: &str) -> String {
-    value
-        .truecolor(WARNING.0, WARNING.1, WARNING.2)
-        .bold()
-        .to_string()
+    theme::warning(value).bold().to_string()
 }
 
 fn error_value(value: &str) -> String {
-    value
-        .truecolor(ERROR.0, ERROR.1, ERROR.2)
-        .bold()
-        .to_string()
+    theme::error(value).bold().to_string()
 }
 
 fn plain_value(value: &str) -> String {
-    value.white().to_string()
+    theme::body(value).to_string()
 }
 
 fn unknown_value(value: &str) -> String {
-    value.dimmed().to_string()
+    theme::muted(value).to_string()
 }
 
 fn activity_count_value(value: Option<u64>) -> String {
     match value {
-        Some(0) => "0".white().to_string(),
-        Some(value) => value
-            .to_string()
-            .truecolor(WARNING.0, WARNING.1, WARNING.2)
-            .bold()
-            .to_string(),
+        Some(0) => theme::body("0").to_string(),
+        Some(value) => theme::warning(value.to_string()).bold().to_string(),
         None => unknown_value("unknown"),
     }
 }
 
 fn error_count_value(value: Option<u64>) -> String {
     match value {
-        Some(0) => "0".truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2).to_string(),
+        Some(0) => theme::success("0").to_string(),
         Some(value) => error_value(&value.to_string()),
         None => unknown_value("unknown"),
     }
 }
 
-fn component_header_line() -> String {
-    let component = format!("{:<COMPONENT_WIDTH$}", "Component").dimmed().bold();
-    let health = format!("{:<HEALTH_WIDTH$}", "Health").dimmed().bold();
-    format!("  {component}{health}{}", "Summary".dimmed().bold())
+fn component_header_line(language: Language) -> String {
+    let component = theme::muted(pad_to_display_width(
+        copy(language, "Component", "组件"),
+        COMPONENT_WIDTH,
+    ))
+    .bold();
+    let health = theme::muted(pad_to_display_width(
+        copy(language, "Health", "健康"),
+        HEALTH_WIDTH,
+    ))
+    .bold();
+    format!(
+        "  {component}{health}{}",
+        theme::muted(copy(language, "Summary", "摘要")).bold()
+    )
 }
 
 fn component_line(
@@ -276,6 +330,7 @@ fn component_line(
     payload: &Value,
     queue: &QueueSummary,
     models: &ModelSummary,
+    language: Language,
 ) -> String {
     let health = component_health(payload, component);
     let summary = match component {
@@ -288,26 +343,23 @@ fn component_line(
         _ => "unknown".to_string(),
     };
 
-    let component = format!("{component:<COMPONENT_WIDTH$}")
-        .truecolor(PEARL.0, PEARL.1, PEARL.2)
-        .bold();
-    let health = styled_health_cell(health);
+    let component = theme::command(pad_to_display_width(component, COMPONENT_WIDTH)).bold();
+    let health = styled_health_cell(health, language);
     let summary = summary_value(&summary);
     format!("  {component}{health}{summary}")
 }
 
-fn styled_health_cell(health: &str) -> String {
-    let cell = format!("{health:<HEALTH_WIDTH$}");
+fn styled_health_cell(health: &str, language: Language) -> String {
+    let translated = match health {
+        "healthy" => copy(language, "healthy", "健康"),
+        "unhealthy" => copy(language, "unhealthy", "异常"),
+        _ => unknown(language),
+    };
+    let cell = pad_to_display_width(translated, HEALTH_WIDTH);
     match health {
-        "healthy" => cell
-            .truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2)
-            .bold()
-            .to_string(),
-        "unhealthy" => cell
-            .truecolor(WARNING.0, WARNING.1, WARNING.2)
-            .bold()
-            .to_string(),
-        _ => cell.dimmed().to_string(),
+        "healthy" => theme::success(cell).bold().to_string(),
+        "unhealthy" => theme::warning(cell).bold().to_string(),
+        _ => theme::muted(cell).to_string(),
     }
 }
 
@@ -315,8 +367,16 @@ fn summary_value(summary: &str) -> String {
     if summary == "unknown" {
         unknown_value(summary)
     } else {
-        summary.white().to_string()
+        theme::body(summary).to_string()
     }
+}
+
+fn pad_to_display_width(value: &str, width: usize) -> String {
+    format!(
+        "{}{}",
+        value,
+        " ".repeat(width.saturating_sub(UnicodeWidthStr::width(value)))
+    )
 }
 
 fn component_status<'a>(payload: &'a Value, component: &str) -> Option<&'a str> {

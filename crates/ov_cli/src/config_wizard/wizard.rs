@@ -11,12 +11,15 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use crate::{
     base_client::BaseClient,
     config::Config,
     error::{Error, Result},
+    i18n::{self, Language},
+    theme::{self, Rgb},
 };
 use serde_json::Value;
 
@@ -29,18 +32,8 @@ use super::store::{
 const VOLCENGINE_API_KEY_URL: &str =
     "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing";
 const SELF_MANAGED_DEFAULT_URL: &str = "http://127.0.0.1:1933";
-const NAV_HINT: &str = "↑/↓ choose · Enter select · Esc back · Ctrl+C exit";
-const INPUT_HINT: &str = "Enter continue · Esc back · Ctrl+C exit";
 const HEADER_TAGLINE: &str = "Context Database for AI Agents";
-const WORDMARK_GRADIENT_START: Rgb = Rgb(234, 253, 247);
-const WORDMARK_GRADIENT_MID: Rgb = Rgb(50, 214, 196);
-const WORDMARK_GRADIENT_END: Rgb = Rgb(7, 95, 100);
-const LOGO_GRADIENT_END: Rgb = Rgb(4, 61, 66);
-const TAGLINE_ICE_START: Rgb = Rgb(234, 253, 247);
-const TAGLINE_ICE_MID: Rgb = Rgb(50, 214, 196);
-const TAGLINE_ICE_END: Rgb = Rgb(7, 95, 100);
-const BOX_BORDER: Rgb = Rgb(50, 214, 196);
-const VERSION_ACCENT: Rgb = Rgb(50, 214, 196);
+const HEADER_TAGLINE_ZH: &str = "AI Agent 上下文数据库";
 const STATUS_BOX_PROBE_TIMEOUT_SECS: f64 = 1.5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,16 +65,24 @@ pub async fn run_config_wizard() -> Result<()> {
 }
 
 async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
+    let mut ui = LiveRegion::default();
+    if !ensure_language_selected(&mut ui)? {
+        return Ok(());
+    }
     print_header();
     print_status_box(&store).await?;
-    let mut ui = LiveRegion::default();
 
     loop {
+        let language = Language::current();
         match prompt_select(
             &mut ui,
-            "What would you like to configure?",
-            "Choose action",
-            &main_action_labels(),
+            copy(
+                language,
+                "What would you like to configure?",
+                "你想配置什么？",
+            ),
+            copy(language, "Choose action", "选择操作"),
+            &main_action_labels_for_language(language),
             0,
             &[],
         )? {
@@ -109,6 +110,37 @@ async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
     }
 }
 
+fn ensure_language_selected(ui: &mut LiveRegion) -> Result<bool> {
+    if i18n::has_saved_language() {
+        return Ok(true);
+    }
+
+    let choices = ["English", "简体中文"];
+    match prompt_select(
+        ui,
+        "Language / 语言",
+        "Choose display language / 选择显示语言",
+        &choices,
+        0,
+        &[format!(
+            "{} {}",
+            theme::muted("Change later:"),
+            theme::command("ov language").bold()
+        )],
+    )? {
+        PromptResult::Value(0) => i18n::save_language(Language::En)?,
+        PromptResult::Value(1) => i18n::save_language(Language::ZhCn)?,
+        PromptResult::Back | PromptResult::Quit => {
+            print_cancelled(ui)?;
+            return Ok(false);
+        }
+        PromptResult::Value(_) => unreachable!("selection is constrained by language list"),
+    }
+
+    ui.clear()?;
+    Ok(true)
+}
+
 pub(crate) fn wizard_header_lines() -> Vec<String> {
     let mut lines: Vec<String> = wordmark_lines()
         .iter()
@@ -121,19 +153,19 @@ pub(crate) fn wizard_header_lines() -> Vec<String> {
 pub(crate) fn wordmark_width() -> usize {
     wordmark_lines()
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| display_width(line))
         .max()
         .unwrap_or_default()
 }
 
 fn wordmark_lines() -> [&'static str; 6] {
     [
-        " ██████╗ ██████╗ ███████╗███╗   ██╗██╗   ██╗██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ",
-        "██╔═══██╗██╔══██╗██╔════╝████╗  ██║██║   ██║██║██║ ██╔╝██║████╗  ██║██╔════╝ ",
-        "██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║   ██║██║█████╔╝ ██║██╔██╗ ██║██║  ███╗",
-        "██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║╚██╗ ██╔╝██║██╔═██╗ ██║██║╚██╗██║██║   ██║",
-        "╚██████╔╝██║     ███████╗██║ ╚████║ ╚████╔╝ ██║██║  ██╗██║██║ ╚████║╚██████╔╝",
-        " ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝  ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ",
+        " ██████╗ ██████╗ ███████╗███╗   ██╗██╗   ██╗ ██╗ ██╗  ██╗ ██╗ ███╗   ██╗ ██████╗ ",
+        "██╔═══██╗██╔══██╗██╔════╝████╗  ██║██║   ██║ ██║ ██║ ██╔╝ ██║ ████╗  ██║██╔════╝ ",
+        "██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║   ██║ ██║ █████╔╝  ██║ ██╔██╗ ██║██║  ███╗",
+        "██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║╚██╗ ██╔╝ ██║ ██╔═██╗  ██║ ██║╚██╗██║██║   ██║",
+        "╚██████╔╝██║     ███████╗██║ ╚████║ ╚████╔╝  ██║ ██║  ██╗ ██║ ██║ ╚████║╚██████╔╝",
+        " ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝  ╚═══╝   ╚═╝ ╚═╝  ╚═╝ ╚═╝ ╚═╝  ╚═══╝ ╚═════╝ ",
     ]
 }
 
@@ -145,16 +177,110 @@ fn status_box_width() -> usize {
     wordmark_width()
 }
 
+fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
+fn nav_hint() -> &'static str {
+    copy(
+        Language::current(),
+        "↑/↓ choose · Enter select · Esc back · Ctrl+C exit",
+        "↑/↓ 选择 · Enter 确认 · Esc 返回 · Ctrl+C 退出",
+    )
+}
+
+fn input_hint() -> &'static str {
+    copy(
+        Language::current(),
+        "Enter continue · Esc back · Ctrl+C exit",
+        "Enter 继续 · Esc 返回 · Ctrl+C 退出",
+    )
+}
+
+fn section_add() -> &'static str {
+    copy(
+        Language::current(),
+        "Create a new OpenViking config.",
+        "创建新的 OpenViking 配置。",
+    )
+}
+
+fn section_edit() -> &'static str {
+    copy(
+        Language::current(),
+        "Update a saved config.",
+        "更新已保存的配置。",
+    )
+}
+
+fn section_delete() -> &'static str {
+    copy(
+        Language::current(),
+        "Delete a saved config.",
+        "删除已保存的配置。",
+    )
+}
+
+fn kind_label(kind: ConfigKind) -> &'static str {
+    match Language::current() {
+        Language::En => kind.label(),
+        Language::ZhCn => match kind {
+            ConfigKind::VolcengineCloud => "火山引擎云",
+            ConfigKind::SelfManaged => "自托管",
+        },
+    }
+}
+
+fn provider_labels(language: Language) -> [&'static str; 2] {
+    match language {
+        Language::En => ["Volcengine Cloud", "Self-Managed"],
+        Language::ZhCn => ["火山引擎云", "自托管"],
+    }
+}
+
+fn api_key_label(optional: bool) -> &'static str {
+    match (Language::current(), optional) {
+        (Language::En, true) => "API key (optional)",
+        (Language::En, false) => "API key",
+        (Language::ZhCn, true) => "API Key（可选）",
+        (Language::ZhCn, false) => "API Key",
+    }
+}
+
 pub(crate) fn main_action_labels() -> [&'static str; 3] {
     ["Add config", "Edit config", "Delete config"]
+}
+
+fn main_action_labels_for_language(language: Language) -> [&'static str; 3] {
+    match language {
+        Language::En => main_action_labels(),
+        Language::ZhCn => ["添加配置", "编辑配置", "删除配置"],
+    }
 }
 
 pub(crate) fn cloud_validation_failure_choices() -> [&'static str; 2] {
     ["Retry API key", "Cancel"]
 }
 
+fn cloud_validation_failure_choices_for_language(language: Language) -> [&'static str; 2] {
+    match language {
+        Language::En => cloud_validation_failure_choices(),
+        Language::ZhCn => ["重新输入 API Key", "取消"],
+    }
+}
+
 pub(crate) fn self_managed_validation_failure_choices() -> [&'static str; 3] {
     ["Edit server URL", "Edit API key", "Cancel"]
+}
+
+fn self_managed_validation_failure_choices_for_language(language: Language) -> [&'static str; 3] {
+    match language {
+        Language::En => self_managed_validation_failure_choices(),
+        Language::ZhCn => ["修改服务器 URL", "修改 API Key", "取消"],
+    }
 }
 
 pub(crate) fn edit_api_key_choice_labels(
@@ -170,6 +296,25 @@ pub(crate) fn edit_api_key_choice_labels(
         ConfigKind::SelfManaged => {
             vec!["Keep existing API key", "Replace API key", "Clear API key"]
         }
+    }
+}
+
+fn edit_api_key_choice_labels_for_language(
+    kind: ConfigKind,
+    has_existing: bool,
+    language: Language,
+) -> Vec<&'static str> {
+    if language == Language::En {
+        return edit_api_key_choice_labels(kind, has_existing);
+    }
+
+    if !has_existing {
+        return Vec::new();
+    }
+
+    match kind {
+        ConfigKind::VolcengineCloud => vec!["保留现有 API Key", "替换 API Key"],
+        ConfigKind::SelfManaged => vec!["保留现有 API Key", "替换 API Key", "清除 API Key"],
     }
 }
 
@@ -212,21 +357,22 @@ fn styled_wordmark_line(_index: usize, line: &str) -> String {
     rendered
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Rgb(pub(crate) u8, pub(crate) u8, pub(crate) u8);
-
 pub(crate) fn wordmark_gradient_color(column: usize, width: usize) -> Rgb {
+    wordmark_gradient_color_for_theme(theme::active_theme(), column, width)
+}
+
+fn wordmark_gradient_color_for_theme(palette: theme::CliTheme, column: usize, width: usize) -> Rgb {
     if width <= 1 {
-        return WORDMARK_GRADIENT_START;
+        return palette.wordmark_start;
     }
 
     let ratio = column as f32 / (width - 1) as f32;
     if ratio <= 0.56 {
-        interpolate_rgb(WORDMARK_GRADIENT_START, WORDMARK_GRADIENT_MID, ratio / 0.56)
+        interpolate_rgb(palette.wordmark_start, palette.wordmark_mid, ratio / 0.56)
     } else {
         interpolate_rgb(
-            WORDMARK_GRADIENT_MID,
-            WORDMARK_GRADIENT_END,
+            palette.wordmark_mid,
+            palette.wordmark_end,
             (ratio - 0.56) / 0.44,
         )
     }
@@ -245,9 +391,9 @@ fn interpolate_channel(start: u8, end: u8, ratio: f32) -> u8 {
     (start as f32 + (end as f32 - start as f32) * ratio).round() as u8
 }
 
-pub(crate) fn tagline_ice_color(column: usize, width: usize) -> Rgb {
+fn tagline_ice_color_for_theme(palette: theme::CliTheme, column: usize, width: usize) -> Rgb {
     if width <= 1 {
-        return TAGLINE_ICE_START;
+        return palette.tagline_start;
     }
 
     let midpoint = width / 2;
@@ -257,21 +403,25 @@ pub(crate) fn tagline_ice_color(column: usize, width: usize) -> Rgb {
         } else {
             column as f32 / midpoint as f32
         };
-        interpolate_rgb(TAGLINE_ICE_START, TAGLINE_ICE_MID, ratio)
+        interpolate_rgb(palette.tagline_start, palette.tagline_mid, ratio)
     } else {
         let tail_width = (width - 1).saturating_sub(midpoint).max(1);
         let ratio = (column - midpoint) as f32 / tail_width as f32;
-        interpolate_rgb(TAGLINE_ICE_MID, TAGLINE_ICE_END, ratio)
+        interpolate_rgb(palette.tagline_mid, palette.tagline_end, ratio)
     }
 }
 
 fn tagline_texture_color(column: usize, width: usize) -> Rgb {
-    let base = tagline_ice_color(column, width);
-    match column % 11 {
-        0 | 1 => mix_rgb(base, Rgb(255, 255, 255), 0.28),
-        6 | 7 => mix_rgb(base, WORDMARK_GRADIENT_END, 0.18),
-        _ => base,
-    }
+    let palette = theme::active_theme();
+    let base = tagline_ice_color_for_theme(palette, column, width);
+    let ratio = if width <= 1 {
+        0.0
+    } else {
+        column as f32 / (width - 1) as f32
+    };
+    let center_glow = (1.0 - (ratio - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+
+    mix_rgb(base, palette.wordmark_start, center_glow * 0.18)
 }
 
 fn mix_rgb(base: Rgb, overlay: Rgb, amount: f32) -> Rgb {
@@ -279,10 +429,11 @@ fn mix_rgb(base: Rgb, overlay: Rgb, amount: f32) -> Rgb {
 }
 
 fn styled_tagline(text: &str) -> String {
-    let width = text.chars().count().max(1);
+    let width = display_width(text).max(1);
     let mut rendered = String::new();
+    let mut column = 0usize;
 
-    for (column, ch) in text.chars().enumerate() {
+    for ch in text.chars() {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
@@ -294,6 +445,7 @@ fn styled_tagline(text: &str) -> String {
                     .to_string(),
             );
         }
+        column += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
 
     rendered
@@ -335,7 +487,13 @@ fn print_status_box_with_runtime(
     let width = status_box_width();
 
     println!();
-    println!("{}", styled_box_title_line(HEADER_TAGLINE, width));
+    println!(
+        "{}",
+        styled_box_title_line(
+            copy(Language::current(), HEADER_TAGLINE, HEADER_TAGLINE_ZH),
+            width
+        )
+    );
     let details = status_box_details(active, configs, config_home, runtime);
     let rows = OV_LOGO_LINES.len().max(details.len());
     let details = center_status_box_details(details, rows);
@@ -622,26 +780,37 @@ enum SaveOutcome {
 
 impl RuntimeConnectionStatus {
     fn plain(self) -> &'static str {
-        match self {
-            Self::Checking => "Checking...",
-            Self::NotConfigured => "Not configured",
-            Self::ConnectedHealthy => "Connected (Healthy)",
-            Self::ConnectedUnhealthy => "Connected (Unhealthy)",
-            Self::Unreachable => "Unreachable",
-            #[cfg(test)]
-            Self::Unknown => "Unknown",
+        match Language::current() {
+            Language::En => match self {
+                Self::Checking => "Checking...",
+                Self::NotConfigured => "Not configured",
+                Self::ConnectedHealthy => "Connected (Healthy)",
+                Self::ConnectedUnhealthy => "Connected (Unhealthy)",
+                Self::Unreachable => "Unreachable",
+                #[cfg(test)]
+                Self::Unknown => "Unknown",
+            },
+            Language::ZhCn => match self {
+                Self::Checking => "检查中...",
+                Self::NotConfigured => "未配置",
+                Self::ConnectedHealthy => "已连接（健康）",
+                Self::ConnectedUnhealthy => "已连接（不健康）",
+                Self::Unreachable => "无法连接",
+                #[cfg(test)]
+                Self::Unknown => "未知",
+            },
         }
     }
 
     fn styled(self) -> String {
         match self {
-            Self::Checking => self.plain().truecolor(234, 253, 247).bold().to_string(),
-            Self::ConnectedHealthy => self.plain().truecolor(116, 255, 177).bold().to_string(),
-            Self::ConnectedUnhealthy => self.plain().yellow().bold().to_string(),
-            Self::Unreachable => self.plain().red().bold().to_string(),
-            Self::NotConfigured => self.plain().dimmed().to_string(),
+            Self::Checking => theme::value(self.plain()).bold().to_string(),
+            Self::ConnectedHealthy => theme::success(self.plain()).bold().to_string(),
+            Self::ConnectedUnhealthy => theme::warning(self.plain()).bold().to_string(),
+            Self::Unreachable => theme::error(self.plain()).bold().to_string(),
+            Self::NotConfigured => theme::muted(self.plain()).to_string(),
             #[cfg(test)]
-            Self::Unknown => self.plain().dimmed().to_string(),
+            Self::Unknown => theme::muted(self.plain()).to_string(),
         }
     }
 }
@@ -660,13 +829,15 @@ impl StatusBoxDetail {
     fn plain(&self) -> String {
         match self {
             Self::Active { name, kind } => match kind {
-                Some(kind) => format!("Active: {name} {kind}"),
-                None => format!("Active: {name}"),
+                Some(kind) => format!("{} {name} {kind}", status_label("Active:")),
+                None => format!("{} {name}", status_label("Active:")),
             },
-            Self::Status { connection } => format!("Status: {}", connection.plain()),
+            Self::Status { connection } => {
+                format!("{} {}", status_label("Status:"), connection.plain())
+            }
             Self::Model { label, value } => format!("{label}: {value}"),
-            Self::Saved { count } => format!("Saved configs: {count}"),
-            Self::Home { path } => format!("Config home: {path}"),
+            Self::Saved { count } => format!("{} {count}", status_label("Saved configs:")),
+            Self::Home { path } => format!("{} {path}", status_label("Config home:")),
             Self::Empty => String::new(),
         }
     }
@@ -676,38 +847,56 @@ impl StatusBoxDetail {
             Self::Active { name, kind } => {
                 let mut rendered = format!(
                     "{} {}",
-                    "Active:".dimmed(),
-                    name.truecolor(255, 132, 54).bold()
+                    theme::muted(status_label("Active:")),
+                    theme::config_name(name).bold()
                 );
                 if let Some(kind) = kind {
                     rendered.push(' ');
-                    rendered.push_str(&kind.white().bold().to_string());
+                    rendered.push_str(&theme::strong(kind).to_string());
                 }
                 rendered
             }
             Self::Status { connection } => {
-                format!("{} {}", "Status:".dimmed(), connection.styled())
+                format!(
+                    "{} {}",
+                    theme::muted(status_label("Status:")),
+                    connection.styled()
+                )
             }
             Self::Model { label, value } => {
-                let value = if value == "Unknown" {
-                    value.dimmed().to_string()
+                let value = if value == unknown_copy() {
+                    theme::muted(value).to_string()
                 } else {
-                    value.truecolor(151, 210, 255).bold().to_string()
+                    theme::sky_value(value).bold().to_string()
                 };
-                format!("{} {}", format!("{label}:").dimmed(), value)
+                format!("{} {}", theme::muted(format!("{label}:")), value)
             }
             Self::Saved { count } => {
-                format!("{} {}", "Saved configs:".dimmed(), count.white().bold())
+                format!(
+                    "{} {}",
+                    theme::muted(status_label("Saved configs:")),
+                    theme::strong(count)
+                )
             }
             Self::Home { path } => {
                 format!(
                     "{} {}",
-                    "Config home:".dimmed(),
-                    path.truecolor(186, 218, 255)
+                    theme::muted(status_label("Config home:")),
+                    theme::sky_value(path).bold()
                 )
             }
             Self::Empty => String::new(),
         }
+    }
+}
+
+fn status_label(label: &'static str) -> &'static str {
+    match (Language::current(), label) {
+        (Language::ZhCn, "Active:") => "当前配置：",
+        (Language::ZhCn, "Status:") => "状态：",
+        (Language::ZhCn, "Saved configs:") => "已保存配置：",
+        (Language::ZhCn, "Config home:") => "配置目录：",
+        _ => label,
     }
 }
 
@@ -765,10 +954,14 @@ fn status_box_details(
 
 fn model_placeholder(connection: RuntimeConnectionStatus) -> String {
     if connection == RuntimeConnectionStatus::Checking {
-        "Checking...".to_string()
+        copy(Language::current(), "Checking...", "检查中...").to_string()
     } else {
-        "Unknown".to_string()
+        unknown_copy().to_string()
     }
+}
+
+fn unknown_copy() -> &'static str {
+    copy(Language::current(), "Unknown", "未知")
 }
 
 fn center_status_box_details(details: Vec<StatusBoxDetail>, rows: usize) -> Vec<StatusBoxDetail> {
@@ -784,8 +977,8 @@ fn center_status_box_details(details: Vec<StatusBoxDetail>, rows: usize) -> Vec<
 fn box_title_line(title: &str, width: usize) -> String {
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
-    let title_width = title.chars().count().min(inner_width);
-    let visible_title = truncate_to_width(&title, title_width);
+    let visible_title = truncate_to_width(&title, inner_width);
+    let title_width = display_width(&visible_title);
     let left = inner_width.saturating_sub(title_width) / 2;
     let right = inner_width.saturating_sub(title_width + left);
 
@@ -801,8 +994,8 @@ fn box_title_line(title: &str, width: usize) -> String {
 fn box_footer_line(title: &str, width: usize) -> String {
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
-    let title_width = title.chars().count().min(inner_width);
-    let visible_title = truncate_to_width(&title, title_width);
+    let visible_title = truncate_to_width(&title, inner_width);
+    let title_width = display_width(&visible_title);
     let right = inner_width.saturating_sub(title_width).min(5);
     let left = inner_width.saturating_sub(title_width + right);
 
@@ -830,11 +1023,11 @@ fn box_content_line(left: &str, right: &str, width: usize) -> String {
 fn styled_box_title_line(title: &str, width: usize) -> String {
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
-    let title_width = title.chars().count().min(inner_width);
-    let visible_title = truncate_to_width(&title, title_width);
+    let visible_title = truncate_to_width(&title, inner_width);
+    let title_width = display_width(&visible_title);
     let left = inner_width.saturating_sub(title_width) / 2;
     let right = inner_width.saturating_sub(title_width + left);
-    let Rgb(red, green, blue) = BOX_BORDER;
+    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
 
     format!(
         "{}{}{}{}{}",
@@ -847,12 +1040,13 @@ fn styled_box_title_line(title: &str, width: usize) -> String {
 }
 
 fn styled_box_footer_line(title: &str, width: usize) -> String {
-    let Rgb(red, green, blue) = BOX_BORDER;
-    let Rgb(version_red, version_green, version_blue) = VERSION_ACCENT;
+    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
+    let Rgb(version_red, version_green, version_blue) =
+        theme::active_theme().version.rgb_fallback();
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
-    let title_width = title.chars().count().min(inner_width);
-    let visible_title = truncate_to_width(&title, title_width);
+    let visible_title = truncate_to_width(&title, inner_width);
+    let title_width = display_width(&visible_title);
     let right = inner_width.saturating_sub(title_width).min(5);
     let left = inner_width.saturating_sub(title_width + right);
 
@@ -877,7 +1071,7 @@ fn styled_box_content_line(
     let logo_width = ov_logo_width();
     let gutter = 3usize;
     let right_width = width.saturating_sub(4 + logo_width + gutter);
-    let Rgb(red, green, blue) = BOX_BORDER;
+    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
     format!(
         "{} {}{}{} {}",
         "│".truecolor(red, green, blue),
@@ -905,13 +1099,22 @@ fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
             );
         }
     }
-    rendered.push_str(&" ".repeat(width.saturating_sub(visible.chars().count())));
+    rendered.push_str(&" ".repeat(width.saturating_sub(display_width(&visible))));
     rendered
 }
 
 fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize) -> Rgb {
+    logo_glass_color_for_theme(theme::active_theme(), column, row, width)
+}
+
+fn logo_glass_color_for_theme(
+    palette: theme::CliTheme,
+    column: usize,
+    row: usize,
+    width: usize,
+) -> Rgb {
     if width <= 1 {
-        return WORDMARK_GRADIENT_START;
+        return palette.wordmark_start;
     }
 
     let column_ratio = column as f32 / (width - 1) as f32;
@@ -920,11 +1123,11 @@ fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize) -> Rgb {
     let ratio = (column_ratio * 0.4 + row_ratio * 0.6).clamp(0.0, 1.0);
 
     if ratio <= 0.46 {
-        interpolate_rgb(WORDMARK_GRADIENT_START, WORDMARK_GRADIENT_MID, ratio / 0.46)
+        interpolate_rgb(palette.wordmark_start, palette.wordmark_mid, ratio / 0.46)
     } else {
         interpolate_rgb(
-            WORDMARK_GRADIENT_MID,
-            LOGO_GRADIENT_END,
+            palette.wordmark_mid,
+            palette.logo_end,
             (ratio - 0.46) / 0.54,
         )
     }
@@ -935,19 +1138,19 @@ fn styled_detail_to_width(detail: &StatusBoxDetail, width: usize) -> String {
     let styled = if plain == detail.plain() {
         detail.styled()
     } else {
-        plain.dimmed().to_string()
+        theme::muted(&plain).to_string()
     };
     format!(
         "{}{}",
         styled,
-        " ".repeat(width.saturating_sub(plain.chars().count()))
+        " ".repeat(width.saturating_sub(display_width(&plain)))
     )
 }
 
 fn ov_logo_width() -> usize {
     OV_LOGO_LINES
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| display_width(line))
         .max()
         .unwrap_or_default()
 }
@@ -958,12 +1161,12 @@ fn pad_to_width(text: &str, width: usize) -> String {
     format!(
         "{}{}",
         truncated,
-        " ".repeat(width.saturating_sub(truncated.chars().count()))
+        " ".repeat(width.saturating_sub(display_width(&truncated)))
     )
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
+    if display_width(text) <= width {
         return text.to_string();
     }
     if width == 0 {
@@ -972,7 +1175,23 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     if width == 1 {
         return "…".to_string();
     }
-    format!("{}…", text.chars().take(width - 1).collect::<String>())
+    let mut used = 0usize;
+    let mut truncated = String::new();
+    let target_width = width.saturating_sub(display_width("…"));
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > target_width {
+            break;
+        }
+        truncated.push(ch);
+        used += ch_width;
+    }
+    truncated.push('…');
+    truncated
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1018,11 +1237,11 @@ pub(crate) fn active_summary_lines(
     let active_line = match active {
         Some(config) => {
             if let Some(entry) = configs.iter().find(|entry| entry.is_active) {
-                format!("Active: {} ({})", entry.name, entry.kind.label())
+                format!("Active: {} ({})", entry.name, kind_label(entry.kind))
             } else {
                 format!(
                     "Active: unnamed ({})",
-                    ConfigKind::from_config(config).label()
+                    kind_label(ConfigKind::from_config(config))
                 )
             }
         }
@@ -1056,9 +1275,13 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
         match stage {
             Stage::Kind => match prompt_select(
                 ui,
-                "Create a new OpenViking config.",
-                "Where should this CLI connect?",
-                &["Volcengine Cloud", "Self-Managed"],
+                section_add(),
+                copy(
+                    Language::current(),
+                    "Where should this CLI connect?",
+                    "CLI 要连接到哪里？",
+                ),
+                &provider_labels(Language::current()),
                 0,
                 &[],
             )? {
@@ -1089,37 +1312,35 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
                 PromptResult::Value(_) => unreachable!("selection is constrained by kind list"),
             },
-            Stage::Name => match prompt_add_config_name(
-                ui,
-                "Create a new OpenViking config.",
-                add_config_name_label(),
-            )? {
-                PromptResult::Value(value) => {
-                    name = value;
-                    stage = if kind == ConfigKind::VolcengineCloud {
-                        Stage::ApiKey
-                    } else {
-                        Stage::Url
-                    };
+            Stage::Name => {
+                match prompt_add_config_name(ui, section_add(), add_config_name_label())? {
+                    PromptResult::Value(value) => {
+                        name = value;
+                        stage = if kind == ConfigKind::VolcengineCloud {
+                            Stage::ApiKey
+                        } else {
+                            Stage::Url
+                        };
+                    }
+                    PromptResult::Back => {
+                        name = None;
+                        api_key = None;
+                        account = None;
+                        user = None;
+                        identity_mode = None;
+                        url = SELF_MANAGED_DEFAULT_URL.to_string();
+                        stage = Stage::Kind;
+                    }
+                    PromptResult::Quit => {
+                        print_cancelled(ui)?;
+                        return Ok(true);
+                    }
                 }
-                PromptResult::Back => {
-                    name = None;
-                    api_key = None;
-                    account = None;
-                    user = None;
-                    identity_mode = None;
-                    url = SELF_MANAGED_DEFAULT_URL.to_string();
-                    stage = Stage::Kind;
-                }
-                PromptResult::Quit => {
-                    print_cancelled(ui)?;
-                    return Ok(true);
-                }
-            },
+            }
             Stage::Url => match prompt_text(
                 ui,
-                "Create a new OpenViking config.",
-                "Server URL",
+                section_add(),
+                copy(Language::current(), "Server URL", "服务器 URL"),
                 Some(&url),
                 Some(InputValueLabel::Default),
                 false,
@@ -1144,19 +1365,15 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 };
 
                 let label = if kind == ConfigKind::SelfManaged {
-                    if self_managed_allows_empty_api_key(&url) {
-                        "API key (optional)"
-                    } else {
-                        "API key"
-                    }
+                    api_key_label(self_managed_allows_empty_api_key(&url))
                 } else {
-                    "API key"
+                    api_key_label(false)
                 };
                 let allow_empty_api_key =
                     kind == ConfigKind::SelfManaged && self_managed_allows_empty_api_key(&url);
                 match prompt_text(
                     ui,
-                    "Create a new OpenViking config.",
+                    section_add(),
                     label,
                     None,
                     None,
@@ -1196,8 +1413,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
                 match prompt_identity_value(
                     ui,
-                    "Create a new OpenViking config.",
-                    "Account ID",
+                    section_add(),
+                    copy(Language::current(), "Account ID", "账户 ID"),
                     mode,
                 )? {
                     PromptResult::Value(value) => {
@@ -1217,8 +1434,12 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
             }
             Stage::User => {
                 let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
-                match prompt_identity_value(ui, "Create a new OpenViking config.", "User ID", mode)?
-                {
+                match prompt_identity_value(
+                    ui,
+                    section_add(),
+                    copy(Language::current(), "User ID", "用户 ID"),
+                    mode,
+                )? {
                     PromptResult::Value(value) => {
                         user = Some(value);
                         stage = Stage::Validate;
@@ -1246,7 +1467,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     account: account.clone(),
                     user: user.clone(),
                 };
-                match validate_draft(ui, "Create a new OpenViking config.", &draft).await {
+                match validate_draft(ui, section_add(), &draft).await {
                     Ok(ValidatedConfig {
                         config,
                         api_key_role,
@@ -1263,9 +1484,9 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         }
                         match prompt_save_action(
                             ui,
-                            "Create a new OpenViking config.",
-                            "Save config?",
-                            add_save_action_labels(),
+                            section_add(),
+                            copy(Language::current(), "Save config?", "保存配置？"),
+                            SaveActionSet::Add,
                             0,
                         )? {
                             PromptResult::Value(SaveAction::SaveAndActivate) => {
@@ -1299,17 +1520,23 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         }
                     }
                     Err(error) => {
-                        let helper_lines =
-                            vec![validation_error_copy(kind, &error).red().to_string()];
+                        let helper_lines = vec![
+                            theme::error(localized_validation_error(kind, &error)).to_string(),
+                        ];
                         let choices: Vec<&str> = if kind == ConfigKind::VolcengineCloud {
-                            cloud_validation_failure_choices().to_vec()
+                            cloud_validation_failure_choices_for_language(Language::current())
+                                .to_vec()
                         } else {
-                            self_managed_validation_failure_choices().to_vec()
+                            self_managed_validation_failure_choices_for_language(Language::current()).to_vec()
                         };
                         match prompt_select(
                             ui,
-                            "Create a new OpenViking config.",
-                            "Validation failed. What next?",
+                            section_add(),
+                            copy(
+                                Language::current(),
+                                "Validation failed. What next?",
+                                "验证失败，下一步？",
+                            ),
                             &choices,
                             0,
                             &helper_lines,
@@ -1364,12 +1591,19 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
 
     let configs = store.list_configs()?;
     if configs.is_empty() {
-        let helper_lines = vec!["No saved configs to edit.".yellow().to_string()];
+        let helper_lines = vec![
+            theme::warning(copy(
+                Language::current(),
+                "No saved configs to edit.",
+                "没有可编辑的配置。",
+            ))
+            .to_string(),
+        ];
         let _ = prompt_select(
             ui,
-            "Update a saved config.",
-            "Nothing to edit.",
-            &["Back"],
+            section_edit(),
+            copy(Language::current(), "Nothing to edit.", "没有可编辑项。"),
+            &[copy(Language::current(), "Back", "返回")],
             0,
             &helper_lines,
         )?;
@@ -1391,8 +1625,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
         match stage {
             Stage::Select => match prompt_config_select(
                 ui,
-                "Update a saved config.",
-                "Config to edit",
+                section_edit(),
+                copy(Language::current(), "Config to edit", "要编辑的配置"),
                 &configs,
             )? {
                 PromptResult::Value(index) => {
@@ -1415,8 +1649,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             },
             Stage::Name => {
-                match prompt_config_name(ui, "Update a saved config.", "Config name", Some(&name))?
-                {
+                match prompt_config_name(
+                    ui,
+                    section_edit(),
+                    copy(Language::current(), "Config name", "配置名称"),
+                    Some(&name),
+                )? {
                     PromptResult::Value(value) => {
                         name = value;
                         stage = if kind == ConfigKind::VolcengineCloud {
@@ -1434,8 +1672,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
             }
             Stage::Url => match prompt_text(
                 ui,
-                "Update a saved config.",
-                "Server URL",
+                section_edit(),
+                copy(Language::current(), "Server URL", "服务器 URL"),
                 Some(&url),
                 Some(InputValueLabel::Current),
                 false,
@@ -1465,12 +1703,15 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     continue;
                 }
 
-                let choices = edit_api_key_choice_labels(kind, has_existing);
                 match prompt_select(
                     ui,
-                    "Update a saved config.",
-                    "API key",
-                    &choices,
+                    section_edit(),
+                    api_key_label(false),
+                    &edit_api_key_choice_labels_for_language(
+                        kind,
+                        has_existing,
+                        Language::current(),
+                    ),
                     0,
                     &helper_lines,
                 )? {
@@ -1510,9 +1751,9 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 let allow_empty =
                     kind == ConfigKind::SelfManaged && self_managed_allows_empty_api_key(&url);
                 let label = if allow_empty {
-                    "API key (optional)"
+                    api_key_label(true)
                 } else {
-                    "API key"
+                    api_key_label(false)
                 };
                 let helper_lines = if kind == ConfigKind::VolcengineCloud {
                     volcengine_api_key_helper_lines()
@@ -1521,7 +1762,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 };
                 match prompt_text(
                     ui,
-                    "Update a saved config.",
+                    section_edit(),
                     label,
                     api_key.as_deref(),
                     api_key.as_deref().map(|_| InputValueLabel::Current),
@@ -1560,7 +1801,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
             }
             Stage::Account => {
                 let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
-                match prompt_identity_value(ui, "Update a saved config.", "Account ID", mode)? {
+                match prompt_identity_value(
+                    ui,
+                    section_edit(),
+                    copy(Language::current(), "Account ID", "账户 ID"),
+                    mode,
+                )? {
                     PromptResult::Value(value) => {
                         account = Some(value);
                         stage = Stage::User;
@@ -1582,7 +1828,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
             }
             Stage::User => {
                 let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
-                match prompt_identity_value(ui, "Update a saved config.", "User ID", mode)? {
+                match prompt_identity_value(
+                    ui,
+                    section_edit(),
+                    copy(Language::current(), "User ID", "用户 ID"),
+                    mode,
+                )? {
                     PromptResult::Value(value) => {
                         user = Some(value);
                         if identity_mode == Some(IdentityMode::RootKey) {
@@ -1609,7 +1860,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     account: account.clone(),
                     user: user.clone(),
                 };
-                match validate_draft(ui, "Update a saved config.", &draft).await {
+                match validate_draft(ui, section_edit(), &draft).await {
                     Ok(ValidatedConfig {
                         config,
                         api_key_role,
@@ -1626,13 +1877,21 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         }
                         match prompt_save_action(
                             ui,
-                            "Update a saved config.",
+                            section_edit(),
                             if configs[selected].is_active {
-                                "Save changes to active config?"
+                                copy(
+                                    Language::current(),
+                                    "Save changes to active config?",
+                                    "保存当前配置的更改？",
+                                )
                             } else {
-                                "Save changes?"
+                                copy(Language::current(), "Save changes?", "保存更改？")
                             },
-                            edit_save_action_labels(configs[selected].is_active),
+                            if configs[selected].is_active {
+                                SaveActionSet::EditActive
+                            } else {
+                                SaveActionSet::EditInactive
+                            },
                             0,
                         )? {
                             PromptResult::Value(SaveAction::SaveActive) => {
@@ -1675,17 +1934,23 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         }
                     }
                     Err(error) => {
-                        let helper_lines =
-                            vec![validation_error_copy(kind, &error).red().to_string()];
+                        let helper_lines = vec![
+                            theme::error(localized_validation_error(kind, &error)).to_string(),
+                        ];
                         let choices = if kind == ConfigKind::VolcengineCloud {
-                            cloud_validation_failure_choices().to_vec()
+                            cloud_validation_failure_choices_for_language(Language::current())
+                                .to_vec()
                         } else {
-                            self_managed_validation_failure_choices().to_vec()
+                            self_managed_validation_failure_choices_for_language(Language::current()).to_vec()
                         };
                         match prompt_select(
                             ui,
-                            "Update a saved config.",
-                            "Validation failed. What next?",
+                            section_edit(),
+                            copy(
+                                Language::current(),
+                                "Validation failed. What next?",
+                                "验证失败，下一步？",
+                            ),
                             &choices,
                             0,
                             &helper_lines,
@@ -1734,12 +1999,19 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
 
     let configs = store.list_configs()?;
     if configs.is_empty() {
-        let helper_lines = vec!["No saved configs to delete.".yellow().to_string()];
+        let helper_lines = vec![
+            theme::warning(copy(
+                Language::current(),
+                "No saved configs to delete.",
+                "没有可删除的配置。",
+            ))
+            .to_string(),
+        ];
         let _ = prompt_select(
             ui,
-            "Delete a saved config.",
-            "Nothing to delete.",
-            &["Back"],
+            section_delete(),
+            copy(Language::current(), "Nothing to delete.", "没有可删除项。"),
+            &[copy(Language::current(), "Back", "返回")],
             0,
             &helper_lines,
         )?;
@@ -1753,8 +2025,8 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
         match stage {
             Stage::Select => match prompt_config_select(
                 ui,
-                "Delete a saved config.",
-                "Config to delete",
+                section_delete(),
+                copy(Language::current(), "Config to delete", "要删除的配置"),
                 &configs,
             )? {
                 PromptResult::Value(index) => {
@@ -1763,9 +2035,13 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
                         let helper_lines = active_delete_block_helper_lines();
                         let _ = prompt_select(
                             ui,
-                            "Delete a saved config.",
-                            "Active config cannot be deleted.",
-                            &["Back"],
+                            section_delete(),
+                            copy(
+                                Language::current(),
+                                "Active config cannot be deleted.",
+                                "不能删除当前配置。",
+                            ),
+                            &[copy(Language::current(), "Back", "返回")],
                             0,
                             &helper_lines,
                         )?;
@@ -1781,31 +2057,30 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
             },
             Stage::Confirm => {
                 let name = &configs[selected].name;
-                match confirm(
-                    ui,
-                    "Delete a saved config.",
-                    &format!("Delete config '{name}'?"),
-                    false,
-                )? {
+                match confirm(ui, section_delete(), &delete_confirm_prompt(name), false)? {
                     PromptResult::Value(true) => {
                         ui.clear()?;
                         store.delete_config(name)?;
                         println!();
                         println!(
                             "{} {}",
-                            "✓".green(),
-                            format!("Deleted config '{name}'.").green()
+                            theme::success("✓"),
+                            theme::success(deleted_config_message(name))
                         );
                         println!(
                             "{} {}",
-                            "Removed:".dimmed(),
+                            theme::muted(copy(Language::current(), "Removed:", "已删除：")),
                             store
                                 .saved_config_path(name)?
                                 .display()
                                 .to_string()
                                 .magenta()
                         );
-                        println!("{} {}", "Next:".dimmed(), next_step_copy());
+                        println!(
+                            "{} {}",
+                            theme::muted(copy(Language::current(), "Next:", "下一步：")),
+                            next_step_copy()
+                        );
                         return Ok(true);
                     }
                     PromptResult::Value(false) => {
@@ -1837,7 +2112,14 @@ async fn validate_draft(
     let require_api_key = draft.kind == ConfigKind::VolcengineCloud
         || (draft.kind == ConfigKind::SelfManaged
             && !self_managed_allows_empty_api_key(&draft.url));
-    ui.render(&status_live_lines(section, "Validating connection..."))?;
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Validating connection...",
+            "正在验证连接...",
+        ),
+    ))?;
     let api_key_role = if config
         .api_key
         .as_deref()
@@ -1887,14 +2169,14 @@ fn save_config(store: &ConfigStore, name: &str, config: &Config, activate: bool)
 fn print_saved(store: &ConfigStore, name: &str, outcome: SaveOutcome) -> Result<()> {
     println!();
     let message = match outcome {
-        SaveOutcome::Activated => format!("Saved config '{name}' and made it active."),
-        SaveOutcome::SavedOnly => format!("Saved config '{name}'."),
-        SaveOutcome::UpdatedActive => format!("Saved active config '{name}'."),
+        SaveOutcome::Activated => saved_message_activated(name),
+        SaveOutcome::SavedOnly => saved_message_only(name),
+        SaveOutcome::UpdatedActive => saved_message_updated_active(name),
     };
-    println!("{} {}", "✓".green(), message.green());
+    println!("{} {}", theme::success("✓"), theme::success(message));
     println!(
         "{} {}",
-        "Saved to:".dimmed(),
+        theme::muted(copy(Language::current(), "Saved to:", "保存到：")),
         store
             .saved_config_path(name)?
             .display()
@@ -1905,49 +2187,105 @@ fn print_saved(store: &ConfigStore, name: &str, outcome: SaveOutcome) -> Result<
         SaveOutcome::Activated | SaveOutcome::UpdatedActive => {
             println!(
                 "{} {}",
-                "Active config:".dimmed(),
+                theme::muted(copy(Language::current(), "Active config:", "当前配置：")),
                 store.active_path().display().to_string().magenta()
             );
         }
         SaveOutcome::SavedOnly => {
             println!(
                 "{} {}",
-                "Activate later:".dimmed(),
-                "ov config switch".cyan()
+                theme::muted(copy(Language::current(), "Activate later:", "稍后启用：")),
+                theme::command("ov config switch")
             );
         }
     }
-    println!("{} {}", "Next:".dimmed(), next_step_copy());
+    println!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Next:", "下一步：")),
+        next_step_copy()
+    );
     Ok(())
 }
 
 fn next_step_copy() -> String {
-    format!("Run {} to get started.", "ov --help".cyan().bold())
+    match Language::current() {
+        Language::En => format!("Run {} to get started.", theme::command("ov --help").bold()),
+        Language::ZhCn => format!("运行 {} 查看可用命令。", theme::command("ov --help").bold()),
+    }
+}
+
+fn saved_message_activated(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Saved config '{name}' and made it active."),
+        Language::ZhCn => format!("已保存配置 '{name}'，并设为当前配置。"),
+    }
+}
+
+fn saved_message_only(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Saved config '{name}'."),
+        Language::ZhCn => format!("已保存配置 '{name}'。"),
+    }
+}
+
+fn saved_message_updated_active(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Saved active config '{name}'."),
+        Language::ZhCn => format!("已保存当前配置 '{name}'。"),
+    }
 }
 
 pub(crate) fn add_config_name_label() -> &'static str {
-    "Config name (optional)"
+    copy(
+        Language::current(),
+        "Config name (optional)",
+        "配置名称（可选）",
+    )
 }
 
 fn add_config_name_helper_lines() -> Vec<String> {
-    vec!["Leave empty to generate one.".dimmed().to_string()]
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Leave empty to generate one.",
+            "留空将自动生成名称。",
+        ))
+        .to_string(),
+    ]
 }
 
 pub(crate) fn volcengine_api_key_helper_lines() -> Vec<String> {
-    vec![format!(
-        "{} {}",
-        "Get your API key:".dimmed(),
-        VOLCENGINE_API_KEY_URL
-    )]
+    let language = Language::current();
+    vec![
+        format!(
+            "{} {}",
+            theme::muted(copy(language, "Get your API key:", "获取 API Key：")),
+            VOLCENGINE_API_KEY_URL
+        ),
+        theme::muted(copy(
+            language,
+            "Go to User Management → API Key to view and copy your key.",
+            "进入用户管理 → API Key 查看并复制。",
+        ))
+        .to_string(),
+    ]
 }
 
 pub(crate) fn self_managed_api_key_helper_lines(allow_empty: bool) -> Vec<String> {
     let copy = if allow_empty {
-        "Optional for local servers. Add one if auth is enabled."
+        copy(
+            Language::current(),
+            "Optional for local servers. Add one if auth is enabled.",
+            "本地服务可不填；如果启用了认证，请填写。",
+        )
     } else {
-        "Required for remote self-managed servers."
+        copy(
+            Language::current(),
+            "Required for remote self-managed servers.",
+            "远程自托管服务需要 API Key。",
+        )
     };
-    vec![copy.dimmed().to_string()]
+    vec![theme::muted(copy).to_string()]
 }
 
 fn prompt_add_config_name(
@@ -1959,7 +2297,7 @@ fn prompt_add_config_name(
     loop {
         let mut helper_lines = add_config_name_helper_lines();
         if let Some(value) = error.as_ref() {
-            helper_lines.push(value.red().to_string());
+            helper_lines.push(theme::error(value).to_string());
         }
 
         match prompt_text(ui, section, prompt, None, None, true, false, &helper_lines)? {
@@ -2008,7 +2346,7 @@ fn prompt_config_name(
     loop {
         let helper_lines: Vec<String> = error
             .as_ref()
-            .map(|value| vec![value.red().to_string()])
+            .map(|value| vec![theme::error(value).to_string()])
             .unwrap_or_default();
         match prompt_text(
             ui,
@@ -2056,15 +2394,25 @@ fn identity_prompt_parts(
         IdentityMode::LocalNoKey => (
             Some("default"),
             Some(InputValueLabel::Default),
-            vec!["Local no-key identity.".dimmed().to_string()],
+            vec![
+                theme::muted(copy(
+                    Language::current(),
+                    "Local no-key identity.",
+                    "本地无密钥身份。",
+                ))
+                .to_string(),
+            ],
         ),
         IdentityMode::RootKey => (
             None,
             None,
             vec![
-                "Root API keys require an explicit account and user."
-                    .dimmed()
-                    .to_string(),
+                theme::muted(copy(
+                    Language::current(),
+                    "Root API keys require an explicit account and user.",
+                    "Root API Key 需要明确的账户和用户。",
+                ))
+                .to_string(),
             ],
         ),
     }
@@ -2081,24 +2429,65 @@ fn prompt_config_select(
 }
 
 fn config_select_label(entry: &ConfigEntry) -> String {
-    let label = format!("{} - {}", entry.name, entry.kind.label());
+    let label = format!("{} - {}", entry.name, kind_label(entry.kind));
     if entry.is_active {
-        format!("{} {}", label, "[Active]".red().bold())
+        format!("{} {}", label, theme::error(active_badge()).bold())
     } else {
         label
     }
 }
 
+fn active_badge() -> &'static str {
+    copy(Language::current(), "[Active]", "[当前]")
+}
+
 fn active_delete_block_helper_lines() -> Vec<String> {
-    vec![
-        "Deleting the active config is blocked.".red().to_string(),
-        format!(
-            "{} {} {}",
-            "Run".dimmed(),
-            "ov config switch".cyan().bold(),
-            "to choose another config, then delete this one.".dimmed()
-        ),
-    ]
+    match Language::current() {
+        Language::En => vec![
+            theme::error("Deleting the active config is blocked.").to_string(),
+            format!(
+                "{} {} {}",
+                theme::muted("Run"),
+                theme::command("ov config switch").bold(),
+                theme::muted("to choose another config, then delete this one.")
+            ),
+        ],
+        Language::ZhCn => vec![
+            theme::error("不能删除当前配置。").to_string(),
+            format!(
+                "{} {} {}",
+                theme::muted("请先运行"),
+                theme::command("ov config switch").bold(),
+                theme::muted("切换到其他配置，然后再删除。")
+            ),
+        ],
+    }
+}
+
+fn delete_confirm_prompt(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Delete config '{name}'?"),
+        Language::ZhCn => format!("删除配置 '{name}'？"),
+    }
+}
+
+fn localized_validation_error(kind: ConfigKind, error: &Error) -> String {
+    match Language::current() {
+        Language::En => validation_error_copy(kind, error),
+        Language::ZhCn => match kind {
+            ConfigKind::VolcengineCloud => "验证失败。请检查 API Key 后重试。".to_string(),
+            ConfigKind::SelfManaged => {
+                "验证失败。请检查服务器 URL，以及是否需要 API Key。".to_string()
+            }
+        },
+    }
+}
+
+fn deleted_config_message(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Deleted config '{name}'."),
+        Language::ZhCn => format!("已删除配置 '{name}'。"),
+    }
 }
 
 pub(crate) fn add_save_action_labels() -> Vec<&'static str> {
@@ -2113,24 +2502,51 @@ pub(crate) fn edit_save_action_labels(is_active: bool) -> Vec<&'static str> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveActionSet {
+    Add,
+    EditActive,
+    EditInactive,
+}
+
+impl SaveActionSet {
+    fn labels(self, language: Language) -> Vec<&'static str> {
+        match (self, language) {
+            (Self::Add, Language::En) => add_save_action_labels(),
+            (Self::Add, Language::ZhCn) => vec!["保存并设为当前配置", "仅保存", "取消"],
+            (Self::EditActive, Language::En) => edit_save_action_labels(true),
+            (Self::EditActive, Language::ZhCn) => vec!["保存更改", "取消"],
+            (Self::EditInactive, Language::En) => edit_save_action_labels(false),
+            (Self::EditInactive, Language::ZhCn) => {
+                vec!["仅保存", "保存并设为当前配置", "取消"]
+            }
+        }
+    }
+
+    fn action(self, index: usize) -> SaveAction {
+        match (self, index) {
+            (Self::Add, 0) => SaveAction::SaveAndActivate,
+            (Self::Add, 1) => SaveAction::SaveOnly,
+            (Self::Add, _) => SaveAction::Cancel,
+            (Self::EditActive, 0) => SaveAction::SaveActive,
+            (Self::EditActive, _) => SaveAction::Cancel,
+            (Self::EditInactive, 0) => SaveAction::SaveOnly,
+            (Self::EditInactive, 1) => SaveAction::SaveAndActivate,
+            (Self::EditInactive, _) => SaveAction::Cancel,
+        }
+    }
+}
+
 fn prompt_save_action(
     ui: &mut LiveRegion,
     section: &str,
     prompt: &str,
-    items: Vec<&'static str>,
+    action_set: SaveActionSet,
     default: usize,
 ) -> Result<PromptResult<SaveAction>> {
+    let items = action_set.labels(Language::current());
     match prompt_select(ui, section, prompt, &items, default, &[])? {
-        PromptResult::Value(index) => {
-            let action = match items.get(index).copied() {
-                Some("Save and activate") => SaveAction::SaveAndActivate,
-                Some("Save only") => SaveAction::SaveOnly,
-                Some("Save changes") => SaveAction::SaveActive,
-                Some("Cancel") => SaveAction::Cancel,
-                _ => unreachable!("selection is constrained by save action list"),
-            };
-            Ok(PromptResult::Value(action))
-        }
+        PromptResult::Value(index) => Ok(PromptResult::Value(action_set.action(index))),
         PromptResult::Back => Ok(PromptResult::Back),
         PromptResult::Quit => Ok(PromptResult::Quit),
     }
@@ -2228,7 +2644,14 @@ fn prompt_text(
                         drop(raw);
                         if chosen.is_empty() && !allow_empty {
                             ui.clear()?;
-                            error = Some("Value cannot be empty.".to_string());
+                            error = Some(
+                                copy(
+                                    Language::current(),
+                                    "Value cannot be empty.",
+                                    "内容不能为空。",
+                                )
+                                .to_string(),
+                            );
                             continue 'attempt;
                         }
                         ui.clear()?;
@@ -2276,9 +2699,11 @@ pub(crate) enum InputValueLabel {
 
 impl InputValueLabel {
     fn text(self) -> &'static str {
-        match self {
-            Self::Default => "Default:",
-            Self::Current => "Current:",
+        match (self, Language::current()) {
+            (Self::Default, Language::En) => "Default:",
+            (Self::Default, Language::ZhCn) => "默认值：",
+            (Self::Current, Language::En) => "Current:",
+            (Self::Current, Language::ZhCn) => "当前值：",
         }
     }
 }
@@ -2289,7 +2714,10 @@ fn confirm(
     prompt: &str,
     default: bool,
 ) -> Result<PromptResult<bool>> {
-    let items = ["Yes", "No"];
+    let items = match Language::current() {
+        Language::En => ["Yes", "No"],
+        Language::ZhCn => ["是", "否"],
+    };
     match prompt_select(ui, section, prompt, &items, usize::from(!default), &[])? {
         PromptResult::Value(0) => Ok(PromptResult::Value(true)),
         PromptResult::Value(1) => Ok(PromptResult::Value(false)),
@@ -2345,10 +2773,14 @@ pub(crate) fn select_live_lines<T: ToString>(
     helper_lines: &[String],
 ) -> Vec<String> {
     let mut lines = vec![
-        format!("{} {}", "◆".purple().bold(), section.bold()),
+        format!(
+            "{} {}",
+            theme::section_marker("◆").bold(),
+            theme::strong(section)
+        ),
         String::new(),
-        format!("{} {}", "?".yellow().bold(), prompt.bold()),
-        format!("  {}", NAV_HINT.dimmed()),
+        format!("{} {}", theme::prompt("?").bold(), theme::strong(prompt)),
+        format!("  {}", theme::muted(nav_hint())),
     ];
 
     if !helper_lines.is_empty() {
@@ -2360,9 +2792,9 @@ pub(crate) fn select_live_lines<T: ToString>(
     lines.extend(items.iter().enumerate().map(|(index, item)| {
         let item = item.to_string();
         if index == selected {
-            format!("  › {item}").green().bold().to_string()
+            theme::selection(format!("  › {item}")).bold().to_string()
         } else {
-            format!("    {item}")
+            format!("    {}", theme::body(item))
         }
     }));
     lines
@@ -2378,10 +2810,14 @@ fn input_live_lines(
     error: Option<&str>,
 ) -> Vec<String> {
     let mut lines = vec![
-        format!("{} {}", "◆".purple().bold(), section.bold()),
+        format!(
+            "{} {}",
+            theme::section_marker("◆").bold(),
+            theme::strong(section)
+        ),
         String::new(),
-        format!("{} {}", "?".yellow().bold(), prompt.bold()),
-        format!("  {}", INPUT_HINT.dimmed()),
+        format!("{} {}", theme::prompt("?").bold(), theme::strong(prompt)),
+        format!("  {}", theme::muted(input_hint())),
     ];
 
     if !helper_lines.is_empty() {
@@ -2392,22 +2828,22 @@ fn input_live_lines(
     if let (Some(default_value), Some(value_label)) = (default, value_label) {
         let rendered_default = if secret {
             if default_value.trim().is_empty() {
-                "(empty)".dimmed().to_string()
+                theme::muted("(empty)").to_string()
             } else {
-                "(existing value)".dimmed().to_string()
+                theme::muted("(existing value)").to_string()
             }
         } else {
-            default_value.dimmed().to_string()
+            theme::muted(default_value).to_string()
         };
         lines.push(format!(
             "  {} {}",
-            value_label.text().dimmed(),
+            theme::muted(value_label.text()),
             rendered_default
         ));
     }
 
     if let Some(error) = error {
-        lines.push(format!("  {}", error.red()));
+        lines.push(format!("  {}", theme::error(error)));
     }
 
     lines.push(String::new());
@@ -2416,9 +2852,13 @@ fn input_live_lines(
 
 fn status_live_lines(section: &str, status: &str) -> Vec<String> {
     vec![
-        format!("{} {}", "◆".purple().bold(), section.bold()),
+        format!(
+            "{} {}",
+            theme::section_marker("◆").bold(),
+            theme::strong(section)
+        ),
         String::new(),
-        format!("{} {}", "…".cyan().bold(), status.bold()),
+        format!("{} {}", theme::command("…").bold(), theme::strong(status)),
     ]
 }
 
@@ -2478,7 +2918,11 @@ fn print_cancelled(ui: &mut LiveRegion) -> Result<()> {
     println!();
     println!(
         "{}",
-        "Cancelled. No partial configuration was written.".yellow()
+        theme::warning(copy(
+            Language::current(),
+            "Cancelled. No partial configuration was written.",
+            "已取消。未写入任何未完成配置。",
+        ))
     );
     Ok(())
 }
@@ -2516,21 +2960,22 @@ impl Drop for RawPrompt {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOX_BORDER, IdentityMode, InputValueLabel, LOGO_GRADIENT_END, OV_LOGO_LINES, Rgb,
-        StatusBoxRuntime, VERSION_ACCENT, active_delete_block_helper_lines, active_summary_lines,
-        active_summary_render_parts, add_config_name_label, add_save_action_labels,
-        allocate_config_name, cloud_validation_failure_choices, config_select_label,
-        display_config_home, edit_api_key_choice_labels, edit_save_action_labels,
+        IdentityMode, InputValueLabel, OV_LOGO_LINES, Rgb, StatusBoxRuntime,
+        active_delete_block_helper_lines, active_summary_lines, active_summary_render_parts,
+        add_config_name_label, add_save_action_labels, allocate_config_name, box_content_line,
+        box_footer_line, box_title_line, cloud_validation_failure_choices, config_select_label,
+        display_config_home, display_width, edit_api_key_choice_labels, edit_save_action_labels,
         extract_models_from_status_payload, identity_prompt_parts, input_live_lines,
-        logo_glass_color, main_action_labels, next_step_copy, ov_logo_width,
+        logo_glass_color_for_theme, main_action_labels, next_step_copy, ov_logo_width,
         saved_summary_render_parts, select_live_lines, self_managed_api_key_helper_lines,
         self_managed_validation_failure_choices, should_prompt_root_identity, status_box_lines,
         status_box_lines_with_runtime, status_box_width, status_payload_is_healthy,
-        tagline_ice_color, validate_config_name, volcengine_api_key_helper_lines,
-        wizard_header_lines, wordmark_gradient_color, wordmark_lines, wordmark_width,
+        tagline_ice_color_for_theme, validate_config_name, volcengine_api_key_helper_lines,
+        wizard_header_lines, wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{ApiKeyRole, ConfigEntry, ConfigKind, ConfigStore};
+    use crate::theme::{self, ThemeColor};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -2607,7 +3052,7 @@ mod tests {
         assert!(lines.last().expect("footer should render").starts_with('╰'));
         assert!(lines.last().expect("footer should render").ends_with('╯'));
         assert_eq!(status_box_width(), wordmark_width());
-        assert_eq!(lines[0].chars().count(), status_box_width());
+        assert_eq!(display_width(&lines[0]), status_box_width());
         assert!(
             lines
                 .last()
@@ -2617,7 +3062,19 @@ mod tests {
                 > status_box_width() / 2
         );
         for line in &lines {
-            assert_eq!(line.chars().count(), status_box_width(), "{line:?}");
+            assert_eq!(display_width(line), status_box_width(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn status_box_cjk_lines_align_to_display_width() {
+        let width = status_box_width();
+        let title = box_title_line("AI Agent 上下文数据库", width);
+        let content = box_content_line("", "当前配置： VPS_ROOT (自托管)", width);
+        let footer = box_footer_line("v0.0.0", width);
+
+        for line in [title, content, footer] {
+            assert_eq!(display_width(&line), width, "{line:?}");
         }
     }
 
@@ -2837,11 +3294,25 @@ mod tests {
     #[test]
     fn wordmark_lines_have_identical_width() {
         let wordmark = wordmark_lines();
-        let width = wordmark[0].chars().count();
+        let width = display_width(wordmark[0]);
 
         for line in wordmark {
-            assert_eq!(line.chars().count(), width, "{line:?} should match");
+            assert_eq!(display_width(line), width, "{line:?} should match");
         }
+    }
+
+    #[test]
+    fn wordmark_is_subtly_wider_for_viking_readability() {
+        let width = wordmark_width();
+
+        assert!(
+            (79..=83).contains(&width),
+            "wordmark should widen only enough to make VIKING readable; got {width}"
+        );
+        assert!(
+            wordmark_lines()[0].contains("██╗   ██╗ ██╗ ██╗  ██╗ ██╗"),
+            "VIKING should have subtle breathing room without obvious gaps"
+        );
     }
 
     #[test]
@@ -2859,7 +3330,7 @@ mod tests {
                 "{line:?} should not protrude or drift horizontally"
             );
             assert!(
-                line.trim_end().chars().count() >= width - 1,
+                display_width(line.trim_end()) >= width - 1,
                 "{line:?} should reach the right edge"
             );
         }
@@ -2879,47 +3350,79 @@ mod tests {
     #[test]
     fn wordmark_gradient_runs_pearl_jade() {
         let width = wordmark_width();
+        let palette = theme::active_theme();
 
-        assert_eq!(wordmark_gradient_color(0, width), Rgb(234, 253, 247));
-        assert_eq!(wordmark_gradient_color(width / 2, width), Rgb(70, 218, 201));
-        assert_eq!(wordmark_gradient_color(width - 1, width), Rgb(7, 95, 100));
+        assert_eq!(
+            wordmark_gradient_color_for_theme(palette, 0, width),
+            palette.wordmark_start
+        );
+        assert_eq!(
+            wordmark_gradient_color_for_theme(palette, width - 1, width),
+            palette.wordmark_end
+        );
+        let middle = wordmark_gradient_color_for_theme(palette, width / 2, width);
+        assert!(
+            middle.0 < palette.wordmark_start.0 && middle.1 < palette.wordmark_start.1,
+            "wordmark should visibly darken across the line"
+        );
     }
 
     #[test]
     fn tagline_ice_color_runs_pearl_jade() {
-        let width = "Context Database for AI Agents".chars().count();
+        let width = display_width("Context Database for AI Agents");
+        let palette = theme::active_theme();
 
-        assert_eq!(tagline_ice_color(0, width), Rgb(234, 253, 247));
-        assert_eq!(tagline_ice_color(width / 2, width), Rgb(50, 214, 196));
-        assert_eq!(tagline_ice_color(width - 1, width), Rgb(7, 95, 100));
+        assert_eq!(
+            tagline_ice_color_for_theme(palette, 0, width),
+            palette.tagline_start
+        );
+        assert_eq!(
+            tagline_ice_color_for_theme(palette, width / 2, width),
+            palette.tagline_mid
+        );
+        assert_eq!(
+            tagline_ice_color_for_theme(palette, width - 1, width),
+            palette.tagline_end
+        );
     }
 
     #[test]
     fn status_box_border_uses_pearl_jade() {
-        assert_eq!(BOX_BORDER, Rgb(50, 214, 196));
+        assert_eq!(
+            theme::active_theme().border,
+            ThemeColor::TrueColor(Rgb(0, 128, 128))
+        );
     }
 
     #[test]
     fn status_box_footer_version_uses_pearl_jade_accent() {
-        assert_eq!(VERSION_ACCENT, Rgb(50, 214, 196));
+        assert_eq!(
+            theme::active_theme().version,
+            ThemeColor::TrueColor(Rgb(0, 128, 128))
+        );
     }
 
     #[test]
     fn status_box_logo_uses_diagonal_pearl_jade_gradient() {
         let width = ov_logo_width();
+        let palette = theme::active_theme();
 
-        assert_eq!(logo_glass_color('⣿', 0, 0, width), Rgb(234, 253, 247));
         assert_eq!(
-            logo_glass_color('⣿', width / 2, 7, width),
-            Rgb(44, 194, 179)
+            logo_glass_color_for_theme(palette, 0, 0, width),
+            palette.wordmark_start
         );
         assert_eq!(
-            logo_glass_color('⣿', width - 1, 13, width),
-            LOGO_GRADIENT_END
+            logo_glass_color_for_theme(palette, width - 1, 13, width),
+            palette.logo_end
+        );
+        let middle = logo_glass_color_for_theme(palette, width / 2, 7, width);
+        assert!(
+            middle.1 > palette.logo_end.1 && middle.1 < palette.wordmark_start.1,
+            "logo middle should sit between the light and dark gradient stops"
         );
 
-        let upper = logo_glass_color('⣿', width / 2, 1, width);
-        let lower = logo_glass_color('⣿', width / 2, 12, width);
+        let upper = logo_glass_color_for_theme(palette, width / 2, 1, width);
+        let lower = logo_glass_color_for_theme(palette, width / 2, 12, width);
         assert!(
             lower.0 < upper.0 && lower.1 < upper.1 && lower.2 < upper.2,
             "logo should darken from top-left toward bottom-right"
@@ -3024,6 +3527,9 @@ mod tests {
         let remote_self_managed = self_managed_api_key_helper_lines(false);
 
         assert!(cloud.iter().any(|line| line.contains("Get your API key:")));
+        assert!(cloud.iter().any(|line| {
+            line.contains("Go to User Management → API Key to view and copy your key.")
+        }));
         assert!(!cloud.iter().any(|line| line.contains("Server URL")));
         assert!(
             local_self_managed.iter().any(

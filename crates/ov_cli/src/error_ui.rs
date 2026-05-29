@@ -1,8 +1,9 @@
 use std::ffi::OsString;
 
 use colored::Colorize;
+use unicode_width::UnicodeWidthStr;
 
-use crate::error::Error;
+use crate::{error::Error, i18n::Language, theme};
 
 const CARD_WIDTH: usize = 72;
 
@@ -76,38 +77,65 @@ pub(crate) fn print_report(report: &ErrorReport, verbose: bool) {
 }
 
 pub(crate) fn report_for_clap_error(args: &[OsString], clap_output: &str) -> ErrorReport {
+    let language = Language::current();
     let command = display_command(args);
     let usage = parse_usage(clap_output);
 
     if is_setup_cli_command(args) {
         return ErrorReport::new(
-            "Command Error",
-            "Use ov config to add, edit, or delete configs.",
+            copy(language, "Command Error", "命令错误"),
+            copy(
+                language,
+                "Use ov config to add, edit, or delete configs.",
+                "请使用 ov config 添加、编辑或删除配置。",
+            ),
         )
         .with_command(command)
         .with_optional_usage(usage)
         .with_suggestion("ov config")
         .with_actions(vec![
-            ErrorAction::new("ov config", "Add, edit, or delete configs"),
-            ErrorAction::new("ov config show", "Show the active config"),
-            ErrorAction::new("ov config validate", "Check the active config"),
+            ErrorAction::new(
+                "ov config",
+                copy(
+                    language,
+                    "Add, edit, or delete configs",
+                    "添加、编辑或删除配置",
+                ),
+            ),
+            ErrorAction::new(
+                "ov config show",
+                copy(language, "Show the active config", "显示当前配置"),
+            ),
+            ErrorAction::new(
+                "ov config validate",
+                copy(language, "Check the active config", "检查当前配置"),
+            ),
         ]);
     }
 
     let unknown = parse_unknown_subcommand(clap_output);
     let suggestion = parse_clap_subcommand_suggestion(clap_output)
         .map(|suggested| qualified_suggestion(args, &suggested));
-    let message = unknown
-        .map(|value| format!("Unknown command: {value}"))
-        .unwrap_or_else(|| first_error_line(clap_output));
-
     let mut actions = Vec::new();
     if let Some(suggestion) = suggestion.as_ref() {
-        actions.push(ErrorAction::new(suggestion, "Run the suggested command"));
+        actions.push(ErrorAction::new(
+            suggestion,
+            copy(language, "Run the suggested command", "运行建议的命令"),
+        ));
     }
-    actions.push(ErrorAction::new("ov --help", "Show all commands"));
+    actions.push(ErrorAction::new(
+        "ov --help",
+        copy(language, "Show all commands", "查看所有命令"),
+    ));
 
-    let mut report = ErrorReport::new("Command Error", message)
+    let message = unknown
+        .map(|value| match language {
+            Language::En => format!("Unknown command: {value}"),
+            Language::ZhCn => format!("未知命令：{value}"),
+        })
+        .unwrap_or_else(|| first_error_line(clap_output));
+
+    let mut report = ErrorReport::new(copy(language, "Command Error", "命令错误"), message)
         .with_command(command)
         .with_optional_usage(usage)
         .with_actions(actions);
@@ -129,99 +157,116 @@ pub(crate) fn report_for_message_error(
 }
 
 pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error) -> ErrorReport {
+    let language = Language::current();
     let command = command.into();
     match error {
-        Error::Config(message) => ErrorReport::new("Configuration Error", message)
+        Error::Config(message) => ErrorReport::new(copy(language, "Configuration Error", "配置错误"), message)
             .with_command(command)
             .with_actions(vec![
-                ErrorAction::new("ov config", "Add or edit a config"),
-                ErrorAction::new("ov config show", "Show the active config"),
+                ErrorAction::new("ov config", copy(language, "Add or edit a config", "添加或编辑配置")),
+                ErrorAction::new("ov config show", copy(language, "Show the active config", "显示当前配置")),
             ]),
         Error::Network(message) => ErrorReport::new(
-            "Connection Error",
-            "Could not reach OpenViking. The server may be offline, or this config points to the wrong URL.",
+            copy(language, "Connection Error", "连接错误"),
+            copy(
+                language,
+                "Could not reach OpenViking. The server may be offline, or this config points to the wrong URL.",
+                "无法连接 OpenViking。服务器可能未启动，或当前配置指向了错误的 URL。",
+            ),
         )
         .with_command(command)
         .with_detail(message)
         .with_actions(vec![
-            ErrorAction::new("ov config validate", "Check the active config"),
-            ErrorAction::new("ov health", "Run a quick server health check"),
-            ErrorAction::new("ov config switch", "Switch to another config"),
+            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
+            ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
+            ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
         Error::Api(message) if looks_like_auth_error(message) => ErrorReport::new(
-            "Authentication Error",
-            "OpenViking rejected the API key for the active config.",
+            copy(language, "Authentication Error", "认证错误"),
+            copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
         )
         .with_command(command)
         .with_detail(message)
         .with_actions(vec![
-            ErrorAction::new("ov config", "Edit this config"),
-            ErrorAction::new("ov config switch", "Use another config"),
+            ErrorAction::new("ov config", copy(language, "Edit this config", "编辑这个配置")),
+            ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
         ]),
         Error::Api(message) => ErrorReport::new(
-            "OpenViking API Error",
-            "OpenViking returned an error for this request.",
+            copy(language, "OpenViking API Error", "OpenViking API 错误"),
+            copy(language, "OpenViking returned an error for this request.", "OpenViking 返回了请求错误。"),
         )
         .with_command(command)
         .with_detail(message)
         .with_actions(vec![
-            ErrorAction::new("ov config validate", "Check the active config"),
-            ErrorAction::new("ov status", "Check OpenViking status"),
+            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
+            ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
         ]),
-        Error::Client(message) => ErrorReport::new("Command Error", message)
+        Error::Client(message) => ErrorReport::new(copy(language, "Command Error", "命令错误"), message)
             .with_command(command)
-            .with_actions(vec![ErrorAction::new("ov --help", "Show all commands")]),
-        Error::Parse(message) => ErrorReport::new("Parse Error", message)
+            .with_actions(vec![ErrorAction::new("ov --help", copy(language, "Show all commands", "查看所有命令"))]),
+        Error::Parse(message) => ErrorReport::new(copy(language, "Parse Error", "解析错误"), message)
             .with_command(command)
-            .with_actions(vec![ErrorAction::new("ov --help", "Show all commands")]),
-        Error::Output(message) => ErrorReport::new("Output Error", message).with_command(command),
-        Error::InvalidPath(message) => ErrorReport::new("Invalid Path", message)
+            .with_actions(vec![ErrorAction::new("ov --help", copy(language, "Show all commands", "查看所有命令"))]),
+        Error::Output(message) => ErrorReport::new(copy(language, "Output Error", "输出错误"), message).with_command(command),
+        Error::InvalidPath(message) => ErrorReport::new(copy(language, "Invalid Path", "路径无效"), message)
             .with_command(command)
-            .with_actions(vec![ErrorAction::new("ov --help", "Show all commands")]),
-        Error::Io(error) => ErrorReport::new("IO Error", "OpenViking could not read or write a file.")
+            .with_actions(vec![ErrorAction::new("ov --help", copy(language, "Show all commands", "查看所有命令"))]),
+        Error::Io(error) => ErrorReport::new(copy(language, "IO Error", "IO 错误"), copy(language, "OpenViking could not read or write a file.", "OpenViking 无法读取或写入文件。"))
             .with_command(command)
             .with_detail(error.to_string()),
         Error::Serialization(error) => {
-            ErrorReport::new("Serialization Error", "OpenViking could not parse structured data.")
+            ErrorReport::new(copy(language, "Serialization Error", "序列化错误"), copy(language, "OpenViking could not parse structured data.", "OpenViking 无法解析结构化数据。"))
                 .with_command(command)
                 .with_detail(error.to_string())
         }
-        Error::Zip(error) => ErrorReport::new("Archive Error", "OpenViking could not process the archive.")
+        Error::Zip(error) => ErrorReport::new(copy(language, "Archive Error", "压缩包错误"), copy(language, "OpenViking could not process the archive.", "OpenViking 无法处理压缩包。"))
             .with_command(command)
             .with_detail(error.to_string()),
-        Error::AlreadyReported => ErrorReport::new("Command Error", "The command failed.")
+        Error::AlreadyReported => ErrorReport::new(copy(language, "Command Error", "命令错误"), copy(language, "The command failed.", "命令执行失败。"))
             .with_command(command),
     }
 }
 
 pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
     let mut output = String::new();
+    let language = Language::current();
 
     if let Some(command) = report.command.as_deref() {
-        output.push_str(&format!("{}\n\n", command.bold()));
+        output.push_str(&format!("{}\n\n", theme::strong(command)));
     }
     if let Some(usage) = report.usage.as_deref() {
-        output.push_str(&format!("{} {}\n", "Usage:".yellow().bold(), usage));
-        output.push_str(&format!("{} {}\n\n", "Try:".dimmed(), "ov --help".cyan()));
+        output.push_str(&format!(
+            "{} {}\n",
+            theme::warning(copy(language, "Usage:", "用法：")).bold(),
+            theme::strong(usage)
+        ));
+        output.push_str(&format!(
+            "{} {}\n\n",
+            theme::muted(copy(language, "Try:", "可尝试：")),
+            theme::command("ov --help")
+        ));
     }
 
     output.push_str(&render_card(report, verbose));
 
     if !report.actions.is_empty() {
         output.push_str("\n\n");
-        output.push_str(&format!("{}\n", "Next:".bold()));
+        output.push_str(&format!(
+            "{}\n",
+            theme::strong(copy(language, "Next:", "下一步："))
+        ));
         let command_width = report
             .actions
             .iter()
-            .map(|action| action.command.chars().count())
+            .map(|action| action.command.width())
             .max()
             .unwrap_or_default();
         for action in &report.actions {
             output.push_str(&format!(
                 "  {}{}  {}\n",
-                action.command.cyan().bold(),
-                " ".repeat(command_width.saturating_sub(action.command.chars().count())),
-                action.description.dimmed()
+                theme::command(action.command.clone()).bold(),
+                " ".repeat(command_width.saturating_sub(action.command.width())),
+                theme::muted(&action.description)
             ));
         }
     } else {
@@ -229,6 +274,13 @@ pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
     }
 
     output
+}
+
+fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
 }
 
 trait OptionalUsage {
@@ -246,33 +298,31 @@ impl OptionalUsage for ErrorReport {
 }
 
 fn render_card(report: &ErrorReport, verbose: bool) -> String {
+    let language = Language::current();
     let inner_width = CARD_WIDTH.saturating_sub(4);
     let title = format!("─ {} ", report.title);
-    let fill = CARD_WIDTH.saturating_sub(2 + title.chars().count());
+    let fill = CARD_WIDTH.saturating_sub(2 + title.width());
     let mut lines = Vec::new();
 
     lines.extend(wrap_text(&report.message, inner_width));
     if let Some(suggestion) = report.suggestion.as_deref() {
         lines.push(String::new());
-        lines.extend(wrap_text(
-            &format!("Did you mean: {suggestion}"),
-            inner_width,
-        ));
+        lines.extend(wrap_text(&did_you_mean(language, suggestion), inner_width));
     }
     if verbose {
         if let Some(detail) = report.detail.as_deref() {
             lines.push(String::new());
-            lines.extend(wrap_text(&format!("Detail: {detail}"), inner_width));
+            lines.extend(wrap_text(&detail_line(language, detail), inner_width));
         }
     }
 
     let mut rendered = String::new();
     rendered.push_str(&format!(
         "{}{}{}{}\n",
-        "╭".red(),
-        title.red().bold(),
-        "─".repeat(fill).red(),
-        "╮".red()
+        theme::error("╭"),
+        theme::error(title).bold(),
+        theme::error("─".repeat(fill)),
+        theme::error("╮")
     ));
     for line in lines {
         rendered.push_str(&render_card_line(&line, inner_width));
@@ -280,22 +330,36 @@ fn render_card(report: &ErrorReport, verbose: bool) -> String {
     }
     rendered.push_str(&format!(
         "{}{}{}",
-        "╰".red(),
-        "─".repeat(CARD_WIDTH.saturating_sub(2)).red(),
-        "╯".red()
+        theme::error("╰"),
+        theme::error("─".repeat(CARD_WIDTH.saturating_sub(2))),
+        theme::error("╯")
     ));
     rendered
 }
 
+fn did_you_mean(language: Language, suggestion: &str) -> String {
+    match language {
+        Language::En => format!("Did you mean: {suggestion}"),
+        Language::ZhCn => format!("你是不是想运行：{suggestion}"),
+    }
+}
+
+fn detail_line(language: Language, detail: &str) -> String {
+    match language {
+        Language::En => format!("Detail: {detail}"),
+        Language::ZhCn => format!("详情：{detail}"),
+    }
+}
+
 fn render_card_line(line: &str, inner_width: usize) -> String {
-    let width = line.chars().count();
+    let width = line.width();
     let padding = inner_width.saturating_sub(width);
     format!(
         "{} {}{} {}",
-        "│".red(),
-        line,
+        theme::error("│"),
+        theme::body(line),
         " ".repeat(padding),
-        "│".red()
+        theme::error("│")
     )
 }
 
@@ -309,8 +373,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let separator = if current.is_empty() { 0 } else { 1 };
-        if !current.is_empty() && current.chars().count() + separator + word.chars().count() > width
-        {
+        if !current.is_empty() && current.width() + separator + word.width() > width {
             lines.push(current);
             current = String::new();
         }
@@ -418,9 +481,12 @@ fn looks_like_auth_error(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_report, report_for_clap_error, report_for_runtime_error};
+    use super::{
+        CARD_WIDTH, ErrorReport, render_report, report_for_clap_error, report_for_runtime_error,
+    };
     use crate::error::Error;
     use std::ffi::OsString;
+    use unicode_width::UnicodeWidthStr;
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
@@ -515,5 +581,18 @@ Usage: ov config [OPTIONS] [COMMAND]
         assert!(rendered.contains("ov config validate"));
         assert!(rendered.contains("ov health"));
         assert!(rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn chinese_error_card_uses_display_width_for_borders() {
+        let report = ErrorReport::new("命令错误", "未知命令：con").with_suggestion("ov config");
+        let rendered = strip_ansi(&render_report(&report, false));
+
+        for line in rendered
+            .lines()
+            .filter(|line| line.starts_with('╭') || line.starts_with('│') || line.starts_with('╰'))
+        {
+            assert_eq!(line.width(), CARD_WIDTH, "{line}");
+        }
     }
 }

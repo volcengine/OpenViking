@@ -1,22 +1,18 @@
 use colored::Colorize;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{Config, default_config_path},
     config_wizard::ConfigKind,
     error::Error,
+    i18n::Language,
+    theme,
 };
 
 const LABEL_WIDTH: usize = 14;
 const ACTION_WIDTH: usize = 26;
 const NAME_WIDTH: usize = 17;
 const KIND_WIDTH: usize = 18;
-const PEARL: (u8, u8, u8) = (234, 253, 247);
-const JADE: (u8, u8, u8) = (50, 214, 196);
-const ORANGE: (u8, u8, u8) = (255, 140, 58);
-const ICE: (u8, u8, u8) = (182, 219, 255);
-const HEALTHY: (u8, u8, u8) = (103, 255, 182);
-const WARNING: (u8, u8, u8) = (255, 211, 92);
-const ERROR: (u8, u8, u8) = (255, 91, 91);
 
 #[derive(Debug, Clone)]
 pub(crate) struct SwitchConfigRow {
@@ -26,30 +22,73 @@ pub(crate) struct SwitchConfigRow {
 }
 
 pub(crate) fn render_validate_success(config: &Config, active_name: Option<&str>) -> String {
-    let mut lines = Vec::new();
-    let kind = ConfigKind::from_config(config).label();
-    let active = active_name.unwrap_or("unknown");
+    render_validate_success_with_language(config, active_name, Language::current())
+}
 
-    lines.push(title("OPENVIKING CONFIG CHECK"));
+pub(crate) fn render_validate_success_with_language(
+    config: &Config,
+    active_name: Option<&str>,
+    language: Language,
+) -> String {
+    let mut lines = Vec::new();
+    let kind = kind_label(ConfigKind::from_config(config), language);
+    let active = active_name.unwrap_or_else(|| unknown(language));
+
+    lines.push(title(copy(
+        language,
+        "OPENVIKING CONFIG CHECK",
+        "OPENVIKING 配置检查",
+    )));
     lines.push(String::new());
-    lines.push(section("Config"));
-    lines.push(detail_line("Active", active_value(active, kind)));
-    lines.push(detail_line("Server", path_value(&config.url)));
+    lines.push(section(copy(language, "Config", "配置")));
     lines.push(detail_line(
-        "Config home",
+        copy(language, "Active", "当前配置"),
+        active_value(active, kind),
+    ));
+    lines.push(detail_line(
+        copy(language, "Server", "服务器"),
+        path_value(&config.url),
+    ));
+    lines.push(detail_line(
+        copy(language, "Config home", "配置目录"),
         path_value(&display_config_home()),
     ));
     lines.push(String::new());
-    lines.push(section("Checks"));
-    lines.push(detail_line("Config file", ok_value("valid")));
-    lines.push(detail_line("Server", ok_value("reachable")));
-    lines.push(detail_line("Auth", ok_value("accepted")));
-    lines.push(detail_line("Health", ok_value("healthy")));
+    lines.push(section(copy(language, "Checks", "检查项")));
+    lines.push(detail_line(
+        copy(language, "Config file", "配置文件"),
+        ok_value(copy(language, "valid", "有效")),
+    ));
+    lines.push(detail_line(
+        copy(language, "Server", "服务器"),
+        ok_value(copy(language, "reachable", "可连接")),
+    ));
+    lines.push(detail_line(
+        copy(language, "Auth", "认证"),
+        ok_value(copy(language, "accepted", "已通过")),
+    ));
+    lines.push(detail_line(
+        copy(language, "Health", "健康状态"),
+        ok_value(copy(language, "healthy", "健康")),
+    ));
     lines.push(String::new());
-    lines.push(section("Next"));
-    lines.push(action_line("ov status", "Full system diagnostics"));
-    lines.push(action_line("ov config switch", "Use another config"));
-    lines.push(action_line("ov config", "Add, edit, or delete configs"));
+    lines.push(section(copy(language, "Next", "下一步")));
+    lines.push(action_line(
+        "ov status",
+        copy(language, "Full system diagnostics", "查看完整系统诊断"),
+    ));
+    lines.push(action_line(
+        "ov config switch",
+        copy(language, "Use another config", "切换到其他配置"),
+    ));
+    lines.push(action_line(
+        "ov config",
+        copy(
+            language,
+            "Add, edit, or delete configs",
+            "添加、编辑或删除配置",
+        ),
+    ));
 
     format!("{}\n", lines.join("\n"))
 }
@@ -59,39 +98,77 @@ pub(crate) fn render_validate_failure(
     active_name: Option<&str>,
     error: &Error,
 ) -> String {
+    render_validate_failure_with_language(config, active_name, error, Language::current())
+}
+
+pub(crate) fn render_validate_failure_with_language(
+    config: &Config,
+    active_name: Option<&str>,
+    error: &Error,
+    language: Language,
+) -> String {
     let mut lines = Vec::new();
-    let kind = ConfigKind::from_config(config).label();
-    let active = active_name.unwrap_or("unknown");
+    let kind = kind_label(ConfigKind::from_config(config), language);
+    let active = active_name.unwrap_or_else(|| unknown(language));
     let classification = ValidationFailureKind::from_error(error);
 
-    lines.push(title("OPENVIKING CONFIG CHECK"));
+    lines.push(title(copy(
+        language,
+        "OPENVIKING CONFIG CHECK",
+        "OPENVIKING 配置检查",
+    )));
     lines.push(String::new());
-    lines.push(section("Config"));
-    lines.push(detail_line("Active", active_value(active, kind)));
-    lines.push(detail_line("Server", path_value(&config.url)));
+    lines.push(section(copy(language, "Config", "配置")));
     lines.push(detail_line(
-        "Config home",
+        copy(language, "Active", "当前配置"),
+        active_value(active, kind),
+    ));
+    lines.push(detail_line(
+        copy(language, "Server", "服务器"),
+        path_value(&config.url),
+    ));
+    lines.push(detail_line(
+        copy(language, "Config home", "配置目录"),
         path_value(&display_config_home()),
     ));
     lines.push(String::new());
-    lines.push(section("Checks"));
-    lines.push(detail_line("Config file", ok_value("valid")));
-    lines.push(detail_line("Server", classification.server_check()));
-    lines.push(detail_line("Auth", classification.auth_check()));
-    lines.push(detail_line("Health", classification.health_check()));
-    lines.push(String::new());
-    lines.push(section("Issue"));
-    lines.push(format!(
-        "  {}",
-        classification
-            .message()
-            .truecolor(ERROR.0, ERROR.1, ERROR.2)
+    lines.push(section(copy(language, "Checks", "检查项")));
+    lines.push(detail_line(
+        copy(language, "Config file", "配置文件"),
+        ok_value(copy(language, "valid", "有效")),
+    ));
+    lines.push(detail_line(
+        copy(language, "Server", "服务器"),
+        classification.server_check(language),
+    ));
+    lines.push(detail_line(
+        copy(language, "Auth", "认证"),
+        classification.auth_check(language),
+    ));
+    lines.push(detail_line(
+        copy(language, "Health", "健康状态"),
+        classification.health_check(language),
     ));
     lines.push(String::new());
-    lines.push(section("Try"));
-    lines.push(action_line("ov health", "Quick server probe"));
-    lines.push(action_line("ov config", "Edit this config"));
-    lines.push(action_line("ov config switch", "Use another config"));
+    lines.push(section(copy(language, "Issue", "问题")));
+    lines.push(format!(
+        "  {}",
+        theme::error(classification.message(language))
+    ));
+    lines.push(String::new());
+    lines.push(section(copy(language, "Try", "可以尝试")));
+    lines.push(action_line(
+        "ov health",
+        copy(language, "Quick server probe", "快速检查服务器"),
+    ));
+    lines.push(action_line(
+        "ov config",
+        copy(language, "Edit this config", "编辑当前配置"),
+    ));
+    lines.push(action_line(
+        "ov config switch",
+        copy(language, "Use another config", "切换到其他配置"),
+    ));
 
     format!("{}\n", lines.join("\n"))
 }
@@ -100,31 +177,42 @@ pub(crate) fn render_switch_header(
     active_name: Option<&str>,
     active_kind: Option<ConfigKind>,
 ) -> String {
+    let language = Language::current();
     let mut lines = Vec::new();
-    lines.push(title("OPENVIKING CONFIG SWITCH"));
+    lines.push(title(copy(
+        language,
+        "OPENVIKING CONFIG SWITCH",
+        "OPENVIKING 配置切换",
+    )));
     lines.push(String::new());
     match (active_name, active_kind) {
         (Some(name), Some(kind)) => lines.push(format!(
             "{} {}",
-            "Active:".dimmed(),
-            active_value(name, kind.label())
+            theme::muted(copy(language, "Active:", "当前配置：")),
+            active_value(name, kind_label(kind, language))
         )),
-        _ => lines.push(format!("{} {}", "Active:".dimmed(), unknown_value("none"))),
+        _ => lines.push(format!(
+            "{} {}",
+            theme::muted(copy(language, "Active:", "当前配置：")),
+            unknown_value(copy(language, "none", "无"))
+        )),
     }
     format!("{}\n", lines.join("\n"))
 }
 
 pub(crate) fn switch_labels(rows: &[SwitchConfigRow]) -> Vec<String> {
+    let language = Language::current();
     rows.iter()
         .map(|row| {
-            let name = format!("{:<NAME_WIDTH$}", row.name)
-                .truecolor(PEARL.0, PEARL.1, PEARL.2)
-                .bold();
-            let kind = format!("{:<KIND_WIDTH$}", row.kind.label()).white();
+            let name = theme::command(pad_to_display_width(&row.name, NAME_WIDTH)).bold();
+            let kind = theme::strong(pad_to_display_width(
+                kind_label(row.kind, language),
+                KIND_WIDTH,
+            ));
             if row.is_active {
                 format!(
                     "{name}{kind}{}",
-                    "[Active]".truecolor(ERROR.0, ERROR.1, ERROR.2).bold()
+                    theme::error(copy(language, "[Active]", "[当前]")).bold()
                 )
             } else {
                 format!("{name}{kind}")
@@ -134,98 +222,154 @@ pub(crate) fn switch_labels(rows: &[SwitchConfigRow]) -> Vec<String> {
 }
 
 pub(crate) fn render_no_saved_configs() -> String {
+    let language = Language::current();
     let mut lines = Vec::new();
-    lines.push(title("OPENVIKING CONFIG SWITCH"));
+    lines.push(title(copy(
+        language,
+        "OPENVIKING CONFIG SWITCH",
+        "OPENVIKING 配置切换",
+    )));
     lines.push(String::new());
-    lines.push(section("No saved configs"));
+    lines.push(section(copy(
+        language,
+        "No saved configs",
+        "没有已保存配置",
+    )));
     lines.push(format!(
         "  {}",
-        "Run ov config to add and save a config first.".dimmed()
+        theme::muted(copy(
+            language,
+            "Run ov config to add and save a config first.",
+            "请先运行 ov config 添加并保存配置。",
+        ))
     ));
     format!("{}\n", lines.join("\n"))
 }
 
 pub(crate) fn render_switch_success(name: &str) -> String {
+    let language = Language::current();
     format!(
         "{} {}\n{}\n",
-        "✓".truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2).bold(),
-        format!("Switched active config to '{name}'.")
-            .truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2)
-            .bold(),
-        format!("  {}", "Run ov status to inspect it.".dimmed())
+        theme::success("✓").bold(),
+        theme::success(copy_switch_success(language, name)).bold(),
+        format!(
+            "  {}",
+            theme::muted(copy(
+                language,
+                "Run ov status to inspect it.",
+                "运行 ov status 查看状态。"
+            ))
+        )
     )
 }
 
 pub(crate) fn render_switch_validation_failure(name: &str, error: &Error) -> String {
+    let language = Language::current();
     let classification = ValidationFailureKind::from_error(error);
     format!(
         "{}\n\n{}\n  {}\n  {}\n\n{}",
-        title("OPENVIKING CONFIG SWITCH"),
-        section("Issue"),
-        format!("Target config '{name}' failed validation.").truecolor(ERROR.0, ERROR.1, ERROR.2),
-        classification.message().dimmed(),
-        action_line("ov config", "Edit this config")
+        title(copy(
+            language,
+            "OPENVIKING CONFIG SWITCH",
+            "OPENVIKING 配置切换"
+        )),
+        section(copy(language, "Issue", "问题")),
+        theme::error(copy_target_validation_failed(language, name)),
+        theme::muted(classification.message(language)),
+        action_line(
+            "ov config",
+            copy(language, "Edit this config", "编辑这个配置")
+        )
     )
 }
 
+fn copy<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
+fn unknown(language: Language) -> &'static str {
+    copy(language, "unknown", "未知")
+}
+
+fn kind_label(kind: ConfigKind, language: Language) -> &'static str {
+    match language {
+        Language::En => kind.label(),
+        Language::ZhCn => match kind {
+            ConfigKind::VolcengineCloud => "火山引擎云",
+            ConfigKind::SelfManaged => "自托管",
+        },
+    }
+}
+
+fn copy_switch_success(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Switched active config to '{name}'."),
+        Language::ZhCn => format!("已切换当前配置为 '{name}'。"),
+    }
+}
+
+fn copy_target_validation_failed(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Target config '{name}' failed validation."),
+        Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
+    }
+}
+
 fn title(value: &str) -> String {
-    value
-        .truecolor(PEARL.0, PEARL.1, PEARL.2)
-        .bold()
-        .to_string()
+    theme::brand_title(value).bold().to_string()
 }
 
 fn section(value: &str) -> String {
-    value.truecolor(JADE.0, JADE.1, JADE.2).bold().to_string()
+    theme::heading(value).bold().to_string()
 }
 
 fn detail_line(label: &str, value: String) -> String {
-    let label = format!("{label:<LABEL_WIDTH$}").dimmed();
+    let label = theme::muted(pad_to_display_width(label, LABEL_WIDTH));
     format!("  {label}{value}")
 }
 
 fn action_line(command: &str, description: &str) -> String {
-    let command = format!("{command:<ACTION_WIDTH$}")
-        .truecolor(JADE.0, JADE.1, JADE.2)
-        .bold();
-    format!("  {command}{}", description.dimmed())
+    let command = theme::command(pad_to_display_width(command, ACTION_WIDTH)).bold();
+    format!("  {command}{}", theme::muted(description))
+}
+
+fn pad_to_display_width(value: &str, width: usize) -> String {
+    format!(
+        "{}{}",
+        value,
+        " ".repeat(width.saturating_sub(UnicodeWidthStr::width(value)))
+    )
 }
 
 fn active_value(name: &str, kind: &str) -> String {
     format!(
         "{} {}",
-        name.truecolor(ORANGE.0, ORANGE.1, ORANGE.2).bold(),
-        format!("({kind})").white().bold()
+        theme::config_name(name).bold(),
+        theme::strong(format!("({kind})"))
     )
 }
 
 fn path_value(value: &str) -> String {
-    value.truecolor(ICE.0, ICE.1, ICE.2).to_string()
+    theme::value(value).to_string()
 }
 
 fn ok_value(value: &str) -> String {
-    value
-        .truecolor(HEALTHY.0, HEALTHY.1, HEALTHY.2)
-        .bold()
-        .to_string()
+    theme::success(value).bold().to_string()
 }
 
 fn warn_value(value: &str) -> String {
-    value
-        .truecolor(WARNING.0, WARNING.1, WARNING.2)
-        .bold()
-        .to_string()
+    theme::warning(value).bold().to_string()
 }
 
 fn fail_value(value: &str) -> String {
-    value
-        .truecolor(ERROR.0, ERROR.1, ERROR.2)
-        .bold()
-        .to_string()
+    theme::error(value).bold().to_string()
 }
 
 fn unknown_value(value: &str) -> String {
-    value.dimmed().to_string()
+    theme::muted(value).to_string()
 }
 
 fn display_config_home() -> String {
@@ -262,37 +406,45 @@ impl ValidationFailureKind {
         }
     }
 
-    fn server_check(self) -> String {
+    fn server_check(self, language: Language) -> String {
         match self {
-            Self::Network => fail_value("unreachable"),
-            Self::Auth | Self::Unhealthy => ok_value("reachable"),
-            Self::Other => warn_value("unknown"),
+            Self::Network => fail_value(copy(language, "unreachable", "无法连接")),
+            Self::Auth | Self::Unhealthy => ok_value(copy(language, "reachable", "可连接")),
+            Self::Other => warn_value(unknown(language)),
         }
     }
 
-    fn auth_check(self) -> String {
+    fn auth_check(self, language: Language) -> String {
         match self {
-            Self::Auth => fail_value("rejected"),
-            Self::Network => warn_value("not checked"),
-            Self::Unhealthy => ok_value("accepted"),
-            Self::Other => warn_value("unknown"),
+            Self::Auth => fail_value(copy(language, "rejected", "被拒绝")),
+            Self::Network => warn_value(copy(language, "not checked", "未检查")),
+            Self::Unhealthy => ok_value(copy(language, "accepted", "已通过")),
+            Self::Other => warn_value(unknown(language)),
         }
     }
 
-    fn health_check(self) -> String {
+    fn health_check(self, language: Language) -> String {
         match self {
-            Self::Unhealthy => fail_value("unhealthy"),
-            Self::Network | Self::Auth => warn_value("not checked"),
-            Self::Other => warn_value("unknown"),
+            Self::Unhealthy => fail_value(copy(language, "unhealthy", "不健康")),
+            Self::Network | Self::Auth => warn_value(copy(language, "not checked", "未检查")),
+            Self::Other => warn_value(unknown(language)),
         }
     }
 
-    fn message(self) -> &'static str {
-        match self {
-            Self::Network => "Could not reach the configured OpenViking server.",
-            Self::Auth => "OpenViking rejected the API key for this config.",
-            Self::Unhealthy => "OpenViking is reachable but reported an unhealthy state.",
-            Self::Other => "The active config could not be validated.",
+    fn message(self, language: Language) -> &'static str {
+        match language {
+            Language::En => match self {
+                Self::Network => "Could not reach the configured OpenViking server.",
+                Self::Auth => "OpenViking rejected the API key for this config.",
+                Self::Unhealthy => "OpenViking is reachable but reported an unhealthy state.",
+                Self::Other => "The active config could not be validated.",
+            },
+            Language::ZhCn => match self {
+                Self::Network => "无法连接已配置的 OpenViking 服务器。",
+                Self::Auth => "OpenViking 拒绝了这个配置的 API Key。",
+                Self::Unhealthy => "服务器可连接，但健康状态异常。",
+                Self::Other => "当前配置验证失败。",
+            },
         }
     }
 }
