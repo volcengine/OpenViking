@@ -40,6 +40,7 @@ const zhCN = {
   common: {
     action: {
       cancel: '取消',
+      close: '关闭',
       saveConnection: '保存连接',
       showAdvancedIdentityFields: '显示高级身份字段',
     },
@@ -66,6 +67,11 @@ const zhCN = {
     },
     dialog: {
       title: '连接与身份',
+    },
+    proxyMode: {
+      title: '自动代理模式',
+      description:
+        '同域后端正在以服务端配置的 API Key 转发请求到 OpenViking Server。浏览器看不到任何凭证，连接设置已锁定。',
     },
     identitySummary: {
       dev: '服务端隐式身份',
