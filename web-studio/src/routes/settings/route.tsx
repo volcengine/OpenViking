@@ -724,17 +724,31 @@ function SettingsRoute() {
         </p>
       </header>
 
-      <Card>
-        <CardHeader className="gap-1.5 border-b bg-muted/20">
+      <Card className="overflow-hidden border-primary/25 bg-primary/[0.025] shadow-sm ring-1 ring-primary/10">
+        <CardHeader className="gap-2 border-b border-primary/15 bg-primary/[0.07] px-5 py-3.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle>{t('connection.title')}</CardTitle>
-              <CardDescription>{t('connection.description')}</CardDescription>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                  <KeyRoundIcon className="size-4" />
+                </div>
+                <CardTitle>{t('connection.title')}</CardTitle>
+                <Badge
+                  variant="outline"
+                  className="border-primary/25 bg-background/80 text-primary"
+                >
+                  {t(`serverMode.${serverMode}`)}
+                </Badge>
+              </div>
+              <CardDescription className="mt-1">
+                {t('connection.description')}
+              </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => void refreshAdmin()}
                 disabled={!canQueryAdmin || accountsQuery.isFetching}
               >
@@ -743,15 +757,15 @@ function SettingsRoute() {
                 />
                 {t('actions.refresh')}
               </Button>
-              <Button type="button" onClick={handleSave}>
+              <Button type="button" size="sm" onClick={handleSave}>
                 <SaveIcon />
                 {t('actions.save')}
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-4 pt-6">
-          <div className="grid gap-4 xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)_minmax(11rem,0.8fr)]">
+        <CardContent className="grid gap-3 px-5 py-4">
+          <div className="grid gap-3 xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)_minmax(11rem,0.8fr)]">
             <Field>
               <FieldLabel htmlFor="settings-base-url">
                 {t('fields.baseUrl')}
@@ -812,7 +826,7 @@ function SettingsRoute() {
               </FieldContent>
             </Field>
           </div>
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_12rem]">
+          <div className="grid gap-3">
             <Field>
               <FieldLabel htmlFor="settings-api-key">
                 {t('fields.apiKey')}
@@ -829,11 +843,6 @@ function SettingsRoute() {
                 />
               </FieldContent>
             </Field>
-            <div className="flex items-end">
-              <Badge variant="outline" className="h-9 px-3">
-                {t(`serverMode.${serverMode}`)}
-              </Badge>
-            </div>
           </div>
           {!canQueryAdmin ? (
             <p className="text-sm text-muted-foreground">

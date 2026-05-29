@@ -30,14 +30,6 @@ import {
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
 import { buttonVariants } from '#/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -58,6 +50,7 @@ import {
   SidebarTrigger,
 } from '#/components/ui/sidebar'
 import { AppConnectionProvider } from '#/hooks/use-app-connection'
+import { cn } from '#/lib/utils'
 import {
   useSessionList,
   useCreateSession,
@@ -354,9 +347,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
-  const currentLanguageOption =
-    LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ??
-    LANGUAGE_OPTIONS[0]
   const [oauthSetupOpen, setOauthSetupOpen] = React.useState(false)
   const settingsActive = pathname === '/settings'
   const oauthSetupActive =
@@ -525,46 +515,35 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               <MoonIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             </button>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={t('language.label', { ns: 'common' })}
-                className={buttonVariants({ size: 'sm', variant: 'ghost' })}
-              >
-                <LanguagesIcon />
-                <span className="hidden sm:inline">
-                  {currentLanguageOption.shortLabel}
-                </span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-32 min-w-32">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>
-                    {t('language.label', { ns: 'common' })}
-                  </DropdownMenuLabel>
-                  {LANGUAGE_OPTIONS.map((item) => {
-                    const isActive = item.value === currentLanguage
+            <div
+              aria-label={t('language.label', { ns: 'common' })}
+              className="flex h-9 items-center gap-0.5 rounded-md border bg-muted/60 p-0.5 text-sm"
+              role="group"
+            >
+              <LanguagesIcon className="mx-1 size-4 text-muted-foreground" />
+              {LANGUAGE_OPTIONS.map((item) => {
+                const isActive = item.value === currentLanguage
 
-                    return (
-                      <DropdownMenuItem
-                        key={item.value}
-                        className="justify-between"
-                        onClick={() => {
-                          if (!isActive) {
-                            void i18n.changeLanguage(item.value)
-                          }
-                        }}
-                      >
-                        <span>{item.title}</span>
-                        {isActive ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t('language.current', { ns: 'common' })}
-                          </span>
-                        ) : null}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={isActive}
+                    className={cn(
+                      'h-7 rounded-sm px-2 font-medium text-muted-foreground transition-colors hover:text-foreground',
+                      isActive && 'bg-background text-foreground shadow-xs',
+                    )}
+                    onClick={() => {
+                      if (!isActive) {
+                        void i18n.changeLanguage(item.value)
+                      }
+                    }}
+                  >
+                    {item.shortLabel}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </header>
 
