@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-import asyncio
 import os
 import time
 from dataclasses import asdict
@@ -85,17 +84,6 @@ search_router = APIRouter(prefix="/api/vikingdb/data/search", tags=["Search"])
 # ==================== Dependencies ====================
 
 
-async def run_blocking(func, /, *args, **kwargs):
-    """Run sync collection/project operations in a worker thread.
-
-    The vectordb service exposes async FastAPI routes, while the shared
-    ICollection / project interfaces are currently synchronous. Offloading them
-    keeps Qdrant and other sync backends from blocking the event loop.
-    """
-
-    return await asyncio.to_thread(func, *args, **kwargs)
-
-
 def get_project(project_name: str = "default"):
     """Get project instance"""
     return project_group.get_or_create_project(project_name)
@@ -150,7 +138,7 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
 
     project = get_project(project_name)
 
-    if await run_blocking(project.has_collection, collection_name):
+    if project.has_collection(collection_name):
         return error_response("collection exist", ErrorCode.COLLECTION_EXIST.value, request=req)
 
     meta_data = {
@@ -165,7 +153,7 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
     logger.debug(f"Collection meta_data: {meta_data}")
 
     try:
-        await run_blocking(project.create_collection, collection_name, meta_data)
+        project.create_collection(collection_name, meta_data)
         logger.info(f"Collection created successfully: {collection_name}")
         return success_response("create collection success", request=req)
     except Exception as e:
@@ -186,7 +174,7 @@ async def update_collection(request: CollectionUpdateRequest, req: Request):
         )
         description = request.Description
         fields = data_utils.convert_dict(request.Fields)
-        await run_blocking(collection.update, fields, description)
+        collection.update(fields, description)
         return success_response("update collection success", request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -195,7 +183,7 @@ async def update_collection(request: CollectionUpdateRequest, req: Request):
 @collection_router.get("/GetVikingdbCollection", response_model=ApiResponse)
 async def get_collection_info(req: Request, collection: Any = Depends(get_collection_dependency)):
     """Get collection information"""
-    meta_data = await run_blocking(collection.get_meta_data)
+    meta_data = collection.get_meta_data()
     return success_response("collection info", meta_data, request=req)
 
 
@@ -205,7 +193,7 @@ async def list_collections(
 ):
     """List all collections"""
     project = get_project(ProjectName)
-    collection_list = await run_blocking(project.list_collections)
+    collection_list = project.list_collections()
     return success_response("collection list", collection_list, request=req)
 
 
@@ -229,7 +217,7 @@ async def drop_collection(request: CollectionDropRequest, req: Request):
     # The original code did NOT check if collection exists, it just dropped it.
     # Assuming idempotent or underlying raises.
     try:
-        await run_blocking(project.drop_collection, request.CollectionName)
+        project.drop_collection(request.CollectionName)
         return success_response("drop collection success", request=req)
     except Exception as e:
         # Catch potential errors
@@ -249,7 +237,7 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
         data_list = data_utils.convert_dict(request.fields)
 
         logger.debug(f"Upserting {len(data_list)} records to {request.collection_name}")
-        result = await run_blocking(collection.upsert_data, data_list, ttl)
+        result = collection.upsert_data(data_list=data_list, ttl=ttl)
         if not result or not result.ids:
             return error_response("upsert data err", ErrorCode.INTERNAL_ERR.value, request=req)
 
@@ -266,7 +254,7 @@ async def fetch_data(
 ):
     """Fetch data from collection"""
     primary_keys = data_utils.convert_dict(ids)
-    data = await run_blocking(collection.fetch_data, primary_keys)
+    data = collection.fetch_data(primary_keys=primary_keys)
     return success_response("fetch data success", asdict(data), request=req)
 
 
@@ -280,10 +268,10 @@ async def delete_data(request: DataDeleteRequest, req: Request):
         del_all = request.del_all or False
 
         if del_all:
-            await run_blocking(collection.delete_all_data)
+            collection.delete_all_data()
             return success_response("del data success", {"deleted": "all"}, request=req)
         else:
-            await run_blocking(collection.delete_data, primary_keys)
+            collection.delete_data(primary_keys=primary_keys)
             return success_response("del data success", {"deleted": len(primary_keys)}, request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -319,7 +307,7 @@ async def create_index(request: IndexCreateRequest, req: Request):
             meta_data["Description"] = description
 
         logger.info(f"Creating index: {index_name} in collection: {request.CollectionName}")
-        await run_blocking(collection.create_index, index_name, meta_data)
+        collection.create_index(index_name, meta_data)
         return success_response("create index success", request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -340,7 +328,7 @@ async def update_index(request: IndexUpdateRequest, req: Request):
         scalar_index = data_utils.convert_dict(request.ScalarIndex)
         description = request.Description
 
-        await run_blocking(collection.update_index, index_name, scalar_index, description)
+        collection.update_index(index_name, scalar_index, description)
         return success_response("update index success", request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -356,14 +344,14 @@ async def get_index_info(
     if not IndexName:
         return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
 
-    data = await run_blocking(collection.get_index_meta_data, IndexName)
+    data = collection.get_index_meta_data(IndexName)
     return success_response("get index meta data success", data, request=req)
 
 
 @index_router.get("/ListVikingdbIndex", response_model=ApiResponse)
 async def list_indexes(req: Request, collection: Any = Depends(get_collection_dependency)):
     """List all indexes"""
-    data = await run_blocking(collection.list_indexes)
+    data = collection.list_indexes()
     return success_response("list indexes success", data, request=req)
 
 
@@ -379,7 +367,7 @@ async def drop_index(request: IndexDropRequest, req: Request):
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
 
-        await run_blocking(collection.drop_index, index_name)
+        collection.drop_index(index_name)
         return success_response("drop index success", request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -415,8 +403,7 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
                 request=req,
             )
 
-        result = await run_blocking(
-            collection.search_by_vector,
+        result = collection.search_by_vector(
             index_name=index_name,
             dense_vector=dense_vector,
             limit=limit,
@@ -459,8 +446,7 @@ async def search_by_id(request: SearchByIdRequest, req: Request):
                 request=req,
             )
 
-        result = await run_blocking(
-            collection.search_by_id,
+        result = collection.search_by_id(
             index_name=index_name,
             id=id_value,
             limit=limit,
@@ -510,8 +496,7 @@ async def search_by_multimodal(request: SearchByMultiModalRequest, req: Request)
             )
 
         try:
-            result = await run_blocking(
-                collection.search_by_multimodal,
+            result = collection.search_by_multimodal(
                 index_name=index_name,
                 text=text,
                 image=image,
@@ -559,8 +544,7 @@ async def search_by_scalar(request: SearchByScalarRequest, req: Request):
                 request=req,
             )
 
-        result = await run_blocking(
-            collection.search_by_scalar,
+        result = collection.search_by_scalar(
             index_name=index_name,
             field=field,
             order=order,
@@ -599,8 +583,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
                 request=req,
             )
 
-        result = await run_blocking(
-            collection.search_by_random,
+        result = collection.search_by_random(
             index_name=index_name,
             limit=limit,
             offset=offset,
@@ -648,8 +631,7 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
             )
 
         try:
-            result = await run_blocking(
-                collection.search_by_keywords,
+            result = collection.search_by_keywords(
                 index_name=index_name,
                 keywords=keywords,
                 query=query,
