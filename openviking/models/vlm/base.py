@@ -190,6 +190,8 @@ class VLMBase(ABC):
         prompt_tokens: int,
         completion_tokens: int,
         duration_seconds: float = 0.0,
+        prompt_cached_tokens: int = 0,
+        completion_reasoning_tokens: int = 0,
     ) -> None:
         """Update token usage
 
@@ -199,6 +201,8 @@ class VLMBase(ABC):
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
             duration_seconds: Wall-clock duration of the VLM call in seconds
+            prompt_cached_tokens: Number of cached prompt tokens from provider usage details
+            completion_reasoning_tokens: Number of reasoning completion tokens from provider usage details
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -210,10 +214,14 @@ class VLMBase(ABC):
         try:
             from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
 
-            get_current_telemetry().add_token_usage(
+            telemetry = get_current_telemetry()
+            stage = get_current_telemetry_stage() or "vlm"
+            telemetry.add_token_usage(
                 prompt_tokens,
                 completion_tokens,
-                stage=get_current_telemetry_stage() or "vlm",
+                stage=stage,
+                prompt_cached_tokens=max(int(prompt_cached_tokens), 0),
+                completion_reasoning_tokens=max(int(completion_reasoning_tokens), 0),
             )
         except Exception as e:
             # Telemetry must never break model inference.

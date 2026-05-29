@@ -187,6 +187,8 @@ class SessionMeta:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
         }
     )
     embedding_token_usage: Dict[str, int] = field(
@@ -258,6 +260,8 @@ class SessionMeta:
                 "prompt_tokens": llm_token_usage.get("prompt_tokens", 0),
                 "completion_tokens": llm_token_usage.get("completion_tokens", 0),
                 "total_tokens": llm_token_usage.get("total_tokens", 0),
+                "cached_tokens": llm_token_usage.get("cached_tokens", 0),
+                "reasoning_tokens": llm_token_usage.get("reasoning_tokens", 0),
             },
             embedding_token_usage={
                 "total_tokens": embedding_token_usage.get("total_tokens", 0),
@@ -1416,7 +1420,9 @@ class Session:
                         "embedding": dict(self._meta.embedding_token_usage),
                         "total": {
                             "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                            + self._meta.embedding_token_usage["total_tokens"]
+                            + self._meta.embedding_token_usage["total_tokens"],
+                            "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                            "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
                         },
                     },
                 },
@@ -1898,6 +1904,8 @@ class Session:
             latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
             latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
             latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
             embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
             latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
