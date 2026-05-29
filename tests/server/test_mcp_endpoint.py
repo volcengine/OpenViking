@@ -361,7 +361,7 @@ async def test_add_resource_local_path_uses_config_when_env_unset(service, monke
     upload_token_store.clear()
 
 
-async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, monkeypatch):
+async def test_add_resource_local_path_ignores_untrusted_forwarded_headers(service, monkeypatch):
     from openviking.server.mcp_endpoint import _request_url_ctx
     from openviking.server.upload_token_store import upload_token_store
 
@@ -371,7 +371,7 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     token = _request_url_ctx.set(
         {
             "x_forwarded_proto": "https",
-            "x_forwarded_host": "ov.public.example.com",
+            "x_forwarded_host": "attacker.example.com",
             "host": "internal:1933",
         }
     )
@@ -380,8 +380,59 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     finally:
         _request_url_ctx.reset(token)
 
-    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "attacker.example.com" not in result
+    assert "http://127.0.0.1:1933/api/v1/resources/temp_upload_signed" in result
     # Inferred → hint must appear
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_ignores_untrusted_host_header(service, monkeypatch):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+
+    token = _request_url_ctx.set(
+        {
+            "x_forwarded_proto": None,
+            "x_forwarded_host": None,
+            "host": "attacker.example.com",
+        }
+    )
+    try:
+        result = await add_resource(path="/tmp/x.pdf")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "attacker.example.com" not in result
+    assert "http://127.0.0.1:1933/api/v1/resources/temp_upload_signed" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_allows_loopback_host_for_local_clients(service, monkeypatch):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+
+    token = _request_url_ctx.set(
+        {
+            "x_forwarded_proto": "https",
+            "x_forwarded_host": "attacker.example.com",
+            "host": "localhost:1933",
+        }
+    )
+    try:
+        result = await add_resource(path="/tmp/x.pdf")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "attacker.example.com" not in result
+    assert "http://localhost:1933/api/v1/resources/temp_upload_signed" in result
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
     upload_token_store.clear()
 
