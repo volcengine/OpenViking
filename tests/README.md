@@ -95,6 +95,9 @@ pytest tests/vectordb/ -v
 
 # Test full end-to-end workflow
 pytest tests/integration/test_full_workflow.py -v
+
+# Test Qdrant adapter integration (requires local/remote Qdrant)
+QDRANT_URL=http://127.0.0.1:6333 pytest tests/integration/test_qdrant_integration.py -v -s
 ```
 
 ### C++ Engine Tests
@@ -198,3 +201,4 @@ End-to-end workflow tests.
 | File | Description | Key Test Cases |
 |------|-------------|----------------|
 | `test_full_workflow.py` | Complete workflows | Resource→vectorize→search flow; Session conversation→commit→memory extraction; Export→delete→import roundtrip; Full E2E with all components |
+| `test_qdrant_integration.py` | Qdrant adapter integration | Collection create/drop; upsert/get/count; vector query; PathScope filter; scalar ordering; metadata sidecar |

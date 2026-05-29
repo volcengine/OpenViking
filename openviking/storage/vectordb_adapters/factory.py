@@ -7,12 +7,14 @@ from __future__ import annotations
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import LocalCollectionAdapter
+from .qdrant_adapter import QdrantCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
 _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "local": LocalCollectionAdapter,
     "http": HttpCollectionAdapter,
+    "qdrant": QdrantCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
 }
