@@ -816,3 +816,7 @@ The OpenViking project uses different licenses for different components:
 - **third\_party**: Respective original licenses of third-party projects
 
 <!-- Link Definitions -->
+## Community Integrations
+
+- [openviking-claude-desktop](https://github.com/itzsamehfawzi/openviking-claude-desktop)
+  — Claude Desktop MCP bridge + Claude Code auto-recall/capture for Windows (by Sameh Khalifa)
