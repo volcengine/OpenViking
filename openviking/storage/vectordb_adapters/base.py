@@ -500,6 +500,16 @@ class CollectionAdapter(ABC):
                 return int(stripped)
         return None
 
+    @staticmethod
+    def _extract_count_total(agg: Dict[str, Any]) -> Optional[int]:
+        for key in ("_total", "__TOTAL__", "__total_count__"):
+            if key not in agg:
+                continue
+            parsed_total = CollectionAdapter._coerce_int(agg.get(key))
+            if parsed_total is not None:
+                return parsed_total
+        return None
+
     def count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         coll = self.get_collection()
         result = coll.aggregate_data(
@@ -507,10 +517,9 @@ class CollectionAdapter(ABC):
             op="count",
             filters=self._compile_filter(filter),
         )
-        if "__TOTAL__" in result.agg:
-            parsed_total = self._coerce_int(result.agg.get("__TOTAL__"))
-            if parsed_total is not None:
-                return parsed_total
+        parsed_total = self._extract_count_total(result.agg)
+        if parsed_total is not None:
+            return parsed_total
 
         return 0
 

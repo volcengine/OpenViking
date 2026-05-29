@@ -400,6 +400,7 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         config.account.clone(),
         config.user.clone(),
         STATUS_BOX_PROBE_TIMEOUT_SECS,
+        config.profile,
         config.extra_headers.clone(),
     );
 

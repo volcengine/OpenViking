@@ -69,6 +69,14 @@ class OpenVikingConfig(BaseModel):
 
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
 
+    query_planner: Optional[VLMConfig] = Field(
+        default=None,
+        description=(
+            "Optional lightweight model configuration for retrieval intent analysis and query "
+            "planning. Falls back to vlm when unset or empty."
+        ),
+    )
+
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
 
     retrieval: RetrievalConfig = Field(
@@ -292,6 +300,12 @@ class OpenVikingConfig(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return self.model_dump()
+
+    def get_query_planner(self) -> VLMConfig:
+        """Return the model config used for retrieval intent analysis and query planning."""
+        if self.query_planner is not None and self.query_planner._has_any_config():
+            return self.query_planner
+        return self.vlm
 
 
 class OpenVikingConfigSingleton:

@@ -125,6 +125,9 @@ class TestToolPart:
         assert part.duration_ms is None
         assert part.prompt_tokens is None
         assert part.completion_tokens is None
+        assert part.tool_output_ref == ""
+        assert part.tool_output_truncated is False
+        assert part.tool_output_mime_type == "text/plain"
         assert part.type == "tool"
 
     def test_custom_values(self):
@@ -140,6 +143,13 @@ class TestToolPart:
             duration_ms=150.5,
             prompt_tokens=100,
             completion_tokens=50,
+            tool_output_ref="viking://session/s1/tool-results/tr_call",
+            tool_output_truncated=True,
+            tool_output_original_chars=1000,
+            tool_output_preview_chars=100,
+            tool_output_sha256="abc123",
+            tool_output_group_id="msg-1",
+            tool_output_externalized_reason="single_threshold",
         )
 
         assert part.tool_id == "call-123"
@@ -152,6 +162,13 @@ class TestToolPart:
         assert part.duration_ms == 150.5
         assert part.prompt_tokens == 100
         assert part.completion_tokens == 50
+        assert part.tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert part.tool_output_truncated is True
+        assert part.tool_output_original_chars == 1000
+        assert part.tool_output_preview_chars == 100
+        assert part.tool_output_sha256 == "abc123"
+        assert part.tool_output_group_id == "msg-1"
+        assert part.tool_output_externalized_reason == "single_threshold"
 
     def test_tool_statuses(self):
         """Test various tool statuses."""
@@ -222,6 +239,11 @@ class TestPartFromDict:
             "duration_ms": 150.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
+            "tool_output_ref": "viking://session/s1/tool-results/tr_call",
+            "tool_output_truncated": True,
+            "tool_output_original_chars": 1000,
+            "tool_output_preview_chars": 100,
+            "tool_output_sha256": "abc123",
         }
 
         part = part_from_dict(data)
@@ -230,6 +252,11 @@ class TestPartFromDict:
         assert part.tool_id == "call-123"
         assert part.tool_name == "search"
         assert part.tool_status == "completed"
+        assert part.tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert part.tool_output_truncated is True
+        assert part.tool_output_original_chars == 1000
+        assert part.tool_output_preview_chars == 100
+        assert part.tool_output_sha256 == "abc123"
 
     def test_unknown_type_defaults_to_text(self):
         """Test unknown type defaults to TextPart."""
@@ -426,6 +453,11 @@ class TestMessageToDict:
                     duration_ms=100,
                     prompt_tokens=50,
                     completion_tokens=25,
+                    tool_output_ref="viking://session/s1/tool-results/tr_call",
+                    tool_output_truncated=True,
+                    tool_output_original_chars=1000,
+                    tool_output_preview_chars=100,
+                    tool_output_externalized_reason="single_threshold",
                 )
             ],
         )
@@ -435,6 +467,11 @@ class TestMessageToDict:
         assert d["parts"][0]["type"] == "tool"
         assert d["parts"][0]["tool_id"] == "call-1"
         assert d["parts"][0]["duration_ms"] == 100
+        assert d["parts"][0]["tool_output_ref"] == "viking://session/s1/tool-results/tr_call"
+        assert d["parts"][0]["tool_output_truncated"] is True
+        assert d["parts"][0]["tool_output_original_chars"] == 1000
+        assert d["parts"][0]["tool_output_preview_chars"] == 100
+        assert d["parts"][0]["tool_output_externalized_reason"] == "single_threshold"
 
     def test_to_dict_timestamp_format(self):
         """Test timestamp format in to_dict."""
@@ -504,6 +541,11 @@ class TestMessageFromDict:
                     "tool_name": "search",
                     "tool_uri": "viking://tools/1",
                     "tool_status": "completed",
+                    "tool_output_ref": "viking://session/s1/tool-results/tr_call",
+                    "tool_output_truncated": True,
+                    "tool_output_original_chars": 1000,
+                    "tool_output_preview_chars": 100,
+                    "tool_output_externalized_reason": "single_threshold",
                 }
             ],
             "created_at": "2026-03-26T10:30:00Z",
@@ -513,6 +555,11 @@ class TestMessageFromDict:
 
         assert isinstance(msg.parts[0], ToolPart)
         assert msg.parts[0].tool_id == "call-1"
+        assert msg.parts[0].tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert msg.parts[0].tool_output_truncated is True
+        assert msg.parts[0].tool_output_original_chars == 1000
+        assert msg.parts[0].tool_output_preview_chars == 100
+        assert msg.parts[0].tool_output_externalized_reason == "single_threshold"
 
     def test_from_dict_supports_legacy_content_only_messages(self):
         """Legacy messages with only content should load as a TextPart."""

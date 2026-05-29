@@ -32,7 +32,7 @@ export function RetrievalSearchBar({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+        className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/60 md:text-sm"
       />
       <Button
         variant="ghost"

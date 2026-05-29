@@ -12,30 +12,34 @@ import type {
   ConsoleDashboardSummaryResult,
   ConsoleTokenSeriesResult,
 } from '@ov-server/api/v1/console'
-import { getLastDaysRange } from './format'
+import { getLastDaysRange, getViewerTimezone } from './format'
 
 export function fetchConsoleDashboardSummary(): Promise<ConsoleDashboardSummaryResult> {
   return getOvResult<ConsoleDashboardSummaryResult>(
-    getConsoleDashboardSummary(),
+    getConsoleDashboardSummary({ query: { timezone: getViewerTimezone() } }),
   )
 }
 
 export function fetchConsoleTokenSeries(): Promise<ConsoleTokenSeriesResult> {
-  const range = getLastDaysRange(TOKEN_SERIES_DAYS)
+  const tz = getViewerTimezone()
+  const range = getLastDaysRange(TOKEN_SERIES_DAYS, tz)
   const query: ConsoleSeriesQuery = {
     bucket: 'day',
     end_date: range.endDate,
     start_date: range.startDate,
+    timezone: tz,
   }
   return getOvResult<ConsoleTokenSeriesResult>(getConsoleTokens({ query }))
 }
 
 export function fetchConsoleContextCommits(): Promise<ConsoleContextCommitsResult> {
-  const range = getLastDaysRange(COMMIT_SERIES_DAYS)
+  const tz = getViewerTimezone()
+  const range = getLastDaysRange(COMMIT_SERIES_DAYS, tz)
   const query: ConsoleSeriesQuery = {
     bucket: '4h',
     end_date: range.endDate,
     start_date: range.startDate,
+    timezone: tz,
   }
   return getOvResult<ConsoleContextCommitsResult>(
     getConsoleContextCommits({ query }),

@@ -7,6 +7,7 @@ Converts EPub e-books to Markdown then parses using MarkdownParser.
 Inspired by microsoft/markitdown approach.
 """
 
+import asyncio
 import html
 import re
 import zipfile
@@ -111,7 +112,7 @@ class EPubParser(BaseParser):
         path = Path(source)
 
         if path.exists():
-            markdown_content = self._convert_to_markdown(path)
+            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path)
             result = await self._md_parser.parse_content(
                 markdown_content, source_path=str(path), instruction=instruction, **kwargs
             )

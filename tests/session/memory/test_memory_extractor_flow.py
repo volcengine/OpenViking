@@ -476,7 +476,7 @@ def create_update_conversation() -> List[Message]:
     return messages
 
 
-class TestMemoryExtractorFlow:
+class TestExtractLoopFlow:
     """Test the complete memory extraction flow."""
 
     @pytest.mark.integration

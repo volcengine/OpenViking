@@ -19,7 +19,7 @@ That command installs an AgentSkill named `openviking`, not the OpenClaw plugin.
 Use this plugin command instead:
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 ## Requirements
@@ -36,7 +36,7 @@ OpenClaw plugin package boundaries:
 - `2026.4.8` is the minimum supported OpenClaw version for the current plugin.
 - `2026.5.3` starts validating package installs so TypeScript plugin entries need compiled JavaScript output.
 - `2026.5.4` and later stop falling back to `.ts` source for installed/global plugin runtime loading when compiled JavaScript is missing.
-- The recommended `openclaw plugins install @openviking/openclaw-plugin` path installs a published package that already includes `dist/*.js`.
+- The recommended `openclaw plugins install clawhub:@openviking/openclaw-plugin` path installs a published package that already includes `dist/*.js`.
 - `ov-install` is the backup/source install path. Use it when ClawHub or the OpenClaw plugin manager path is unavailable/rate-limited, or when explicitly testing a source ref. For OpenClaw `>= 2026.5.3`, it builds the plugin during installation.
 
 Quick check:
@@ -87,7 +87,7 @@ Use this path for normal users, production installs, and agent-assisted installs
 ### 1. Install The Plugin
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 If your OpenClaw installation requires an explicit registry prefix, use:
@@ -253,7 +253,7 @@ This checks the Gateway to OpenViking path by injecting a real conversation and 
 
 ## Backup Path: ov-install
 
-`ov-install` is the backup path, not the primary install path. Use it when `openclaw plugins install @openviking/openclaw-plugin` cannot reach ClawHub, is rate-limited, or when you explicitly need to install/test plugin files from a Git branch or source ref.
+`ov-install` is the backup path, not the primary install path. Use it when `openclaw plugins install clawhub:@openviking/openclaw-plugin` cannot reach ClawHub, is rate-limited, or when you explicitly need to install/test plugin files from a Git branch or source ref.
 
 Try the OpenClaw plugin manager first. If that path is unavailable, run:
 
@@ -267,14 +267,14 @@ Useful backup/source flags:
 | Flag | Meaning |
 | --- | --- |
 | `--workdir PATH` | Target OpenClaw state directory |
-| `--version REF` | Git ref, tag, branch, or release version to install |
+| `--plugin-version=REF` | Plugin version: npm version, npm dist-tag, or Git ref to install |
 | `--current-version` | Print the version tracked by the helper |
 | `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
 | `--api-key KEY` | OpenViking API key |
 | `--agent-prefix PREFIX` | Agent routing prefix |
 | `--update` | Update an existing helper-managed install |
 
-For user-facing installs, use `openclaw plugins install @openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.
+For user-facing installs, use `openclaw plugins install clawhub:@openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.
 
 ## Migrate From ov-install To openclaw plugin install
 
@@ -289,7 +289,7 @@ The ov-install context-engine deployment writes files to `~/.openclaw/extensions
 rm -rf ~/.openclaw/extensions/openviking/
 
 # Install via the OpenClaw plugin manager
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 
 # Reconfigure (your existing config in openclaw.json is preserved)
 openclaw openviking setup --reconfigure
@@ -347,7 +347,7 @@ openclaw config set plugins.slots.memory none
 rm -rf ~/.openclaw/extensions/memory-openviking/
 
 # Install new plugin
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
 openclaw openviking status --json

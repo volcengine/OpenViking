@@ -232,10 +232,9 @@ async def grep(
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(resolved_uri, "file")
+        mapped = map_exception(e, resource=resolved_uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=resolved_uri, resource_type="file")
@@ -260,10 +259,9 @@ async def glob(
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri or request.pattern, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(resolved_uri or request.pattern, "file")
+        mapped = map_exception(e, resource=resolved_uri or request.pattern, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     except Exception as exc:
         mapped = map_exception(exc, resource=request.uri, resource_type="file")

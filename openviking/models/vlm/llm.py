@@ -175,17 +175,18 @@ class StructuredVLM:
         self,
         prompt: str = "",
         schema: Optional[Dict[str, Any]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Get JSON completion from VLM."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
         response = self._get_vlm().get_completion(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -195,17 +196,18 @@ class StructuredVLM:
         self,
         prompt: str = "",
         schema: Optional[Dict[str, Any]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Async version of complete_json."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
         response = await self._get_vlm().get_completion_async(
             prompt=prompt,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -215,11 +217,12 @@ class StructuredVLM:
         self,
         prompt: str,
         model_class: Type[T],
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Optional[T]:
         """Get structured completion validated against a Pydantic model."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         schema = model_class.model_json_schema()
-        response = self.complete_json(prompt, schema=schema, thinking=thinking)
+        response = self.complete_json(prompt, schema=schema, thinking=effective_thinking)
         if response is None:
             return None
 
@@ -233,11 +236,12 @@ class StructuredVLM:
         self,
         prompt: str,
         model_class: Type[T],
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> Optional[T]:
         """Async version of complete_model."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         schema = model_class.model_json_schema()
-        response = await self.complete_json_async(prompt, schema=schema, thinking=thinking)
+        response = await self.complete_json_async(prompt, schema=schema, thinking=effective_thinking)
         if response is None:
             return None
 
@@ -251,15 +255,16 @@ class StructuredVLM:
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get vision completion."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         return self._get_vlm().get_vision_completion(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )
@@ -268,15 +273,16 @@ class StructuredVLM:
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Async vision completion."""
+        effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         return await self._get_vlm().get_vision_completion_async(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=effective_thinking,
             tools=tools,
             messages=messages,
         )

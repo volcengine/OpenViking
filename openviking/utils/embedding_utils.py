@@ -6,7 +6,6 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
-import math
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -22,7 +21,6 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
-_EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
 _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
@@ -42,45 +40,6 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         value = overrides.get(field)
         if value is not None:
             embedding_msg.context_data[field] = value
-
-
-def _estimate_embedding_input_tokens(text: str) -> int:
-    """Estimate tokens for the raw text embedding input guard."""
-    if not text:
-        return 0
-    cjk_chars = sum(
-        1
-        for char in text
-        if "\u4e00" <= char <= "\u9fff"
-        or "\u3040" <= char <= "\u30ff"
-        or "\uac00" <= char <= "\ud7af"
-    )
-    other_chars = len(text) - cjk_chars
-    return max(1, cjk_chars + math.ceil(other_chars / 4))
-
-
-def _truncate_embedding_input(
-    text: str,
-    max_tokens: int,
-    suffix: str = _EMBEDDING_TRUNCATION_SUFFIX,
-) -> str:
-    """Trim raw text before embedding using the local estimate above."""
-    if not text:
-        return text
-    if max_tokens <= 0:
-        return suffix.lstrip()
-    if _estimate_embedding_input_tokens(text) <= max_tokens:
-        return text
-
-    low = 0
-    high = len(text)
-    while low < high:
-        mid = (low + high + 1) // 2
-        if _estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
-            low = mid
-        else:
-            high = mid - 1
-    return text[:low].rstrip() + suffix
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -394,7 +353,6 @@ async def vectorize_file(
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
-        max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -412,12 +370,11 @@ async def vectorize_file(
             if summary and effective_text_source in {"summary_first", "summary_only"}:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                # Read raw file content and apply configured truncation guard.
+                # Read raw file content; embedders apply their own input guard.
                 try:
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    content = _truncate_embedding_input(content, max_input_tokens)
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(

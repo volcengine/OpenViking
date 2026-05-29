@@ -74,6 +74,24 @@ class Session:
             role_id=role_id,
         )
 
+    async def batch_add_messages(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Add multiple messages to the session in a single request.
+
+        Args:
+            messages: List of dicts, each with "role" and optionally "content",
+                      "parts", "created_at", "role_id".
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        return await self._client.batch_add_messages(
+            self.session_id,
+            messages=messages,
+        )
+
     async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 

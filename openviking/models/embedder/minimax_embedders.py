@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MiniMax Embedder Implementation via HTTP API"""
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -11,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -80,7 +80,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
         # Initialize session with retry logic
         self.session = self._create_session()
-        self._async_client: Optional[httpx.AsyncClient] = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension if not provided
         if self._dimension is None:
@@ -172,11 +172,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         }
 
     async def _call_api_async(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
-        if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=60.0)
+        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=60.0))
 
         try:
-            response = await self._async_client.post(
+            response = await client.post(
                 self.api_base,
                 headers=self._build_headers(),
                 params=self._build_params(),
@@ -281,12 +280,4 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def close(self):
         self.session.close()
-        if self._async_client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                loop.create_task(self._async_client.aclose())
-            else:
-                asyncio.run(self._async_client.aclose())
+        self._async_client_cache.close_all_with_aclose()

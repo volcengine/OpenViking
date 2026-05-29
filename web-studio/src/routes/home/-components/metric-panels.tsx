@@ -125,7 +125,7 @@ function MetricPanel({
       </div>
 
       {children ? (
-        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(92px,1fr))] gap-2">
+        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
           {children}
         </div>
       ) : null}

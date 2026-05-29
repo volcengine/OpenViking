@@ -1,6 +1,8 @@
 import { fetchFind, fetchFindAllTypes, fetchSearch } from '#/lib/retrieval'
 import {
   getContentRead,
+  getContentAbstract,
+  getContentOverview,
   getFsLs,
   getFsStat,
   getFsTree,
@@ -121,7 +123,8 @@ export async function fetchFileContent(
           uri,
           offset,
           limit,
-        },
+          raw: options.raw,
+        } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
       }),
     )
 
@@ -134,6 +137,22 @@ export async function fetchFileContent(
       limit,
       truncated: limit >= 0,
     }
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
+export async function fetchDirectoryLevelContent(
+  uri: string,
+  level: 'abstract' | 'overview',
+): Promise<string> {
+  try {
+    const request =
+      level === 'abstract'
+        ? getContentAbstract({ query: { uri: normalizeDirUri(uri) } })
+        : getContentOverview({ query: { uri: normalizeDirUri(uri) } })
+    const result = await getOvResult<unknown>(request)
+    return normalizeReadContent(result)
   } catch (error) {
     throw toVikingApiError(error)
   }
@@ -160,6 +179,7 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       modTime: formatModTime(rawModTime),
       modTimestamp: null,
       abstract: String(data.abstract ?? ''),
+      overview: String(data.overview ?? ''),
     }
   } catch {
     return {
@@ -171,6 +191,7 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       modTime: '',
       modTimestamp: null,
       abstract: '',
+      overview: '',
     }
   }
 }

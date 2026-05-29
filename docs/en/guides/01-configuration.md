@@ -686,6 +686,29 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### query_planner
+
+Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
+
+Only add this section when the planner model is already available in your environment. For example, the Ollama model below must be pulled and served locally before use.
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "api_base": "http://127.0.0.1:11434",
+    "temperature": 0.0,
+    "timeout": 60,
+    "extra_request_body": {
+      "think": false
+    }
+  }
+}
+```
+
+Use `query_planner` when you want a smaller or cheaper model to handle retrieval planning while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
+
 ### feishu
 
 Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-resources.md) for supported URL patterns.
@@ -1093,6 +1116,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1100,13 +1124,14 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
 | `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
 `agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
 
 ### ovcli.conf
 
-You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
@@ -1117,6 +1142,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
+  "profile": false,
   "upload": {
     "mode": "local",
     "ignore_dirs": "node_modules,.cache,.nx",
@@ -1133,6 +1159,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `account` | Default account sent as `X-OpenViking-Account` | `null` |
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
+| `profile` | Whether to append `profile=1` to HTTP requests by default. Applies to both the Python HTTP client and the `ov` CLI; `ov --profile` can enable it per invocation. Actual effect still depends on the server enabling `server.profile_enabled`. | `false` |
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
 | `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
@@ -1167,7 +1194,10 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
+    "profile_enabled": false,
     "cors_origins": ["*"],
+    "public_base_url": "https://ov.example.com",
+    "upload_signed_ttl_seconds": 600,
     "temp_upload": {
       "default_mode": "local",
       "shared_max_size_bytes": 536870912,
@@ -1183,7 +1213,10 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `port` | int | Bind port | `1933` |
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
+| `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
+| `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
+| `upload_signed_ttl_seconds` | int | TTL in seconds for one-shot tokens minted by the MCP `add_resource` tool for local-file uploads via the signed `POST /api/v1/resources/temp_upload_signed` endpoint. | `600` (10 minutes) |
 | `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
 | `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |

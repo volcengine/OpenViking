@@ -242,7 +242,7 @@ export function FindPalette({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 sm:items-start sm:px-6 sm:pt-[12vh]"
       role="dialog"
       aria-modal="true"
       aria-label={t('searchPalette.ariaLabel')}
@@ -255,7 +255,7 @@ export function FindPalette({
 
       <div
         className={cn(
-          'animate-palette-in relative flex h-[46rem] max-h-[84vh] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300',
+          'animate-palette-in relative flex h-[46rem] max-h-[calc(100svh-2rem)] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300 sm:max-h-[84vh]',
           paletteWidth,
         )}
         onKeyDown={handleKeyDown}
@@ -275,7 +275,7 @@ export function FindPalette({
             onCompositionEnd={() => {
               composingRef.current = false
             }}
-            className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+            className="h-12 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/70 md:text-sm"
           />
           {query && (
             <button

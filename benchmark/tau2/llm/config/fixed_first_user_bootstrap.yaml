@@ -1,0 +1,14 @@
+extends: no_memory.yaml
+
+benchmark:
+  name: tau2_fixed_first_user_bootstrap
+
+eval:
+  # Use live simulator turns once to collect the first user request fixture.
+  # The resulting fixture can then be reused by strict fixed-first-user configs.
+  protocol: live_user_bootstrap
+  require_fixed_first_user: false
+  user_simulator_policy: confirmation_aware
+  fixed_first_user_fixtures:
+    retail:
+    airline:

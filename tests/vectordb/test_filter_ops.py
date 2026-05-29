@@ -13,6 +13,7 @@ db_path_basic = "./test_data/db_test_filters_basic/"
 db_path_complex = "./test_data/db_test_filters_complex/"
 db_path_lifecycle = "./test_data/db_test_filters_lifecycle/"
 db_path_scale = "./test_data/db_test_filters_scale/"
+db_path_large_fields = "./test_data/db_test_filters_large_fields/"
 
 
 def clean_dir(path):
@@ -112,6 +113,47 @@ class TestFilterOpsBasic(unittest.TestCase):
         self.assertEqual(
             self._search({"op": "contains", "field": "val_str", "substring": "er"}), [3, 5]
         )  # chERry, eldERbERry
+
+
+class TestFilterOpsLargeFields(unittest.TestCase):
+    def setUp(self):
+        clean_dir(db_path_large_fields)
+        self.path = db_path_large_fields
+        self.collection = self._create_collection()
+
+    def tearDown(self):
+        if self.collection:
+            self.collection.drop()
+        clean_dir(self.path)
+
+    def _create_collection(self):
+        collection_meta = {
+            "CollectionName": "test_filters_large_fields",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "embedding", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "uri", "FieldType": "string"},
+                {"FieldName": "abstract", "FieldType": "string"},
+            ],
+        }
+        return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
+
+    def test_upsert_record_with_oversized_json_field_raises(self):
+        large_abstract = 'prefix "quoted" \\\\ path\n' + ("x" * 66000)
+        uri = "viking://user/memories/large.md"
+        with self.assertRaisesRegex(
+            (RuntimeError, ValueError), "fields.*exceeds 65535 bytes"
+        ):
+            self.collection.upsert_data(
+                [
+                    {
+                        "id": 1,
+                        "embedding": [1.0, 0, 0, 0],
+                        "uri": uri,
+                        "abstract": large_abstract,
+                    }
+                ]
+            )
 
 
 class TestFilterOpsComplex(unittest.TestCase):

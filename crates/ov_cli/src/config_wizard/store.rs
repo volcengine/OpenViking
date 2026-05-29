@@ -401,6 +401,7 @@ pub(crate) async fn validate_candidate_config_with_role(
         config.account.clone(),
         config.user.clone(),
         timeout,
+        config.profile,
         config.extra_headers.clone(),
     );
 

@@ -12,6 +12,7 @@ FLOAT32_SIZE = 4
 UINT32_SIZE = 4  # Used for string/binary length and offset
 UINT16_SIZE = 2  # Used for list length and string/binary length inside lists
 BOOL_SIZE = 1
+STRING_MAX_UINT16_LENGTH = 0xFFFF
 
 
 @dataclass
@@ -146,6 +147,10 @@ class _PyBytesRow:
                 fix_region_offset += UINT32_SIZE
                 bytes_item = value.encode("utf-8")
                 bytes_item_len = len(bytes_item)
+                if bytes_item_len > STRING_MAX_UINT16_LENGTH:
+                    raise ValueError(
+                        f"string field '{field_meta.name}' exceeds 65535 bytes"
+                    )
                 var_fmt_list.append("H")
                 var_val_list.append(bytes_item_len)
                 variable_region_offset += UINT16_SIZE

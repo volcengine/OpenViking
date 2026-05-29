@@ -69,7 +69,7 @@ function RequestLogsRoute() {
       <div className="grid gap-3 md:grid-cols-2">
         <MetricCard
           label={t('metrics.total')}
-          value={total}
+          value={total >= 1000 ? '999+' : total}
           icon={<ActivityIcon className="size-4" />}
         />
         <MetricCard

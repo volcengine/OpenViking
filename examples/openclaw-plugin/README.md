@@ -1,59 +1,81 @@
-# @openviking/openclaw-plugin — OpenViking OpenClaw Plugin
+# OpenViking for OpenClaw
 
-OpenClaw context-engine plugin for OpenViking remote memory, context database, RAG and semantic retrieval.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term context engine: automatic recall, session archive, memory extraction, semantic search, and RAG over a remote OpenViking server.
 
-## Important: Plugin vs Skill
-
-This page is for the **OpenClaw plugin package**:
-
-```
-@openviking/openclaw-plugin
-```
-
-**Do NOT** install the plugin with `clawhub install openviking` — that installs the `openviking` AgentSkill (under `skills/openviking`), which is a different thing.
-
-For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openviking/openclaw-plugin`.
-
-## Install (Natural Language)
-
-Ask your agent:
-
-> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
-
-Or in Chinese:
-
-> 帮我安装 OpenViking 远程记忆插件 @openviking/openclaw-plugin。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
-
-The agent will automatically run install → setup → restart → verify. No manual steps needed.
-
-## Install (Command Line)
+## Quick Start
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
 openclaw gateway restart
 openclaw openviking status --json
 ```
 
-The `setup` command automatically activates the context-engine slot and validates the server connection.
+That's it. The `setup` command activates the context-engine slot and validates the connection.
 
-## Search Keywords
+### Or ask your agent
 
-@openviking/openclaw-plugin, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
+> Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
+
+The agent runs install → setup → restart → verify automatically. See [INSTALL-AGENT.md](./INSTALL-AGENT.md).
+
+## How It Works
+
+| Stage | What happens |
+|-------|-------------|
+| **Every turn** (`afterTurn`) | Your messages are archived into an OpenViking session |
+| **On `/compact`** (`compact`) | Archived messages are extracted into long-term memories |
+| **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
+
+## Tools
+
+Once installed, the plugin provides these agent tools:
+
+| Tool | Purpose |
+|------|---------|
+| `memory_recall` | Explicit long-term memory search |
+| `memory_store` | Persist important information immediately |
+| `memory_forget` | Delete memories by URI or query |
+| `ov_archive_search` | Search across archives by keyword |
+| `ov_archive_expand` | Expand an archive back to raw messages |
+| `add_resource` | Import documents, URLs, or Git repos |
+| `add_skill` | Import agent skills |
+| `ov_search` | Search imported resources and skills |
+| `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
+| `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
+| `openviking_tool_result_list` | List externalized tool results in the current session |
+
+## Data Flow & Privacy
+
+- **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
+- **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
+- **Storage**: All data lives on your OpenViking server under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
+- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
+- **Multi-tenant isolation**: Supports `accountId`, `userId`, and `agent_prefix` for per-tenant scoping.
+
+## Verify
+
+```bash
+openclaw openviking status --json     # one-shot health check
+openclaw config get plugins.slots.contextEngine  # should output: openviking
+```
 
 ## Documentation
 
-- Install and upgrade: [INSTALL.md](./INSTALL.md)
-- Chinese design and install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
-- Agent-oriented operator guide: [INSTALL-AGENT.md](./INSTALL-AGENT.md)
+| Doc | Description |
+|-----|-------------|
+| [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
+| [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
+| [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+
+> **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
 ---
 
-## Technical Overview
+<details>
+<summary><b>Technical Overview (for integrators and engineers)</b></summary>
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
-
-The remainder of this document is an implementation-focused design note for integrators and engineers.
+This plugin is registered as the `openviking` context engine in OpenClaw.
 
 ## Design Positioning
 
@@ -205,7 +227,7 @@ Beyond automatic behavior, the plugin exposes seven tools directly:
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
 - `add_skill`: import or register an OpenViking agent skill
-- `memory_search`: search OpenViking resources and skills, especially after importing them
+- `ov_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
 
@@ -215,7 +237,7 @@ They serve different roles:
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
 - `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
 - `add_skill` imports skills into OpenViking, while `add_resource` imports resources
-- `memory_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -231,8 +253,8 @@ The plugin also registers explicit slash commands for manual imports:
 ```text
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
 /add-skill ./skills/install-openviking-memory --wait
-/memory-search "OpenViking install" --uri viking://resources/openviking-readme
-/memory-search "memory install skill" --uri viking://agent/skills
+/ov-search "OpenViking install" --uri viking://resources/openviking-readme
+/ov-search "memory install skill" --uri viking://agent/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.
@@ -315,3 +337,5 @@ ov tui
 ---
 
 For installation, upgrade, and uninstall operations, use [INSTALL.md](./INSTALL.md).
+
+</details>

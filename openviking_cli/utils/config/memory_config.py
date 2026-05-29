@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -10,7 +10,7 @@ class MemoryConfig(BaseModel):
 
     version: str = Field(
         default="v2",
-        description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
+        description="Memory implementation version. Only 'v2' is supported.",
     )
     agent_scope_mode: str = Field(
         default="user+agent",
@@ -49,6 +49,14 @@ class MemoryConfig(BaseModel):
             "into higher-level experience memories."
         ),
     )
+    experimental_memory_switch: bool = Field(
+        default=False,
+        description=(
+            "Experimental memory switch for experimental testing. When enabled, "
+            "experimental memory templates are loaded and agent_memory_enabled defaults "
+            "to true unless explicitly configured."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(
@@ -75,14 +83,15 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
-    enable_vaka_template: bool = Field(
+    session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(
-            "When enabled, use vaka-specific memory templates (entities, profile) "
-            "from the bundled vaka/ subdirectory to override default templates."
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the agent skill directory. Disabled by "
+            "default."
         ),
     )
-    enable_role_id_memory_isolate: bool = Field(
+    role_id_memory_isolation_enabled: bool = Field(
         default=False,
         description=(
             "When enabled, memory extraction uses role_id from messages to determine "
@@ -90,14 +99,37 @@ class MemoryConfig(BaseModel):
             "is ignored and the login user from the request context is used instead."
         ),
     )
+    link_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, memory extraction supports link extraction between "
+            "memory items (page_id, links field, and link resolution). When disabled (default), "
+            "no page_id or link fields are generated, and link resolution is skipped."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
+            data = data.copy()
+            data.setdefault("agent_memory_enabled", True)
+        return data
 
     @field_validator("agent_scope_mode")
     @classmethod
     def validate_agent_scope_mode(cls, value: str) -> str:
         if value not in {"user+agent", "agent"}:
             raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str) -> str:
+        if value != "v2":
+            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
         return value
 
     @classmethod

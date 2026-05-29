@@ -10,15 +10,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
     _build_embedding_metadata,
     init_context_collection,
 )
-from openviking.storage.expr import Eq
 from openviking.storage.errors import EmbeddingRebuildRequiredError
+from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
@@ -40,6 +40,7 @@ class _DummyConfig:
         embedder: _DummyEmbedder,
         backend: str = "volcengine",
         volcengine_data_api_key: str | None = None,
+        max_input_tokens: int = 4096,
     ):
         self.storage = SimpleNamespace(
             vectordb=SimpleNamespace(
@@ -58,6 +59,7 @@ class _DummyConfig:
             ),
             sparse=None,
             hybrid=None,
+            max_input_tokens=max_input_tokens,
             circuit_breaker=SimpleNamespace(
                 failure_threshold=5,
                 reset_timeout=60.0,
@@ -395,6 +397,86 @@ async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch):
+    class _CapturingVikingDB:
+        is_closing = False
+
+        async def upsert(self, _data, *, ctx):
+            return "rec-1"
+
+    class _CapturingEmbedder(DenseEmbedderBase):
+        def __init__(self):
+            super().__init__("capturing-test", config={"max_input_tokens": 10})
+            self.text = None
+
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            del is_query
+            self.text = text
+            return EmbedResult(dense_vector=[0.1, 0.2])
+
+        def get_dimension(self) -> int:
+            return 2
+
+    embedder = _CapturingEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder, max_input_tokens=10),
+    )
+
+    handler = TextEmbeddingHandler(_CapturingVikingDB())
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    queue_data["message"] = " ".join(f"token-{idx}" for idx in range(200))
+    payload["data"] = json.dumps(queue_data)
+
+    await handler.on_dequeue(payload)
+
+    assert embedder.text is not None
+    assert embedder.text.endswith("...(truncated for embedding)")
+    assert "token-199" not in embedder.text
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypatch):
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return None
+
+    class _OversizedInputEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            del text, is_query
+            raise RuntimeError("Malformed input request: expected maxLength: 50000, actual: 75000")
+
+    vikingdb = _QueueingVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_OversizedInputEmbedder()),
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result is None
+    assert vikingdb.enqueued == []
+    assert status == {"success": 0, "requeue": 0, "error": 1}
+    assert handler._circuit_breaker._failure_count == 0
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(monkeypatch):
     captured = {}
 
@@ -689,7 +771,9 @@ async def test_single_account_backend_collection_exists_runs_in_threadpool(monke
         called["kwargs"] = kwargs
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
+    )
 
     backend = _SingleAccountBackend(
         config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
@@ -702,6 +786,122 @@ async def test_single_account_backend_collection_exists_runs_in_threadpool(monke
     assert called["func"].__name__ == "collection_exists"
     assert called["args"] == ()
     assert called["kwargs"] == {}
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_upsert_runs_adapter_in_threadpool(monkeypatch):
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            return [data["id"]]
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
+    )
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    record_id = await backend.upsert(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "abstract": "sample",
+            "account_id": "acc1",
+            "unknown": "legacy",
+        }
+    )
+
+    assert record_id == "rec-1"
+    assert [call[0] for call in calls] == ["_prepare_upsert_payload", "upsert"]
+    assert calls[-1][1] == (
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "abstract": "sample",
+            "account_id": "acc1",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_mutations_run_adapter_in_threadpool(monkeypatch):
+    calls = []
+
+    class _Adapter:
+        mode = "local"
+
+        def drop_collection(self):
+            return True
+
+        def delete(self, **kwargs):
+            calls.append(("adapter_delete_kwargs", kwargs))
+            return 2
+
+        def count(self, **kwargs):
+            calls.append(("adapter_count_kwargs", kwargs))
+            return 3
+
+        def clear(self):
+            return True
+
+        def close(self):
+            return None
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
+    )
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id=None,
+        shared_adapter=_Adapter(),
+    )
+    filter_expr = Eq("account_id", "acc1")
+
+    assert await backend.drop_collection() is True
+    assert await backend.delete(["rec-1"]) == 2
+    assert await backend.delete_by_filter(filter_expr) == 2
+    assert await backend.count(filter=filter_expr) == 3
+    assert await backend.clear() is True
+    await backend.close()
+
+    assert [call[0] for call in calls if not call[0].startswith("adapter_")] == [
+        "drop_collection",
+        "delete",
+        "delete",
+        "count",
+        "clear",
+        "close",
+    ]
 
 
 @pytest.mark.asyncio
@@ -735,7 +935,9 @@ async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypat
         called["kwargs"] = kwargs
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
+    )
 
     backend = _SingleAccountBackend(
         config=VectorDBBackendConfig(backend="local", name="context", dimension=2),

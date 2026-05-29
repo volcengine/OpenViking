@@ -25,7 +25,8 @@ benchmark/locomo/
 │   └── result/         # 评测结果目录
 ├── mem0/               # mem0 评测脚本（详见 mem0/README.md）
 ├── supermemory/        # Supermemory 评测脚本（详见 supermemory/README.md）
-└── claudecode/         # Claude Code 评测脚本（详见 claudecode/README.md）
+├── claudecode/         # Claude Code 评测脚本（详见 claudecode/README.md）
+└── hermes/             # Hermes Agent 评测脚本（详见 hermes/README.md）
 ```
 
 ---

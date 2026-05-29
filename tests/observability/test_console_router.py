@@ -53,9 +53,38 @@ def _app_with_runtime(runtime=None, *, request_context=_admin_ctx) -> FastAPI:
 class FakeConsoleService:
     def __init__(self) -> None:
         self.audit_call = None
+        self.token_series_call = None
+        self.dashboard_call = None
+        self.context_commits_call = None
 
     async def token_series(self, **kwargs):
-        raise InvalidArgumentError("bad date range")
+        self.token_series_call = kwargs
+        if kwargs.get("end_date", "") < kwargs.get("start_date", ""):
+            raise InvalidArgumentError("bad date range")
+        return {
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "bucket": kwargs["bucket"],
+            "items": [],
+        }
+
+    async def context_commits(self, **kwargs):
+        self.context_commits_call = kwargs
+        return {
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "bucket": kwargs["bucket"],
+            "items": [],
+        }
+
+    async def dashboard_summary(self, ctx, **kwargs):
+        self.dashboard_call = {"ctx": ctx, **kwargs}
+        return {
+            "context_counts": {},
+            "today_tokens": {},
+            "today_retrievals": {},
+            "agent_overview": {"total": 0, "items": []},
+        }
 
     async def audit_logs(self, **kwargs):
         self.audit_call = kwargs
@@ -127,3 +156,45 @@ async def test_console_router_invalid_arguments_return_http_400():
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.asyncio
+async def test_console_router_passes_timezone_to_dashboard_and_series():
+    service = FakeConsoleService()
+    transport = httpx.ASGITransport(app=_app_with_runtime(FakeRuntime(service)))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.get(
+            "/api/v1/console/dashboard/summary",
+            params={"timezone": "Asia/Shanghai"},
+        )
+        await client.get(
+            "/api/v1/console/tokens",
+            params={
+                "start_date": "2026-05-01",
+                "end_date": "2026-05-12",
+                "timezone": "America/New_York",
+            },
+        )
+        await client.get(
+            "/api/v1/console/context-commits",
+            params={
+                "start_date": "2026-05-01",
+                "end_date": "2026-05-12",
+                "bucket": "4h",
+                "timezone": "Europe/Berlin",
+            },
+        )
+
+    assert service.dashboard_call["timezone_name"] == "Asia/Shanghai"
+    assert service.token_series_call["timezone_name"] == "America/New_York"
+    assert service.context_commits_call["timezone_name"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
+async def test_console_router_defaults_timezone_to_none_when_missing():
+    service = FakeConsoleService()
+    transport = httpx.ASGITransport(app=_app_with_runtime(FakeRuntime(service)))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.get("/api/v1/console/dashboard/summary")
+
+    assert service.dashboard_call["timezone_name"] is None

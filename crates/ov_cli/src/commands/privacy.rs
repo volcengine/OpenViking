@@ -160,18 +160,19 @@ fn render_kv_ascii_table(rows: &[Value]) -> String {
     out
 }
 
-fn output_section_table(title: &str, rows: Vec<Value>, _compact: bool) {
-    println!("[{}]", title);
-    println!("{}", render_kv_ascii_table(&rows));
+fn render_section_table(title: &str, rows: Vec<Value>) -> String {
+    format!("[{}]\n{}", title, render_kv_ascii_table(&rows))
 }
 
-fn output_meta_current_tables(meta: &Map<String, Value>, values: &Map<String, Value>, compact: bool) {
-    output_section_table("meta", to_kv_rows(meta), compact);
-    println!();
-    output_section_table("current", to_kv_rows(values), compact);
+fn render_meta_current_tables(meta: &Map<String, Value>, values: &Map<String, Value>) -> String {
+    format!(
+        "{}\n\n{}",
+        render_section_table("meta", to_kv_rows(meta)),
+        render_section_table("current", to_kv_rows(values))
+    )
 }
 
-fn output_version_like_tables(result: &Value, compact: bool) -> Result<()> {
+fn output_version_like_tables(result: &Value, _compact: bool) -> Result<()> {
     let mut meta = result
         .as_object()
         .ok_or_else(|| Error::Parse("Expected object response".to_string()))?
@@ -181,7 +182,8 @@ fn output_version_like_tables(result: &Value, compact: bool) -> Result<()> {
         .and_then(|v| v.as_object().cloned())
         .ok_or_else(|| Error::Parse("Expected values object in response".to_string()))?;
 
-    output_meta_current_tables(&meta, &values, compact);
+    let rendered = render_meta_current_tables(&meta, &values);
+    println!("{}", crate::output::append_profile_to_rendered(rendered, result));
     Ok(())
 }
 
@@ -222,7 +224,8 @@ pub async fn get_current(
             .and_then(Value::as_object)
             .ok_or_else(|| Error::Parse("Expected current.values object in response".to_string()))?
             .clone();
-        output_meta_current_tables(&meta, &values, compact);
+        let rendered = render_meta_current_tables(&meta, &values);
+        println!("{}", crate::output::append_profile_to_rendered(rendered, &result));
         return Ok(());
     }
 
@@ -354,12 +357,55 @@ pub async fn upsert(
             .ok_or_else(|| Error::Parse("Expected values object in upsert response".to_string()))?
             .clone();
         let (updated_rows, unchanged_rows) = split_kv_rows_by_keys(&values, &requested_keys);
-        output_section_table("updated", updated_rows, compact);
-        println!();
-        output_section_table("unchanged", unchanged_rows, compact);
+        let rendered = format!(
+            "{}\n\n{}",
+            render_section_table("updated", updated_rows),
+            render_section_table("unchanged", unchanged_rows)
+        );
+        println!("{}", crate::output::append_profile_to_rendered(rendered, &result));
         return Ok(());
     }
 
     output_success(&result, output_format, compact);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn version_like_table_output_keeps_profile_section() {
+        let result = json!({
+            "version": 3,
+            "change_reason": "rotate",
+            "values": {
+                "k": "v"
+            },
+            "profile": [
+                "privacy took 3ms"
+            ]
+        });
+
+        let mut meta = result
+            .as_object()
+            .expect("object")
+            .clone();
+        let values = meta
+            .remove("values")
+            .and_then(|v| v.as_object().cloned())
+            .expect("values");
+        let rendered = format!(
+            "[meta]\n{}\n\n[current]\n{}",
+            render_kv_ascii_table(&to_kv_rows(&meta)),
+            render_kv_ascii_table(&to_kv_rows(&values))
+        );
+        let final_rendered = crate::output::append_profile_to_rendered(
+            rendered,
+            &result,
+        );
+
+        assert!(final_rendered.contains("profile\nprivacy took 3ms\n"));
+    }
 }

@@ -121,6 +121,17 @@ def configure_metric_account_dimension(
     )
 
 
+def _create_metric_registry() -> MetricRegistry:
+    """
+    Create a new `MetricRegistry` instance.
+
+    This helper centralizes the registry instantiation to avoid security issues
+    introduced by bridging classes (e.g., an external registry implementation
+    bypassing internal safety checks).
+    """
+    return MetricRegistry()
+
+
 def init_metrics_from_server_config(
     config: ServerConfig, *, app=None, service=None, registry: MetricRegistry | None = None
 ) -> None:
@@ -160,7 +171,7 @@ def init_metrics_from_server_config(
             metric_allowlist=list(account_dimension.metric_allowlist or []),
             max_active_accounts=int(account_dimension.max_active_accounts),
         )
-        _registry = registry or MetricRegistry()
+        _registry = registry or _create_metric_registry()
         collector_manager = create_default_collector_manager(app=app, service=service, config=config)
         _event_router = _build_event_router(_registry)
         register_event_subscriber(

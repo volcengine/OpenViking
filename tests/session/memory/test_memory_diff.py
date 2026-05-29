@@ -12,11 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import (
-    MemoryFileContent,
-    ResolvedOperation,
-    ResolvedOperations,
-)
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.storage.viking_fs import VikingFS
 
@@ -111,34 +107,27 @@ class TestMemoryDiffArchive:
         """Test building memory_diff for modified memory files (updates)."""
 
         # Setup: files exist
-        async def mock_read(uri, ctx=None):
-            if uri == "memory/user/test/identity.md":
-                return "# Identity\n\nOld identity content"
-            raise Exception("File not found")
-
-        mock_viking_fs.read_file.side_effect = mock_read
-
         result = MemoryUpdateResult()
         result.written_uris = ["memory/user/test/identity.md"]
 
+        old_mf = MemoryFile(
+            uri="memory/user/test/identity.md",
+            content="# Identity\n\nOld identity content",
+            memory_type="identity",
+        )
+        op = ResolvedOperation(
+            uris=["memory/user/test/identity.md"],
+            memory_type="identity",
+            memory_fields={},
+            old_memory_file_content=old_mf,
+        )
         operations = ResolvedOperations(
-            upsert_operations=[],
+            upsert_operations=[op],
             delete_file_contents=[],
             errors=[],
         )
 
-        # First call returns old content, second returns new content
-        call_count = 0
-
-        async def mock_read_multiple(uri, ctx=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return "# Identity\n\nOld identity content"
-            else:
-                return "# Identity\n\nNew identity content"
-
-        mock_viking_fs.read_file.side_effect = mock_read_multiple
+        mock_viking_fs.read_file = AsyncMock(return_value="# Identity\n\nNew identity content")
 
         diff = await compressor._build_memory_diff(
             result=result,
@@ -156,11 +145,11 @@ class TestMemoryDiffArchive:
         result = MemoryUpdateResult()
         result.deleted_uris = ["memory/user/test/context/old_project.md"]
 
-        deleted_content = MemoryFileContent(
+        deleted_content = MemoryFile(
             uri="memory/user/test/context/old_project.md",
-            plain_content="# Old Project\n\nThis project was deleted",
+            content="# Old Project\n\nThis project was deleted",
             memory_type="context",
-            memory_fields={"project": "test"},
+            extra_fields={"project": "test"},
         )
 
         operations = ResolvedOperations(
@@ -188,22 +177,16 @@ class TestMemoryDiffArchive:
         result.edited_uris = ["memory/user/test/identity.md"]
 
         # Setup operation with old content
-        old_content = MemoryFileContent(
+        old_content = MemoryFile(
             uri="memory/user/test/identity.md",
-            plain_content="# Identity\n\nOld content",
+            content="# Identity\n\nOld content",
             memory_type="identity",
-            memory_fields={"name": "test"},
+            extra_fields={"name": "test"},
         )
         operation = ResolvedOperation(
             uris=["memory/user/test/identity.md"],
             memory_type="identity",
             memory_fields={"name": "test"},
-            new_memory_file_content=MemoryFileContent(
-                uri="memory/user/test/identity.md",
-                plain_content="# Identity\n\nNew content",
-                memory_type="identity",
-                memory_fields={"name": "test"},
-            ),
             old_memory_file_content=old_content,
         )
 
@@ -254,8 +237,24 @@ class TestMemoryDiffArchive:
             "memory/user/test/context/new.md",  # new -> add
         ]
 
+        old_mf = MemoryFile(
+            uri="memory/user/test/identity.md",
+            content="# Existing\n\nOld content",
+            memory_type="identity",
+        )
+        op_existing = ResolvedOperation(
+            uris=["memory/user/test/identity.md"],
+            memory_type="identity",
+            memory_fields={},
+            old_memory_file_content=old_mf,
+        )
+        op_new = ResolvedOperation(
+            uris=["memory/user/test/context/new.md"],
+            memory_type="context",
+            memory_fields={},
+        )
         operations = ResolvedOperations(
-            upsert_operations=[],
+            upsert_operations=[op_existing, op_new],
             delete_file_contents=[],
             errors=[],
         )

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
@@ -44,6 +44,8 @@ pub struct Config {
     #[serde(default = "default_verbose")]
     pub verbose: bool,
     #[serde(default)]
+    pub profile: bool,
+    #[serde(default)]
     pub upload: UploadConfig,
     #[serde(default, alias = "extra_header")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -87,6 +89,7 @@ impl Default for Config {
             echo_command: true,
             show_progress: false,
             verbose: false,
+            profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
         }
@@ -123,6 +126,16 @@ impl Config {
         Self::load_default()
     }
 
+    pub fn load_required() -> Result<Self> {
+        // Resolution order: env var > default path
+        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
+            return Self::load_required_from_path(&PathBuf::from(env_path));
+        }
+
+        let config_path = default_config_path()?;
+        Self::load_required_from_path(&config_path)
+    }
+
     pub fn load_default() -> Result<Self> {
         // Resolution order: env var > default path
         if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
@@ -133,8 +146,23 @@ impl Config {
         }
 
         let config_path = default_config_path()?;
-        if config_path.exists() {
-            Self::from_file(&config_path.to_string_lossy())
+        Self::load_default_from_path(&config_path)
+    }
+
+    pub fn load_required_from_path(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::from_file(&path.to_string_lossy())
+        } else {
+            Err(Error::Config(
+                "No CLI config file detected, please use `ov config` to initialize ovcli.conf"
+                    .to_string(),
+            ))
+        }
+    }
+
+    pub fn load_default_from_path(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::from_file(&path.to_string_lossy())
         } else {
             Ok(Self::default())
         }
@@ -181,6 +209,32 @@ pub fn get_or_create_machine_id() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{Config, merge_csv_options};
+
+    #[test]
+    fn load_required_from_path_reports_missing_cli_config() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("missing-ovcli.conf");
+
+        let error = Config::load_required_from_path(&path)
+            .expect_err("missing required config should fail")
+            .to_string();
+
+        assert!(error.contains("No CLI config file detected"));
+        assert!(error.contains("ov config"));
+        assert!(!error.contains("setup-cli"));
+        assert!(error.contains("ovcli.conf"));
+    }
+
+    #[test]
+    fn load_default_from_path_keeps_default_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("missing-ovcli.conf");
+
+        let config = Config::load_default_from_path(&path)
+            .expect("default-loading path should still fall back");
+
+        assert_eq!(config.url, "http://localhost:1933");
+    }
 
     #[test]
     fn config_deserializes_account_and_user_fields() {
@@ -330,6 +384,19 @@ mod tests {
         .expect("config should deserialize");
 
         assert!(config.extra_headers.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_profile_flag() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "profile": true
+            }"#,
+        )
+        .expect("config should deserialize with profile");
+
+        assert!(config.profile);
     }
 
     #[test]

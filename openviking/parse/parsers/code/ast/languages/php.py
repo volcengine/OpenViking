@@ -187,7 +187,14 @@ def _extract_function_like(node, content_bytes: bytes, docstring: str = "") -> F
                 if return_type:
                     break
 
-    return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
+    return FunctionSig(
+        name=name,
+        params=params,
+        return_type=return_type,
+        docstring=docstring,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _extract_class(
@@ -234,7 +241,14 @@ def _extract_class(
                 doc = _preceding_doc(siblings, idx, content_bytes)
                 methods.append(_extract_function_like(child, content_bytes, docstring=doc))
 
-    return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
+    return ClassSkeleton(
+        name=name,
+        bases=bases,
+        docstring=docstring,
+        methods=methods,
+        line_start=node.start_point[0] + 1,
+        line_end=node.end_point[0] + 1,
+    )
 
 
 def _dedup_keep_order(items: List[str]) -> List[str]:

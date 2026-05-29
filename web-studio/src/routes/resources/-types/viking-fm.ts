@@ -1,4 +1,11 @@
-export type VikingFileType = 'image' | 'markdown' | 'code' | 'text' | 'binary'
+export type VikingFileType =
+  | 'directory'
+  | 'image'
+  | 'markdown'
+  | 'jsonl'
+  | 'code'
+  | 'text'
+  | 'binary'
 
 export interface VikingFsEntry {
   uri: string
@@ -9,6 +16,7 @@ export interface VikingFsEntry {
   modTime: string
   modTimestamp: number | null
   abstract: string
+  overview?: string
 }
 
 export interface VikingListQueryOptions {
@@ -33,6 +41,7 @@ export interface VikingTreeQueryOptions {
 export interface VikingReadQueryOptions {
   offset?: number
   limit?: number
+  raw?: boolean
 }
 
 export interface VikingListResult {

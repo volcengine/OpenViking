@@ -479,6 +479,7 @@ Usage: ov config [OPTIONS] [COMMAND]
         assert!(rendered.contains("Did you mean: ov config"));
         assert!(rendered.contains("ov config"));
         assert!(rendered.contains("ov config show"));
+        assert!(!rendered.contains("ov config setup-cli to initialize"));
         assert!(!rendered.contains("no longer available"));
         assert!(!rendered.contains("deprecated"));
     }

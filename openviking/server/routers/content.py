@@ -16,6 +16,7 @@ from openviking.server.auth import (
     require_role,
 )
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
@@ -62,6 +63,7 @@ async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
     limit: int = Query(-1, description="Number of lines to read, -1 means read to end"),
+    raw: bool = Query(False, description="Return raw stored content without memory-field cleanup"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Read file content (L2)."""
@@ -72,24 +74,25 @@ async def read(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
 
-    # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
-    if isinstance(result, bytes):
-        text = result.decode("utf-8")
-    elif isinstance(result, str):
-        text = result
-    else:
-        text = None
+    if not raw:
+        # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
+        if isinstance(result, bytes):
+            text = result.decode("utf-8")
+        elif isinstance(result, str):
+            text = result
+        else:
+            text = None
 
-    if text:
-        from openviking.session.memory.utils.content import deserialize_content
+        if text:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-        result = deserialize_content(text)
+            mf = MemoryFileUtils.read(text)
+            result = mf.content
 
     return Response(status="ok", result=result)
 
@@ -107,10 +110,9 @@ async def abstract(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -128,10 +130,9 @@ async def overview(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
     return Response(status="ok", result=result)
 
@@ -149,10 +150,9 @@ async def download(
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
-        # Fallback for older versions without typed exceptions
-        err_msg = str(e).lower()
-        if "not found" in err_msg or "no such file or directory" in err_msg:
-            raise NotFoundError(uri, "file")
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
         raise
 
     # Try to get filename from stat

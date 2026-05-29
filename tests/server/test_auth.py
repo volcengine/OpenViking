@@ -320,13 +320,13 @@ async def test_task_endpoints_are_user_scoped():
     reset_task_tracker()
     account_id = _uid()
     tracker = get_task_tracker()
-    alice_task = tracker.create(
+    alice_task = await tracker.create(
         "session_commit",
         resource_id="alice-session",
         account_id=account_id,
         user_id="alice",
     )
-    bob_task = tracker.create(
+    bob_task = await tracker.create(
         "session_commit",
         resource_id="bob-session",
         account_id=account_id,

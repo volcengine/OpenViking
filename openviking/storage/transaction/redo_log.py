@@ -5,7 +5,7 @@
 import json
 from typing import Any, Dict, List
 
-from openviking.pyagfs import AGFSClient
+from openviking.pyagfs import AGFSClient, AsyncAGFSClient
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,39 +21,39 @@ class RedoLog:
     """
 
     def __init__(self, agfs: AGFSClient):
-        self._agfs = agfs
+        self._async_agfs = AsyncAGFSClient(agfs)
 
     def _task_path(self, task_id: str) -> str:
         return f"{_REDO_ROOT}/{task_id}/redo.json"
 
-    def _ensure_dirs(self, dir_path: str) -> None:
+    async def _ensure_dirs_async(self, dir_path: str) -> None:
         parts = dir_path.strip("/").split("/")
         current = ""
         for part in parts:
             current = f"{current}/{part}"
             try:
-                self._agfs.mkdir(current)
+                await self._async_agfs.mkdir(current)
             except Exception:
                 pass
 
-    def write_pending(self, task_id: str, info: Dict[str, Any]) -> None:
+    async def write_pending_async(self, task_id: str, info: Dict[str, Any]) -> None:
         """Write a redo marker before the operation starts."""
         dir_path = f"{_REDO_ROOT}/{task_id}"
-        self._ensure_dirs(dir_path)
+        await self._ensure_dirs_async(dir_path)
         data = json.dumps(info, default=str).encode("utf-8")
-        self._agfs.write(self._task_path(task_id), data)
+        await self._async_agfs.write(self._task_path(task_id), data)
 
-    def mark_done(self, task_id: str) -> None:
+    async def mark_done_async(self, task_id: str) -> None:
         """Delete the redo marker after a successful operation."""
         try:
-            self._agfs.rm(f"{_REDO_ROOT}/{task_id}", recursive=True)
+            await self._async_agfs.rm(f"{_REDO_ROOT}/{task_id}", recursive=True)
         except Exception as e:
             logger.warning(f"Failed to clean redo marker {task_id}: {e}")
 
-    def list_pending(self) -> List[str]:
+    async def list_pending_async(self) -> List[str]:
         """Return all pending task IDs (directories under _REDO_ROOT)."""
         try:
-            entries = self._agfs.ls(_REDO_ROOT)
+            entries = await self._async_agfs.ls(_REDO_ROOT)
             if not isinstance(entries, list):
                 return []
             return [
@@ -64,10 +64,10 @@ class RedoLog:
         except Exception:
             return []
 
-    def read(self, task_id: str) -> Dict[str, Any]:
+    async def read_async(self, task_id: str) -> Dict[str, Any]:
         """Read the info dict of a pending task."""
         try:
-            content = self._agfs.cat(self._task_path(task_id))
+            content = await self._async_agfs.cat(self._task_path(task_id))
             if isinstance(content, bytes):
                 content = content.decode("utf-8")
             return json.loads(content)

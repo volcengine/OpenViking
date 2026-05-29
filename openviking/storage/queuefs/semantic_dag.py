@@ -4,7 +4,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
@@ -121,49 +121,6 @@ class SemanticDagExecutor:
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
 
-    def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
-        """Create on_complete callback for incremental update or full update."""
-
-        async def noop_callback() -> None:
-            return
-
-        if not self._target_uri or not self._root_uri:
-            return noop_callback
-
-        if self._target_uri == self._root_uri:
-            return noop_callback
-
-        # If full update, move temp uri to target uri has been handled in the processor
-        if not self._incremental_update:
-            return noop_callback
-
-        async def sync_diff_callback() -> None:
-            try:
-                diff = await self._processor._sync_topdown_recursive(
-                    self._root_uri,
-                    self._target_uri,
-                    ctx=self._ctx,
-                    file_change_status=self._file_change_status,
-                    lock=self._lock,
-                )
-                logger.info(
-                    f"[SyncDiff] Diff computed: "
-                    f"added_files={len(diff.added_files)}, "
-                    f"deleted_files={len(diff.deleted_files)}, "
-                    f"updated_files={len(diff.updated_files)}, "
-                    f"added_dirs={len(diff.added_dirs)}, "
-                    f"deleted_dirs={len(diff.deleted_dirs)}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"[SyncDiff] Error in sync_diff_callback: "
-                    f"root_uri={self._root_uri}, target_uri={self._target_uri} "
-                    f"error={e}",
-                    exc_info=True,
-                )
-
-        return sync_diff_callback
-
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
@@ -176,13 +133,9 @@ class SemanticDagExecutor:
             await self._lock.close()
             raise
 
-        original_on_complete = self._create_on_complete_callback()
-
         # Release owned semantic locks after downstream vectorization finishes.
         async def wrapped_on_complete() -> None:
             try:
-                if original_on_complete:
-                    await original_on_complete()
                 if self._telemetry_id and self._semantic_msg_id:
                     get_request_wait_tracker().mark_semantic_done(
                         self._telemetry_id, self._semantic_msg_id
@@ -295,7 +248,9 @@ class SemanticDagExecutor:
         try:
             entries = await self._viking_fs.ls(uri, ctx=self._ctx)
         except Exception as e:
-            logger.warning(f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}")
+            logger.warning(
+                f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}"
+            )
             return [], []
 
         children_dirs: List[str] = []
@@ -320,13 +275,13 @@ class SemanticDagExecutor:
                 f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}"
             )
             return None
-        try:
-            relative_path = current_uri[len(self._root_uri) :]
-            if relative_path.startswith("/"):
-                relative_path = relative_path[1:]
-            return f"{self._target_uri}/{relative_path}" if relative_path else self._target_uri
-        except Exception:
+        if self._target_uri != self._root_uri:
+            logger.warning(
+                "Incremental semantic update expects target_uri == root_uri: "
+                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
+            )
             return None
+        return current_uri
 
     def _is_direct_incremental_update(self) -> bool:
         return (
@@ -434,7 +389,9 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
-            target_dirs, target_files = await self._list_dir(target_path, "_check_dir_children_changed")
+            target_dirs, target_files = await self._list_dir(
+                target_path, "_check_dir_children_changed"
+            )
             current_file_names = {f.split("/")[-1] for f in current_files}
             target_file_names = {f.split("/")[-1] for f in target_files}
             if current_file_names != target_file_names:

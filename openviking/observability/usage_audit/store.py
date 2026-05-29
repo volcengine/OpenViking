@@ -4,13 +4,18 @@
 
 from __future__ import annotations
 
+from datetime import tzinfo
 from typing import Any, Protocol, Sequence
 
 from openviking.observability.events import ObservabilityEvent
 
 
 class UsageAuditStore(Protocol):
-    """Persistence contract for product usage/audit data."""
+    """Persistence contract for product usage/audit data.
+
+    Time-keyed columns are stored in UTC; read methods accept a viewer-supplied
+    `tz` and rebucket on the fly.
+    """
 
     async def initialize(self) -> None:
         """Initialize the store."""
@@ -21,26 +26,42 @@ class UsageAuditStore(Protocol):
     async def record_batch(self, events: Sequence[ObservabilityEvent]) -> None:
         """Persist a batch of observability events."""
 
-    async def get_today_tokens(self, *, account_id: str, date: str) -> dict[str, int]:
-        """Return token totals for one account and date."""
+    async def get_today_tokens(
+        self, *, account_id: str, user_date: str, tz: tzinfo
+    ) -> dict[str, int]:
+        """Return token totals for one account and viewer-local date."""
 
-    async def get_today_retrievals(self, *, account_id: str, date: str) -> dict[str, int]:
+    async def get_today_retrievals(
+        self, *, account_id: str, user_date: str, tz: tzinfo
+    ) -> dict[str, int]:
         """Return successful find/search counts for one account and date."""
 
     async def get_agent_overview(
-        self, *, account_id: str, date: str, limit: int = 5
+        self, *, account_id: str, user_date: str, tz: tzinfo, limit: int = 5
     ) -> dict[str, Any]:
-        """Return distinct agent count and recent agents for one account/date."""
+        """Return distinct agent count and recent agents for the viewer's day."""
 
     async def get_token_series(
-        self, *, account_id: str, start_date: str, end_date: str, bucket: str
+        self,
+        *,
+        account_id: str,
+        start_user_date: str,
+        end_user_date: str,
+        bucket: str,
+        tz: tzinfo,
     ) -> list[dict[str, Any]]:
-        """Return token series rows for a date range."""
+        """Return token series rows for a viewer-local date range."""
 
     async def get_context_commit_heatmap(
-        self, *, account_id: str, start_date: str, end_date: str, bucket: str
+        self,
+        *,
+        account_id: str,
+        start_user_date: str,
+        end_user_date: str,
+        bucket: str,
+        tz: tzinfo,
     ) -> list[dict[str, Any]]:
-        """Return context write bucket rows for a date range."""
+        """Return context write bucket rows for a viewer-local date range."""
 
     async def query_audit_logs(
         self,

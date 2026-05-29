@@ -12,6 +12,9 @@ const en = {
       home: {
         title: 'Home',
       },
+      oauthSetup: {
+        title: 'OAuth setup',
+      },
       operations: {
         title: 'Operations',
       },
@@ -31,7 +34,7 @@ const en = {
     sidebar: {
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
-      workspaceGroupLabel: 'Workspace',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -54,24 +57,18 @@ const en = {
     theme: {
       toggle: 'Toggle theme',
     },
-    serverMode: {
-      checking: 'Detecting',
-      devImplicit: 'Development Mode',
-      explicitAuth: 'Explicit Auth',
-      offline: 'Offline',
-    },
   },
   connection: {
     devMode: {
       description:
-        'This server is using implicit identity, so account, user, and API key are usually not required.',
-      title: 'Development Mode Detected',
+        'This server provides identity automatically, so account, user, and API key are usually not required.',
+      title: 'Server-managed identity',
     },
     dialog: {
       title: 'Connection & Identity',
     },
     identitySummary: {
-      devImplicit: 'Server-managed identity',
+      dev: 'Server-managed identity',
       named: '{{identity}}',
       unset: 'Identity not set',
     },
@@ -79,6 +76,10 @@ const en = {
       accountId: {
         label: 'Account',
         placeholder: 'default',
+      },
+      agentId: {
+        label: 'Agent',
+        placeholder: 'web-studio',
       },
       apiKey: {
         label: 'API Key',
@@ -95,6 +96,27 @@ const en = {
         label: 'User',
         placeholder: 'default',
       },
+    },
+    oauthOtp: {
+      title: 'OAuth client OTP',
+      description:
+        'Generate a short-lived code that an MCP client can submit to authorize as the selected identity.',
+      generate: 'Generate OTP',
+      regenerate: 'Regenerate',
+      copy: 'Copy',
+      copied: 'Copied',
+      codeLabel: 'One-time code',
+      expiresIn: 'Expires in {{seconds}}s',
+      expired: 'Expired — generate a new code.',
+      generateError: 'Could not generate OTP: {{message}}',
+    },
+  },
+  oauthSetup: {
+    page: {
+      title: 'OAuth setup',
+      intro:
+        'Use this page when authenticating an MCP client via OAuth — for example Claude.ai, Claude Desktop, ChatGPT, or Cursor. Generate a short-lived OTP here, then paste it into the MCP client to bind its connection to the selected identity.',
+      docsLink: 'Read the OAuth integration guide',
     },
   },
   home: {
@@ -130,8 +152,8 @@ const en = {
         recentDay: 'Recent commit',
       },
       title: 'Context Commit Stats',
-      yearlyEmpty: 'No context commits in the last year',
-      yearlyTotal: '{{count}} context commits in the last year',
+      yearlyEmpty: 'No context commits',
+      yearlyTotal: '{{count}} context commits',
       tooltip: {
         total: 'Total commits',
       },
@@ -190,8 +212,8 @@ const en = {
     todayRetrievals: {
       description:
         'Shows successful semantic retrieval calls for find() and search() today. Resets at midnight.',
-      find: 'find()',
-      search: 'search()',
+      find: 'find',
+      search: 'search',
       title: 'Retrievals Today',
     },
     todayTokens: {
@@ -397,7 +419,7 @@ const en = {
     searchPalette: {
       ariaLabel: 'Search',
       openContainingDirectory: 'Open containing directory',
-      placeholder: 'Search files and directories...',
+      placeholder: 'Search',
       scope: {
         global: 'Search scope: Global',
         current: 'Search scope: {{name}}',
@@ -490,13 +512,13 @@ const en = {
   },
   retrieval: {
     title: 'Retrieval',
-    searchPlaceholder: 'Search context, e.g. how to authenticate users',
+    searchPlaceholder: 'Search context',
     send: 'Search',
     controls: {
       function: 'Retrieval Function',
       modes: {
-        find: 'find()',
-        search: 'search()',
+        find: 'find',
+        search: 'search',
       },
       resultCount: 'Results',
       path: 'Path',
@@ -583,6 +605,57 @@ const en = {
     empty: {
       description: 'Select a session from the sidebar or create a new one.',
       title: 'No session selected',
+    },
+  },
+  oauth: {
+    identityPicker: {
+      useCurrent: 'Authorize as the current identity',
+      noCurrent:
+        'No identity set. Open Connection & Identity to sign in first, or use a different API key below.',
+      useCustom: 'Use a different API key',
+      customKeyLabel: 'API key',
+      customKeyPlaceholder: 'Paste an API key (not persisted)',
+    },
+    consent: {
+      title: 'Authorize {{clientName}}',
+      loading: 'Loading authorization request…',
+      expired:
+        'This authorization has expired or is no longer valid. Restart the flow from your MCP client.',
+      missingPending:
+        'Missing authorization id. Open the link your MCP client gave you.',
+      requestSummary:
+        '{{clientName}} is requesting access to your OpenViking workspace.',
+      redirectLabel: 'Redirect',
+      scopesLabel: 'Scopes',
+      scopesNone: '(none)',
+      signInRequired:
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+      openConnectionDialog: 'Open Connection & Identity',
+      authorize: 'Authorize',
+      deny: 'Deny',
+      useAnotherDevice: 'Use another device →',
+      waitingRedirect: 'Authorized — redirecting back to the client…',
+      verifying: 'Verifying…',
+      denying: 'Denying…',
+      denied: 'Denied. You can close this tab.',
+      verifyError: 'Authorization failed: {{message}}',
+      noApiKey: 'No API key available. Select an identity or paste a key.',
+    },
+    verify: {
+      title: 'Cross-device verify',
+      description:
+        'Enter the 6-character code shown on the device that started the MCP client login.',
+      codeLabel: 'Verification code',
+      codePlaceholder: '6-character code',
+      submit: 'Authorize',
+      success:
+        'Authorized for {{clientName}}. You can close this tab and return to the original device.',
+      successUnknownClient:
+        'Authorized. You can close this tab and return to the original device.',
+      verifyError: 'Authorization failed: {{message}}',
+      noApiKey: 'No API key available. Select an identity or paste a key.',
+      signInRequired:
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
 } as const

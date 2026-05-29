@@ -123,7 +123,7 @@ function buildFetchHeaders(): Record<string, string> {
   if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
   if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
   if (conn.userId) headers['X-OpenViking-User'] = conn.userId
-  headers['X-OpenViking-Agent'] = 'web-studio'
+  headers['X-OpenViking-Agent'] = conn.agentId || 'web-studio'
   return headers
 }
 

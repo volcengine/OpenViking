@@ -17,6 +17,9 @@ import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
+import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
+import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
+import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
 const SessionsRouteRoute = SessionsRouteRouteImport.update({
   id: '/sessions',
@@ -58,6 +61,21 @@ const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ResourcesRouteRoute,
 } as any)
+const OauthVerifyRoute = OauthVerifyRouteImport.update({
+  id: '/oauth/verify',
+  path: '/oauth/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthSetupRoute = OauthSetupRouteImport.update({
+  id: '/oauth/setup',
+  path: '/oauth/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/oauth/consent',
+  path: '/oauth/consent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -66,6 +84,9 @@ export interface FileRoutesByFullPath {
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
+  '/oauth/consent': typeof OauthConsentRoute
+  '/oauth/setup': typeof OauthSetupRoute
+  '/oauth/verify': typeof OauthVerifyRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -74,6 +95,9 @@ export interface FileRoutesByTo {
   '/home': typeof HomeRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
+  '/oauth/consent': typeof OauthConsentRoute
+  '/oauth/setup': typeof OauthSetupRoute
+  '/oauth/verify': typeof OauthVerifyRoute
   '/resources': typeof ResourcesIndexRoute
   '/sessions': typeof SessionsIndexRoute
 }
@@ -85,6 +109,9 @@ export interface FileRoutesById {
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
+  '/oauth/consent': typeof OauthConsentRoute
+  '/oauth/setup': typeof OauthSetupRoute
+  '/oauth/verify': typeof OauthVerifyRoute
   '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -97,6 +124,9 @@ export interface FileRouteTypes {
     | '/resources'
     | '/retrieval'
     | '/sessions'
+    | '/oauth/consent'
+    | '/oauth/setup'
+    | '/oauth/verify'
     | '/resources/'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
@@ -105,6 +135,9 @@ export interface FileRouteTypes {
     | '/home'
     | '/request-logs'
     | '/retrieval'
+    | '/oauth/consent'
+    | '/oauth/setup'
+    | '/oauth/verify'
     | '/resources'
     | '/sessions'
   id:
@@ -115,6 +148,9 @@ export interface FileRouteTypes {
     | '/resources'
     | '/retrieval'
     | '/sessions'
+    | '/oauth/consent'
+    | '/oauth/setup'
+    | '/oauth/verify'
     | '/resources/'
     | '/sessions/'
   fileRoutesById: FileRoutesById
@@ -126,6 +162,9 @@ export interface RootRouteChildren {
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
+  OauthConsentRoute: typeof OauthConsentRoute
+  OauthSetupRoute: typeof OauthSetupRoute
+  OauthVerifyRoute: typeof OauthVerifyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -186,6 +225,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResourcesIndexRouteImport
       parentRoute: typeof ResourcesRouteRoute
     }
+    '/oauth/verify': {
+      id: '/oauth/verify'
+      path: '/oauth/verify'
+      fullPath: '/oauth/verify'
+      preLoaderRoute: typeof OauthVerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/setup': {
+      id: '/oauth/setup'
+      path: '/oauth/setup'
+      fullPath: '/oauth/setup'
+      preLoaderRoute: typeof OauthSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -220,6 +280,9 @@ const rootRouteChildren: RootRouteChildren = {
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
+  OauthConsentRoute: OauthConsentRoute,
+  OauthSetupRoute: OauthSetupRoute,
+  OauthVerifyRoute: OauthVerifyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

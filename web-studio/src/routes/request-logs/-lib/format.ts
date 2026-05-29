@@ -10,14 +10,11 @@ export function formatTime(value?: string): string {
   if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const h24 = date.getHours()
+  const period = h24 < 12 ? 'am' : 'pm'
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+  return `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())} ${pad(h12)}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${period}`
 }
 
 export function formatDuration(value?: number): string {

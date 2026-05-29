@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import HeatMap from '@uiw/react-heat-map'
 
@@ -59,10 +59,34 @@ export function ContextCommitsPanel({
   t: HomeT
 }) {
   const [tooltip, setTooltip] = useState<CommitTooltip | null>(null)
+  const heatmapScrollRef = useRef<HTMLDivElement>(null)
   const items = useMemo(
     () => normalizeCommitHeatmapData(data?.items),
     [data?.items],
   )
+
+  useEffect(() => {
+    const el = heatmapScrollRef.current
+    if (!el) return
+    // Wait one frame for HeatMap to lay out, then align the viewport's
+    // right edge with the rightmost rendered cell (not the SVG's trailing
+    // padding). Finds the last <rect> on the heatmap to compute the
+    // actual content edge.
+    const raf = requestAnimationFrame(() => {
+      const node = heatmapScrollRef.current
+      if (!node) return
+      const rects = node.querySelectorAll<SVGRectElement>('svg rect')
+      let cellsRight = node.scrollWidth
+      if (rects.length > 0) {
+        const last = rects[rects.length - 1]
+        const bbox = last.getBoundingClientRect()
+        const containerLeft = node.getBoundingClientRect().left
+        cellsRight = bbox.right - containerLeft + node.scrollLeft
+      }
+      node.scrollLeft = Math.max(0, cellsRight - node.clientWidth)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [items])
   const panelColors = useMemo(() => buildHeatmapPanelColors(items), [items])
   const totalCommits = useMemo(
     () => items.reduce((total, item) => total + item.count, 0),
@@ -108,7 +132,7 @@ export function ContextCommitsPanel({
         <>
           <div className="grid gap-4 xl:grid-cols-[minmax(820px,auto)_minmax(180px,1fr)]">
             <div className="min-w-0">
-              <div className="overflow-x-auto">
+              <div ref={heatmapScrollRef} className="overflow-x-auto">
                 <HeatMap
                   className="[--heatmap-empty:oklch(0.92_0_0)] text-muted-foreground dark:[--heatmap-empty:oklch(0.31_0_0)] [&_.w-heatmap-month]:fill-current [&_.w-heatmap-week]:fill-current"
                   endDate={endDate}
@@ -247,13 +271,36 @@ function CommitTooltipView({
     },
   ]
 
+  // Clamp the tooltip into the viewport so it never overflows on narrow
+  // (mobile) screens. We render once with the centered transform, then
+  // measure and re-apply a clamped horizontal offset.
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const [horizontalShift, setHorizontalShift] = useState(0)
+
+  useLayoutEffect(() => {
+    const el = tooltipRef.current
+    if (!el) return
+    const margin = 8
+    const rect = el.getBoundingClientRect()
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth
+    let shift = 0
+    if (rect.right > viewportWidth - margin) {
+      shift = viewportWidth - margin - rect.right
+    } else if (rect.left < margin) {
+      shift = margin - rect.left
+    }
+    setHorizontalShift(shift)
+  }, [item, x, y])
+
   return (
     <div
-      className="pointer-events-none fixed z-50 w-64 rounded-xl border border-border/70 bg-popover/95 px-3.5 py-3 text-xs text-popover-foreground shadow-2xl shadow-black/10 ring-1 ring-foreground/5 backdrop-blur-md dark:shadow-black/35"
+      ref={tooltipRef}
+      className="pointer-events-none fixed z-50 w-64 max-w-[calc(100vw-1rem)] rounded-xl border border-border/70 bg-popover/95 px-3.5 py-3 text-xs text-popover-foreground shadow-2xl shadow-black/10 ring-1 ring-foreground/5 backdrop-blur-md dark:shadow-black/35"
       style={{
         left: x,
         top: y - 12,
-        transform: 'translate(-50%, -100%)',
+        transform: `translate(calc(-50% + ${horizontalShift}px), -100%)`,
       }}
     >
       <div className="flex items-start justify-between gap-4">
@@ -294,7 +341,10 @@ function CommitTooltipView({
         ))}
       </div>
 
-      <span className="absolute left-1/2 top-full size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-border/70 bg-popover/95" />
+      <span
+        className="absolute top-full size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-border/70 bg-popover/95"
+        style={{ left: `calc(50% - ${horizontalShift}px)` }}
+      />
     </div>
   )
 }

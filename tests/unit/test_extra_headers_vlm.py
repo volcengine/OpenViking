@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM extra_headers support."""
 
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from openviking.models.vlm.backends.litellm_vlm import (
@@ -9,6 +11,7 @@ from openviking.models.vlm.backends.litellm_vlm import (
     detect_provider_by_model,
 )
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
 
 
 class TestVLMExtraHeaders:
@@ -239,6 +242,79 @@ class TestOpenAIVLMClientRetries:
 
         call_kwargs = mock_async_openai_class.call_args.kwargs
         assert call_kwargs["max_retries"] == 0
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncOpenAI")
+    def test_openai_async_client_is_scoped_to_event_loop(self, mock_async_openai_class):
+        main_loop_client = MagicMock(name="main_loop_client")
+        worker_loop_client = MagicMock(name="worker_loop_client")
+        mock_async_openai_class.side_effect = [main_loop_client, worker_loop_client]
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
+
+        async def get_twice():
+            return vlm.get_async_client(), vlm.get_async_client()
+
+        first, second = asyncio.run(get_twice())
+        result = []
+
+        def run_in_thread_loop():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                result.append(loop.run_until_complete(get_twice()))
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+        thread = threading.Thread(target=run_in_thread_loop)
+        thread.start()
+        thread.join()
+
+        assert first is main_loop_client
+        assert second is main_loop_client
+        assert result == [(worker_loop_client, worker_loop_client)]
+        assert mock_async_openai_class.call_count == 2
+
+    def test_volcengine_async_client_is_scoped_to_event_loop(self, monkeypatch):
+        main_loop_client = MagicMock(name="main_loop_client")
+        worker_loop_client = MagicMock(name="worker_loop_client")
+        build_async_client = MagicMock(side_effect=[main_loop_client, worker_loop_client])
+
+        vlm = VolcEngineVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+            }
+        )
+        monkeypatch.setattr(vlm, "_build_async_client", build_async_client)
+
+        async def get_client():
+            return vlm.get_async_client()
+
+        first = asyncio.run(get_client())
+        result = []
+
+        def run_in_thread_loop():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                result.append(loop.run_until_complete(get_client()))
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+        thread = threading.Thread(target=run_in_thread_loop)
+        thread.start()
+        thread.join()
+
+        assert first is main_loop_client
+        assert result == [worker_loop_client]
+        assert build_async_client.call_count == 2
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
     def test_azure_sync_client_disables_sdk_retries(self, mock_azure_openai_class):

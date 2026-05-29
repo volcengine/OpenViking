@@ -141,12 +141,28 @@ class TempUploadConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ToolOutputExternalizationConfig(BaseModel):
+    """External storage controls for oversized tool outputs."""
+
+    enabled: bool = True
+    threshold_chars: int = 20_000
+    preview_chars: int = 2_000
+    assistant_turn_inline_budget_chars: int = 100_000
+    assistant_turn_preview_budget_chars: int = 10_000
+    min_preview_chars: int = 1_000
+    aggregate_selection_strategy: Literal["largest_first"] = "largest_first"
+    failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
     auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
@@ -161,6 +177,9 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
+    tool_output_externalization: ToolOutputExternalizationConfig = Field(
+        default_factory=ToolOutputExternalizationConfig
+    )
 
     model_config = {"extra": "forbid"}
 

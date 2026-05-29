@@ -1,13 +1,31 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""SQLite schema for product usage/audit projections."""
+"""SQLite schema for product usage/audit projections.
+
+All time-keyed columns (`date_utc`, `hour_utc`, `created_at`) are persisted in
+UTC. The viewer's timezone is applied at read time so a single store can
+serve any region. Token and retrieval rollups are hour-grained so cross-tz
+"today" queries can slice at user-local day boundaries; agent activity stays
+daily, filtered by `last_seen_at` at read time.
+"""
+
+# Bump when the table layout changes incompatibly. Stored on the `_schema_meta`
+# row so `SQLiteUsageAuditStore.initialize` can reset the local SQLite store
+# when an older snapshot is detected.
+SCHEMA_VERSION = 3
 
 SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_token_daily (
+CREATE TABLE IF NOT EXISTS _schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage_token_hourly (
     account_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    date TEXT NOT NULL,
+    date_utc TEXT NOT NULL,
+    hour_utc INTEGER NOT NULL,
     source TEXT NOT NULL,
     token_type TEXT NOT NULL,
     provider TEXT NOT NULL,
@@ -15,52 +33,58 @@ CREATE TABLE IF NOT EXISTS usage_token_daily (
     token_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (
-        account_id, user_id, agent_id, date, source, token_type, provider, model_name
+        account_id, user_id, agent_id, date_utc, hour_utc,
+        source, token_type, provider, model_name
     )
 );
 CREATE INDEX IF NOT EXISTS idx_usage_token_account_date
-    ON usage_token_daily(account_id, date);
+    ON usage_token_hourly(account_id, date_utc, hour_utc);
 
-CREATE TABLE IF NOT EXISTS usage_retrieval_daily (
+CREATE TABLE IF NOT EXISTS usage_retrieval_hourly (
     account_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    date TEXT NOT NULL,
+    date_utc TEXT NOT NULL,
+    hour_utc INTEGER NOT NULL,
     operation TEXT NOT NULL,
     status TEXT NOT NULL,
     request_count INTEGER NOT NULL DEFAULT 0,
     result_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (account_id, user_id, agent_id, date, operation, status)
+    PRIMARY KEY (
+        account_id, user_id, agent_id, date_utc, hour_utc, operation, status
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_usage_retrieval_account_date
-    ON usage_retrieval_daily(account_id, date);
+    ON usage_retrieval_hourly(account_id, date_utc, hour_utc);
 
 CREATE TABLE IF NOT EXISTS usage_context_write_bucket (
     account_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    date TEXT NOT NULL,
-    hour_bucket INTEGER NOT NULL,
+    date_utc TEXT NOT NULL,
+    hour_utc INTEGER NOT NULL,
     operation TEXT NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (account_id, user_id, agent_id, date, hour_bucket, operation)
+    PRIMARY KEY (
+        account_id, user_id, agent_id, date_utc, hour_utc, operation
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_usage_context_write_account_date
-    ON usage_context_write_bucket(account_id, date, hour_bucket);
+    ON usage_context_write_bucket(account_id, date_utc, hour_utc);
 
 CREATE TABLE IF NOT EXISTS usage_agent_activity_daily (
     account_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    date TEXT NOT NULL,
+    date_utc TEXT NOT NULL,
     request_count INTEGER NOT NULL DEFAULT 0,
     last_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (account_id, agent_id, date)
+    PRIMARY KEY (account_id, agent_id, date_utc)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_agent_activity_account_date
-    ON usage_agent_activity_daily(account_id, date, last_seen_at);
+    ON usage_agent_activity_daily(account_id, date_utc, last_seen_at);
 
 CREATE TABLE IF NOT EXISTS request_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,3 +108,17 @@ CREATE INDEX IF NOT EXISTS idx_request_audit_account_api
 CREATE INDEX IF NOT EXISTS idx_request_audit_account_status
     ON request_audit(account_id, status_code);
 """
+
+# The SQLite backend is a local pre-GA store with short retention. When the
+# schema changes incompatibly, reset all local usage/audit tables instead of
+# carrying partial migrations that can leave date/date_utc or daily/hourly
+# shapes mixed in one database.
+RESET_ON_SCHEMA_UPGRADE_TABLES = (
+    "usage_token_daily",
+    "usage_retrieval_daily",
+    "usage_token_hourly",
+    "usage_retrieval_hourly",
+    "usage_context_write_bucket",
+    "usage_agent_activity_daily",
+    "request_audit",
+)

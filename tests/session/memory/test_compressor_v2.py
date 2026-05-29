@@ -15,9 +15,14 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
+from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.memory_updater import MemoryUpdateResult
-from openviking.session.memory.utils.content import deserialize_metadata, serialize_with_metadata
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.memory_isolation_handler import RoleScope
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -278,6 +283,28 @@ class TestCompressorV2:
     """Tests for SessionCompressorV2."""
 
     @pytest.mark.asyncio
+    async def test_memory_lock_retry_logging_is_throttled(self, monkeypatch):
+        warnings = []
+        debug_logs = []
+        monkeypatch.setattr(compressor_v2_module.logger, "warning", warnings.append)
+        monkeypatch.setattr(compressor_v2_module.logger, "debug", debug_logs.append)
+
+        last_warning_at = compressor_v2_module._log_memory_lock_retry(
+            retry_count=1,
+            max_retries=0,
+            last_warning_at=0.0,
+        )
+        compressor_v2_module._log_memory_lock_retry(
+            retry_count=2,
+            max_retries=0,
+            last_warning_at=last_warning_at,
+        )
+
+        assert len(warnings) == 1
+        assert "attempt=1" in warnings[0]
+        assert debug_logs == []
+
+    @pytest.mark.asyncio
     async def test_extract_long_term_memories_includes_latest_archive_overview(self):
         """Latest archive overview should be prepended to the v2 conversation context."""
         compressor = SessionCompressorV2(vikingdb=None)
@@ -422,8 +449,44 @@ class TestCompressorV2:
         logger.info("Test completed successfully!")
 
     @pytest.mark.asyncio
-    async def test_v2_lock_acquire_respects_max_retries(self):
-        """v2 memory extraction should stop after configured lock retry limit."""
+    async def test_extract_long_term_memories_logs_agfs_fallback_at_debug(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+
+        dummy_registry = SimpleNamespace(initialize_memory_files=AsyncMock())
+        dummy_orchestrator = SimpleNamespace(
+            context_provider=SimpleNamespace(get_memory_schemas=lambda _ctx: []),
+            _transaction_handle=None,
+            run=AsyncMock(return_value=(None, [])),
+        )
+
+        with (
+            patch("openviking.storage.viking_fs.get_viking_fs", return_value=None),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=None),
+            patch(
+                "openviking.session.memory.memory_type_registry.create_default_registry",
+                return_value=dummy_registry,
+            ),
+            patch.object(compressor, "_get_or_create_react", return_value=dummy_orchestrator),
+            patch("openviking.session.compressor_v2.logger.warning") as warning_mock,
+            patch("openviking.session.compressor_v2.logger.debug") as debug_mock,
+        ):
+            result = await compressor.extract_long_term_memories(
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=False,
+            )
+
+        assert result == []
+        warning_mock.assert_not_called()
+        debug_mock.assert_any_call("AGFS unavailable, running memory extraction without locks")
+
+    @pytest.mark.asyncio
+    async def test_v2_lock_acquire_waits_without_retry_loop(self):
+        """v2 memory extraction should delegate waiting to lock manager without local retries."""
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
@@ -478,7 +541,6 @@ class TestCompressorV2:
                 return_value=SimpleNamespace(initialize_memory_files=AsyncMock()),
             ),
             patch.object(compressor, "_get_or_create_react", return_value=DummyOrchestrator()),
-            patch("openviking.session.compressor_v2.asyncio.sleep", new=AsyncMock()),
         ):
             initialize_openviking_config()
             config = get_openviking_config()
@@ -535,7 +597,7 @@ class TestCompressorV2:
         config = SimpleNamespace(
             vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
             memory=SimpleNamespace(
-                enable_role_id_memory_isolate=False,
+                role_id_memory_isolation_enabled=False,
                 v2_lock_max_retries=1,
                 v2_lock_retry_interval_seconds=0.0,
             ),
@@ -594,25 +656,29 @@ class TestCompressorV2:
         exp_uri = "viking://agent/default/memories/experiences/debug.md"
         events: List[str] = []
 
+        traj_uri = "viking://agent/default/memories/trajectories/traj-1.md"
+
         class FakeVikingFS:
             def __init__(self):
-                self.content = serialize_with_metadata(
-                    {
-                        "content": "debug login issue",
-                        "source_trajectories": ["traj-0"],
-                    }
-                )
+                self.files = {
+                    exp_uri: MemoryFileUtils.write(
+                        MemoryFile(uri=exp_uri, content="debug login issue")
+                    ),
+                    traj_uri: MemoryFileUtils.write(
+                        MemoryFile(uri=traj_uri, content="traj content")
+                    ),
+                }
 
             def _uri_to_path(self, uri: str, ctx=None) -> str:
                 return f"/local/default/agent/default/memories/experiences/{uri.rsplit('/', 1)[-1]}"
 
             async def read_file(self, uri: str, ctx=None):
                 events.append("read")
-                return self.content
+                return self.files.get(uri, "")
 
             async def write_file(self, uri: str, content: str, ctx=None):
                 events.append("write")
-                self.content = content
+                self.files[uri] = content
 
         handle = SimpleNamespace(id="handle-1", locks=[])
 
@@ -633,16 +699,324 @@ class TestCompressorV2:
         with patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager):
             await compressor._append_trajectories_to_experiences(
                 [exp_uri],
-                ["traj-1"],
+                [traj_uri],
                 ctx,
                 viking_fs,
             )
 
-        metadata = deserialize_metadata(viking_fs.content)
-        assert metadata["source_trajectories"] == ["traj-0", "traj-1"]
+        # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
+        exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
+        assert "source_trajectories" not in exp_mf.extra_fields
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert exp_mf.backlinks == [], "exp should have no backlinks"
+
+        # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
+        traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
+        assert traj_mf.links == [], "traj should have no forward links"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+
+        # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",
-            "write",
+            "read",   # exp read
+            "write",  # exp write (exp.links)
+            "read",   # traj read  (write_stored_links)
+            "write",  # traj write (traj.backlinks)
             "release",
         ]
+
+
+class TestExtractLoopPatchRepair:
+    """Tests for ExtractLoop patch validation and repair retry."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_patch_search_triggers_one_repair_retry(self):
+        schema = MemoryTypeSchema(
+            memory_type="profile",
+            description="User profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="Profile content",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+        )
+        target_uri = "viking://user/default/memories/profile.md"
+        other_uri = "viking://user/default/memories/other.md"
+        target_file = MemoryFile(uri=target_uri, content="# Tim\n- Likes reading")
+        other_file = MemoryFile(uri=other_uri, content="# Other\n- Has been reading as usual")
+
+        class DummyRegistry:
+            def get(self, memory_type):
+                assert memory_type == "profile"
+                return schema
+
+        class DummyProvider:
+            read_file_contents = {
+                target_uri: target_file,
+                other_uri: other_file,
+            }
+
+            def __init__(self):
+                self.extract_context = ExtractContext([])
+
+            def get_memory_schemas(self, _ctx):
+                return [schema]
+
+            def get_output_language(self):
+                return "English"
+
+            def get_tools(self):
+                return []
+
+            def instruction(self):
+                return "Extract memories."
+
+            async def prefetch(self):
+                return []
+
+            def get_extract_context(self):
+                return self.extract_context
+
+            def _get_registry(self):
+                return DummyRegistry()
+
+        class DummyIsolationHandler:
+            def get_read_scope(self):
+                return RoleScope(user_ids=["default"], agent_ids=["default"])
+
+            def fill_role_ids(self, item_dict, role_scope):
+                item_dict.setdefault("user_id", "default")
+                item_dict.setdefault("agent_id", "default")
+
+            def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
+                return [target_uri]
+
+        class DummyVLM:
+            model = "dummy"
+
+            def __init__(self):
+                self.responses = [
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Has been reading as usual","replace":"- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_uris":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading\n- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_uris":[]}',
+                ]
+                self.messages = []
+
+            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+                self.messages.append(list(messages))
+                return self.responses.pop(0)
+
+        vlm = DummyVLM()
+        loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MockVikingFS(),
+            max_iterations=1,
+            context_provider=DummyProvider(),
+            isolation_handler=DummyIsolationHandler(),
+        )
+
+        operations, _tools_used = await loop.run()
+
+        assert len(vlm.messages) == 2
+        second_call_content = "\n".join(message["content"] for message in vlm.messages[1])
+        assert "SEARCH/REPLACE patch could not be applied" in second_call_content
+        assert "Regenerate the complete operations JSON" in second_call_content
+        assert target_uri in second_call_content
+        assert other_uri in second_call_content
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Likes reading"
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_patch_search_repairs_only_once(self):
+        schema = MemoryTypeSchema(
+            memory_type="profile",
+            description="User profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="Profile content",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+        )
+        target_uri = "viking://user/default/memories/profile.md"
+        target_file = MemoryFile(uri=target_uri, content="# Tim\n- Likes reading")
+
+        class DummyRegistry:
+            def get(self, memory_type):
+                assert memory_type == "profile"
+                return schema
+
+        class DummyProvider:
+            read_file_contents = {target_uri: target_file}
+
+            def __init__(self):
+                self.extract_context = ExtractContext([])
+
+            def get_memory_schemas(self, _ctx):
+                return [schema]
+
+            def get_output_language(self):
+                return "English"
+
+            def get_tools(self):
+                return []
+
+            def instruction(self):
+                return "Extract memories."
+
+            async def prefetch(self):
+                return []
+
+            def get_extract_context(self):
+                return self.extract_context
+
+            def _get_registry(self):
+                return DummyRegistry()
+
+        class DummyIsolationHandler:
+            def get_read_scope(self):
+                return RoleScope(user_ids=["default"], agent_ids=["default"])
+
+            def fill_role_ids(self, item_dict, role_scope):
+                item_dict.setdefault("user_id", "default")
+                item_dict.setdefault("agent_id", "default")
+
+            def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
+                return [target_uri]
+
+        class DummyVLM:
+            model = "dummy"
+
+            def __init__(self):
+                self.responses = [
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing one","replace":"- Fixed one"}]} }],"delete_uris":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing two","replace":"- Fixed two"}]} }],"delete_uris":[]}',
+                ]
+                self.messages = []
+
+            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+                self.messages.append(list(messages))
+                return self.responses.pop(0)
+
+        vlm = DummyVLM()
+        loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MockVikingFS(),
+            max_iterations=1,
+            context_provider=DummyProvider(),
+            isolation_handler=DummyIsolationHandler(),
+        )
+
+        operations, _tools_used = await loop.run()
+
+        assert len(vlm.messages) == 2
+        all_messages = "\n".join(
+            message["content"] for call_messages in vlm.messages for message in call_messages
+        )
+        assert all_messages.count("SEARCH/REPLACE patch could not be applied") == 1
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Missing two"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_patch_success_does_not_trigger_repair(self):
+        schema = MemoryTypeSchema(
+            memory_type="profile",
+            description="User profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="Profile content",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+        )
+        target_uri = "viking://user/default/memories/profile.md"
+        target_file = MemoryFile(uri=target_uri, content="# Tim\n- Likes reading every night")
+
+        class DummyRegistry:
+            def get(self, memory_type):
+                assert memory_type == "profile"
+                return schema
+
+        class DummyProvider:
+            read_file_contents = {target_uri: target_file}
+
+            def __init__(self):
+                self.extract_context = ExtractContext([])
+
+            def get_memory_schemas(self, _ctx):
+                return [schema]
+
+            def get_output_language(self):
+                return "English"
+
+            def get_tools(self):
+                return []
+
+            def instruction(self):
+                return "Extract memories."
+
+            async def prefetch(self):
+                return []
+
+            def get_extract_context(self):
+                return self.extract_context
+
+            def _get_registry(self):
+                return DummyRegistry()
+
+        class DummyIsolationHandler:
+            def get_read_scope(self):
+                return RoleScope(user_ids=["default"], agent_ids=["default"])
+
+            def fill_role_ids(self, item_dict, role_scope):
+                item_dict.setdefault("user_id", "default")
+                item_dict.setdefault("agent_id", "default")
+
+            def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
+                return [target_uri]
+
+        class DummyVLM:
+            model = "dummy"
+
+            def __init__(self):
+                self.responses = [
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading every night (as of 2023-11-11)"}]} }],"delete_uris":[]}',
+                ]
+                self.messages = []
+
+            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+                self.messages.append(list(messages))
+                return self.responses.pop(0)
+
+        vlm = DummyVLM()
+        loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MockVikingFS(),
+            max_iterations=1,
+            context_provider=DummyProvider(),
+            isolation_handler=DummyIsolationHandler(),
+        )
+
+        operations, _tools_used = await loop.run()
+
+        assert len(vlm.messages) == 1
+        assert (
+            operations.upsert_operations[0].memory_fields["content"].blocks[0].search
+            == "- Likes reading"
+        )
