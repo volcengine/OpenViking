@@ -2,7 +2,7 @@
 
 Long-term semantic memory for [Pi](https://github.com/mariozechner/pi-coding-agent) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and sessions are committed for persistent memory extraction — all via pi's native extension API.
 
-> Designed with lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach.
+> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the full design spec with comparison tables and event flow diagrams.
 
 ## Quick Start
 
@@ -218,6 +218,8 @@ Both plugins share the same core design (informed by each other):
 | Subagent isolation  | Explicit hook management                | Natural process-level isolation        |
 
 ## Extension Structure
+
+See [DESIGN.md](./DESIGN.md) for the full design specification — comparison of all three OV plugins, detailed event flow, design rationale, and implementation guidance useful for building OV extensions for any agent harness.
 
 ```
 pi-coding-agent-extension/
