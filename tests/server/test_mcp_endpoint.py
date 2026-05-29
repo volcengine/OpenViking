@@ -332,6 +332,23 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
     upload_token_store.clear()
 
 
+async def test_add_resource_local_path_does_not_ingest_directly(service, monkeypatch):
+    """Regression: MCP must not pass direct host paths to resource ingestion."""
+    from openviking.server.upload_token_store import upload_token_store
+
+    async def fail_add_resource(**kwargs):
+        raise AssertionError("local path must be converted to upload instructions")
+
+    upload_token_store.clear()
+    monkeypatch.setattr(service.resources, "add_resource", fail_add_resource)
+
+    result = await add_resource(path="/app/.openviking/ov.conf")
+
+    assert "upload required" in result.lower()
+    assert "Resource added" not in result
+    upload_token_store.clear()
+
+
 async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatch):
     from openviking.server.upload_token_store import upload_token_store
 
