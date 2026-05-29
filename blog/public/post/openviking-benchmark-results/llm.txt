@@ -1,0 +1,64 @@
+# OpenViking Benchmark Update: User Memory, Agent Memory, and Knowledge Base QA
+
+Published: 2026-05-29
+
+OpenViking's May 2026 benchmark update focuses on three scenarios: long-conversation user memory, reusable agent experience memory, and knowledge-base QA. The main question is whether OpenViking can improve accuracy while reducing latency and token cost.
+
+## User Memory on LoCoMo
+
+OpenViking was evaluated as an external memory layer for OpenClaw, Hermes, and Claude Code on LoCoMo long-conversation QA.
+
+Results:
+
+- OpenClaw native memory: 24.20% accuracy, 95.14s average query time, 392,559,404 total input tokens.
+- OpenClaw + OpenViking: 82.08% accuracy, 38.8s average query time, 37,423,456 total input tokens.
+- Hermes native memory: 33.38% accuracy, 82.4s average query time, 79,228,398 total input tokens.
+- Hermes + OpenViking: 82.86% accuracy, 27.9s average query time, 52,026,755 total input tokens.
+- Claude Code auto-memory: 57.21% accuracy, 49.1s average query time, 353,306,422 total input tokens.
+- Claude Code + OpenViking: 80.32% accuracy, 20.4s average query time, 129,968,899 total input tokens.
+
+Efficiency improvements versus native baselines:
+
+- OpenClaw: 24.20% to 82.08% accuracy, 59.22% lower latency, 91.0% fewer tokens.
+- Hermes: 33.38% to 82.86% accuracy, 66.10% lower latency, 34.3% fewer tokens.
+- Claude Code: 57.21% to 80.32% accuracy, 58.45% lower latency, 63.2% fewer tokens.
+
+## Agent Experience Memory
+
+Agent memory asks whether an agent can reuse what it learned from previous attempts.
+
+ClawWork result:
+
+- LLM only: $2,269.77 net income after 50 tasks, 1,030.3K tokens per hour.
+- LLM + OpenViking: $3,843.74 net income after 50 tasks, 872.4K tokens per hour.
+
+tau2-bench result:
+
+- LLM without memory: 70.94% Retail accuracy, 54.38% Airline accuracy.
+- LLM + OpenViking experience memory: 77.81% Retail accuracy, 66.25% Airline accuracy.
+
+## Knowledge Base QA
+
+HotpotQA result:
+
+- Naive RAG: 62.50% accuracy, 1,290 tokens per QA, 0.11s latency per QA.
+- HippoRAG 2: 61.00% accuracy, 726 tokens per QA, 20s latency.
+- LightRAG: 89.00% accuracy, 28,443 tokens per QA, 75s latency.
+- LangChain SQL agent: 78.00% accuracy, 4,776 tokens per QA, 132s latency.
+- OpenViking top-5: 72.75% accuracy, 3,154 tokens per QA, 0.22s latency.
+- OpenViking top-20: 91.00% accuracy, 12,533 tokens per QA, 0.23s latency.
+- Nanobot + OpenViking: 87.00% accuracy, 71,300 tokens per QA, 61.6s latency.
+
+Single-turn RAG average across FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA:
+
+- Naive RAG: 53.93% average accuracy, 2,755,356 indexing tokens, 1,435 tokens per QA, 0.13s retrieval latency.
+- PageIndex: 36.75% average accuracy, 5,609,206 indexing tokens, 710,480 tokens per QA, 84.60s retrieval latency.
+- HippoRAG 2: 44.50% average accuracy, 124,963,618 indexing tokens, 637 tokens per QA, 18.83s retrieval latency.
+- LightRAG: 76.00% average accuracy, 62,705,469 indexing tokens, 27,035 tokens per QA, 9.19s retrieval latency.
+- OpenViking: 66.87% average accuracy, 8,671,538 indexing tokens, 3,060 tokens per QA, 0.19s retrieval latency.
+
+## Takeaway
+
+The benchmark pattern is consistent: OpenViking is most useful when the product needs a context-management loop. Long user history, previous agent attempts, and large knowledge bases all benefit from a layer that can store, narrow, retrieve, and reuse context without forcing every token into the prompt.
+
+The VikingMem paper has been accepted by VLDB 2026. OpenViking open-sources part of that context-database direction for developers to try today.
