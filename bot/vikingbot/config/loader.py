@@ -2,10 +2,12 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 
 from vikingbot.config.schema import Config
 
@@ -149,12 +151,34 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
         host = ov_data.get("host", "127.0.0.1")
         port = ov_data.get("port", "1933")
         bot_data["server_url"] = f"http://{host}:{port}"
-    if "root_api_key" not in bot_data or not bot_data["root_api_key"]:
-        bot_data["root_api_key"] = ov_data.get("root_api_key", "")
-    if "root_api_key" in bot_data and bot_data["root_api_key"]:
-        bot_data["mode"] = "remote"
-    else:
-        bot_data["mode"] = "local"
+    api_key = bot_data.get("api_key") or ""
+    root_api_key = ov_data.get("root_api_key", "")
+    mode = bot_data["mode"] if "mode" in bot_data and bot_data["mode"] else ""
+    if not mode:
+        mode = "remote" if root_api_key else "local"
+        bot_data["mode"] = mode
+    logger.debug(f"mode: {mode}")
+    if not api_key and mode == "remote":
+        try:
+            cli_config = load_ovcli_config()
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            raise
+        if cli_config and cli_config.api_key:
+            bot_data["api_key"] = cli_config.api_key
+
+def validate_openviking_auth(config: Config) -> None:
+    ov_server = config.ov_server
+    if ov_server.mode == "local":
+        return
+    if ov_server.api_key:
+        return
+
+    print(
+        "Error: No api_key，please set api_key in ovcli.conf or set bot.ov_server.api_key in ov.conf",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def save_config(

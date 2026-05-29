@@ -3,11 +3,80 @@ from types import SimpleNamespace
 
 import pytest
 from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingSearchTool
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.loader import _merge_ov_server_config, validate_openviking_auth
+from vikingbot.config.schema import OpenVikingConfig, SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount import ov_server as ov_server_module
 from vikingbot.openviking_mount.ov_server import VikingClient
+
+
+def test_openviking_config_defaults_to_user_mode():
+    config = OpenVikingConfig()
+
+    assert config.api_key_type == "user"
+    assert config.api_key == ""
+
+
+def test_openviking_config_legacy_root_key_restores_root_mode():
+    config = OpenVikingConfig(root_api_key="root-key")
+
+    assert config.api_key_type == "root"
+    assert config.api_key == "root-key"
+
+
+def test_openviking_config_api_key_keeps_user_mode():
+    config = OpenVikingConfig(api_key="user-key")
+
+    assert config.api_key_type == "user"
+    assert config.api_key == "user-key"
+
+
+def test_merge_ov_server_config_prefers_ovcli_user_key(monkeypatch):
+    bot_data = {}
+    ov_data = {"host": "127.0.0.1", "port": "1933", "root_api_key": "legacy-root"}
+
+    monkeypatch.setattr(
+        "vikingbot.config.loader.load_ovcli_config",
+        lambda: SimpleNamespace(api_key="cli-user-key"),
+    )
+
+    _merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["api_key"] == "cli-user-key"
+    assert "root_api_key" not in bot_data
+    assert bot_data["mode"] == "remote"
+
+
+
+def test_merge_ov_server_config_defaults_to_local_without_root_switch(monkeypatch):
+    bot_data = {}
+    ov_data = {"host": "127.0.0.1", "port": "1933"}
+
+    def _unexpected_load_ovcli_config():
+        raise AssertionError("load_ovcli_config should not be called in local mode")
+
+    monkeypatch.setattr(
+        "vikingbot.config.loader.load_ovcli_config", _unexpected_load_ovcli_config
+    )
+
+    _merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "local"
+    assert "api_key" not in bot_data
+
+
+def test_validate_openviking_auth_rejects_missing_remote_key(capsys):
+    config = SimpleNamespace(ov_server=SimpleNamespace(mode="remote", api_key=""))
+
+    with pytest.raises(SystemExit):
+        validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert (
+        "Error: No api_key，please set api_key in ovcli.conf or set bot.ov_server.api_key in ov.conf"
+        in captured.err
+    )
 
 
 class _DummySession:
@@ -50,11 +119,15 @@ class _DummyHTTPClient:
         return None
 
 
-def _make_config(api_key_type: str, mode: str = "remote"):
+def _make_config(api_key_type: str, mode: str = "remote", api_key: str | None = None):
+    effective_api_key = api_key if api_key is not None else (
+        "root-key" if api_key_type == "root" else "user-key"
+    )
     ov_server = SimpleNamespace(
         mode=mode,
         api_key_type=api_key_type,
         server_url="http://ov.local",
+        api_key=effective_api_key,
         root_api_key="root-key",
         account_id="acct",
         admin_user_id="admin",
@@ -70,7 +143,9 @@ def _patch_http_client(monkeypatch):
 
 
 def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
-    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    monkeypatch.setattr(
+        ov_server_module, "load_config", lambda: _make_config("root", api_key="root-key")
+    )
 
     client = VikingClient(agent_id="workspace#channel")
 
@@ -82,12 +157,15 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
 
 
 def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
-    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    monkeypatch.setattr(
+        ov_server_module, "load_config", lambda: _make_config("user", api_key="user-key")
+    )
 
     client = VikingClient(agent_id="workspace")
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "user"
+    assert first.kwargs["api_key"] == "user-key"
     assert "user" not in first.kwargs
     assert "account" not in first.kwargs
 
@@ -247,7 +325,7 @@ async def test_search_memory_uses_policy_scoped_namespaces(monkeypatch):
 
     assert calls == [
         "viking://user/sender-1/agent/workspace/memories/",
-        "viking://agent/workspace/user/sender-1/memories/",
+        "viking://agent/workspace/user/admin/memories/",
     ]
 
 

@@ -26,7 +26,13 @@ from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.manager import ChannelManager
-from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config
+from vikingbot.config.loader import (
+    ensure_config,
+    get_config_path,
+    get_data_dir,
+    load_config,
+    validate_openviking_auth,
+)
 from vikingbot.config.schema import SessionKey, requires_gateway_token
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
@@ -292,6 +298,7 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
+    validate_openviking_auth(config)
     effective_host = host if host is not None else config.gateway.host
     effective_port = port if port is not None else config.gateway.port
     gateway_token = _get_gateway_token(config)
@@ -647,6 +654,7 @@ def chat(
 
     bus = MessageBus()
     config = ensure_config(path)
+    validate_openviking_auth(config)
     _init_bot_data(config)
 
     logger.remove()

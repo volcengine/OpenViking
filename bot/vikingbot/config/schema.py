@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -510,8 +510,10 @@ class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
     mode: str = "remote"  # local or remote
-    api_key_type: Literal["root", "user"] = "root"
+    api_key_type: Literal["root", "user"] = ""
     server_url: str = ""
+    api_key: str = ""
+    # 废弃，后续使用api_key
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
@@ -522,8 +524,16 @@ class OpenVikingConfig(BaseModel):
     @classmethod
     def normalize_api_key_type(cls, value: Any) -> str:
         if value is None:
-            return "root"
+            return ""
         return str(value).strip().lower()
+
+    @model_validator(mode="after")
+    def apply_api_key_compatibility(self):
+        if not self.api_key_type:
+            self.api_key_type = "user" if not self.root_api_key or self.api_key else "root"
+        if self.root_api_key and not self.api_key:
+            self.api_key = self.root_api_key
+        return self
 
 
 class WebToolsConfig(BaseModel):

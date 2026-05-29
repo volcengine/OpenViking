@@ -19,7 +19,9 @@ class VikingClient:
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
         self.mode = openviking_config.mode
-        self.api_key_type = (openviking_config.api_key_type or "root").strip().lower()
+        self.api_key_type = (openviking_config.api_key_type or "user").strip().lower()
+        logger.debug(f"Openviking API key type: {openviking_config.api_key_type}")
+        logger.debug(f"Openviking API key: {openviking_config.api_key}")
         if self.api_key_type not in {"root", "user"}:
             raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
 
@@ -47,7 +49,7 @@ class VikingClient:
 
         remote_client_kwargs = {
             "url": openviking_config.server_url,
-            "api_key": openviking_config.root_api_key,
+            "api_key": openviking_config.api_key,
             "agent_id": agent_id,
         }
         if self._is_root_key_mode():
