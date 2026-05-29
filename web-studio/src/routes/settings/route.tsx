@@ -417,15 +417,17 @@ function AddUserDialog({
     userId: '',
   })
 
+  const prevOpenRef = React.useRef(open)
   React.useEffect(() => {
-    if (open) {
+    if (open && !prevOpenRef.current) {
       setDraft({
         accountId: defaultAccountId || DEFAULT_ACCOUNT_ID,
         role: 'user',
         userId: '',
       })
     }
-  }, [open])
+    prevOpenRef.current = open
+  }, [defaultAccountId, open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
