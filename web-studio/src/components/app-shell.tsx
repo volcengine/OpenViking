@@ -28,7 +28,6 @@ import {
 } from '#/components/ui/collapsible'
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
-import { buttonVariants } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -128,6 +127,9 @@ const LANGUAGE_OPTIONS = [
     value: 'en',
   },
 ] as const
+
+const HEADER_ICON_BUTTON_CLASS =
+  'relative inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 function resolveLanguage(
   value: string | undefined,
@@ -501,22 +503,10 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
         <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label={t('theme.toggle', { ns: 'common' })}
-              className={buttonVariants({ size: 'sm', variant: 'ghost' })}
-              onClick={() =>
-                setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
-              }
-            >
-              <SunIcon className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <MoonIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            </button>
-
+          <div className="flex items-center gap-3">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="flex h-9 items-center rounded-full border border-border/80 bg-muted/60 p-1 text-sm"
+              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-base shadow-xs"
               role="group"
             >
               {LANGUAGE_OPTIONS.map((item) => {
@@ -528,7 +518,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'h-7 min-w-10 rounded-full px-3 font-semibold text-muted-foreground transition-colors hover:text-foreground',
+                      'h-8 min-w-12 rounded-xl px-3 font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       isActive && 'bg-foreground text-background shadow-sm',
                     )}
                     onClick={() => {
@@ -542,6 +532,28 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 )
               })}
             </div>
+
+            <button
+              type="button"
+              aria-label={t('theme.toggle', { ns: 'common' })}
+              className={HEADER_ICON_BUTTON_CLASS}
+              onClick={() =>
+                setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
+              }
+            >
+              <MoonIcon className="size-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+              <SunIcon className="absolute size-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+            </button>
+
+            <a
+              href="https://github.com/volcengine/OpenViking"
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t('footer.github', { ns: 'appShell' })}
+              className={HEADER_ICON_BUTTON_CLASS}
+            >
+              <GithubIcon className="size-5" />
+            </a>
           </div>
         </header>
 
