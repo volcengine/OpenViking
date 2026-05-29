@@ -302,7 +302,7 @@ class QdrantCollection(ICollection):
 
     def _make_point(self, record: Dict[str, Any]) -> Dict[str, Any]:
         point_id = record.get("id")
-        if not point_id:
+        if point_id is None or point_id == "":
             raise ValueError("Qdrant point requires id")
 
         dense_vector = record.get(self._dense_vector_name)
@@ -907,6 +907,9 @@ class QdrantCollection(ICollection):
         self._meta_store.delete_index_meta(collection_key=self.collection_key, index_name=index_name)
 
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl=0):
+        # Qdrant does not provide a collection-level per-point TTL primitive that
+        # matches the existing ICollection contract, so ttl is accepted only for
+        # interface compatibility and intentionally ignored here.
         points = [self._make_point(data) for data in data_list]
         self._client.request(
             "PUT",

@@ -122,10 +122,11 @@ class QdrantMetaStore:
         ):
             return []
         self._meta_collection_ensured = True
-        response = self._client.request(
-            "POST",
-            f"/collections/{self._meta_collection_name}/points/scroll",
-            json_body={
+        points: List[Dict[str, Any]] = []
+        next_offset: Optional[Any] = None
+
+        while True:
+            request_body: Dict[str, Any] = {
                 "limit": 128,
                 "with_payload": True,
                 "with_vector": False,
@@ -135,10 +136,28 @@ class QdrantMetaStore:
                         {"key": "collection_key", "match": {"value": collection_key}},
                     ]
                 },
-            },
-        )
-        result = response.get("result", {})
-        return result.get("points", []) if isinstance(result, dict) else []
+            }
+            if next_offset is not None:
+                request_body["offset"] = next_offset
+
+            response = self._client.request(
+                "POST",
+                f"/collections/{self._meta_collection_name}/points/scroll",
+                json_body=request_body,
+            )
+            result = response.get("result", {})
+            if not isinstance(result, dict):
+                break
+
+            batch = result.get("points", [])
+            if isinstance(batch, list):
+                points.extend(batch)
+
+            next_offset = result.get("next_page_offset")
+            if next_offset is None:
+                break
+
+        return points
 
     def save_collection_meta(
         self,

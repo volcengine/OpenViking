@@ -34,6 +34,9 @@ def _build_collection_stub(client: _StubClient) -> QdrantCollection:
     collection = object.__new__(QdrantCollection)
     collection._client = client
     collection._physical_collection_name = "proj__context"
+    collection._dense_vector_name = "vector"
+    collection._sparse_vector_name = "sparse_vector"
+    collection._vector_dim = 3
     return collection
 
 
@@ -103,3 +106,13 @@ def test_delete_all_data_falls_back_to_batched_delete(caplog):
         5,
     ]
     assert "Falling back to batched delete_all_data" in caplog.text
+
+
+def test_make_point_accepts_zero_id():
+    collection = _build_collection_stub(_StubClient([]))
+
+    point = collection._make_point({"id": 0, "vector": [0.1, 0.2, 0.3], "name": "zero"})
+
+    assert point["id"] == 0
+    assert point["vector"]["vector"] == [0.1, 0.2, 0.3]
+    assert point["payload"]["name"] == "zero"
