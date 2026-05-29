@@ -1,3 +1,6 @@
+> **Note:** Looking for a Claude Desktop + Claude Code integration?
+> See [openviking-claude-desktop](https://github.com/itzsamehfawzi/openviking-claude-desktop)
+> — MCP bridge, auto-recall hooks, watchdog, Windows native.
 <div align="center">
 
 <a href="https://openviking.ai/" target="_blank">
