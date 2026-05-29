@@ -356,7 +356,7 @@ class _SingleAccountBackend:
                 order_desc=order_desc,
             )
         except Exception as e:
-            logger.error("Error querying collection: %s", e)
+            logger.error("Error querying collection: %s", e, exc_info=True)
             return []
 
     async def search(
