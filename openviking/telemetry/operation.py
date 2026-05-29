@@ -74,7 +74,7 @@ class TelemetrySummaryBuilder:
         "memory_apply_ms": "memory_apply.duration_ms",
         "post_apply_ms": "post_apply.duration_ms",
         "skill_apply_ms": "skill_apply.duration_ms",
-        "operation_exact_apply_window_wait_ms": ("operation_exact_apply_window_wait.duration_ms"),
+        "operation_exact_apply_window_wait_ms": "operation_exact_apply_window_wait.duration_ms",
         "operation_exact_apply_window_lock_wait_ms": (
             "operation_exact_apply_window_lock_wait.duration_ms"
         ),
