@@ -558,7 +558,7 @@ class LocalClient(BaseClient):
         messages: List[Dict[str, Any]],
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Add multiple messages to a session in a single local operation."""
+        """Add multiple messages to a session in one batch."""
         execution = await run_with_telemetry(
             operation="session.batch_add_messages",
             telemetry=telemetry,
@@ -577,20 +577,20 @@ class LocalClient(BaseClient):
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
-
         specs: list[dict[str, Any]] = []
-        for message in messages:
-            role = message["role"]
-            parts = message.get("parts")
-            content = message.get("content")
+
+        for index, message in enumerate(messages):
+            role = message.get("role")
+            if not role:
+                raise ValueError(f"messages[{index}]: missing required key 'role'")
 
             message_parts: list[Part]
-            if parts is not None:
-                message_parts = [part_from_dict(p) for p in parts]
-            elif content is not None:
-                message_parts = [TextPart(text=content)]
+            if message.get("parts") is not None:
+                message_parts = [part_from_dict(part) for part in message["parts"]]
+            elif message.get("content") is not None:
+                message_parts = [TextPart(text=str(message["content"]))]
             else:
-                raise ValueError("Each message must include either content or parts")
+                raise ValueError(f"messages[{index}]: either content or parts must be provided")
 
             specs.append(
                 {
@@ -601,11 +601,11 @@ class LocalClient(BaseClient):
                 }
             )
 
-        added_messages = session.add_messages(specs)
+        added = session.add_messages(specs)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
-            "added": len(added_messages),
+            "added": len(added),
         }
 
     # ============= Pack =============

@@ -97,6 +97,7 @@ jobs:
           DIST_DIR="docs/.vitepress/dist"
           HTML_CACHE_CONTROL="public, max-age=0, must-revalidate"
           STATIC_CACHE_CONTROL="public, max-age=31536000, immutable"
+          NO_CACHE_CONTROL="no-store, no-cache, must-revalidate, max-age=0"
 
           aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
@@ -125,6 +126,14 @@ jobs:
             --recursive \
             --cache-control "${STATIC_CACHE_CONTROL}" \
             --only-show-errors
+
+          if [ -d "${DIST_DIR}/agents" ]; then
+            aws s3 cp "${DIST_DIR}/agents" "s3://${TOS_BUCKET}/agents/" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --recursive \
+              --cache-control "${NO_CACHE_CONTROL}" \
+              --only-show-errors
+          fi
 
       - name: Report TOS deployment failure
         if: steps.setup_python.outcome == 'failure' || steps.install_aws_cli.outcome == 'failure' || steps.upload_tos.outcome == 'failure'

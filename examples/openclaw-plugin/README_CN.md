@@ -41,6 +41,9 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 | `add_resource` | 导入文档、URL 或 Git 仓库 |
 | `add_skill` | 导入 agent 技能 |
 | `ov_search` | 检索已导入的 resources 和 skills |
+| `openviking_tool_result_read` | 还原被 OpenViking 外置的工具结果的完整原始内容 |
+| `openviking_tool_result_search` | 按关键词在外置的工具结果中检索 |
+| `openviking_tool_result_list` | 列出当前会话中外置的工具结果 |
 
 ## 数据流与隐私
 

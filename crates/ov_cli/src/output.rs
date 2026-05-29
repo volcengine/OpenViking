@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_COL_WIDTH: usize = 256;
@@ -22,7 +22,7 @@ impl From<&str> for OutputFormat {
 pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bool) {
     if matches!(format, OutputFormat::Json) {
         if compact {
-            println!("{}", json!({ "ok": true, "result": result }));
+            println!("{}", compact_success_value(result));
         } else {
             println!(
                 "{}",
@@ -32,6 +32,29 @@ pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bo
     } else {
         print_table(result, compact);
     }
+}
+
+fn compact_success_value<T: Serialize>(result: T) -> Value {
+    let mut obj = match serde_json::to_value(result).unwrap_or(Value::Null) {
+        Value::Object(obj) => obj,
+        value => return json!({ "ok": true, "result": value }),
+    };
+
+    let Some(profile) = obj.remove("profile") else {
+        return json!({ "ok": true, "result": Value::Object(obj) });
+    };
+
+    let result = if obj.len() == 1 && obj.contains_key("result") {
+        obj.remove("result").unwrap_or(Value::Null)
+    } else {
+        Value::Object(obj)
+    };
+
+    if profile.is_null() {
+        return json!({ "ok": true, "result": result });
+    }
+
+    json!({ "status": "ok", "result": result, "profile": profile })
 }
 
 #[allow(dead_code)]
@@ -975,6 +998,82 @@ mod tests {
                 ]
                 .join("\n")
             )
+        );
+    }
+
+    #[test]
+    fn test_compact_json_lifts_profile_next_to_result_for_list_payloads() {
+        let value = json!({
+            "result": [
+                {"id": "1", "name": "alpha"}
+            ],
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "status": "ok",
+                "result": [
+                    {"id": "1", "name": "alpha"}
+                ],
+                "profile": [
+                    "line one"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_lifts_profile_next_to_result_for_object_payloads() {
+        let value = json!({
+            "healthy": true,
+            "version": "0.1.x",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "status": "ok",
+                "result": {
+                    "healthy": true,
+                    "version": "0.1.x"
+                },
+                "profile": [
+                    "line one"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_treats_null_profile_as_absent() {
+        let value = json!({
+            "result": [
+                {"id": "1", "name": "alpha"}
+            ],
+            "profile": null
+        });
+
+        let rendered = compact_success_value(value.clone());
+
+        assert_eq!(
+            rendered,
+            json!({
+                "ok": true,
+                "result": [
+                    {"id": "1", "name": "alpha"}
+                ]
+            })
         );
     }
 

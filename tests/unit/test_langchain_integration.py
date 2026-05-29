@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.runnables import RunnableLambda
 from langgraph.store.base import PutOp
 
+import openviking.integrations.langchain.client as client_helpers
 from openviking.integrations.langchain import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
@@ -22,9 +23,9 @@ from openviking.integrations.langchain import (
 )
 from openviking.integrations.langchain.client import (
     OpenVikingConnection,
+    apply_commit_policy,
     call_openviking,
     ensure_client,
-    maybe_commit_session,
 )
 from openviking.integrations.langchain.history import (
     langchain_message_to_openviking,
@@ -32,6 +33,11 @@ from openviking.integrations.langchain.history import (
 )
 from openviking.integrations.langchain.middleware import _message_signature
 from openviking.integrations.langchain.tools import _archive_grep_pattern
+
+
+def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
+    assert hasattr(client_helpers, "apply_commit_policy")
+    assert not hasattr(client_helpers, "maybe_commit_session")
 
 
 def test_retriever_returns_langchain_documents():
@@ -357,6 +363,33 @@ def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
     assert [doc.metadata["openviking_uri"] for doc in docs] == ["viking://resources/recovered.md"]
     assert len(instances) == 2
     assert instances[0].closed is True
+
+
+def test_in_memory_openviking_client_batch_add_messages_records_messages():
+    client = InMemoryOpenVikingClient()
+
+    result = client.batch_add_messages(
+        "batch-session",
+        [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "text": "hi"}],
+                "role_id": "agent-1",
+                "created_at": "2026-05-26T00:00:00+00:00",
+            },
+        ],
+    )
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    assert [message["role"] for message in client.sessions["batch-session"]] == [
+        "user",
+        "assistant",
+    ]
+    assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
+    assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
+    assert client.sessions["batch-session"][1]["role_id"] == "agent-1"
+    assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
 def test_chat_message_history_preserves_tool_parts():
@@ -931,7 +964,7 @@ def test_langgraph_store_uses_create_first_and_preserves_created_at_on_replace()
 
 def test_pending_token_commit_does_not_create_missing_session():
     client = InMemoryOpenVikingClient()
-    result = maybe_commit_session(
+    result = apply_commit_policy(
         client,
         "missing-commit-session",
         OpenVikingCommitPolicy(mode="pending_tokens", pending_token_threshold=1),

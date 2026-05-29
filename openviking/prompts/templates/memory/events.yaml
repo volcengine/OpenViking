@@ -1,15 +1,91 @@
 memory_type: events
 description: |
   # Guidelines
-  - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later"), and nothing should be omitted. If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
-  - Include all facts as comprehensively as possible, especially requests made by specific roles and mark major events.
-  - Convert dialogue into indirect speech, covering emotions and speaker characteristics, recording the user's emotional state, conversation content, emotional feedback (such as happy, sad, curious, etc.), and the assistant's response.
-  - Create a coherent narrative, retaining key dramatic elements.
+  - Each event must be atomic: capture exactly one real-world occurrence, decision, commitment, arrangement, proposal, progress update, or result.
+  - Prefer precise, small events over comprehensive narratives. Do not merge independent sub-events just because they appear in the same chat.
+  - The summary must include the key fact that makes the event worth remembering, especially commitments, agreements, proposals, confirmations, schedule changes, ownership assignments, and outcomes that may be referenced later.
+  - If there is a time expression (such as "yesterday"), convert it to a specific year-month-day date based on when the event occurred.
+  - Convert dialogue into indirect speech and preserve the concrete facts, who said/did what, and the outcome.
   - Use a third-person perspective.
-  - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
-  - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
-  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. A conversation is the medium, not the event. Split multi-topic conversations into separate events by topic. Do NOT name events after who was chatting — name them after WHAT happened.
+  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. A conversation is the medium, not the event.
+  - Split multi-topic conversations into separate events by topic.
+  - Even within one continuous topic, create separate events when ANY of the following changes:
+    - the main goal or subject
+    - the time anchor
+    - the decision, proposal, or commitment
+    - the responsible person or participants
+    - the outcome or status
+  - It is allowed and encouraged to extract multiple events from one continuous block of messages when that block contains multiple independent decisions, commitments, plans, or results.
+  - Do NOT name events after who was chatting. Name them after what specifically happened.
+  - Avoid broad umbrella events such as "team arrangement", "project discussion", "weekend plan", or "meeting chat" when the conversation actually contains multiple smaller actionable sub-events.
+
+  # Granularity Examples
+  ## Bad Example
+  Conversation facts:
+  - They proposed having dinner on Friday.
+  - They confirmed a meeting for next Monday.
+  - Xiaoming promised to bring the projector.
+  Bad extraction:
+  - event_name: 团队安排
+    summary: They discussed team arrangements, including dinner, next week's meeting, and equipment preparation.
+  Why bad:
+  - It merges a proposal, a schedule confirmation, and a commitment into one coarse event.
+
+  ## Good Example
+  Good extraction:
+  - event_name: 周五聚餐提议
+    summary: A Friday dinner was proposed.
+  - event_name: 下周一会议确认
+    summary: A meeting for next Monday was confirmed.
+  - event_name: 投影仪携带承诺
+    summary: Xiaoming committed to bring the projector.
+  Why good:
+  - Each event contains one decision/proposal/commitment only.
+
+  ## Bad Example
+  Conversation facts:
+  - The launch was postponed to June 3.
+  - Lina became the owner of the release checklist.
+  Bad extraction:
+  - event_name: 发布调整
+    summary: They adjusted the release plan, including postponement and ownership changes.
+  Why bad:
+  - It merges a schedule change and an ownership assignment.
+
+  ## Good Example
+  Good extraction:
+  - event_name: 上线延期确认
+    summary: The launch was postponed to 2026-06-03.
+  - event_name: 清单负责人确认
+    summary: Lina was assigned as the owner of the release checklist.
+  Why good:
+  - The time change and the owner assignment are stored as separate atomic events.
+
+  ## Bad Example
+  Conversation facts:
+  - The team started implementation of the sync feature.
+  - Work was blocked by a dependency issue.
+  - The work resumed after the dependency was fixed.
+  - The rollout was completed later that week.
+  Bad extraction:
+  - event_name: sync_feature_progress
+    summary: The sync feature moved forward from implementation to blockage, recovery, and completion.
+  Why bad:
+  - It compresses a multi-stage timeline into one coarse event.
+
+  ## Good Example
+  Good extraction:
+  - event_name: sync_feature_started
+    summary: The team started implementation of the sync feature.
+  - event_name: dependency_blocker_hit
+    summary: Work on the sync feature was blocked by a dependency issue.
+  - event_name: sync_work_resumed
+    summary: Work on the sync feature resumed after the dependency was fixed.
+  - event_name: rollout_completed
+    summary: The rollout of the sync feature was completed later that week.
+  Why good:
+  - A start, a blocker, a resumption, and a completion are four separate status changes and should be stored as four atomic events.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
@@ -17,16 +93,13 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  {{ summary }}
+  Summary: {{ summary }}
   {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
   {{ extract_context.get_event_content(ranges, summary, 0) }}
 embedding_template: |-
-  {{ event_name }}
-
-  {{ goal }}
-
+  EventName: {{ event_name }}
+  Goal: {{ goal }}
   {{ content }}
-
 overview_template: |-
   # Events Overview
   {% if items %}**Date:** {{ extract_context.get_year(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_month(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_day(items[0].file_content.ranges|default(''))|default('') }}{% endif %}
@@ -38,15 +111,16 @@ fields:
   - name: event_name
     type: string
     description: |
-      Output a concrete noun phrase representing a real-world activity or occurrence.
+      Output a concise name for exactly one atomic real-world event.
       Rules:
       1. Must be written in {{ language }};
       2. {% if language == 'en' %}Use lowercase with underscores instead of spaces, maximum 3 words;{% else %}Keep it concise and natural in {{ language }};{% endif %}
       3. Never include any date, time, year or number;
-      4. Must name the real-world activity/occurrence, NOT the conversation about it;
+      4. Must name one specific proposal, decision, commitment, arrangement, progress update, or result — not a broad topic bucket;
       5. Names ending with _chat, _talk, _conversation, _catchup, _discussion are forbidden;
       6. Patterns like "person_chat", "chat_about_xxx", "daily_talk" are forbidden;
-      7. Output only the event name, no extra explanation.
+      7. Broad names like "team arrangement", "project discussion", "weekend plan", "meeting topic" are forbidden if the source actually contains smaller sub-events;
+      8. Output only the event name, no extra explanation.
     merge_op: immutable
 
   - name: goal
@@ -68,4 +142,3 @@ fields:
       - Single index: "N" (e.g., "7" means only message 7)
       - Mixed: "0-3,7,15-20" (ranges and single indices combined)
     merge_op: immutable
-
