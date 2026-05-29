@@ -626,6 +626,16 @@ function SettingsRoute() {
   }, [accountOptions])
 
   React.useEffect(() => {
+    if (!accountsQuery.isError) {
+      return
+    }
+    const typed = draft.accountId.trim()
+    if (typed) {
+      setManagedAccountId(typed)
+    }
+  }, [accountsQuery.isError, draft.accountId])
+
+  React.useEffect(() => {
     const users = usersQuery.data
     if (!users?.length) {
       return
@@ -695,14 +705,14 @@ function SettingsRoute() {
   const users = usersQuery.data ?? []
   const managedUsers = managedUsersQuery.data ?? []
   const totalAccounts = accountOptions.length
-  const totalUsers =
-    accountOptions.reduce((sum, account) => sum + account.userCount, 0) ||
-    managedUsers.length
+  const totalUsers = accountOptions.length
+    ? accountOptions.reduce((sum, account) => sum + account.userCount, 0)
+    : managedUsers.length
   const visibleKeys = managedUsers.filter(
     (user) => user.apiKey || user.keyPrefix,
   ).length
-  const adminUnavailable =
-    !canQueryAdmin || accountsQuery.isError || managedUsersQuery.isError
+  const isRootRestricted = accountsQuery.isError
+  const adminUnavailable = !canQueryAdmin || managedUsersQuery.isError
 
   function updateDraft(next: Partial<ConnectionDraft>): void {
     setDraft((current) => ({ ...current, ...next }))
@@ -802,20 +812,33 @@ function SettingsRoute() {
               </FieldContent>
             </Field>
             <Field>
-              <FieldLabel>{t('fields.account')}</FieldLabel>
+              <FieldLabel htmlFor="settings-account-id">
+                {t('fields.account')}
+              </FieldLabel>
               <FieldContent>
-                <AccountSelect
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('fields.account')}
-                  value={draft.accountId || DEFAULT_ACCOUNT_ID}
-                  onChange={(accountId) =>
-                    updateDraft({
-                      accountId,
-                      userId: DEFAULT_USER_ID,
-                    })
-                  }
-                />
+                {isRootRestricted ? (
+                  <Input
+                    id="settings-account-id"
+                    value={draft.accountId}
+                    onChange={(event) =>
+                      updateDraft({ accountId: event.target.value })
+                    }
+                    placeholder={t('placeholders.account')}
+                  />
+                ) : (
+                  <AccountSelect
+                    accounts={accountOptions}
+                    disabled={!canQueryAdmin || accountsQuery.isLoading}
+                    label={t('fields.account')}
+                    value={draft.accountId || DEFAULT_ACCOUNT_ID}
+                    onChange={(accountId) =>
+                      updateDraft({
+                        accountId,
+                        userId: DEFAULT_USER_ID,
+                      })
+                    }
+                  />
+                )}
               </FieldContent>
             </Field>
             <Field>
@@ -909,13 +932,24 @@ function SettingsRoute() {
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:justify-end">
               <div className="min-w-40">
-                <AccountSelect
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('management.accountFilter')}
-                  value={managedAccountId}
-                  onChange={setManagedAccountId}
-                />
+                {isRootRestricted ? (
+                  <Input
+                    aria-label={t('management.accountFilter')}
+                    value={managedAccountId}
+                    onChange={(event) =>
+                      setManagedAccountId(event.target.value)
+                    }
+                    placeholder={t('placeholders.account')}
+                  />
+                ) : (
+                  <AccountSelect
+                    accounts={accountOptions}
+                    disabled={!canQueryAdmin || accountsQuery.isLoading}
+                    label={t('management.accountFilter')}
+                    value={managedAccountId}
+                    onChange={setManagedAccountId}
+                  />
+                )}
               </div>
               <Button
                 type="button"
@@ -931,7 +965,7 @@ function SettingsRoute() {
               <Button
                 type="button"
                 onClick={() => setAddAccountOpen(true)}
-                disabled={!canQueryAdmin}
+                disabled={!canQueryAdmin || isRootRestricted}
               >
                 <PlusIcon />
                 {t('actions.addAccount')}

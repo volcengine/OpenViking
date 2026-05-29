@@ -33,11 +33,11 @@ type AppConnectionContextValue = {
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
-  accountId: 'default',
+  accountId: '',
   agentId: 'web-studio',
   apiKey: '',
   baseUrl: ovClient.getOptions().baseUrl,
-  userId: 'default',
+  userId: '',
 }
 
 const AppConnectionContext =
