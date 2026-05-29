@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking import AsyncOpenViking
+from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -182,6 +183,60 @@ class TestCommit:
         assert [message["parts"][0]["text"] for message in context["messages"]] == [
             "Round 2 user",
             "Round 2 assistant",
+        ]
+
+    async def test_session_commit_keeps_telemetry_as_first_positional_argument(self):
+        calls = []
+
+        class _FakeClient:
+            async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
+                calls.append(
+                    {
+                        "session_id": session_id,
+                        "telemetry": telemetry,
+                        "keep_recent_count": keep_recent_count,
+                    }
+                )
+                return {"task_id": "task-1"}
+
+        session = ClientSession(_FakeClient(), "s1", "user-1")
+
+        result = await session.commit(True)
+
+        assert result == {"task_id": "task-1"}
+        assert calls == [
+            {
+                "session_id": "s1",
+                "telemetry": True,
+                "keep_recent_count": 0,
+            }
+        ]
+
+    async def test_session_commit_async_keeps_telemetry_as_first_positional_argument(self):
+        calls = []
+
+        class _FakeClient:
+            async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
+                calls.append(
+                    {
+                        "session_id": session_id,
+                        "telemetry": telemetry,
+                        "keep_recent_count": keep_recent_count,
+                    }
+                )
+                return {"task_id": "task-1"}
+
+        session = ClientSession(_FakeClient(), "s1", "user-1")
+
+        result = await session.commit_async(True)
+
+        assert result == {"task_id": "task-1"}
+        assert calls == [
+            {
+                "session_id": "s1",
+                "telemetry": True,
+                "keep_recent_count": 0,
+            }
         ]
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
