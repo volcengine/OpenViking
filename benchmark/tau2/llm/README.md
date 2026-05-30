@@ -231,15 +231,18 @@ server-side exact apply. Configure the running OpenViking server with:
 - `memory.agent_memory_enabled=true`
 - `memory.agent_experience_apply_lock_mode="operation_exact"`
 - `memory.agent_trajectory_apply_lock_mode="operation_exact"`
-- `memory.long_term_apply_lock_mode="operation_exact"`
 - `memory.operation_exact_apply_window_seconds=10.0`
 - `memory.long_term_extraction_enabled=false`
+- `memory.session_skill_extraction_enabled=false`
 
 `--strict-preflight` checks `OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`)
 and fails fast if the server-side memory config does not match the experiment
 config. The `10.0s` operation-exact apply window is now also the OpenViking
 product default; the remaining settings are benchmark / Vaka corpus-prepare
-defaults for faster iteration. Experience consolidation keeps the normal
+defaults for faster iteration. `long_term_extraction_enabled=false` is the
+important exp-only switch: standard user/tool/skill long-term extraction is
+skipped, while agent trajectory / experience memory still runs when
+`agent_memory_enabled=true`. Experience consolidation keeps the normal
 per-trajectory semantics, while same-session experience phases may run
 concurrently when operation-exact apply is enabled. The operation-exact apply
 window is a server-side owner

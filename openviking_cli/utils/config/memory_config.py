@@ -84,15 +84,6 @@ class MemoryConfig(BaseModel):
             "and overview that will be written."
         ),
     )
-    long_term_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
-        default="tree",
-        description=(
-            "Experimental lock scope for standard long-term memory apply, including tool and skill "
-            "memories. 'tree' preserves the existing schema-directory lock around read/LLM/apply. "
-            "'operation_exact' lets read/LLM run before acquiring exact locks for concrete memory "
-            "files and directory overviews that will be written."
-        ),
-    )
     operation_exact_apply_window_seconds: float = Field(
         default=10.0,
         ge=0.0,

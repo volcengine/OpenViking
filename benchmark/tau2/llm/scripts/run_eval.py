@@ -126,7 +126,6 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     agent_memory_enabled = openviking.get("agent_memory_enabled")
     apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
-    long_term_apply_lock_mode = openviking.get("long_term_apply_lock_mode")
     long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
     operation_exact_apply_window_seconds = openviking.get("operation_exact_apply_window_seconds")
     result: dict[str, Any] = {
@@ -136,9 +135,6 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         ),
         "expected_agent_trajectory_apply_lock_mode": (
             str(trajectory_apply_lock_mode) if trajectory_apply_lock_mode is not None else None
-        ),
-        "expected_long_term_apply_lock_mode": (
-            str(long_term_apply_lock_mode) if long_term_apply_lock_mode is not None else None
         ),
         "expected_long_term_extraction_enabled": _optional_bool(long_term_extraction_enabled),
         "expected_operation_exact_apply_window_seconds": (
@@ -163,12 +159,6 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
         raise ValueError(
             "openviking.agent_trajectory_apply_lock_mode must be 'tree' or 'operation_exact'"
         )
-    if result["expected_long_term_apply_lock_mode"] not in {
-        None,
-        "tree",
-        "operation_exact",
-    }:
-        raise ValueError("openviking.long_term_apply_lock_mode must be 'tree' or 'operation_exact'")
     if (
         result["expected_operation_exact_apply_window_seconds"] is not None
         and result["expected_operation_exact_apply_window_seconds"] < 0
@@ -272,7 +262,6 @@ def _openviking_server_memory_config_report(
         "agent_memory_enabled": memory.get("agent_memory_enabled", False),
         "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
         "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
-        "long_term_apply_lock_mode": memory.get("long_term_apply_lock_mode", "tree"),
         "long_term_extraction_enabled": memory.get("long_term_extraction_enabled", True),
         "operation_exact_apply_window_seconds": memory.get(
             "operation_exact_apply_window_seconds", 0.0
@@ -310,16 +299,6 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.agent_trajectory_apply_lock_mode mismatch: "
             f"expected {expected_trajectory_apply_lock_mode!r}, actual "
             f"{actual['agent_trajectory_apply_lock_mode']!r} in {config_path}"
-        )
-    expected_long_term_apply_lock_mode = expected["expected_long_term_apply_lock_mode"]
-    if (
-        expected_long_term_apply_lock_mode is not None
-        and actual["long_term_apply_lock_mode"] != expected_long_term_apply_lock_mode
-    ):
-        errors.append(
-            "OpenViking server memory.long_term_apply_lock_mode mismatch: "
-            f"expected {expected_long_term_apply_lock_mode!r}, actual "
-            f"{actual['long_term_apply_lock_mode']!r} in {config_path}"
         )
     expected_long_term_extraction_enabled = expected["expected_long_term_extraction_enabled"]
     if (
@@ -653,13 +632,6 @@ def _tau2_command(
                 [
                     "--expected-agent-trajectory-apply-lock-mode",
                     agent_experience_config["expected_agent_trajectory_apply_lock_mode"],
-                ]
-            )
-        if agent_experience_config["expected_long_term_apply_lock_mode"] is not None:
-            command.extend(
-                [
-                    "--expected-long-term-apply-lock-mode",
-                    agent_experience_config["expected_long_term_apply_lock_mode"],
                 ]
             )
         if agent_experience_config["expected_long_term_extraction_enabled"] is not None:

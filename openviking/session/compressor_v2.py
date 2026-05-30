@@ -147,8 +147,6 @@ def _operation_exact_lock_enabled(config: Any, phase_label: str) -> bool:
         return (
             getattr(memory_config, "agent_trajectory_apply_lock_mode", "tree") == "operation_exact"
         )
-    if phase_label == "long_term":
-        return getattr(memory_config, "long_term_apply_lock_mode", "tree") == "operation_exact"
     return False
 
 
@@ -1490,48 +1488,6 @@ class SessionCompressorV2:
         from openviking.storage.viking_fs import get_viking_fs
 
         viking_fs = get_viking_fs()
-        if getattr(config.memory, "long_term_apply_lock_mode", "tree") == "operation_exact":
-            from openviking.session.memory.session_extract_context_provider import (
-                SessionExtractContextProvider,
-            )
-
-            provider = SessionExtractContextProvider(
-                messages=messages,
-                latest_archive_overview=latest_archive_overview,
-            )
-            if archive_uri:
-                provider._memory_diff_archive_uri = archive_uri
-
-            phase_result = await self._run_extract_phase(
-                provider=provider,
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=strict_extract_errors,
-                phase_label="long_term",
-            )
-            if phase_result is None:
-                return []
-
-            _written_uris, _edited_uris, contexts, _inheritance_map, _skill_results = phase_result
-            telemetry.set(
-                "memory.extract.candidates.total",
-                sum(
-                    1 for context in contexts if context.category in {"memory_write", "memory_edit"}
-                ),
-            )
-            telemetry.set(
-                "memory.extract.created",
-                sum(1 for context in contexts if context.category == "memory_write"),
-            )
-            telemetry.set(
-                "memory.extract.merged",
-                sum(1 for context in contexts if context.category == "memory_edit"),
-            )
-            telemetry.set(
-                "memory.extract.deleted",
-                sum(1 for context in contexts if context.category == "memory_delete"),
-            )
-            return contexts
 
         # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         lock_manager = None

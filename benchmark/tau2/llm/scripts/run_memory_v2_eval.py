@@ -511,7 +511,6 @@ def _expected_openviking_memory_config(args: argparse.Namespace) -> dict[str, An
         "expected_agent_trajectory_apply_lock_mode": (
             args.expected_agent_trajectory_apply_lock_mode
         ),
-        "expected_long_term_apply_lock_mode": args.expected_long_term_apply_lock_mode,
         "expected_long_term_extraction_enabled": args.expected_long_term_extraction_enabled,
         "expected_operation_exact_apply_window_seconds": (
             args.expected_operation_exact_apply_window_seconds
@@ -1081,14 +1080,6 @@ def main() -> int:
         choices=["tree", "operation_exact"],
         help=(
             "Expected server-side memory.agent_trajectory_apply_lock_mode. "
-            "Recorded in corpus manifests for reproducibility."
-        ),
-    )
-    parser.add_argument(
-        "--expected-long-term-apply-lock-mode",
-        choices=["tree", "operation_exact"],
-        help=(
-            "Expected server-side memory.long_term_apply_lock_mode. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )
