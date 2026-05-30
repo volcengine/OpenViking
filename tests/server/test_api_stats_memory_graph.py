@@ -169,3 +169,34 @@ async def test_memory_graph_health_reports_experience_quality_signals(client, se
     assert quality["missing_required_heading_examples"][0]["missing"] == {
         "content": [omitted_heading]
     }
+
+
+async def test_memory_graph_health_reports_empty_experience_content(client, service):
+    root_uri = "viking://agent/default/memories"
+    exp_uri = f"{root_uri}/experiences/metadata_only_refund.md"
+    traj_uri = f"{root_uri}/trajectories/refund.md"
+    link = {
+        "from_uri": exp_uri,
+        "to_uri": traj_uri,
+        "link_type": "derived_from",
+        "weight": 1.0,
+    }
+
+    await _write_memory(
+        service,
+        exp_uri,
+        MemoryFile(content="", memory_type="experiences", links=[link]),
+    )
+    await _write_memory(
+        service,
+        traj_uri,
+        MemoryFile(content="Refund trajectory", memory_type="trajectories", backlinks=[link]),
+    )
+
+    resp = await client.get("/api/v1/stats/memory-graph", params={"uri": root_uri})
+
+    assert resp.status_code == 200
+    quality = resp.json()["result"]["experience_quality"]
+    assert quality["content_chars"]["empty"] == 1
+    assert quality["required_heading_check_enabled"] is True
+    assert quality["missing_required_heading_count"] == 1
