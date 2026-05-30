@@ -152,7 +152,6 @@ jobs:
         echo "CC=clang" >> "$GITHUB_ENV"
         echo "CXX=clang++" >> "$GITHUB_ENV"
         echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
-        echo "OV_REQUIRE_STUDIO_BUILD=1" >> "$GITHUB_ENV"
         clang --version
         clang++ --version
 
@@ -428,9 +427,7 @@ jobs:
 
     - name: Require ragfs native artifact for wheel builds
       shell: bash
-      run: |
-        echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
-        echo "OV_REQUIRE_STUDIO_BUILD=1" >> "$GITHUB_ENV"
+      run: echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
 
     - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
       shell: bash
