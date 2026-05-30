@@ -512,6 +512,9 @@ def _expected_openviking_memory_config(args: argparse.Namespace) -> dict[str, An
             args.expected_agent_trajectory_apply_lock_mode
         ),
         "expected_long_term_extraction_enabled": args.expected_long_term_extraction_enabled,
+        "expected_session_skill_extraction_enabled": (
+            args.expected_session_skill_extraction_enabled
+        ),
         "expected_operation_exact_apply_window_seconds": (
             args.expected_operation_exact_apply_window_seconds
         ),
@@ -1088,6 +1091,14 @@ def main() -> int:
         type=_parse_bool,
         help=(
             "Expected server-side memory.long_term_extraction_enabled. "
+            "Recorded in corpus manifests for reproducibility."
+        ),
+    )
+    parser.add_argument(
+        "--expected-session-skill-extraction-enabled",
+        type=_parse_bool,
+        help=(
+            "Expected server-side memory.session_skill_extraction_enabled. "
             "Recorded in corpus manifests for reproducibility."
         ),
     )

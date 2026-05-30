@@ -127,6 +127,7 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
     apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
     trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
     long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
+    session_skill_extraction_enabled = openviking.get("session_skill_extraction_enabled")
     operation_exact_apply_window_seconds = openviking.get("operation_exact_apply_window_seconds")
     result: dict[str, Any] = {
         "expected_agent_memory_enabled": _optional_bool(agent_memory_enabled),
@@ -137,6 +138,9 @@ def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any
             str(trajectory_apply_lock_mode) if trajectory_apply_lock_mode is not None else None
         ),
         "expected_long_term_extraction_enabled": _optional_bool(long_term_extraction_enabled),
+        "expected_session_skill_extraction_enabled": _optional_bool(
+            session_skill_extraction_enabled
+        ),
         "expected_operation_exact_apply_window_seconds": (
             float(operation_exact_apply_window_seconds)
             if operation_exact_apply_window_seconds is not None
@@ -263,6 +267,7 @@ def _openviking_server_memory_config_report(
         "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
         "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
         "long_term_extraction_enabled": memory.get("long_term_extraction_enabled", True),
+        "session_skill_extraction_enabled": memory.get("session_skill_extraction_enabled", False),
         "operation_exact_apply_window_seconds": memory.get(
             "operation_exact_apply_window_seconds", 0.0
         ),
@@ -310,6 +315,19 @@ def _openviking_server_memory_config_report(
             "OpenViking server memory.long_term_extraction_enabled mismatch: "
             f"expected {expected_long_term_extraction_enabled!r}, actual "
             f"{actual['long_term_extraction_enabled']!r} in {config_path}"
+        )
+    expected_session_skill_extraction_enabled = expected[
+        "expected_session_skill_extraction_enabled"
+    ]
+    if (
+        expected_session_skill_extraction_enabled is not None
+        and _optional_bool(actual["session_skill_extraction_enabled"])
+        != expected_session_skill_extraction_enabled
+    ):
+        errors.append(
+            "OpenViking server memory.session_skill_extraction_enabled mismatch: "
+            f"expected {expected_session_skill_extraction_enabled!r}, actual "
+            f"{actual['session_skill_extraction_enabled']!r} in {config_path}"
         )
     expected_window_seconds = expected["expected_operation_exact_apply_window_seconds"]
     try:
@@ -639,6 +657,15 @@ def _tau2_command(
                 [
                     "--expected-long-term-extraction-enabled",
                     str(agent_experience_config["expected_long_term_extraction_enabled"]).lower(),
+                ]
+            )
+        if agent_experience_config["expected_session_skill_extraction_enabled"] is not None:
+            command.extend(
+                [
+                    "--expected-session-skill-extraction-enabled",
+                    str(
+                        agent_experience_config["expected_session_skill_extraction_enabled"]
+                    ).lower(),
                 ]
             )
         if agent_experience_config["expected_operation_exact_apply_window_seconds"] is not None:

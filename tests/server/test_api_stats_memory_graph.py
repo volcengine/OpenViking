@@ -160,6 +160,9 @@ async def test_memory_graph_health_reports_experience_quality_signals(client, se
     assert quality["source_overlap_pair_count"] == 1
     assert quality["duplicate_exact_source_set_count"] == 1
     assert quality["source_links_per_experience"]["linkless"] == 0
+    assert quality["source_links_per_experience"]["single_source"] == 2
+    assert quality["source_links_per_experience"]["single_source_rate"] == 1.0
+    assert quality["source_links_per_experience"]["p90"] == 1
     assert quality["content_chars"]["empty"] == 0
     assert quality["required_heading_check_enabled"] is True
     assert quality["required_heading_fields"]["content"] == required_content_headings

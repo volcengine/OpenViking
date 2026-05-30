@@ -252,8 +252,15 @@ def _summarize_experience_quality(
         "source_links_per_experience": {
             "avg": round(sum(source_counts) / len(source_counts), 2) if source_counts else 0.0,
             "p50": round(_percentile(source_counts, 0.50), 2),
+            "p90": round(_percentile(source_counts, 0.90), 2),
             "max": max(source_counts) if source_counts else 0,
             "linkless": sum(1 for value in source_counts if value == 0),
+            "single_source": sum(1 for value in source_counts if value == 1),
+            "single_source_rate": (
+                round(sum(1 for value in source_counts if value == 1) / len(source_counts), 4)
+                if source_counts
+                else 0.0
+            ),
         },
         "required_heading_check_enabled": heading_check_enabled,
         "required_heading_fields": heading_requirements,
