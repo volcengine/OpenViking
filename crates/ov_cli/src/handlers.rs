@@ -4,7 +4,9 @@ use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
+use crate::theme;
 use crate::tui;
+use colored::Colorize;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -251,7 +253,13 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::status(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Health => {
-            let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+            let _ = commands::system::health(
+                &client,
+                Some(&ctx.config),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await?;
             Ok(())
         }
         SystemCommands::Consistency { uri } => {
@@ -572,334 +580,439 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
 }
 
 use crate::ConfigCommands;
-use crate::base_client::BaseClient;
 use crate::config::Config;
+use crate::config_command_ui::{self, SwitchConfigRow};
+use crate::config_wizard::{self, ConfigStore};
+use crate::i18n::{self, Language};
 use crate::output;
 
-pub async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
+// Config commands intentionally edit the persisted ovcli.conf files. Runtime
+// overrides carried in CliContext should not change what gets shown or saved.
+pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Result<()> {
     match cmd {
-        ConfigCommands::Show => {
+        Some(ConfigCommands::Show) => {
             let config = Config::load()?;
             output::output_success(
-                &serde_json::to_value(config).unwrap(),
+                &config_wizard::redacted_config_value(&config)?,
                 output::OutputFormat::Json,
                 true,
             );
             Ok(())
         }
-        ConfigCommands::Validate => match Config::load() {
-            Ok(_) => {
-                println!("Configuration is valid");
-                Ok(())
+        Some(ConfigCommands::Validate) => {
+            let config = Config::load()?;
+            let store = ConfigStore::new()?;
+            let active_name = active_config_name(&store)?;
+            match config_wizard::validate_config(&config).await {
+                Ok(()) => {
+                    print!(
+                        "{}",
+                        config_command_ui::render_validate_success(&config, active_name.as_deref(),)
+                    );
+                    Ok(())
+                }
+                Err(error) => {
+                    print!(
+                        "{}",
+                        config_command_ui::render_validate_failure(
+                            &config,
+                            active_name.as_deref(),
+                            &error,
+                        )
+                    );
+                    Err(Error::AlreadyReported)
+                }
             }
-            Err(e) => Err(Error::Config(e.to_string())),
-        },
-        ConfigCommands::SetupCli => handle_setup_cli().await,
-        ConfigCommands::Switch => handle_config_switch().await,
+        }
+        Some(ConfigCommands::Switch) => handle_config_switch().await,
+        None => config_wizard::run_config_wizard().await,
     }
 }
 
-/// Interactive setup for CLI configuration
-async fn handle_setup_cli() -> Result<()> {
-    use colored::Colorize;
-    use rustyline::DefaultEditor;
-
-    println!("{}", "Welcome to OpenViking CLI Setup!".bold().green());
-    println!();
-
-    // Load existing config if available
-    let mut config = match Config::load_default() {
-        Ok(c) => c,
-        Err(_) => Config::default(),
-    };
-
-    let mut rl = DefaultEditor::new()
-        .map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
-
-    // Step 1: Get server URL
-    let default_url = config.url.clone();
-    let prompt = format!("OpenViking Server URL [{}]: ", default_url);
-    let url_input = rl.readline(&prompt).unwrap_or_default();
-    let url = if url_input.trim().is_empty() {
-        default_url
-    } else {
-        url_input.trim().to_string()
-    };
-
-    // Update config with URL immediately for probing
-    config.url = url.clone();
-
-    // Step 2: Probe health endpoint
-    println!();
-    println!("{}", "Probing server health...".blue());
-    let probe_result = probe_health(&url, 5.0).await;
-
-    let needs_api_key = match probe_result {
-        Ok((healthy, auth_required)) => {
-            if healthy {
-                println!("{}", "✓ Server is healthy!".green());
-            } else {
-                println!("{}", "⚠ Server responded but reports unhealthy".yellow());
-            }
-            auth_required
-        }
-        Err(e) => {
-            println!("{}", format!("⚠ Could not reach server: {}", e).yellow());
-            // Default to asking for API key if we can't probe
-            true
-        }
-    };
-
-    // Step 3: Ask for API key if needed
-    if needs_api_key {
-        println!();
-        let default_key = config.api_key.clone().unwrap_or_default();
-        let prompt = if default_key.is_empty() {
-            "API Key (optional, press Enter to skip): ".to_string()
-        } else {
-            format!("API Key [{}]: ", "*".repeat(default_key.len().min(8)))
-        };
-        let key_input = rl.readline(&prompt).unwrap_or_default();
-        if !key_input.trim().is_empty() {
-            config.api_key = Some(key_input.trim().to_string());
-        } else if default_key.is_empty() {
-            config.api_key = None;
-        }
-    }
-
-    // Step 4: Save config
-    println!();
-    let config_path = crate::config::default_config_path()?;
-    println!(
-        "{}",
-        format!("Saving configuration to: {}", config_path.to_string_lossy()).blue()
-    );
-    config.save_default()?;
-
-    // Step 5: Optionally save a named backup
-    println!();
-    let prompt = "Name this configuration (optional, press Enter to skip): ";
-    let name_input = rl.readline(prompt).unwrap_or_default();
-    if !name_input.trim().is_empty() {
-        let config_name = name_input.trim().to_string();
-        if let Some(parent) = config_path.parent() {
-            let backup_path = parent.join(format!("ovcli.conf.{}", config_name));
-            std::fs::copy(&config_path, &backup_path).map_err(|e| {
-                Error::Config(format!("Failed to save configuration backup: {}", e))
-            })?;
+pub async fn handle_language(value: Option<String>) -> Result<()> {
+    let language = match value {
+        Some(value) => Language::from_code(&value).ok_or_else(|| {
+            Error::Config(format!(
+                "Unsupported language '{value}'. Use 'en' or 'zh-CN'."
+            ))
+        })?,
+        None => {
+            let current = Language::current();
+            println!("{}", language_title(current));
             println!(
-                "{}",
-                format!(
-                    "✓ Configuration saved as backup: {}",
-                    backup_path.to_string_lossy()
-                )
-                .green()
+                "{} {}",
+                theme::muted(language_label("Current:", "当前语言：", current)),
+                theme::command(current.label()).bold()
             );
+            println!();
+            let choices = vec![
+                Language::En.label().to_string(),
+                Language::ZhCn.label().to_string(),
+            ];
+            match prompt_select(language_prompt(current), &choices, 0)? {
+                SelectOutcome::Selected(0) => Language::En,
+                SelectOutcome::Selected(1) => Language::ZhCn,
+                SelectOutcome::Back | SelectOutcome::Quit => {
+                    println!("{}", theme::muted(language_no_change(current)));
+                    return Ok(());
+                }
+                SelectOutcome::Selected(_) => {
+                    unreachable!("selection is constrained by language list")
+                }
+            }
         }
-    }
+    };
 
-    println!();
-    println!("{}", "✓ Setup complete!".bold().green());
-    println!(
-        "{}",
-        "You can now use the 'ov' command to interact with OpenViking.".dimmed()
-    );
-    println!(
-        "{}",
-        "Use 'ov config switch' to switch between saved configurations.".dimmed()
-    );
-
+    i18n::save_language(language)?;
+    println!("{}", theme::success(language_saved(language)).bold());
     Ok(())
 }
 
-/// Probe health endpoint to check server status and auth requirement
-async fn probe_health(base_url: &str, timeout_secs: f64) -> Result<(bool, bool)> {
-    let client = BaseClient::new_simple(base_url, timeout_secs);
+fn language_title(language: Language) -> String {
+    theme::brand_title(match language {
+        Language::En => "OPENVIKING LANGUAGE".to_string(),
+        Language::ZhCn => "OPENVIKING 语言设置".to_string(),
+    })
+    .bold()
+    .to_string()
+}
 
-    // First try without API key
-    let result: Result<serde_json::Value> = client.get("/health", &[]).await;
+fn language_prompt(language: Language) -> &'static str {
+    match language {
+        Language::En => "Choose language",
+        Language::ZhCn => "选择语言",
+    }
+}
 
-    match result {
-        Ok(value) => {
-            let healthy = value
-                .get("healthy")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            Ok((healthy, false))
-        }
-        Err(Error::Api(msg)) => {
-            // If we get auth-related errors, auth is required
-            if msg.contains("401")
-                || msg.contains("403")
-                || msg.contains("unauthorized")
-                || msg.contains("forbidden")
-                || msg.contains("AuthenticationError")
-            {
-                Ok((false, true))
-            } else {
-                Ok((false, false))
-            }
-        }
-        Err(_) => Ok((false, true)),
+fn language_label<'a>(en: &'a str, zh: &'a str, language: Language) -> &'a str {
+    match language {
+        Language::En => en,
+        Language::ZhCn => zh,
+    }
+}
+
+fn language_saved(language: Language) -> &'static str {
+    match language {
+        Language::En => "Language set to English.",
+        Language::ZhCn => "语言已切换为简体中文。",
+    }
+}
+
+fn language_no_change(language: Language) -> &'static str {
+    match language {
+        Language::En => "Language was not changed.",
+        Language::ZhCn => "语言未更改。",
     }
 }
 
 /// Interactive configuration switcher
 async fn handle_config_switch() -> Result<()> {
-    use colored::Colorize;
-
-    // Step 1: Find all available configurations
-    let config_path = crate::config::default_config_path()?;
-    let config_dir = config_path
-        .parent()
-        .ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?;
-
-    let mut configs = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(config_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                if filename.starts_with("ovcli.conf.") && filename != "ovcli.conf" {
-                    if let Some(name) = filename.strip_prefix("ovcli.conf.") {
-                        // Try to load the config to get its URL for display
-                        let url = if let Ok(cfg) = Config::from_file(&path.to_string_lossy()) {
-                            cfg.url.clone()
-                        } else {
-                            String::new()
-                        };
-                        configs.push((name.to_string(), path, url));
-                    }
-                }
-            }
-        }
-    }
+    let store = ConfigStore::new()?;
+    let configs = store.list_configs()?;
 
     if configs.is_empty() {
-        println!("{}", "No saved configurations found.".yellow());
-        println!(
-            "{}",
-            "Use 'ov config setup-cli' and save a named configuration first.".dimmed()
-        );
+        print!("{}", config_command_ui::render_no_saved_configs());
         return Ok(());
     }
 
-    // Step 2: Interactive selection using simple numbered menu
-    println!("{}", "Select a configuration to use:".bold());
-    println!();
-
-    for (i, (name, _, url)) in configs.iter().enumerate() {
-        if url.is_empty() {
-            println!("  {}. {}", i + 1, name.bold());
-        } else {
-            println!("  {}. {} ({})", i + 1, name.bold(), url.dimmed());
-        }
-    }
-
-    println!();
-    println!(
+    let active = configs.iter().find(|config| config.is_active);
+    print!(
         "{}",
-        "Enter    '<number>' to use a configuration (e.g. '2')".dimmed()
+        config_command_ui::render_switch_header(
+            active.map(|config| config.name.as_str()),
+            active.map(|config| config.kind),
+        )
     );
-    println!(
-        "{}",
-        "Or enter 'del<number>' to delete a configuration (e.g. 'del2')".dimmed()
-    );
-    println!("{}", "Press Enter without input to cancel".dimmed());
-
-    let mut rl = rustyline::DefaultEditor::new()
-        .map_err(|e| Error::Config(format!("Failed to initialize input editor: {}", e)))?;
 
     loop {
-        let input = rl.readline("> ").unwrap_or_default();
-        let input = input.trim();
+        let rows: Vec<SwitchConfigRow> = configs
+            .iter()
+            .map(|config| SwitchConfigRow {
+                name: config.name.clone(),
+                kind: config.kind,
+                is_active: config.is_active,
+            })
+            .collect();
+        let labels = config_command_ui::switch_labels(&rows);
+        let language = Language::current();
+        let index = match prompt_select(
+            config_switch_prompt(language, "Choose config", "选择配置"),
+            &labels,
+            0,
+        )? {
+            SelectOutcome::Selected(index) => index,
+            SelectOutcome::Back | SelectOutcome::Quit => {
+                println!("{}", theme::muted(config_not_changed(language)));
+                return Ok(());
+            }
+        };
 
-        if input.is_empty() {
-            println!();
-            println!("{}", "Cancelled.".dimmed());
+        let selected = configs[index].clone();
+        if selected.is_active {
+            println!(
+                "{}",
+                theme::muted(config_already_active(language, &selected.name))
+            );
             return Ok(());
         }
 
-        // Check for delete command
-        if let Some(num_str) = input
-            .strip_prefix("del")
-            .or_else(|| input.strip_prefix("Del"))
-        {
-            if let Ok(idx) = num_str.parse::<usize>() {
-                if idx >= 1 && idx <= configs.len() {
-                    let idx = idx - 1;
-                    let (name, path, _) = &configs[idx];
-                    println!();
-                    println!(
+        let confirmation = switch_confirmation_labels();
+        match switch_confirmation_decision(prompt_select(
+            &config_switch_confirm_prompt(language, &selected.name),
+            &confirmation,
+            0,
+        )?) {
+            SwitchConfirmationDecision::Confirm => {
+                println!("{}", theme::muted(validating_target_config(language)));
+                if let Err(error) = config_wizard::validate_config(&selected.config).await {
+                    print!(
                         "{}",
-                        format!(
-                            "Are you sure you want to delete configuration '{}'? (y/N)",
-                            name
-                        )
-                        .yellow()
+                        config_command_ui::render_switch_validation_failure(&selected.name, &error,)
                     );
-
-                    let confirm = rl.readline("> ").unwrap_or_default();
-                    if confirm.trim().eq_ignore_ascii_case("y")
-                        || confirm.trim().eq_ignore_ascii_case("yes")
-                    {
-                        std::fs::remove_file(path).map_err(|e| {
-                            Error::Config(format!("Failed to delete configuration: {}", e))
-                        })?;
-                        println!("{}", format!("✓ Configuration '{}' deleted.", name).green());
-                    } else {
-                        println!("{}", "Deletion cancelled.".dimmed());
-                    }
-                    return Ok(());
+                    return Err(Error::AlreadyReported);
                 }
+                store.activate_config(&selected.name)?;
+                print!(
+                    "{}",
+                    config_command_ui::render_switch_success(&selected.name)
+                );
+                return Ok(());
             }
-            println!("{}", "Invalid selection. Please try again.".yellow());
-            continue;
-        }
-
-        // Try to parse as selection number
-        if let Ok(idx) = input.parse::<usize>() {
-            if idx >= 1 && idx <= configs.len() {
-                let idx = idx - 1;
-                // Handle switching
-                let (name, source_path, _) = &configs[idx];
-
-                // First, backup current config as .bak
-                if config_path.exists() {
-                    let backup_path = config_dir.join("ovcli.conf.bak");
-                    std::fs::copy(&config_path, &backup_path).map_err(|e| {
-                        Error::Config(format!("Failed to backup current config: {}", e))
-                    })?;
-                }
-
-                // Copy selected config to main config
-                std::fs::copy(source_path, &config_path)
-                    .map_err(|e| Error::Config(format!("Failed to switch configuration: {}", e)))?;
-
-                println!();
-                println!(
-                    "{}",
-                    format!("✓ Switched to configuration '{}'", name)
-                        .bold()
-                        .green()
-                );
-                println!(
-                    "{}",
-                    format!("Configuration saved to: {}", config_path.to_string_lossy()).dimmed()
-                );
-
+            SwitchConfirmationDecision::Back => continue,
+            SwitchConfirmationDecision::Quit => {
+                println!("{}", theme::muted(config_not_changed(language)));
                 return Ok(());
             }
         }
+    }
+}
 
-        println!(
-            "{}",
-            format!(
-                "Invalid selection. Please enter a number between 1 and {}.",
-                configs.len()
-            )
-            .yellow()
-        );
+fn active_config_name(store: &ConfigStore) -> Result<Option<String>> {
+    Ok(store
+        .list_configs()?
+        .into_iter()
+        .find(|entry| entry.is_active)
+        .map(|entry| entry.name))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectOutcome {
+    Selected(usize),
+    Back,
+    Quit,
+}
+
+fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<SelectOutcome> {
+    use std::io::{self, Write};
+
+    use crossterm::{
+        cursor,
+        event::{self, Event, KeyCode, KeyModifiers},
+        execute,
+        terminal::{self, Clear, ClearType},
+    };
+
+    if items.is_empty() {
+        return Ok(SelectOutcome::Back);
+    }
+
+    struct RawGuard {
+        hide_cursor: bool,
+    }
+    impl RawGuard {
+        fn enter() -> Result<Self> {
+            terminal::enable_raw_mode()?;
+            let mut stdout = io::stdout();
+            if let Err(error) = execute!(stdout, cursor::Hide) {
+                let _ = terminal::disable_raw_mode();
+                return Err(error.into());
+            }
+            Ok(Self { hide_cursor: true })
+        }
+    }
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+            if self.hide_cursor {
+                let _ = execute!(io::stdout(), cursor::Show);
+            }
+        }
+    }
+
+    let mut selected = default.min(items.len().saturating_sub(1));
+    let mut rendered_lines = 0usize;
+    let _raw_guard = RawGuard::enter()?;
+
+    loop {
+        clear_rendered_lines(rendered_lines)?;
+        let lines = select_lines(prompt, items, selected);
+        rendered_lines = lines.len();
+        print!("{}", live_select_block(&lines));
+        io::stdout().flush()?;
+
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Up => {
+                    selected = if selected == 0 {
+                        items.len().saturating_sub(1)
+                    } else {
+                        selected - 1
+                    };
+                }
+                KeyCode::Down => selected = (selected + 1) % items.len(),
+                KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                    clear_rendered_lines(rendered_lines)?;
+                    return Ok(SelectOutcome::Selected(selected));
+                }
+                KeyCode::Esc => {
+                    clear_rendered_lines(rendered_lines)?;
+                    return Ok(SelectOutcome::Back);
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    clear_rendered_lines(rendered_lines)?;
+                    return Ok(SelectOutcome::Quit);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn clear_rendered_lines(lines: usize) -> Result<()> {
+        if lines == 0 {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        execute!(
+            stdout,
+            cursor::MoveUp(lines as u16),
+            cursor::MoveToColumn(0)
+        )?;
+        for line in 0..lines {
+            execute!(
+                stdout,
+                cursor::MoveToColumn(0),
+                Clear(ClearType::CurrentLine)
+            )?;
+            if line + 1 < lines {
+                execute!(stdout, cursor::MoveDown(1))?;
+            }
+        }
+        execute!(
+            stdout,
+            cursor::MoveUp(lines.saturating_sub(1) as u16),
+            cursor::MoveToColumn(0)
+        )?;
+        Ok(())
+    }
+}
+
+fn live_select_block(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut rendered = lines.join("\r\n");
+    rendered.push_str("\r\n");
+    rendered
+}
+
+fn switch_confirmation_labels() -> Vec<String> {
+    match Language::current() {
+        Language::En => vec!["Yes".to_string(), "No".to_string()],
+        Language::ZhCn => vec!["是".to_string(), "否".to_string()],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchConfirmationDecision {
+    Confirm,
+    Back,
+    Quit,
+}
+
+fn switch_confirmation_decision(outcome: SelectOutcome) -> SwitchConfirmationDecision {
+    match outcome {
+        SelectOutcome::Selected(0) => SwitchConfirmationDecision::Confirm,
+        SelectOutcome::Selected(_) | SelectOutcome::Back => SwitchConfirmationDecision::Back,
+        SelectOutcome::Quit => SwitchConfirmationDecision::Quit,
+    }
+}
+
+fn select_lines(prompt: &str, items: &[String], selected: usize) -> Vec<String> {
+    let language = Language::current();
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{} {}",
+        theme::prompt("?").bold(),
+        theme::strong(prompt)
+    ));
+    lines.push(format!("  {}", theme::muted(select_hint(language))));
+    lines.push(String::new());
+    for (index, item) in items.iter().enumerate() {
+        let marker = if index == selected {
+            theme::selection("›").bold().to_string()
+        } else {
+            " ".to_string()
+        };
+        lines.push(format!(
+            "  {marker} {}",
+            style_select_item(item, index == selected)
+        ));
+    }
+    lines
+}
+
+fn style_select_item(item: &str, selected: bool) -> String {
+    if contains_ansi_escape(item) {
+        return item.to_string();
+    }
+    if selected {
+        theme::selection(item).bold().to_string()
+    } else {
+        theme::body(item).to_string()
+    }
+}
+
+fn contains_ansi_escape(value: &str) -> bool {
+    value.contains("\u{1b}[")
+}
+
+fn select_hint(language: Language) -> &'static str {
+    match language {
+        Language::En => "↑/↓ choose · Enter select · Esc back · Ctrl+C exit",
+        Language::ZhCn => "↑/↓ 选择 · Enter 确认 · Esc 返回 · Ctrl+C 退出",
+    }
+}
+
+fn config_switch_prompt<'a>(language: Language, en: &'a str, zh: &'a str) -> &'a str {
+    language_label(en, zh, language)
+}
+
+fn config_switch_confirm_prompt(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Switch active config to {name}?"),
+        Language::ZhCn => format!("切换当前配置为 {name}？"),
+    }
+}
+
+fn config_not_changed(language: Language) -> &'static str {
+    match language {
+        Language::En => "No config was changed.",
+        Language::ZhCn => "配置未更改。",
+    }
+}
+
+fn config_already_active(language: Language, name: &str) -> String {
+    match language {
+        Language::En => format!("Config '{name}' is already active."),
+        Language::ZhCn => format!("配置 '{name}' 已是当前配置。"),
+    }
+}
+
+fn validating_target_config(language: Language) -> &'static str {
+    match language {
+        Language::En => "Validating target config...",
+        Language::ZhCn => "正在验证目标配置...",
     }
 }
 
@@ -979,7 +1092,10 @@ pub async fn handle_find(
     if let Some(ref l) = level {
         params.push(format!(
             "--level {}",
-            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+            l.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     params.push(format!("\"{}\"", query));
@@ -1023,7 +1139,10 @@ pub async fn handle_search(
     if let Some(ref l) = level {
         params.push(format!(
             "--level {}",
-            l.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+            l.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     params.push(format!("\"{}\"", query));
@@ -1249,7 +1368,8 @@ pub async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
 
     // Reuse the system health command
-    let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+    let _ = commands::system::health(&client, Some(&ctx.config), ctx.output_format, ctx.compact)
+        .await?;
 
     Ok(())
 }
@@ -1276,10 +1396,79 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
             println!("  1. The server is running");
             println!("  2. The URL is correct");
             println!("  3. Your API key is valid (if required)");
-            println!("\nRun `ov config setup-cli` to reconfigure if needed.");
+            println!("\nRun `ov config` to reconfigure if needed.");
             std::process::exit(1);
         }
     }
 
     tui::run_tui(client, &uri).await
+}
+
+#[cfg(test)]
+mod config_switch_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn live_select_block_uses_crlf_for_raw_mode_rows() {
+        let lines = vec!["Choose config".to_string(), "  › local".to_string()];
+
+        let rendered = live_select_block(&lines);
+
+        assert_eq!(rendered, "Choose config\r\n  › local\r\n");
+        assert!(!rendered.contains("config\n"));
+    }
+
+    #[test]
+    fn switch_selector_hint_uses_esc_back_language() {
+        let lines = select_lines("Choose config", &["local".to_string()], 0);
+        let plain = strip_ansi(&lines.join("\n"));
+
+        assert!(plain.contains("Esc back"));
+        assert!(!plain.contains("Esc cancel"));
+    }
+
+    #[test]
+    fn switch_confirmation_labels_are_yes_no_only() {
+        assert_eq!(
+            switch_confirmation_labels(),
+            vec!["Yes".to_string(), "No".to_string()]
+        );
+    }
+
+    #[test]
+    fn switch_confirmation_maps_no_and_esc_to_back_but_ctrl_c_to_quit() {
+        assert_eq!(
+            switch_confirmation_decision(SelectOutcome::Selected(0)),
+            SwitchConfirmationDecision::Confirm
+        );
+        assert_eq!(
+            switch_confirmation_decision(SelectOutcome::Selected(1)),
+            SwitchConfirmationDecision::Back
+        );
+        assert_eq!(
+            switch_confirmation_decision(SelectOutcome::Back),
+            SwitchConfirmationDecision::Back
+        );
+        assert_eq!(
+            switch_confirmation_decision(SelectOutcome::Quit),
+            SwitchConfirmationDecision::Quit
+        );
+    }
+
+    fn strip_ansi(input: &str) -> String {
+        let mut output = String::new();
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' {
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+        output
+    }
 }

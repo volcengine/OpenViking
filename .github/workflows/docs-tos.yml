@@ -133,6 +133,25 @@ jobs:
               --recursive \
               --cache-control "${NO_CACHE_CONTROL}" \
               --only-show-errors
+
+            if [ -f "${DIST_DIR}/agents/index.json" ]; then
+              aws s3 cp "${DIST_DIR}/agents/index.json" "s3://${TOS_BUCKET}/agents/index.json" \
+                --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+                --content-type "application/json; charset=utf-8" \
+                --content-disposition "inline" \
+                --cache-control "${NO_CACHE_CONTROL}" \
+                --only-show-errors
+            fi
+
+            while IFS= read -r -d '' markdown_file; do
+              rel_path="${markdown_file#${DIST_DIR}/agents/}"
+              aws s3 cp "${markdown_file}" "s3://${TOS_BUCKET}/agents/${rel_path}" \
+                --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+                --content-type "text/markdown; charset=utf-8" \
+                --content-disposition "inline" \
+                --cache-control "${NO_CACHE_CONTROL}" \
+                --only-show-errors
+            done < <(find "${DIST_DIR}/agents" -type f -name "*.md" -print0)
           fi
 
       - name: Report TOS deployment failure

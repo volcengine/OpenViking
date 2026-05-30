@@ -1276,8 +1276,27 @@ const contextEnginePlugin = {
             if (memoriesCount === 0) {
               api.logger.warn(
                 `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
-                  "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
+                  "No OpenViking-managed long-term memory was created. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text was judged not durable.",
               );
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Memory extraction completed for session ${sessionId}, but produced 0 memories. ` +
+                      "No OpenViking-managed long-term memory was stored. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text is durable enough to remember.",
+                  },
+                ],
+                details: {
+                  action: "failed",
+                  sessionId,
+                  status: commitResult.status,
+                  error: "no_memories_extracted",
+                  memoriesCount,
+                  archived: commitResult.archived ?? false,
+                  usedTempSession,
+                },
+              };
             } else {
               api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
             }

@@ -28,10 +28,17 @@ from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.openviking_mount.session_state import (
+    get_openviking_session_id,
+    get_openviking_state,
+    get_unsynced_messages,
+    parse_local_index,
+    reset_openviking_state,
+)
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import Session, SessionManager
-from vikingbot.utils.helpers import cal_str_tokens
+from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
 from vikingbot.utils.tracing import set_response_id, trace
 
 if TYPE_CHECKING:
@@ -140,6 +147,7 @@ class AgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connecting = False
+        self._ov_clients: dict[str, Any] = {}
         self._register_default_tools()
 
     async def _connect_mcp(self) -> None:
@@ -230,6 +238,247 @@ class AgentLoop:
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
         )
+
+    def _ov_session_context_enabled(self) -> bool:
+        agents_config = getattr(self.config, "agents", None)
+        return bool(agents_config and getattr(agents_config, "session_context_enabled", False))
+
+    def _get_ov_workspace_id(self, session_key: SessionKey) -> str:
+        if self.sandbox_manager:
+            return self.sandbox_manager.to_workspace_id(session_key)
+        return "shared"
+
+    async def _get_ov_client(self, session_key: SessionKey):
+        workspace_id = self._get_ov_workspace_id(session_key)
+        client = self._ov_clients.get(workspace_id)
+        if client is None:
+            from vikingbot.openviking_mount.ov_server import VikingClient
+
+            client = await VikingClient.create(workspace_id)
+            self._ov_clients[workspace_id] = client
+        return client
+
+    def _format_history_messages(
+        self,
+        session: Session,
+        messages: list[dict[str, Any]],
+        provider_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not messages:
+            return []
+        temp_session = Session(key=session.key, messages=list(messages), metadata=session.metadata)
+        return temp_session.get_history(max_messages=len(messages), provider_name=provider_name)
+
+    @staticmethod
+    def _flatten_ov_message_text(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+        text_parts: list[str] = []
+        for part in message.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            for key in ("text", "abstract", "tool_output"):
+                value = part.get(key)
+                if isinstance(value, str) and value.strip():
+                    text_parts.append(value.strip())
+        return "\n".join(text_parts).strip()
+
+    def _build_ov_history_messages(
+        self,
+        session: Session,
+        context_payload: dict[str, Any],
+        provider_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        raw_messages: list[dict[str, Any]] = []
+        overview = str(context_payload.get("latest_archive_overview") or "").strip()
+        if overview:
+            raw_messages.append(
+                {
+                    "role": "assistant",
+                    "content": ensure_non_empty_assistant_content(
+                        f"[Earlier conversation summary]\n{overview}"
+                    ),
+                }
+            )
+
+        for message in context_payload.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            text = self._flatten_ov_message_text(message)
+            if not text:
+                continue
+            raw_messages.append(
+                {
+                    "role": role,
+                    "content": (
+                        ensure_non_empty_assistant_content(text) if role == "assistant" else text
+                    ),
+                }
+            )
+
+        return self._format_history_messages(
+            session,
+            raw_messages,
+            provider_name=provider_name,
+        )
+
+    async def _build_prompt_history(
+        self,
+        session: Session,
+        provider_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self._ov_session_context_enabled():
+            return session.get_history(provider_name=provider_name)
+
+        agents_config = getattr(self.config, "agents", None)
+        token_budget = int(getattr(agents_config, "session_context_token_budget", 12000) or 12000)
+        session_id = get_openviking_session_id(session)
+
+        try:
+            client = await self._get_ov_client(session.key)
+            context_payload = await client.get_session_context(
+                session_id=session_id,
+                token_budget=token_budget,
+            )
+            ov_history = self._build_ov_history_messages(
+                session,
+                context_payload,
+                provider_name=provider_name,
+            )
+            local_tail = self._format_history_messages(
+                session,
+                get_unsynced_messages(session),
+                provider_name=provider_name,
+            )
+            return ov_history + local_tail
+        except Exception as e:
+            logger.warning(
+                f"Failed to load OpenViking session context for {session_id}: {e}. "
+                "Falling back to local session history."
+            )
+            return session.get_history(provider_name=provider_name)
+
+    async def _submit_openviking_session(
+        self,
+        session: Session,
+        *,
+        force_commit: bool = False,
+        keep_recent_count: int | None = None,
+        commit_message_threshold: int | None = None,
+    ) -> bool:
+        if not self._ov_session_context_enabled():
+            return False
+
+        state = get_openviking_state(session)
+        state.pop("last_commit_performed", None)
+        kwargs: dict[str, Any] = {
+            "session": session,
+            "force_commit": force_commit,
+        }
+        if keep_recent_count is not None:
+            kwargs["keep_recent_count"] = keep_recent_count
+        if commit_message_threshold is not None:
+            kwargs["commit_message_threshold"] = commit_message_threshold
+
+        await hook_manager.execute_hooks(
+            context=HookContext(
+                event_type="message.compact",
+                session_id=get_openviking_session_id(session),
+                workspace_id=self._get_ov_workspace_id(session.key),
+                session_key=session.key,
+            ),
+            **kwargs,
+        )
+        await self.sessions.save(session)
+        return get_openviking_state(session).get("last_sync_status") == "success"
+
+    async def _submit_openviking_session_and_clear_if_committed(
+        self,
+        session: Session,
+        *,
+        force_commit: bool = False,
+        keep_recent_count: int | None = None,
+        commit_message_threshold: int | None = None,
+    ) -> bool:
+        success = await self._submit_openviking_session(
+            session,
+            force_commit=force_commit,
+            keep_recent_count=keep_recent_count,
+            commit_message_threshold=commit_message_threshold,
+        )
+        if not success:
+            return False
+        if not get_openviking_state(session).get("last_commit_performed"):
+            return True
+
+        session.clear()
+        reset_openviking_state(session, rotate_session_id=False)
+        state = get_openviking_state(session)
+        state["last_sync_status"] = "success"
+        await self.sessions.save(session)
+        return True
+
+    async def _maybe_commit_openviking_before_turn(
+        self,
+        session: Session,
+        msg: InboundMessage,
+    ) -> None:
+        if not self._ov_session_context_enabled():
+            return
+
+        agents_config = getattr(self.config, "agents", None)
+        if agents_config is None:
+            return
+
+        state = get_openviking_state(session)
+        pending_tokens = int(state.get("last_pending_tokens", 0) or 0)
+        commit_token_threshold = int(getattr(agents_config, "commit_token_threshold", 6000) or 6000)
+        incoming_tokens = cal_str_tokens(msg.content or "")
+        last_commit_local_index = parse_local_index(state.get("last_commit_local_index", -1))
+        messages_since_commit = len(session.messages) - last_commit_local_index - 1
+        incoming_messages_count = 1
+        should_commit = bool(
+            pending_tokens >= commit_token_threshold
+            or pending_tokens + incoming_tokens >= commit_token_threshold
+            or messages_since_commit + incoming_messages_count >= self.memory_window
+        )
+        if not should_commit:
+            return
+
+        await self._submit_openviking_session_and_clear_if_committed(
+            session,
+            force_commit=True,
+            keep_recent_count=int(getattr(agents_config, "commit_keep_recent_count", 10) or 0),
+            commit_message_threshold=self.memory_window,
+        )
+
+    async def _commit_openviking_session(
+        self,
+        session: Session,
+        *,
+        keep_recent_count: int = 0,
+        clear_local_session: bool = False,
+        rotate_session_id: bool = False,
+    ) -> bool:
+        success = await self._submit_openviking_session(
+            session,
+            force_commit=True,
+            keep_recent_count=keep_recent_count,
+        )
+        if not success:
+            return False
+        if clear_local_session:
+            session.clear()
+            reset_openviking_state(session, rotate_session_id=rotate_session_id)
+            state = get_openviking_state(session)
+            state["last_sync_status"] = "success"
+            await self.sessions.save(session)
+        return True
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -346,20 +595,29 @@ class AgentLoop:
                         try:
                             # Build query from last 3 user messages
                             _user_msgs = [
-                                m["content"] for m in messages
+                                m["content"]
+                                for m in messages
                                 if m.get("role") == "user" and isinstance(m.get("content"), str)
                             ]
                             _query = "\n".join(_user_msgs[-3:])
-                            workspace_id = self.sandbox_manager.to_workspace_id(session_key) if self.sandbox_manager else "shared"
+                            workspace_id = (
+                                self.sandbox_manager.to_workspace_id(session_key)
+                                if self.sandbox_manager
+                                else "shared"
+                            )
                             _exp = await self.context.memory.get_viking_experience_context(
                                 query=_query, workspace_id=workspace_id
                             )
-                            logger.info(f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}")
+                            logger.info(
+                                f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}"
+                            )
                             if _exp:
-                                messages.append({
-                                    "role": "user",
-                                    "content": f"## Relevant Agent Experience\n{_exp}",
-                                })
+                                messages.append(
+                                    {
+                                        "role": "user",
+                                        "content": f"## Relevant Agent Experience\n{_exp}",
+                                    }
+                                )
                                 continue
                         except Exception as _e:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
@@ -559,6 +817,8 @@ class AgentLoop:
                         metadata=msg.metadata,
                     )
                 session.clear()
+                if self._ov_session_context_enabled():
+                    reset_openviking_state(session, rotate_session_id=True)
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
@@ -573,11 +833,24 @@ class AgentLoop:
                         content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata,
                     )
-                session_clone = session.clone()
-                session.clear()
-                await self.sessions.save(session)
-                # Run consolidation in background
-                await self._safe_consolidate_memory(session_clone, archive_all=True)
+                if self._ov_session_context_enabled():
+                    committed = await self._commit_openviking_session(
+                        session,
+                        keep_recent_count=0,
+                        clear_local_session=True,
+                    )
+                    if not committed:
+                        return OutboundMessage(
+                            session_key=msg.session_key,
+                            content="🐈 Memory consolidation failed. Session history was kept.",
+                            metadata=msg.metadata,
+                        )
+                else:
+                    session_clone = session.clone()
+                    session.clear()
+                    await self.sessions.save(session)
+                    # Run consolidation in background
+                    await self._safe_consolidate_memory(session_clone, archive_all=True)
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="🐈 New session started. Memory consolidated.",
@@ -590,7 +863,18 @@ class AgentLoop:
                         content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata,
                     )
-                if ov_tools_enable:
+                if self._ov_session_context_enabled():
+                    remembered = await self._commit_openviking_session(
+                        session,
+                        keep_recent_count=self.config.agents.commit_keep_recent_count,
+                    )
+                    if not remembered:
+                        return OutboundMessage(
+                            session_key=msg.session_key,
+                            content="Failed to submit this conversation to memory storage.",
+                            metadata=msg.metadata,
+                        )
+                elif ov_tools_enable:
                     session_clone = session.clone()
                     await self._consolidate_viking_memory(session_clone)
                 return OutboundMessage(
@@ -624,8 +908,12 @@ class AgentLoop:
                     event_type=OutboundEventType.NO_REPLY,
                 )
 
+            await self._evaluate_previous_response_outcome(session, msg)
+
             # Consolidate memory before processing if session is too large
-            if len(session.messages) > self.memory_window:
+            if self._ov_session_context_enabled():
+                await self._maybe_commit_openviking_before_turn(session, msg)
+            elif len(session.messages) > self.memory_window:
                 # Clone session for async consolidation, then immediately trim original
                 session_clone = session.clone()
                 keep_count = min(10, max(2, self.memory_window // 2))
@@ -633,8 +921,6 @@ class AgentLoop:
                 await self.sessions.save(session)
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=False)
-
-            await self._evaluate_previous_response_outcome(session, msg)
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -652,10 +938,11 @@ class AgentLoop:
                 eval=self._eval,
             )
 
-            # Build initial messages (use get_history for LLM-formatted messages)
+            # Build initial messages (use OpenViking session context when enabled)
             provider_name = self.config.get_provider_name(self.model) if self.config else None
+            history = await self._build_prompt_history(session, provider_name=provider_name)
             messages = await message_context.build_messages(
-                history=session.get_history(provider_name=provider_name),
+                history=history,
                 current_message=msg.content,
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
@@ -714,6 +1001,11 @@ class AgentLoop:
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
+                if self._ov_session_context_enabled():
+                    await self._submit_openviking_session_and_clear_if_committed(
+                        session,
+                        commit_message_threshold=self.memory_window,
+                    )
             LangfuseClient.get_instance().update_generation_metadata(
                 response_id, response_completed
             )
@@ -879,8 +1171,9 @@ class AgentLoop:
 
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
+        history = await self._build_prompt_history(session, provider_name=provider_name)
         messages = await self.context.build_messages(
-            history=session.get_history(provider_name=provider_name),
+            history=history,
             current_message=msg.content,
             session_key=msg.session_key,
             ov_tools_enable=ov_tools_enable,

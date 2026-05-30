@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
+pub const DEFAULT_SELF_MANAGED_PORT: &str = "1933";
+pub const DEFAULT_SELF_MANAGED_URL: &str = "http://127.0.0.1:1933";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
@@ -52,7 +54,7 @@ pub struct Config {
 }
 
 fn default_url() -> String {
-    "http://localhost:1933".to_string()
+    DEFAULT_SELF_MANAGED_URL.to_string()
 }
 
 fn default_timeout() -> f64 {
@@ -78,7 +80,7 @@ fn default_verbose() -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: None,
             root_api_key: None,
             account: None,
@@ -154,7 +156,7 @@ impl Config {
             Self::from_file(&path.to_string_lossy())
         } else {
             Err(Error::Config(
-                "No CLI config file detected, please use `ov config setup-cli` to initialize ovcli.conf"
+                "No CLI config file detected, please use `ov config` to initialize ovcli.conf"
                     .to_string(),
             ))
         }
@@ -196,6 +198,22 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(home.join(".openviking").join("ovcli.conf"))
 }
 
+pub fn display_config_home() -> String {
+    let path = default_config_path()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let Some(path) = path else {
+        return "~/.openviking".to_string();
+    };
+    let Some(home) = dirs::home_dir() else {
+        return path.display().to_string();
+    };
+    if let Ok(stripped) = path.strip_prefix(&home) {
+        return format!("~/{}", stripped.display());
+    }
+    path.display().to_string()
+}
+
 /// Get a unique machine ID using machine-uid crate.
 ///
 /// Uses the system's machine ID, falls back to "default" if unavailable.
@@ -220,7 +238,8 @@ mod tests {
             .to_string();
 
         assert!(error.contains("No CLI config file detected"));
-        assert!(error.contains("ov config setup-cli"));
+        assert!(error.contains("ov config"));
+        assert!(!error.contains("setup-cli"));
         assert!(error.contains("ovcli.conf"));
     }
 
@@ -232,14 +251,14 @@ mod tests {
         let config = Config::load_default_from_path(&path)
             .expect("default-loading path should still fall back");
 
-        assert_eq!(config.url, "http://localhost:1933");
+        assert_eq!(config.url, "http://127.0.0.1:1933");
     }
 
     #[test]
     fn config_deserializes_account_and_user_fields() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "api_key": "test-key",
                 "account": "acme",
                 "user": "alice",
@@ -260,7 +279,7 @@ mod tests {
     fn config_deserializes_root_api_key() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "api_key": "user-key",
                 "root_api_key": "root-key"
             }"#,
@@ -275,7 +294,7 @@ mod tests {
     fn config_deserializes_account_id_and_user_id_aliases() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "account_id": "acme",
                 "user_id": "alice"
             }"#,
@@ -290,7 +309,7 @@ mod tests {
     fn config_deserializes_upload_fields() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "upload": {
                     "ignore_dirs": "node_modules,dist",
                     "include": "*.md,*.pdf",
@@ -359,7 +378,7 @@ mod tests {
     fn config_deserializes_extra_headers() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "extra_headers": {
                     "X-Custom-Header": "custom-value",
                     "Authorization": "Bearer token"
@@ -377,7 +396,7 @@ mod tests {
     fn config_deserializes_extra_headers_none_when_missing() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933"
+                "url": "http://127.0.0.1:1933"
             }"#,
         )
         .expect("config should deserialize");
@@ -389,7 +408,7 @@ mod tests {
     fn config_deserializes_profile_flag() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "profile": true
             }"#,
         )
@@ -402,7 +421,7 @@ mod tests {
     fn config_deserializes_extra_header_alias() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "extra_header": {
                     "X-Custom-Header": "custom-value",
                     "Authorization": "Bearer token"

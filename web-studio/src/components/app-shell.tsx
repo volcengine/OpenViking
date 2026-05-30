@@ -8,7 +8,6 @@ import {
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
-  LanguagesIcon,
   LoaderIcon,
   MessageSquareIcon,
   MoonIcon,
@@ -29,15 +28,6 @@ import {
 } from '#/components/ui/collapsible'
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
-import { buttonVariants } from '#/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -57,10 +47,8 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '#/components/ui/sidebar'
-import {
-  AppConnectionProvider,
-  useAppConnection,
-} from '#/hooks/use-app-connection'
+import { AppConnectionProvider } from '#/hooks/use-app-connection'
+import { cn } from '#/lib/utils'
 import {
   useSessionList,
   useCreateSession,
@@ -129,16 +117,19 @@ const NAV_ITEMS: readonly NavItem[] = [
 
 const LANGUAGE_OPTIONS = [
   {
+    shortLabel: '中',
+    title: '中文',
+    value: 'zh-CN',
+  },
+  {
     shortLabel: 'EN',
     title: 'English',
     value: 'en',
   },
-  {
-    shortLabel: '中文',
-    title: '中文',
-    value: 'zh-CN',
-  },
 ] as const
+
+const HEADER_ICON_BUTTON_CLASS =
+  'relative inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 function resolveLanguage(
   value: string | undefined,
@@ -353,15 +344,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const { openConnectionDialog } = useAppConnection()
   const { setTheme, resolvedTheme } = useTheme()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
-  const currentLanguageOption =
-    LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ??
-    LANGUAGE_OPTIONS[0]
   const [oauthSetupOpen, setOauthSetupOpen] = React.useState(false)
+  const settingsActive = pathname === '/settings'
   const oauthSetupActive =
     pathname === '/oauth/setup' || pathname.startsWith('/oauth/setup/')
 
@@ -456,7 +444,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={openConnectionDialog}
+                render={<Link to="/settings" />}
+                isActive={settingsActive}
                 tooltip={t('footer.connection', { ns: 'appShell' })}
                 className="text-base"
               >
@@ -514,59 +503,57 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
         <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-3">
+            <div
+              aria-label={t('language.label', { ns: 'common' })}
+              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
+              role="group"
+            >
+              {LANGUAGE_OPTIONS.map((item) => {
+                const isActive = item.value === currentLanguage
+
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={isActive}
+                    className={cn(
+                      'h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                      isActive && 'bg-foreground text-background shadow-sm',
+                    )}
+                    onClick={() => {
+                      if (!isActive) {
+                        void i18n.changeLanguage(item.value)
+                      }
+                    }}
+                  >
+                    {item.shortLabel}
+                  </button>
+                )
+              })}
+            </div>
+
             <button
               type="button"
               aria-label={t('theme.toggle', { ns: 'common' })}
-              className={buttonVariants({ size: 'sm', variant: 'ghost' })}
+              className={HEADER_ICON_BUTTON_CLASS}
               onClick={() =>
                 setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
               }
             >
-              <SunIcon className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <MoonIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+              <MoonIcon className="size-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+              <SunIcon className="absolute size-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             </button>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={t('language.label', { ns: 'common' })}
-                className={buttonVariants({ size: 'sm', variant: 'ghost' })}
-              >
-                <LanguagesIcon />
-                <span className="hidden sm:inline">
-                  {currentLanguageOption.shortLabel}
-                </span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-32 min-w-32">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>
-                    {t('language.label', { ns: 'common' })}
-                  </DropdownMenuLabel>
-                  {LANGUAGE_OPTIONS.map((item) => {
-                    const isActive = item.value === currentLanguage
-
-                    return (
-                      <DropdownMenuItem
-                        key={item.value}
-                        className="justify-between"
-                        onClick={() => {
-                          if (!isActive) {
-                            void i18n.changeLanguage(item.value)
-                          }
-                        }}
-                      >
-                        <span>{item.title}</span>
-                        {isActive ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t('language.current', { ns: 'common' })}
-                          </span>
-                        ) : null}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <a
+              href="https://github.com/volcengine/OpenViking"
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t('footer.github', { ns: 'appShell' })}
+              className={HEADER_ICON_BUTTON_CLASS}
+            >
+              <GithubIcon className="size-5" />
+            </a>
           </div>
         </header>
 

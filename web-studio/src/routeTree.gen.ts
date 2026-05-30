@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
@@ -21,6 +22,11 @@ import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
+const SettingsRouteRoute = SettingsRouteRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SessionsRouteRoute = SessionsRouteRouteImport.update({
   id: '/sessions',
   path: '/sessions',
@@ -84,6 +90,7 @@ export interface FileRoutesByFullPath {
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
+  '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/home': typeof HomeRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
+  '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -109,6 +117,7 @@ export interface FileRoutesById {
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
+  '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/resources'
     | '/retrieval'
     | '/sessions'
+    | '/settings'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -135,6 +145,7 @@ export interface FileRouteTypes {
     | '/home'
     | '/request-logs'
     | '/retrieval'
+    | '/settings'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/resources'
     | '/retrieval'
     | '/sessions'
+    | '/settings'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -162,6 +174,7 @@ export interface RootRouteChildren {
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
+  SettingsRouteRoute: typeof SettingsRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthSetupRoute: typeof OauthSetupRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
@@ -169,6 +182,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sessions': {
       id: '/sessions'
       path: '/sessions'
@@ -280,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
+  SettingsRouteRoute: SettingsRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthSetupRoute: OauthSetupRoute,
   OauthVerifyRoute: OauthVerifyRoute,

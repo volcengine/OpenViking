@@ -111,6 +111,114 @@ const en = {
       generateError: 'Could not generate OTP: {{message}}',
     },
   },
+  settings: {
+    actions: {
+      addAccount: 'Add account',
+      addUser: 'Add user',
+      cancel: 'Cancel',
+      copy: 'Copy',
+      refresh: 'Refresh',
+      regenerate: 'Regenerate',
+      save: 'Save',
+      use: 'Use',
+    },
+    connection: {
+      adminError: 'Could not load admin identities: {{message}}',
+      description:
+        'Select the account and user that Studio should send with OpenViking requests.',
+      noKey:
+        'Enter an API key with admin access to load account and user choices.',
+      title: 'Connection settings',
+    },
+    dialogs: {
+      addAccount: {
+        description:
+          'Create a workspace account and its first admin user. The new key will be shown once.',
+        title: 'Add account',
+      },
+      addUser: {
+        description:
+          'Register a user under an existing account. The generated key will be shown once.',
+        title: 'Add user',
+      },
+      regenerate: {
+        description:
+          'Regenerate the API key for {{account}} / {{user}}. The current key stops working immediately.',
+        title: 'Regenerate API key?',
+      },
+    },
+    empty: {
+      adminDescription:
+        'Use a root or account admin API key to list users, copy keys, add identities, or regenerate credentials.',
+      adminTitle: 'Admin access required',
+      usersDescription: 'Create a user to mint the first API key.',
+      usersTitle: 'No users in this account',
+    },
+    fields: {
+      account: 'Account',
+      adminUser: 'Admin user',
+      agent: 'Agent',
+      apiKey: 'API key',
+      baseUrl: 'Server URL',
+      role: 'Role',
+      user: 'User',
+    },
+    keyResult: {
+      description:
+        'Copy it now. OpenViking may only show a prefix after you leave this state.',
+      dismiss: 'Dismiss',
+      title: 'New API key',
+    },
+    loading: 'Loading identities...',
+    management: {
+      accountFilter: 'Managed account',
+      description:
+        'Review users and credentials for one account, then add users or rotate keys from the web UI.',
+      title: 'User management',
+    },
+    page: {
+      description:
+        'Configure the active OpenViking identity and manage accounts, users, and API keys from Studio.',
+      title: 'Connection & Identity',
+    },
+    placeholders: {
+      account: 'team-account',
+      agent: 'web-studio',
+      apiKey: 'Enter X-API-Key or Bearer token',
+      baseUrl: 'http://127.0.0.1:1933',
+      user: 'default',
+    },
+    roles: {
+      admin: 'Admin',
+      user: 'User',
+    },
+    serverMode: {
+      api_key: 'API key mode',
+      checking: 'Checking...',
+      dev: 'Development mode',
+      offline: 'Offline',
+      trusted: 'Trusted mode',
+    },
+    stats: {
+      accounts: 'Total accounts',
+      apiKeys: 'Visible API keys',
+      users: 'Users',
+    },
+    table: {
+      account: 'Account',
+      actions: 'Actions',
+      apiKey: 'API key',
+      role: 'Role',
+      user: 'User',
+    },
+    toast: {
+      accountCreated: 'Account created',
+      connectionSaved: 'Connection saved',
+      copied: 'Copied',
+      keyRegenerated: 'API key regenerated',
+      userCreated: 'User created',
+    },
+  },
   oauthSetup: {
     page: {
       title: 'OAuth setup',

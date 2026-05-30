@@ -876,13 +876,20 @@ class AsyncHTTPClient(BaseClient):
         return self._handle_response(response)
 
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/commit",
-            json={"telemetry": telemetry},
+            json={
+                "keep_recent_count": keep_recent_count,
+                "telemetry": telemetry,
+            },
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
