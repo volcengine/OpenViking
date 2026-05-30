@@ -14,6 +14,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 _SKIP_MEMORY_FILENAMES = {".overview.md", ".abstract.md", ".graph.html"}
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _PAIR_SIMILARITY_THRESHOLD = 0.5
 _PAIR_SCAN_LIMIT = 1000
 
@@ -128,11 +129,83 @@ def _quality_pair(
     return item
 
 
+def _normalize_heading(heading: str) -> str:
+    return heading.strip().rstrip(":：").casefold()
+
+
+def _extract_markdown_headings(text: str) -> list[str]:
+    headings = []
+    seen = set()
+    for match in _HEADING_RE.finditer(text or ""):
+        heading = match.group(1).strip().rstrip(":：")
+        normalized = _normalize_heading(heading)
+        if heading and normalized not in seen:
+            headings.append(heading)
+            seen.add(normalized)
+    return headings
+
+
+def _load_schema_heading_requirements(memory_types: set[str]) -> dict[str, dict[str, list[str]]]:
+    """Derive field-level heading requirements from the active memory schemas.
+
+    The graph health endpoint should follow memory template changes rather than
+    encoding one fixed experience format. If schema loading is unavailable in a
+    local diagnostic environment, heading checks are simply disabled.
+    """
+
+    try:
+        from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+
+        registry = MemoryTypeRegistry(load_schemas=True)
+    except Exception:
+        return {}
+
+    requirements: dict[str, dict[str, list[str]]] = {}
+    for memory_type in sorted(memory_types):
+        schema = registry.get(memory_type)
+        if not schema:
+            continue
+        field_requirements = {
+            field.name: headings
+            for field in schema.fields
+            if (headings := _extract_markdown_headings(field.description))
+        }
+        if field_requirements:
+            requirements[memory_type] = field_requirements
+    return requirements
+
+
+def _memory_field_text(memory_file: Any, field_name: str) -> str:
+    if field_name == "content":
+        return memory_file.plain_content()
+    value = memory_file.extra_fields.get(field_name)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _missing_schema_headings(
+    memory_file: Any,
+    field_heading_requirements: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    missing_by_field: dict[str, list[str]] = {}
+    for field_name, required_headings in field_heading_requirements.items():
+        content = _memory_field_text(memory_file, field_name)
+        seen = {_normalize_heading(match.group(1)) for match in _HEADING_RE.finditer(content)}
+        missing = [
+            heading for heading in required_headings if _normalize_heading(heading) not in seen
+        ]
+        if missing:
+            missing_by_field[field_name] = missing
+    return missing_by_field
+
+
 def _summarize_experience_quality(
     *,
     nodes: dict[str, Any],
     experience_uris: list[str],
     experience_source_sets: dict[str, set[str]],
+    heading_requirements: dict[str, list[str]],
     sample_limit: int,
 ) -> dict[str, Any]:
     """Summarize experience content granularity signals.
@@ -144,6 +217,17 @@ def _summarize_experience_quality(
 
     lengths = [len(nodes[uri].plain_content()) for uri in experience_uris]
     source_counts = [len(experience_source_sets.get(uri, set())) for uri in experience_uris]
+    missing_heading_examples = []
+    complete_required_headings = 0
+    heading_check_enabled = bool(heading_requirements)
+    if heading_check_enabled:
+        for uri in experience_uris:
+            missing = _missing_schema_headings(nodes[uri], heading_requirements)
+            if not missing:
+                complete_required_headings += 1
+                continue
+            if len(missing_heading_examples) < sample_limit:
+                missing_heading_examples.append({"uri": uri, "missing": missing})
 
     source_set_to_uris: dict[tuple[str, ...], list[str]] = defaultdict(list)
     for uri in experience_uris:
@@ -211,6 +295,14 @@ def _summarize_experience_quality(
             "max": max(source_counts) if source_counts else 0,
             "linkless": sum(1 for value in source_counts if value == 0),
         },
+        "required_heading_check_enabled": heading_check_enabled,
+        "required_heading_fields": heading_requirements,
+        "required_headings": heading_requirements.get("content", []),
+        "complete_required_heading_count": complete_required_headings,
+        "missing_required_heading_count": (
+            len(experience_uris) - complete_required_headings if heading_check_enabled else 0
+        ),
+        "missing_required_heading_examples": missing_heading_examples,
         "pair_similarity_threshold": _PAIR_SIMILARITY_THRESHOLD,
         "pair_scan_limit": _PAIR_SCAN_LIMIT,
         "pair_scan_skipped": pair_scan_skipped,
@@ -409,6 +501,7 @@ async def inspect_memory_graph_health(
             )
 
     memory_type_counts = Counter(memory_type_by_uri.values())
+    heading_requirements_by_type = _load_schema_heading_requirements(set(memory_type_counts))
     experience_uris = [
         uri for uri, memory_type in memory_type_by_uri.items() if memory_type == "experiences"
     ]
@@ -445,6 +538,7 @@ async def inspect_memory_graph_health(
         nodes=nodes,
         experience_uris=experience_uris,
         experience_source_sets=experience_source_sets,
+        heading_requirements=heading_requirements_by_type.get("experiences", {}),
         sample_limit=sample_limit,
     )
 

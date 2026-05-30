@@ -5,6 +5,7 @@
 
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.graph_health import _load_schema_heading_requirements
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -95,6 +96,10 @@ async def test_memory_graph_health_reports_missing_backlink(client, service):
 
 async def test_memory_graph_health_reports_experience_quality_signals(client, service):
     root_uri = "viking://agent/default/memories"
+    required_content_headings = _load_schema_heading_requirements({"experiences"})["experiences"][
+        "content"
+    ]
+    omitted_heading = required_content_headings[1]
     first_exp_uri = f"{root_uri}/experiences/refund_request_process.md"
     second_exp_uri = f"{root_uri}/experiences/request_refund_processing.md"
     traj_uri = f"{root_uri}/trajectories/refund.md"
@@ -115,7 +120,10 @@ async def test_memory_graph_health_reports_experience_quality_signals(client, se
         service,
         first_exp_uri,
         MemoryFile(
-            content="Refund request requires checking eligibility before issuing refund.",
+            content="\n\n".join(
+                f"## {heading}\n- Refund request requires checking eligibility."
+                for heading in required_content_headings
+            ),
             memory_type="experiences",
             links=[first_link],
         ),
@@ -124,8 +132,10 @@ async def test_memory_graph_health_reports_experience_quality_signals(client, se
         service,
         second_exp_uri,
         MemoryFile(
-            content=(
-                "Request refund processing requires checking eligibility before issuing refund."
+            content="\n\n".join(
+                f"## {heading}\n- Request refund processing requires checking eligibility."
+                for heading in required_content_headings
+                if heading != omitted_heading
             ),
             memory_type="experiences",
             links=[second_link],
@@ -151,3 +161,11 @@ async def test_memory_graph_health_reports_experience_quality_signals(client, se
     assert quality["duplicate_exact_source_set_count"] == 1
     assert quality["source_links_per_experience"]["linkless"] == 0
     assert quality["content_chars"]["empty"] == 0
+    assert quality["required_heading_check_enabled"] is True
+    assert quality["required_heading_fields"]["content"] == required_content_headings
+    assert quality["required_headings"] == required_content_headings
+    assert quality["complete_required_heading_count"] == 1
+    assert quality["missing_required_heading_count"] == 1
+    assert quality["missing_required_heading_examples"][0]["missing"] == {
+        "content": [omitted_heading]
+    }
