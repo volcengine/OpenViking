@@ -948,27 +948,31 @@ async def _synthesize_create_new_experience_consolidation(
             continue
 
         final_content = raw_group.get("content")
-        if isinstance(final_content, str) and final_content.strip():
-            final_content = final_content.strip()
-            if schema is not None:
-                repaired_content = await _ensure_synthesized_field_schema(
-                    vlm=vlm,
-                    memory_type="experiences",
-                    field_name="content",
-                    value=final_content,
-                    schema=schema,
-                    phase_metric_key=phase_metric_key,
+        if not isinstance(final_content, str) or not final_content.strip():
+            telemetry.count(
+                f"{prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected",
+                1,
+            )
+            continue
+
+        final_content = final_content.strip()
+        if schema is not None:
+            repaired_content = await _ensure_synthesized_field_schema(
+                vlm=vlm,
+                memory_type="experiences",
+                field_name="content",
+                value=final_content,
+                schema=schema,
+                phase_metric_key=phase_metric_key,
+            )
+            if repaired_content is None:
+                telemetry.count(
+                    f"{prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected",
+                    1,
                 )
-                if repaired_content is None:
-                    telemetry.count(
-                        f"{prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected",
-                        1,
-                    )
-                    continue
-                else:
-                    final_content = repaired_content
-            if final_content:
-                canonical["operation"].memory_fields["content"] = final_content
+                continue
+            final_content = repaired_content
+        canonical["operation"].memory_fields["content"] = final_content
 
         canonical_uri = canonical["uri"]
         for index in member_indices:

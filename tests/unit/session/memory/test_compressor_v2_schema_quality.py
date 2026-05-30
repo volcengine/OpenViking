@@ -11,6 +11,7 @@ from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.utils.json_parser import JsonUtils
@@ -198,6 +199,67 @@ def test_create_new_experience_consolidation_keeps_ops_when_schema_repair_fails(
     assert phase["operation_exact_apply_window_create_new_consolidation_schema_rejected"] == 1
 
 
+def test_create_new_experience_consolidation_rejects_groups_without_content():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            return JsonUtils.dumps({"groups": [{"canonical_index": 0, "member_indices": [0, 1]}]})
+
+    schema = _experience_schema()
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    uris = [
+        "viking://agent/default/memories/experiences/delivered_order_return.md",
+        "viking://agent/default/memories/experiences/order_item_return.md",
+    ]
+    links = [
+        StoredLink(
+            from_uri=uris[0],
+            to_uri="viking://agent/default/memories/trajectories/return_a.md",
+            link_type="derived_from",
+        ),
+        StoredLink(
+            from_uri=uris[1],
+            to_uri="viking://agent/default/memories/trajectories/return_b.md",
+            link_type="derived_from",
+        ),
+    ]
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[uri],
+                memory_fields={
+                    "experience_name": f"card_{index}",
+                    "content": f"Experience card {index}",
+                },
+            )
+            for index, uri in enumerate(uris)
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=list(links),
+    )
+
+    telemetry = OperationTelemetry(operation="test", enabled=True)
+    with bind_telemetry(telemetry):
+        remap = asyncio.run(
+            compressor_v2_module._synthesize_create_new_experience_consolidation(
+                vlm=FakeVLM(),
+                operations=operations,
+                phase_metric_key="experience_single",
+                registry=registry,
+            )
+        )
+
+    assert remap == {}
+    assert [op.uris[0] for op in operations.upsert_operations] == uris
+    assert operations.resolved_links == links
+    phase = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
+    assert phase["operation_exact_apply_window_create_new_consolidation_schema_rejected"] == 1
+
+
 def test_timeline_conflict_synthesis_returns_none_when_schema_repair_fails():
     class FakeVLM:
         def __init__(self):
@@ -212,11 +274,7 @@ def test_timeline_conflict_synthesis_returns_none_when_schema_repair_fails():
     schema = _experience_schema()
     current = MemoryFile(
         uri="viking://agent/default/memories/experiences/a.md",
-        content=(
-            "## Situation\n- Existing\n\n"
-            "## Approach\n- Existing\n\n"
-            "## Reflect\n- Existing"
-        ),
+        content=("## Situation\n- Existing\n\n## Approach\n- Existing\n\n## Reflect\n- Existing"),
         memory_type="experiences",
     )
     base = MemoryFile(uri=current.uri, content=current.content, memory_type="experiences")
