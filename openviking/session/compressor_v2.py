@@ -37,6 +37,10 @@ from openviking.session.memory.memory_updater import (
 )
 from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.merge_op.link_merge import merge_links
+from openviking.session.memory.schema_quality import (
+    missing_required_headings_in_text,
+    schema_heading_requirements,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -481,6 +485,107 @@ def _jsonable_for_prompt(value: Any) -> Any:
         return str(value)
 
 
+async def _repair_schema_required_headings(
+    *,
+    vlm: Any,
+    memory_type: str,
+    field_name: str,
+    content: str,
+    required_headings: list[str],
+    missing_headings: list[str],
+    schema_field_description: str,
+    phase_metric_key: str,
+) -> Optional[str]:
+    """Ask the model once to make a synthesized field schema-compliant."""
+
+    if not required_headings or not missing_headings:
+        return content
+
+    telemetry = get_current_telemetry()
+    prefix = f"memory.agent.extract.phase.{phase_metric_key}"
+    telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_attempts", 1)
+    telemetry.count(
+        f"{prefix}.operation_exact_apply_window_schema_repair_missing_headings",
+        len(missing_headings),
+    )
+
+    payload = {
+        "memory_type": memory_type,
+        "field_name": field_name,
+        "required_headings": required_headings,
+        "missing_headings": missing_headings,
+        "schema_field_description": schema_field_description,
+        "content_to_repair": content,
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You repair a synthesized memory field so it complies with the active "
+                "memory schema. Preserve the existing facts, bullets, and intent. Do not "
+                "invent new facts. Reorganize text only as needed so every required "
+                "heading appears exactly once and in the required order. Output JSON only: "
+                '{"content": "<full repaired field content>"}'
+            ),
+        },
+        {"role": "user", "content": JsonUtils.dumps(payload, indent=2)},
+    ]
+    try:
+        response = await vlm.get_completion_async(messages=messages)
+        raw_content = (
+            response if isinstance(response, str) else (getattr(response, "content", "") or "")
+        )
+        parsed = JsonUtils.loads(raw_content) or {}
+        repaired = parsed.get("content") if isinstance(parsed, dict) else None
+        if not isinstance(repaired, str) or not repaired.strip():
+            telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_failed", 1)
+            return None
+        repaired = repaired.strip()
+        if missing_required_headings_in_text(repaired, required_headings):
+            telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_failed", 1)
+            return None
+        telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_success", 1)
+        return repaired
+    except Exception:
+        telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_failed", 1)
+        logger.warning(
+            "operation-exact apply-window schema repair failed for %s.%s",
+            memory_type,
+            field_name,
+            exc_info=True,
+        )
+        return None
+
+
+async def _ensure_synthesized_field_schema(
+    *,
+    vlm: Any,
+    memory_type: str,
+    field_name: str,
+    value: str,
+    schema: Any,
+    phase_metric_key: str,
+) -> Optional[str]:
+    required_headings = schema_heading_requirements(schema).get(field_name, [])
+    if not required_headings:
+        return value
+    missing = missing_required_headings_in_text(value, required_headings)
+    if not missing:
+        return value
+    fields_by_name = {field.name: field for field in getattr(schema, "fields", []) or []}
+    field_description = getattr(fields_by_name.get(field_name), "description", "") or ""
+    return await _repair_schema_required_headings(
+        vlm=vlm,
+        memory_type=memory_type,
+        field_name=field_name,
+        content=value,
+        required_headings=required_headings,
+        missing_headings=missing,
+        schema_field_description=field_description,
+        phase_metric_key=phase_metric_key,
+    )
+
+
 async def _synthesize_timeline_conflict_fields(
     *,
     vlm: Any,
@@ -602,10 +707,20 @@ async def _synthesize_timeline_conflict_fields(
             value = fields[field]
             if value is None:
                 continue
+            value = await _ensure_synthesized_field_schema(
+                vlm=vlm,
+                memory_type=memory_type,
+                field_name=field,
+                value=str(value),
+                schema=schema,
+                phase_metric_key=phase_metric_key,
+            )
+            if value is None:
+                continue
             if field == "content":
-                synthesized.content = str(value)
+                synthesized.content = value
             else:
-                synthesized.extra_fields[field] = str(value)
+                synthesized.extra_fields[field] = value
         telemetry.add_duration(
             f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis",
             (asyncio.get_running_loop().time() - started_at) * 1000,
@@ -718,6 +833,7 @@ async def _synthesize_create_new_experience_consolidation(
     vlm: Any,
     operations: ResolvedOperations,
     phase_metric_key: str,
+    registry: Any = None,
 ) -> dict[str, str]:
     """Consolidate same-window cross-URI create-new experience proposals.
 
@@ -730,6 +846,7 @@ async def _synthesize_create_new_experience_consolidation(
     candidates = _create_new_experience_candidates(operations)
     if len(candidates) < 2:
         return {}
+    schema = registry.get("experiences") if registry is not None else None
 
     payload = {
         "candidate_experiences": [
@@ -753,7 +870,8 @@ async def _synthesize_create_new_experience_consolidation(
                 "should remain a narrower exception. Choose one existing candidate_index as "
                 "canonical for each merged group. Keep singletons out of groups. For each "
                 "merged group, provide one final full content string that preserves all "
-                "compatible guidance without inventing facts. Output JSON only: "
+                "compatible guidance without inventing facts. If the active schema requires "
+                "specific markdown headings, keep those headings exactly. Output JSON only: "
                 '{"groups": [{"canonical_index": 0, "member_indices": [0, 2], '
                 '"content": "<full final content>"}]}'
             ),
@@ -823,7 +941,26 @@ async def _synthesize_create_new_experience_consolidation(
 
         final_content = raw_group.get("content")
         if isinstance(final_content, str) and final_content.strip():
-            canonical["operation"].memory_fields["content"] = final_content.strip()
+            final_content = final_content.strip()
+            if schema is not None:
+                repaired_content = await _ensure_synthesized_field_schema(
+                    vlm=vlm,
+                    memory_type="experiences",
+                    field_name="content",
+                    value=final_content,
+                    schema=schema,
+                    phase_metric_key=phase_metric_key,
+                )
+                if repaired_content is None:
+                    telemetry.count(
+                        f"{prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected",
+                        1,
+                    )
+                    final_content = ""
+                else:
+                    final_content = repaired_content
+            if final_content:
+                canonical["operation"].memory_fields["content"] = final_content
 
         canonical_uri = canonical["uri"]
         for index in member_indices:
@@ -2360,6 +2497,7 @@ class SessionCompressorV2:
                 leader_telemetry = payloads[0]["telemetry"]
                 leader_phase_key = payloads[0]["phase_metric_key"]
                 leader_prefix = f"memory.agent.extract.phase.{leader_phase_key}"
+                registry = payloads[0]["provider"]._get_registry()
                 create_new_uri_remap: dict[str, str] = {}
                 if bool(
                     getattr(
@@ -2372,6 +2510,7 @@ class SessionCompressorV2:
                         vlm=vlm,
                         operations=combined_operations,
                         phase_metric_key=leader_phase_key,
+                        registry=registry,
                     )
                 combined_operations.upsert_operations = _order_upserts_for_coalesced_timeline(
                     combined_operations.upsert_operations
@@ -2387,7 +2526,6 @@ class SessionCompressorV2:
                     f"{leader_prefix}.operation_exact_apply_window_timeline_items",
                     timeline_items,
                 )
-                registry = payloads[0]["provider"]._get_registry()
                 conflict_synthesis_enabled = bool(
                     getattr(
                         config.memory,

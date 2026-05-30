@@ -10,11 +10,16 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import LINK_TYPE_DEFAULT
+from openviking.session.memory.schema_quality import (
+    extract_markdown_headings,
+    load_schema_heading_requirements,
+    missing_schema_headings,
+    normalize_heading,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 _SKIP_MEMORY_FILENAMES = {".overview.md", ".abstract.md", ".graph.html"}
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
-_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _PAIR_SIMILARITY_THRESHOLD = 0.5
 _PAIR_SCAN_LIMIT = 1000
 
@@ -130,19 +135,11 @@ def _quality_pair(
 
 
 def _normalize_heading(heading: str) -> str:
-    return heading.strip().rstrip(":：").casefold()
+    return normalize_heading(heading)
 
 
 def _extract_markdown_headings(text: str) -> list[str]:
-    headings = []
-    seen = set()
-    for match in _HEADING_RE.finditer(text or ""):
-        heading = match.group(1).strip().rstrip(":：")
-        normalized = _normalize_heading(heading)
-        if heading and normalized not in seen:
-            headings.append(heading)
-            seen.add(normalized)
-    return headings
+    return extract_markdown_headings(text)
 
 
 def _load_schema_heading_requirements(memory_types: set[str]) -> dict[str, dict[str, list[str]]]:
@@ -153,51 +150,14 @@ def _load_schema_heading_requirements(memory_types: set[str]) -> dict[str, dict[
     local diagnostic environment, heading checks are simply disabled.
     """
 
-    try:
-        from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-
-        registry = MemoryTypeRegistry(load_schemas=True)
-    except Exception:
-        return {}
-
-    requirements: dict[str, dict[str, list[str]]] = {}
-    for memory_type in sorted(memory_types):
-        schema = registry.get(memory_type)
-        if not schema:
-            continue
-        field_requirements = {
-            field.name: headings
-            for field in schema.fields
-            if (headings := _extract_markdown_headings(field.description))
-        }
-        if field_requirements:
-            requirements[memory_type] = field_requirements
-    return requirements
-
-
-def _memory_field_text(memory_file: Any, field_name: str) -> str:
-    if field_name == "content":
-        return memory_file.plain_content()
-    value = memory_file.extra_fields.get(field_name)
-    if value is None:
-        return ""
-    return str(value)
+    return load_schema_heading_requirements(memory_types)
 
 
 def _missing_schema_headings(
     memory_file: Any,
     field_heading_requirements: dict[str, list[str]],
 ) -> dict[str, list[str]]:
-    missing_by_field: dict[str, list[str]] = {}
-    for field_name, required_headings in field_heading_requirements.items():
-        content = _memory_field_text(memory_file, field_name)
-        seen = {_normalize_heading(match.group(1)) for match in _HEADING_RE.finditer(content)}
-        missing = [
-            heading for heading in required_headings if _normalize_heading(heading) not in seen
-        ]
-        if missing:
-            missing_by_field[field_name] = missing
-    return missing_by_field
+    return missing_schema_headings(memory_file, field_heading_requirements)
 
 
 def _summarize_experience_quality(

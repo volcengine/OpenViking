@@ -513,6 +513,36 @@ class TelemetrySummaryBuilder:
                             ),
                             0,
                         ),
+                        "operation_exact_apply_window_schema_repair_attempts": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_attempts"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_success": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_success"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_failed"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_missing_headings": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_missing_headings"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_schema_rejected": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected"
+                            ),
+                            0,
+                        ),
                         "result_written_uris": cls._i(
                             counters.get(f"{metric_prefix}.result_written_uris"), 0
                         ),
