@@ -258,7 +258,9 @@ ov session get a1b2c3d4
     "llm_token_usage": {
       "prompt_tokens": 5200,
       "completion_tokens": 1800,
-      "total_tokens": 7000
+      "total_tokens": 7000,
+      "cached_tokens": 1200,
+      "reasoning_tokens": 800
     },
     "user": {
       "account_id": "default",
