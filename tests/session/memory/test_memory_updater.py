@@ -796,6 +796,57 @@ class TestConsecutivePatchesSameURI:
 
         mock_viking_fs.write_file.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_apply_upsert_raises_latest_read_failure_under_file_lock_mode(
+        self, monkeypatch
+    ):
+        memory_type = "notes"
+        uri = "viking://user/test/memories/notes/demo.md"
+
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description="notes",
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+            ],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                pass
+
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=RuntimeError("read failed"))
+        mock_viking_fs.write_file = AsyncMock()
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_upsert_lock_context",
+            lambda **kwargs: FakeExactLock(),
+        )
+
+        op = ResolvedOperation(
+            old_memory_file_content=MemoryFile(uri=uri, content="read-time base"),
+            memory_fields={"content": "new body"},
+            memory_type=memory_type,
+            uris=[uri],
+        )
+
+        with pytest.raises(RuntimeError, match="latest read failed under exact file-lock mode"):
+            await updater._apply_upsert(op, MagicMock())
+
+        mock_viking_fs.write_file.assert_not_awaited()
+
     def test_exact_file_lock_unavailable_fails_fast_when_enabled(self, monkeypatch):
         monkeypatch.setattr(
             "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
@@ -1023,6 +1074,47 @@ class TestConsecutivePatchesSameURI:
         assert events == ["lock", "read", "write", "unlock"]
         parsed = parse_memory_file_with_fields(store[target_uri])
         assert [backlink["from_uri"] for backlink in parsed["backlinks"]] == [source_uri]
+
+    @pytest.mark.asyncio
+    async def test_write_stored_links_exact_lock_raises_endpoint_failure(self, monkeypatch):
+        source_uri = "viking://agent/demo/memories/experiences/source.md"
+        target_uri = "viking://agent/demo/memories/trajectories/target.md"
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                pass
+
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=RuntimeError("read failed"))
+        mock_viking_fs.write_file = AsyncMock()
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_file_lock_context",
+            lambda **kwargs: FakeExactLock(),
+        )
+
+        link = StoredLink(
+            from_uri=source_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            description="source trajectory",
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to apply links under exact file-lock mode"):
+            await write_stored_links(
+                [link],
+                MagicMock(),
+                mock_viking_fs,
+                skip_uris={source_uri},
+            )
+
+        mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_apply_delete_skips_stale_file_under_exact_lock(self, monkeypatch):

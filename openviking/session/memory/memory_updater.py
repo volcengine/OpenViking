@@ -206,6 +206,11 @@ async def write_stored_links(
 
             await _write_links_for_uri(uri, link_groups)
         except Exception as e:
+            if lock_handle is not None or _memory_apply_exact_file_lock_enabled():
+                get_current_telemetry().increment("memory.apply.links.failed_file_lock")
+                raise RuntimeError(
+                    f"Failed to apply links under exact file-lock mode: uri={uri}, error={e}"
+                ) from e
             tracer.error(f"Failed to apply links to {uri}: {e}")
 
 
@@ -643,8 +648,25 @@ class MemoryUpdater:
             content = await viking_fs.read_file(uri, ctx=ctx)
             if content:
                 old_content = MemoryFileUtils.read(content, uri=uri)
-        except Exception:
-            # File doesn't exist yet, that's okay
+        except NotFoundError as exc:
+            # Create-new files may legitimately be absent at write time.  In
+            # exact-lock mode, an update whose old snapshot disappeared is
+            # stale and should not silently resurrect the old content.
+            if (
+                _memory_apply_exact_file_lock_enabled()
+                and resolved_op.old_memory_file_content is not None
+            ):
+                get_current_telemetry().increment("memory.apply.latest_read.missing_file_lock")
+                raise RuntimeError(
+                    f"latest read found missing file under exact file-lock mode: uri={uri}"
+                ) from exc
+        except Exception as exc:
+            if _memory_apply_exact_file_lock_enabled():
+                get_current_telemetry().increment("memory.apply.latest_read.failed_file_lock")
+                raise RuntimeError(
+                    f"latest read failed under exact file-lock mode: uri={uri}, error={exc}"
+                ) from exc
+            # Legacy tree-lock mode kept best-effort fallback behavior here.
             pass
         # Fall back to pre-fetched content if disk read failed
         if old_content is None:
