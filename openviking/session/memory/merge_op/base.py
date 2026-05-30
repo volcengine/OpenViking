@@ -92,6 +92,37 @@ class StrPatch(BaseModel):
             return self.blocks[0].replace
         return None
 
+    def with_base(
+        self,
+        *,
+        base_value: Optional[str],
+        base_digest: Optional[str] = None,
+        source_operation_id: Optional[str] = None,
+        attempt_id: int = 0,
+    ) -> "StrPatchWithBase":
+        """Wrap this patch with the field value it was generated against."""
+        return StrPatchWithBase(
+            blocks=self.blocks,
+            base_value=base_value,
+            base_digest=base_digest,
+            source_operation_id=source_operation_id,
+            attempt_id=attempt_id,
+        )
+
+
+class StrPatchWithBase(StrPatch):
+    """Runtime envelope for a string patch plus its read-time base value.
+
+    This is intentionally not exposed as an LLM output schema. Extractors still
+    produce ``StrPatch``; the write path wraps it with base metadata before
+    file-lock apply/rewrite.
+    """
+
+    base_value: Optional[str] = None
+    base_digest: Optional[str] = None
+    source_operation_id: Optional[str] = None
+    attempt_id: int = 0
+
 
 class MergeOp(str, Enum):
     """Merge operation enumeration."""
@@ -143,3 +174,12 @@ class MergeOpBase(ABC):
             New field value after applying the merge
         """
         pass
+
+    async def apply_async(self, current_value: Any, patch_value: Any) -> Any:
+        """Async-compatible apply hook.
+
+        Most merge operations are deterministic and synchronous. Stale patch
+        rewrite can override this without forcing the whole merge-op API to
+        become async.
+        """
+        return self.apply(current_value, patch_value)

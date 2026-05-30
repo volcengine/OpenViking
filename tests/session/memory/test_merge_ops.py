@@ -4,6 +4,11 @@
 Tests for MergeOp architecture - type-safe merge operations.
 """
 
+import asyncio
+import hashlib
+
+import pytest
+
 from openviking.session.memory.dataclass import (
     MemoryField,
 )
@@ -17,7 +22,9 @@ from openviking.session.memory.merge_op import (
     SumOp,
     apply_str_patch,
 )
-from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.merge_op.base import FieldType, StrPatchWithBase
+from openviking.session.memory.merge_op.patch_handler import PatchParseError
+from openviking.session.memory.memory_updater import _wrap_patch_with_read_base
 
 # ============================================================================
 # Test MergeOp Base Classes
@@ -80,6 +87,141 @@ class TestPatchOp:
 
         op_int = PatchOp(FieldType.INT64)
         assert op_int.apply(100, 200) == 200
+
+    def test_apply_async_defaults_to_apply(self):
+        """Merge ops can be awaited without forcing every op to be async."""
+        op = PatchOp(FieldType.INT64)
+        assert asyncio.run(op.apply_async(100, 200)) == 200
+
+    def test_str_patch_with_base_applies_like_str_patch(self):
+        """Base metadata should not change existing patch semantics."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="old", replace="new")],
+            base_value="hello old",
+            base_digest="digest-1",
+            source_operation_id="op-1",
+        )
+
+        assert op.apply("hello old", patch) == "hello new"
+        assert patch.base_value == "hello old"
+        assert patch.base_digest == "digest-1"
+        assert patch.source_operation_id == "op-1"
+
+    def test_apply_async_rewrites_stale_patch_against_latest_content(self, monkeypatch):
+        """A stale runtime patch can be rewritten against the lock-time content."""
+        op = PatchOp(FieldType.STRING)
+        stale_patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="old policy", replace="new policy")],
+            base_value="old policy",
+            source_operation_id="notes.md:content",
+        )
+        rewrite_calls = []
+
+        async def fake_rewrite(*, current_value, patch_value, error):
+            rewrite_calls.append((current_value, patch_value, error))
+            return StrPatch(blocks=[SearchReplaceBlock(search="latest policy", replace="new policy")])
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._rewrite_stale_patch",
+            fake_rewrite,
+        )
+
+        result = asyncio.run(op.apply_async("latest policy", stale_patch))
+
+        assert result == "new policy"
+        assert len(rewrite_calls) == 1
+        assert rewrite_calls[0][1].source_operation_id == "notes.md:content"
+
+    def test_apply_async_does_not_rewrite_when_base_is_not_stale(self, monkeypatch):
+        """A malformed patch against the latest base should fail normally."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="missing", replace="new")],
+            base_value="latest policy",
+            source_operation_id="notes.md:content",
+        )
+        rewrite_calls = []
+
+        async def fake_rewrite(*, current_value, patch_value, error):
+            rewrite_calls.append((current_value, patch_value, error))
+            return StrPatch(blocks=[SearchReplaceBlock(search="latest policy", replace="new")])
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._rewrite_stale_patch",
+            fake_rewrite,
+        )
+
+        with pytest.raises(PatchParseError):
+            asyncio.run(op.apply_async("latest policy", patch))
+
+        assert rewrite_calls == []
+
+    def test_apply_async_uses_base_digest_for_stale_detection(self, monkeypatch):
+        """Digest metadata is the version check; base_value remains rewrite context."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="missing", replace="new")],
+            base_value="latest policy",
+            base_digest=hashlib.sha256("older policy".encode("utf-8")).hexdigest(),
+            source_operation_id="notes.md:content",
+        )
+        rewrite_calls = []
+
+        async def fake_rewrite(*, current_value, patch_value, error):
+            rewrite_calls.append((current_value, patch_value, error))
+            return StrPatch(blocks=[SearchReplaceBlock(search="latest policy", replace="new")])
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._rewrite_stale_patch",
+            fake_rewrite,
+        )
+
+        result = asyncio.run(op.apply_async("latest policy", patch))
+
+        assert result == "new"
+        assert len(rewrite_calls) == 1
+
+    def test_apply_async_does_not_rewrite_when_base_digest_matches(self, monkeypatch):
+        """Matching base_digest means the patch is malformed, not stale."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="missing", replace="new")],
+            base_value="older policy",
+            base_digest=hashlib.sha256("latest policy".encode("utf-8")).hexdigest(),
+            source_operation_id="notes.md:content",
+        )
+        rewrite_calls = []
+
+        async def fake_rewrite(*, current_value, patch_value, error):
+            rewrite_calls.append((current_value, patch_value, error))
+            return StrPatch(blocks=[SearchReplaceBlock(search="latest policy", replace="new")])
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._rewrite_stale_patch",
+            fake_rewrite,
+        )
+
+        with pytest.raises(PatchParseError):
+            asyncio.run(op.apply_async("latest policy", patch))
+
+        assert rewrite_calls == []
 
 
 class TestSumOp:
@@ -228,6 +370,45 @@ class TestSearchReplaceBlock:
         assert description is not None
         assert "line_number<TAB>" in description
         assert "Never include" in description
+
+
+class TestStrPatchWithBase:
+    """Tests for runtime patch base envelopes."""
+
+    def test_with_base_preserves_blocks_and_metadata(self):
+        patch = StrPatch(
+            blocks=[SearchReplaceBlock(search="old", replace="new")],
+        )
+
+        wrapped = patch.with_base(
+            base_value="hello old",
+            base_digest="digest-1",
+            source_operation_id="op-1",
+        )
+
+        assert isinstance(wrapped, StrPatchWithBase)
+        assert wrapped.blocks == patch.blocks
+        assert wrapped.base_value == "hello old"
+        assert wrapped.base_digest == "digest-1"
+        assert wrapped.source_operation_id == "op-1"
+        assert wrapped.attempt_id == 0
+
+    def test_wrap_patch_with_read_base_adds_digest(self):
+        patch = StrPatch(
+            blocks=[SearchReplaceBlock(search="old", replace="new")],
+        )
+
+        wrapped = _wrap_patch_with_read_base(
+            patch,
+            base_value="hello old",
+            source_operation_id="memory://example:content",
+        )
+
+        assert isinstance(wrapped, StrPatchWithBase)
+        assert wrapped.blocks == patch.blocks
+        assert wrapped.base_value == "hello old"
+        assert wrapped.base_digest is not None
+        assert wrapped.source_operation_id == "memory://example:content"
 
 
 class TestStrPatch:

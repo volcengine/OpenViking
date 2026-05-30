@@ -116,6 +116,11 @@ def _render_memory_schema_locks(
     return exact_paths, tree_paths
 
 
+def _memory_apply_exact_file_lock_enabled_from_config(config: Any) -> bool:
+    memory_config = getattr(config, "memory", None)
+    return bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False))
+
+
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
 
@@ -298,7 +303,13 @@ class SessionCompressorV2:
                 transaction_handle=transaction_handle,
             )
             read_scope = isolation_handler.get_read_scope()
-            if lock_manager:
+            if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
+                get_current_telemetry().increment("memory.extract.schema_tree_lock_skipped_for_exact_apply")
+                tracer.info(
+                    "[memory_lock] Skipping extraction schema locks; "
+                    "using per-file rewrite locks at apply time"
+                )
+            elif lock_manager:
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
                     schemas=schemas,
@@ -698,7 +709,13 @@ class SessionCompressorV2:
             transaction_handle = lock_manager.create_handle()
 
         try:
-            if lock_manager:
+            if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
+                get_current_telemetry().increment("memory.extract.schema_tree_lock_skipped_for_exact_apply")
+                tracer.info(
+                    f"[{phase_label}] Skipping extraction schema locks; "
+                    "using per-file rewrite locks at apply time"
+                )
+            elif lock_manager:
                 schemas = [
                     schema
                     for schema in provider.get_memory_schemas(ctx)
@@ -956,12 +973,13 @@ class SessionCompressorV2:
                     [lock_path],
                     lock_mode="exact",
                     handle=lock_handle,
-                ):
+                ) as exp_lock_handle:
                     await self._append_trajectory_metadata(
                         exp_uri,
                         normalized_traj_uris,
                         ctx,
                         viking_fs,
+                        lock_handle=exp_lock_handle,
                     )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
@@ -972,6 +990,7 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
+        lock_handle: Optional[Any] = None,
     ) -> None:
         from datetime import timezone
         from openviking.session.memory.merge_op.link_merge import merge_links
@@ -998,7 +1017,7 @@ class SessionCompressorV2:
             tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
         # Write traj.backlinks — exp_uri already handled above
-        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri})
+        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri}, lock_handle=lock_handle)
 
     async def _build_memory_diff(
         self,
