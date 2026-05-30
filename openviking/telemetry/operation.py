@@ -495,6 +495,12 @@ class TelemetrySummaryBuilder:
                             ),
                             0,
                         ),
+                        "operation_exact_apply_window_create_new_key_count": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_key_count"
+                            ),
+                            0,
+                        ),
                         "operation_exact_apply_window_create_new_consolidation_groups": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_groups"

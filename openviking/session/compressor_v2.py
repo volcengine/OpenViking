@@ -701,6 +701,7 @@ async def _synthesize_timeline_conflict_fields(
             return None
 
         synthesized = current_file.model_copy(deep=True)
+        applied_fields = 0
         for field in eligible_fields:
             if field not in fields:
                 continue
@@ -721,6 +722,13 @@ async def _synthesize_timeline_conflict_fields(
                 synthesized.content = value
             else:
                 synthesized.extra_fields[field] = value
+            applied_fields += 1
+        if applied_fields == 0:
+            telemetry.count(
+                f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis_failed",
+                1,
+            )
+            return None
         telemetry.add_duration(
             f"{prefix}.operation_exact_apply_window_timeline_conflict_synthesis",
             (asyncio.get_running_loop().time() - started_at) * 1000,
@@ -956,7 +964,7 @@ async def _synthesize_create_new_experience_consolidation(
                         f"{prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected",
                         1,
                     )
-                    final_content = ""
+                    continue
                 else:
                     final_content = repaired_content
             if final_content:
