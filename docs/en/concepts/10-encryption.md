@@ -217,4 +217,4 @@ See [Configuration Guide](../guides/01-configuration.md#encryption) for detailed
 
 - [Storage Architecture](./05-storage.md) - VikingFS and AGFS architecture
 - [Configuration Guide](../guides/01-configuration.md) - Encryption configuration details
-- [Technical Design](../../design/multi-tenant-file-encryption-desigin.md) - Encryption technical design
+- [Technical Design](../../design/multi-tenant-design.md) - Encryption technical design
