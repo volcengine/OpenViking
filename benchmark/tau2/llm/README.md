@@ -226,7 +226,8 @@ under `memory_corpora/`.
 Agent Harness / TAU-2 corpus preparation opts into the faster agent-memory
 write path. The default evidence path keeps experience consolidation on the
 normal per-trajectory route and relies on concurrent session commits plus
-server-side exact apply. Configure the running OpenViking server with:
+server-side exact apply for agent trajectory / experience files only.
+Configure the running OpenViking server with:
 
 - `memory.agent_memory_enabled=true`
 - `memory.agent_experience_apply_lock_mode="operation_exact"`

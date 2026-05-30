@@ -49,7 +49,8 @@ openviking:
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
   # Agent Harness / TAU-2 experiment corpus preparation defaults to concurrent
-  # per-session commits plus server-side exact apply.
+  # per-session commits plus server-side exact apply for agent trajectory /
+  # experience memory.
   agent_memory_enabled: true
   agent_experience_apply_lock_mode: operation_exact
   agent_trajectory_apply_lock_mode: operation_exact
