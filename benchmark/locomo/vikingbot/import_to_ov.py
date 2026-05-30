@@ -269,9 +269,7 @@ def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
             llm_input = llm.get("input", llm.get("prompt_tokens", 0))
             llm_output = llm.get("output", llm.get("completion_tokens", 0))
             cache_tokens = llm.get("cached_tokens", llm.get("prompt_cached", 0))
-            reasoning_tokens = llm.get(
-                "reasoning_tokens", llm.get("completion_reasoning", 0)
-            )
+            reasoning_tokens = llm.get("reasoning_tokens", llm.get("completion_reasoning", 0))
             return {
                 "embedding": embed_total,
                 "vlm": llm_input,
@@ -381,7 +379,9 @@ async def viking_ingest(
                     raise RuntimeError(f"Task {task_id} {status}, trace_id={trace_id}: {task}")
                 await asyncio.sleep(2)
             else:
-                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts, trace_id={trace_id}")
+                raise RuntimeError(
+                    f"Task {task_id} timed out after {max_attempts} attempts, trace_id={trace_id}"
+                )
         else:
             token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
@@ -499,9 +499,11 @@ def parse_retry_wrong_csv(csv_path: str) -> Dict[str, set]:
     """
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        wrong_items = [row for row in reader
-                       if row.get("is_invalid", "").lower() != "true"
-                       and row.get("result") == "WRONG"]
+        wrong_items = [
+            row
+            for row in reader
+            if row.get("is_invalid", "").lower() != "true" and row.get("result") == "WRONG"
+        ]
 
     if not wrong_items:
         print(f"[retry-wrong] No valid wrong questions found in {csv_path}", file=sys.stderr)
@@ -637,7 +639,14 @@ async def run_import(args: argparse.Namespace) -> None:
 
         # 为每个 sample 创建独立的处理协程
         async def process_sample(item, sample_index):
-            nonlocal success_count, error_count, total_embedding_tokens, total_vlm_tokens, total_cache_tokens, total_reasoning_tokens, total_llm_output_tokens
+            nonlocal \
+                success_count, \
+                error_count, \
+                total_embedding_tokens, \
+                total_vlm_tokens, \
+                total_cache_tokens, \
+                total_reasoning_tokens, \
+                total_llm_output_tokens
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
 
@@ -648,7 +657,9 @@ async def run_import(args: argparse.Namespace) -> None:
                 if sess_nums:
                     sample_session_range = (min(sess_nums), max(sess_nums))
 
-            sessions = build_session_messages(item, sample_session_range, group_chat=args.group_chat)
+            sessions = build_session_messages(
+                item, sample_session_range, group_chat=args.group_chat
+            )
 
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
@@ -709,7 +720,9 @@ async def run_import(args: argparse.Namespace) -> None:
                 for idx, item in enumerate(samples)
             ]
         else:
-            tasks = [asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)]
+            tasks = [
+                asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)
+            ]
 
     else:
         # Plain text format
@@ -796,7 +809,9 @@ async def run_import(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         print(f"Average VLM per session: {total_vlm_tokens / success_count:.1f}", file=sys.stderr)
-        print(f"Average Cache per session: {total_cache_tokens / success_count:.1f}", file=sys.stderr)
+        print(
+            f"Average Cache per session: {total_cache_tokens / success_count:.1f}", file=sys.stderr
+        )
         print(
             f"Average Reasoning per session: {total_reasoning_tokens / success_count:.1f}",
             file=sys.stderr,
