@@ -38,7 +38,7 @@ from openviking.session.memory.memory_updater import (
 from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
 from openviking.session.memory.merge_op.link_merge import merge_links
 from openviking.session.memory.schema_quality import (
-    missing_required_headings_in_text,
+    required_heading_structure_errors,
     schema_heading_requirements,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
@@ -493,12 +493,14 @@ async def _repair_schema_required_headings(
     content: str,
     required_headings: list[str],
     missing_headings: list[str],
+    heading_errors: Optional[dict[str, list[str]]] = None,
     schema_field_description: str,
     phase_metric_key: str,
 ) -> Optional[str]:
     """Ask the model once to make a synthesized field schema-compliant."""
 
-    if not required_headings or not missing_headings:
+    errors = heading_errors or {"missing": missing_headings}
+    if not required_headings or not any(errors.values()):
         return content
 
     telemetry = get_current_telemetry()
@@ -508,12 +510,17 @@ async def _repair_schema_required_headings(
         f"{prefix}.operation_exact_apply_window_schema_repair_missing_headings",
         len(missing_headings),
     )
+    telemetry.count(
+        f"{prefix}.operation_exact_apply_window_schema_repair_heading_errors",
+        sum(len(values) for values in errors.values()),
+    )
 
     payload = {
         "memory_type": memory_type,
         "field_name": field_name,
         "required_headings": required_headings,
         "missing_headings": missing_headings,
+        "heading_errors": errors,
         "schema_field_description": schema_field_description,
         "content_to_repair": content,
     }
@@ -541,7 +548,7 @@ async def _repair_schema_required_headings(
             telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_failed", 1)
             return None
         repaired = repaired.strip()
-        if missing_required_headings_in_text(repaired, required_headings):
+        if any(required_heading_structure_errors(repaired, required_headings).values()):
             telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_failed", 1)
             return None
         telemetry.count(f"{prefix}.operation_exact_apply_window_schema_repair_success", 1)
@@ -569,8 +576,8 @@ async def _ensure_synthesized_field_schema(
     required_headings = schema_heading_requirements(schema).get(field_name, [])
     if not required_headings:
         return value
-    missing = missing_required_headings_in_text(value, required_headings)
-    if not missing:
+    heading_errors = required_heading_structure_errors(value, required_headings)
+    if not any(heading_errors.values()):
         return value
     fields_by_name = {field.name: field for field in getattr(schema, "fields", []) or []}
     field_description = getattr(fields_by_name.get(field_name), "description", "") or ""
@@ -580,7 +587,8 @@ async def _ensure_synthesized_field_schema(
         field_name=field_name,
         content=value,
         required_headings=required_headings,
-        missing_headings=missing,
+        missing_headings=heading_errors["missing"],
+        heading_errors=heading_errors,
         schema_field_description=field_description,
         phase_metric_key=phase_metric_key,
     )
@@ -916,7 +924,7 @@ async def _synthesize_create_new_experience_consolidation(
         return {}
 
     by_index = {item["candidate_index"]: item for item in candidates}
-    used_duplicates: set[int] = set()
+    used_group_indices: set[int] = set()
     duplicate_op_ids: set[int] = set()
     uri_remap: dict[str, str] = {}
     merged_group_count = 0
@@ -941,7 +949,11 @@ async def _synthesize_create_new_experience_consolidation(
                 member_indices.append(index)
         if canonical_index not in member_indices or len(member_indices) < 2:
             continue
-        if any(index in used_duplicates for index in member_indices):
+        if any(index in used_group_indices for index in member_indices):
+            telemetry.count(
+                f"{prefix}.operation_exact_apply_window_create_new_consolidation_overlap_rejected",
+                1,
+            )
             continue
         canonical = by_index.get(canonical_index)
         if canonical is None:
@@ -983,8 +995,8 @@ async def _synthesize_create_new_experience_consolidation(
             if duplicate_uri == canonical_uri:
                 continue
             duplicate_op_ids.add(id(duplicate["operation"]))
-            used_duplicates.add(index)
             uri_remap[duplicate_uri] = canonical_uri
+        used_group_indices.update(member_indices)
         merged_group_count += 1
 
     if not uri_remap:

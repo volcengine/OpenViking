@@ -519,6 +519,12 @@ class TelemetrySummaryBuilder:
                             ),
                             0,
                         ),
+                        "operation_exact_apply_window_create_new_consolidation_overlap_rejected": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_overlap_rejected"
+                            ),
+                            0,
+                        ),
                         "operation_exact_apply_window_schema_repair_attempts": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_schema_repair_attempts"
@@ -540,6 +546,12 @@ class TelemetrySummaryBuilder:
                         "operation_exact_apply_window_schema_repair_missing_headings": cls._i(
                             counters.get(
                                 f"{metric_prefix}.operation_exact_apply_window_schema_repair_missing_headings"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_heading_errors": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_heading_errors"
                             ),
                             0,
                         ),

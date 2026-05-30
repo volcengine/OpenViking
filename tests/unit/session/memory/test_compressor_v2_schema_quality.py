@@ -260,6 +260,88 @@ def test_create_new_experience_consolidation_rejects_groups_without_content():
     assert phase["operation_exact_apply_window_create_new_consolidation_schema_rejected"] == 1
 
 
+def test_create_new_experience_consolidation_rejects_overlapping_groups():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            return JsonUtils.dumps(
+                {
+                    "groups": [
+                        {
+                            "canonical_index": 0,
+                            "member_indices": [0, 1],
+                            "content": (
+                                "## Situation\n- A plus B\n\n"
+                                "## Approach\n- Keep B fact\n\n"
+                                "## Reflect\n- Guard B"
+                            ),
+                        },
+                        {
+                            "canonical_index": 0,
+                            "member_indices": [0, 2],
+                            "content": (
+                                "## Situation\n- A plus C\n\n"
+                                "## Approach\n- Keep C fact\n\n"
+                                "## Reflect\n- Guard C"
+                            ),
+                        },
+                    ]
+                }
+            )
+
+    schema = _experience_schema()
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    uris = [
+        "viking://agent/default/memories/experiences/card_a.md",
+        "viking://agent/default/memories/experiences/card_b.md",
+        "viking://agent/default/memories/experiences/card_c.md",
+    ]
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[uri],
+                memory_fields={
+                    "experience_name": f"card_{index}",
+                    "content": f"Experience card {index}",
+                },
+            )
+            for index, uri in enumerate(uris)
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(
+                from_uri=uri,
+                to_uri=f"viking://agent/default/memories/trajectories/source_{index}.md",
+                link_type="derived_from",
+            )
+            for index, uri in enumerate(uris)
+        ],
+    )
+
+    telemetry = OperationTelemetry(operation="test", enabled=True)
+    with bind_telemetry(telemetry):
+        remap = asyncio.run(
+            compressor_v2_module._synthesize_create_new_experience_consolidation(
+                vlm=FakeVLM(),
+                operations=operations,
+                phase_metric_key="experience_single",
+                registry=registry,
+            )
+        )
+
+    assert remap == {uris[1]: uris[0]}
+    assert [op.uris[0] for op in operations.upsert_operations] == [uris[0], uris[2]]
+    assert operations.upsert_operations[0].memory_fields["content"].count("B") > 0
+    assert "C fact" not in operations.upsert_operations[0].memory_fields["content"]
+    assert {link.from_uri for link in operations.resolved_links} == {uris[0], uris[2]}
+    phase = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
+    assert phase["operation_exact_apply_window_create_new_consolidation_overlap_rejected"] == 1
+
+
 def test_timeline_conflict_synthesis_returns_none_when_schema_repair_fails():
     class FakeVLM:
         def __init__(self):
@@ -313,6 +395,45 @@ def test_timeline_conflict_synthesis_returns_none_when_schema_repair_fails():
     phase = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
     assert phase["operation_exact_apply_window_timeline_conflict_synthesis_failed"] == 1
     assert phase["operation_exact_apply_window_schema_repair_failed"] == 1
+
+
+def test_synthesized_field_schema_rejects_duplicate_or_out_of_order_heading_repair():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            return JsonUtils.dumps(
+                {
+                    "content": (
+                        "## Reflect\n- Still first\n\n"
+                        "## Situation\n- Present\n\n"
+                        "## Approach\n- Present\n\n"
+                        "## Reflect\n- Duplicate"
+                    )
+                }
+            )
+
+    telemetry = OperationTelemetry(operation="test", enabled=True)
+    with bind_telemetry(telemetry):
+        repaired = asyncio.run(
+            compressor_v2_module._ensure_synthesized_field_schema(
+                vlm=FakeVLM(),
+                memory_type="experiences",
+                field_name="content",
+                value=(
+                    "## Reflect\n- First\n\n"
+                    "## Situation\n- Present\n\n"
+                    "## Approach\n- Present\n\n"
+                    "## Reflect\n- Duplicate"
+                ),
+                schema=_experience_schema(),
+                phase_metric_key="experience_single",
+            )
+        )
+
+    assert repaired is None
+    phase = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
+    assert phase["operation_exact_apply_window_schema_repair_attempts"] == 1
+    assert phase["operation_exact_apply_window_schema_repair_failed"] == 1
+    assert phase["operation_exact_apply_window_schema_repair_heading_errors"] == 4
 
 
 def test_synthesized_field_schema_noops_without_heading_requirements():

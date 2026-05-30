@@ -61,6 +61,43 @@ def missing_required_headings_in_text(text: str, required_headings: list[str]) -
     return [heading for heading in required_headings if normalize_heading(heading) not in seen]
 
 
+def required_heading_structure_errors(
+    text: str,
+    required_headings: list[str],
+) -> dict[str, list[str]]:
+    if not required_headings:
+        return {"missing": [], "duplicate": [], "out_of_order": []}
+
+    required_norms = [normalize_heading(heading) for heading in required_headings]
+    heading_norms = [
+        normalize_heading(match.group(1))
+        for match in _HEADING_RE.finditer(text or "")
+        if match.group(1).strip()
+    ]
+    missing = [
+        heading
+        for heading, norm in zip(required_headings, required_norms, strict=True)
+        if norm not in heading_norms
+    ]
+    duplicate = [
+        heading
+        for heading, norm in zip(required_headings, required_norms, strict=True)
+        if heading_norms.count(norm) > 1
+    ]
+
+    out_of_order: list[str] = []
+    if not missing:
+        positions = [heading_norms.index(norm) for norm in required_norms]
+        if positions != sorted(positions):
+            out_of_order = list(required_headings)
+
+    return {
+        "missing": missing,
+        "duplicate": duplicate,
+        "out_of_order": out_of_order,
+    }
+
+
 def memory_field_text(memory_file: Any, field_name: str) -> str:
     if field_name == "content":
         return memory_file.plain_content()
