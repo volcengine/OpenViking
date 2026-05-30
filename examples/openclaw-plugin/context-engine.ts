@@ -1317,7 +1317,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             ? afterTurnParams.prePromptMessageCount
             : 0;
 
-        const { messages: extractedMessagesRaw, newCount } = extractNewTurnMessages(messages, start);
+        const { messages: extractedMessagesRaw, newCount } = extractNewTurnMessages(messages, start, {
+          ensureLastUserMessage: true,
+        });
         const extractedMessages = coalesceConsecutiveToolMessages(extractedMessagesRaw);
 
         if (extractedMessages.length === 0) {
@@ -1336,7 +1338,17 @@ export function createMemoryOpenVikingContextEngine(params: {
           const r = (m as Record<string, unknown>).role as string;
           return r === "user" || r === "assistant";
         }) as AgentMessage[];
-        const newMsgFull = messageDigest(newMessages);
+        const capturedMessagesForDigest = extractedMessages.map((msg) => ({
+          role: msg.role,
+          content: msg.parts.map((part) =>
+            part.type === "text"
+              ? { type: "text", text: part.text }
+              : { type: "toolResult", content: part.toolOutput, name: part.toolName },
+          ),
+        })) as AgentMessage[];
+        const newMsgFull = messageDigest(
+          capturedMessagesForDigest.length > 0 ? capturedMessagesForDigest : newMessages,
+        );
         const newTurnTokens = newMsgFull.reduce((s, d) => s + d.tokens, 0);
 
         diag("afterTurn_entry", OVSessionId, {

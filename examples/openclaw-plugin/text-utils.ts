@@ -332,6 +332,62 @@ type ExtractedMessage = {
   }>;
 };
 
+type ExtractNewTurnMessagesOptions = {
+  /**
+   * OpenClaw may report a prePromptMessageCount that starts after the user
+   * prompt for the just-finished turn. When the captured window has no user
+   * text, prepend the nearest preceding user text so extraction sees the fact
+   * source rather than only the assistant acknowledgement.
+   */
+  ensureLastUserMessage?: boolean;
+};
+
+function extractTextMessage(msg: Record<string, unknown>): ExtractedMessage | undefined {
+  const role = msg.role as string;
+  if (role !== "user" && role !== "assistant") {
+    return undefined;
+  }
+
+  const text = extractPartText(msg.content);
+  if (!text) {
+    return undefined;
+  }
+
+  const cleanedText = sanitizeUserTextForCapture(text);
+  if (!cleanedText) {
+    return undefined;
+  }
+
+  return {
+    role: role === "assistant" ? "assistant" : "user",
+    parts: [{
+      type: "text",
+      text: cleanedText,
+    }],
+  };
+}
+
+function hasUserTextMessage(messages: ExtractedMessage[]): boolean {
+  return messages.some((message) =>
+    message.role === "user" && message.parts.some((part) => part.type === "text" && part.text.trim()),
+  );
+}
+
+function findLatestUserTextBefore(messages: unknown[], startIndex: number): ExtractedMessage | undefined {
+  const end = Math.min(messages.length - 1, Math.max(0, startIndex - 1));
+  for (let i = end; i >= 0; i -= 1) {
+    const msg = messages[i] as Record<string, unknown>;
+    if (!msg || typeof msg !== "object" || msg.role !== "user") {
+      continue;
+    }
+    const extracted = extractTextMessage(msg);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return undefined;
+}
+
 /**
  * 提取从 startIndex 开始的新消息，返回结构化消息。
  * - 用户输入 → type: "text"
@@ -342,6 +398,7 @@ type ExtractedMessage = {
 export function extractNewTurnMessages(
   messages: unknown[],
   startIndex: number,
+  options: ExtractNewTurnMessagesOptions = {},
 ): { messages: ExtractedMessage[]; newCount: number } {
   const result: ExtractedMessage[] = [];
   let count = 0;
@@ -410,22 +467,10 @@ export function extractNewTurnMessages(
 
     // user/assistant -> type: "text"
     const content = msg.content;
-    const text = extractPartText(content);
+    const textMessage = extractTextMessage(msg);
 
-    if (text) {
-      // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
-      const cleanedText = sanitizeUserTextForCapture(text);
-      if (cleanedText) {
-        // 保持原始 role，assistant 保持 assistant，user 保持 user
-        const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-        result.push({
-          role: ovRole,
-          parts: [{
-            type: "text",
-            text: cleanedText,
-          }],
-        });
-      }
+    if (textMessage) {
+      result.push(textMessage);
     } else {
       /// 如果原始消息有 toolCall，提取所有工具名并生成占位符
       if (role === "assistant" && Array.isArray(content)) {
@@ -460,6 +505,14 @@ export function extractNewTurnMessages(
           });
         }
       }
+    }
+  }
+
+  if (options.ensureLastUserMessage && result.length > 0 && !hasUserTextMessage(result)) {
+    const latestUser = findLatestUserTextBefore(messages, startIndex);
+    if (latestUser) {
+      result.unshift(latestUser);
+      count += 1;
     }
   }
 

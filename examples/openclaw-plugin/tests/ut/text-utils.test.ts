@@ -223,6 +223,54 @@ describe("extractNewTurnTexts", () => {
 });
 
 describe("extractNewTurnMessages", () => {
+  it("prepends latest user text when startIndex skipped the current user turn", () => {
+    const messages = [
+      { role: "user", content: "My grandmother's name is Li Jiulin." },
+      { role: "assistant", content: "Got it, I noted that down." },
+    ];
+
+    const { messages: extracted, newCount } = extractNewTurnMessages(messages, 1, {
+      ensureLastUserMessage: true,
+    });
+
+    expect(newCount).toBe(2);
+    expect(extracted).toEqual([
+      {
+        role: "user",
+        parts: [{ type: "text", text: "My grandmother's name is Li Jiulin." }],
+      },
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "Got it, I noted that down." }],
+      },
+    ]);
+  });
+
+  it("does not prepend a prior user when the captured window already has user text", () => {
+    const messages = [
+      { role: "user", content: "old fact" },
+      { role: "assistant", content: "old reply" },
+      { role: "user", content: "new fact" },
+      { role: "assistant", content: "new reply" },
+    ];
+
+    const { messages: extracted, newCount } = extractNewTurnMessages(messages, 2, {
+      ensureLastUserMessage: true,
+    });
+
+    expect(newCount).toBe(2);
+    expect(extracted).toEqual([
+      {
+        role: "user",
+        parts: [{ type: "text", text: "new fact" }],
+      },
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "new reply" }],
+      },
+    ]);
+  });
+
   it("keeps assistant toolCall messages that have no text block", () => {
     const messages = [
       {

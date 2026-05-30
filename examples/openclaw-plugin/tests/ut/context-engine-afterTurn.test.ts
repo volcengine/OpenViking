@@ -176,6 +176,28 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("hi there");
   });
 
+  it("includes the latest user message when prePromptMessageCount starts at the assistant reply", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "My grandmother's name is Li Jiulin." },
+      { role: "assistant", content: [{ type: "text", text: "Got it, I noted that down." }] },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 1,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][2][0].text).toContain("Li Jiulin");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("noted");
+  });
+
   it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
     const { engine, client } = makeEngine();
 

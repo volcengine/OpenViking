@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -10,6 +11,44 @@ type RequestRecord = {
   method: string;
   path: string;
 };
+
+type PluginService = {
+  start: () => Promise<void>;
+  stop?: () => Promise<void> | void;
+};
+
+type RegisteredContextEngine = {
+  afterTurn: (params: {
+    sessionId: string;
+    sessionFile: string;
+    messages: Array<{ role: string; content: unknown; timestamp?: number }>;
+    prePromptMessageCount: number;
+  }) => Promise<void>;
+};
+
+async function loadOpenClawE2EModules(): Promise<{
+  buildPluginApi: (params: Record<string, unknown>) => unknown;
+  finalizeHarnessContextEngineTurn: (params: Record<string, unknown>) => Promise<{ postTurnFinalizationSucceeded: boolean }>;
+}> {
+  const distDir = process.env.OPENVIKING_OPENCLAW_DIST_DIR;
+  if (!distDir) {
+    throw new Error("OPENVIKING_OPENCLAW_DIST_DIR is required for this e2e test");
+  }
+
+  const pluginRuntime = await import(
+    pathToFileURL(`${distDir.replace(/\/$/, "")}/plugin-sdk/plugin-test-runtime.js`).href
+  );
+  const agentHarness = await import(
+    pathToFileURL(`${distDir.replace(/\/$/, "")}/plugin-sdk/agent-harness.js`).href
+  );
+
+  return {
+    buildPluginApi: pluginRuntime.buildPluginApi as (params: Record<string, unknown>) => unknown,
+    finalizeHarnessContextEngineTurn: agentHarness.finalizeHarnessContextEngineTurn as (
+      params: Record<string, unknown>,
+    ) => Promise<{ postTurnFinalizationSucceeded: boolean }>,
+  };
+}
 
 function makeStats() {
   return {
@@ -289,4 +328,176 @@ describe("plugin normal flow with healthy backend", () => {
 
     await service?.stop?.();
   });
+
+  it("captures the latest user turn when OpenClaw prePromptMessageCount starts at assistant", async () => {
+    let service:
+      | {
+          start: () => Promise<void>;
+          stop?: () => Promise<void> | void;
+        }
+      | null = null;
+    let contextEngineFactory: (() => unknown) | null = null;
+
+    plugin.register({
+      logger: {
+        debug: () => {},
+        error: () => {},
+        info: () => {},
+        warn: () => {},
+      },
+      on: () => {},
+      pluginConfig: {
+        autoCapture: true,
+        autoRecall: false,
+        baseUrl,
+        commitTokenThreshold: 20000,
+        mode: "remote",
+      },
+      registerContextEngine: (_id, factory) => {
+        contextEngineFactory = factory as () => unknown;
+      },
+      registerService: (entry) => {
+        service = entry;
+      },
+      registerTool: () => {},
+    });
+
+    expect(service).toBeTruthy();
+    expect(contextEngineFactory).toBeTruthy();
+
+    await service!.start();
+
+    const contextEngine = contextEngineFactory!() as {
+      afterTurn: (params: {
+        sessionId: string;
+        sessionFile: string;
+        messages: Array<{ role: string; content: unknown; timestamp?: number }>;
+        prePromptMessageCount: number;
+      }) => Promise<void>;
+    };
+
+    await contextEngine.afterTurn({
+      sessionId: "session-skipped-user",
+      sessionFile: "",
+      messages: [
+        {
+          role: "user",
+          content: "My grandmother's name is Li Jiulin.",
+          timestamp: Date.parse("2026-04-07T09:00:00Z"),
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Got it, I noted that down." }],
+          timestamp: Date.parse("2026-04-07T09:00:01Z"),
+        },
+      ],
+      prePromptMessageCount: 1,
+    });
+
+    const addMessageRequests = requests.filter(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-skipped-user/messages",
+    );
+    expect(addMessageRequests).toHaveLength(2);
+
+    const firstBody = JSON.parse(addMessageRequests[0]!.body ?? "{}");
+    const secondBody = JSON.parse(addMessageRequests[1]!.body ?? "{}");
+    expect(firstBody.role).toBe("user");
+    expect(firstBody.parts?.[0]?.text).toContain("Li Jiulin");
+    expect(secondBody.role).toBe("assistant");
+    expect(secondBody.parts?.[0]?.text).toContain("noted");
+
+    await service?.stop?.();
+  });
+
+  const openClawE2E = process.env.OPENVIKING_OPENCLAW_DIST_DIR ? it : it.skip;
+
+  openClawE2E("captures the skipped user turn through OpenClaw harness finalization", async () => {
+    const { buildPluginApi, finalizeHarnessContextEngineTurn } = await loadOpenClawE2EModules();
+
+    let service: PluginService | null = null;
+    let contextEngineFactory: (() => unknown) | null = null;
+
+    const api = buildPluginApi({
+      id: "openviking",
+      name: "OpenViking",
+      version: "test",
+      description: "OpenViking test plugin",
+      source: "source",
+      rootDir: process.cwd(),
+      registrationMode: "source",
+      config: {},
+      pluginConfig: {
+        autoCapture: true,
+        autoRecall: false,
+        baseUrl,
+        commitTokenThreshold: 20000,
+        mode: "remote",
+      },
+      runtime: {},
+      logger: {
+        debug: () => {},
+        error: () => {},
+        info: () => {},
+        warn: () => {},
+      },
+      resolvePath: (input: string) => input,
+      handlers: {
+        registerContextEngine: (_id: string, factory: () => unknown) => {
+          contextEngineFactory = factory;
+        },
+        registerService: (entry: PluginService) => {
+          service = entry;
+        },
+      },
+    });
+
+    plugin.register(api as Parameters<typeof plugin.register>[0]);
+
+    expect(service).toBeTruthy();
+    expect(contextEngineFactory).toBeTruthy();
+
+    await service!.start();
+
+    const contextEngine = contextEngineFactory!() as RegisteredContextEngine;
+    const result = await finalizeHarnessContextEngineTurn({
+      contextEngine,
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "session-openclaw-harness",
+      sessionFile: "",
+      messagesSnapshot: [
+        {
+          role: "user",
+          content: "My grandmother's name is Li Jiulin, her birthday is the 7th day of the 7th lunar month.",
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Got it, I noted that down." }],
+        },
+      ],
+      prePromptMessageCount: 1,
+      runMaintenance: async () => undefined,
+      warn: (message: string) => {
+        throw new Error(message);
+      },
+    });
+
+    expect(result.postTurnFinalizationSucceeded).toBe(true);
+
+    const addMessageRequests = requests.filter(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-openclaw-harness/messages",
+    );
+    expect(addMessageRequests).toHaveLength(2);
+
+    const firstBody = JSON.parse(addMessageRequests[0]!.body ?? "{}");
+    const secondBody = JSON.parse(addMessageRequests[1]!.body ?? "{}");
+    expect(firstBody.role).toBe("user");
+    expect(firstBody.parts?.[0]?.text).toContain("Li Jiulin");
+    expect(firstBody.parts?.[0]?.text).toContain("7th lunar month");
+    expect(secondBody.role).toBe("assistant");
+    expect(secondBody.parts?.[0]?.text).toContain("noted");
+
+    await service?.stop?.();
+  }, 20000);
 });
