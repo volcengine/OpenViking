@@ -464,10 +464,18 @@ def _build_web_studio():
     """Build the web-studio SPA and copy dist into the Python package tree.
 
     Skipped when OV_SKIP_STUDIO_BUILD=1 or when the bundle already exists.
-    Falls back gracefully (warning, not error) when npm is unavailable.
+    Falls back gracefully (warning, not error) when npm is unavailable unless
+    OV_REQUIRE_STUDIO_BUILD=1 is set by release packaging.
     """
+    require_studio = os.environ.get("OV_REQUIRE_STUDIO_BUILD") == "1"
+
+    def _unavailable(message):
+        if require_studio:
+            raise RuntimeError(message)
+        print(message)
+
     if os.environ.get("OV_SKIP_STUDIO_BUILD") == "1":
-        print("  [SKIP] web-studio build disabled by OV_SKIP_STUDIO_BUILD=1")
+        _unavailable("  [SKIP] web-studio build disabled by OV_SKIP_STUDIO_BUILD=1")
         return
 
     dest = SETUP_DIR / "openviking" / "web_studio" / "dist"
@@ -477,12 +485,12 @@ def _build_web_studio():
 
     source = SETUP_DIR / "web-studio"
     if not (source / "package.json").is_file():
-        print("  [SKIP] web-studio source not found; /studio will be unavailable")
+        _unavailable("  [SKIP] web-studio source not found; /studio will be unavailable")
         return
 
     npm = shutil.which("npm")
     if not npm:
-        print("  [SKIP] npm not found; install Node.js to enable /studio")
+        _unavailable("  [SKIP] npm not found; install Node.js to enable /studio")
         return
 
     print("Building web-studio (Vite SPA)...")
@@ -493,12 +501,16 @@ def _build_web_studio():
             cwd=str(source),
         )
     except subprocess.CalledProcessError as exc:
-        print(f"  [WARNING] web-studio npm build failed ({exc}); /studio will be unavailable")
+        _unavailable(
+            f"  [WARNING] web-studio npm build failed ({exc}); /studio will be unavailable"
+        )
         return
 
     built = source / "dist"
     if not (built / "index.html").is_file():
-        print("  [WARNING] web-studio build produced no index.html; /studio will be unavailable")
+        _unavailable(
+            "  [WARNING] web-studio build produced no index.html; /studio will be unavailable"
+        )
         return
 
     dest.parent.mkdir(parents=True, exist_ok=True)
