@@ -540,6 +540,8 @@ html[lang="zh"] body {
   font-size: 18px;
   line-height: 1.62;
   letter-spacing: 0.02em;
+  line-break: loose;
+  word-break: normal;
 }
 
 html[lang="zh"] .b-lead,
@@ -548,17 +550,24 @@ html[lang="zh"] .b-post__sub,
 html[lang="zh"] .b-card__excerpt {
   line-height: 1.58;
   letter-spacing: 0.03em;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
 }
 
 html[lang="zh"] :is(.b-h, .b-post__title, .b-card__title, .b-brand__name, .b-post__navcard__title) {
   letter-spacing: 0;
 }
 
+html[lang="zh"] :is(.b-article, .b-post__head, .b-card__body, .b-hero) {
+  word-break: normal;
+  word-break: auto-phrase;
+}
+
 html[lang="zh"] :is(.b-hero__title, .b-post__title, .b-card__title, .b-post__navcard__title) {
-  overflow-wrap: anywhere;
-  text-wrap: wrap;
-  word-break: keep-all;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+  word-break: normal;
+  word-break: auto-phrase;
 }
 
 /* ===========================================================
