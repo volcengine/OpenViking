@@ -524,6 +524,7 @@ const zhCN = {
       scope: {
         global: '搜索范围: 全局',
         current: '搜索范围: {{name}}',
+        resetToGlobal: '点击重置为全局搜索',
       },
       scopeState: {
         validatingTitle: '正在校验搜索范围',
@@ -571,6 +572,7 @@ const zhCN = {
       back: '返回上一级',
       loading: '正在加载目录',
       filesSection: '文件',
+      error: '加载目录失败',
       empty: {
         title: '空目录',
         subtitle: '这一层目前没有可继续展开的子目录',

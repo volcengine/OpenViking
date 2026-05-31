@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
+  ArrowLeft,
   ChevronRight,
   FolderOpen,
   RefreshCcw,
@@ -399,8 +400,19 @@ export function VikingFileManager({
     }
   }, [])
 
+  const isRoot = currentUri === 'viking://'
+
   const toolbar = (
     <div className="flex h-10 items-center gap-1 border-b px-3">
+      <button
+        type="button"
+        disabled={isRoot}
+        aria-label={t('dirBrowser.back')}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        onClick={() => updateUri(parentUri(currentUri))}
+      >
+        <ArrowLeft className="size-3.5" />
+      </button>
       <nav className="flex flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-xs text-muted-foreground md:text-sm">
         {breadcrumbs.map((crumb, i) => (
           <span key={crumb.uri} className="flex shrink-0 items-center gap-0.5">

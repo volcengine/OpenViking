@@ -534,6 +534,7 @@ const en = {
       scope: {
         global: 'Search scope: Global',
         current: 'Search scope: {{name}}',
+        resetToGlobal: 'Click to reset to global search',
       },
       scopeState: {
         validatingTitle: 'Validating search scope',
@@ -581,6 +582,7 @@ const en = {
       back: 'Back',
       loading: 'Loading directory',
       filesSection: 'Files',
+      error: 'Failed to load directory',
       empty: {
         title: 'Empty directory',
         subtitle:
