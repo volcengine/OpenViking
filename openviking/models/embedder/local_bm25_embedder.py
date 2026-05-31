@@ -54,6 +54,24 @@ class BM25Stats:
             for h in seen:
                 self.term_doc_freq[h] = self.term_doc_freq.get(h, 0) + 1
 
+    def rebuild(self, tokenized_documents: List[List[int]]) -> None:
+        doc_count = 0
+        total_tokens = 0
+        term_doc_freq: Dict[int, int] = {}
+
+        for token_hashes in tokenized_documents:
+            if not token_hashes:
+                continue
+            doc_count += 1
+            total_tokens += len(token_hashes)
+            for h in set(token_hashes):
+                term_doc_freq[h] = term_doc_freq.get(h, 0) + 1
+
+        with self._lock:
+            self.doc_count = doc_count
+            self.total_tokens = total_tokens
+            self.term_doc_freq = term_doc_freq
+
     def save(self, path: Path) -> None:
         with self._lock:
             data = {
@@ -121,9 +139,21 @@ def _hash_token(token: str) -> int:
 class LocalBM25Embedder(SparseEmbedderBase):
     """BM25 sparse embedder for local hybrid retrieval.
 
-    Insert path (is_query=False): returns length-normalized TF vector.
+    Document path (is_query=False): returns length-normalized TF vector using rebuilt stats.
     Query path (is_query=True): returns IDF-weighted query vector.
     Dot product of query x document = BM25 score.
+
+    BM25 corpus statistics are rebuild-only. Batch document embedding rebuilds stats from the
+    provided batch before generating vectors. Single document embedding requires stats that
+    were already rebuilt or loaded from stats_path.
+
+    Use this rebuild-based BM25 embedder when every corpus update can afford to rebuild
+    all BM25 stats and rewrite all affected sparse vectors within the ingestion latency
+    budget, typically as an offline or batch job. For continuously growing corpora,
+    frequent uploads, or stricter score consistency under incremental writes, BM25 should
+    be computed at search time by the retrieval index instead of being stored as
+    precomputed sparse vectors. Use an external sparse embedding or retrieval provider
+    when operational simplicity is more important than maintaining local BM25 internals.
     """
 
     def __init__(
@@ -155,25 +185,43 @@ class LocalBM25Embedder(SparseEmbedderBase):
 
         if is_query:
             return self._embed_query(token_hashes)
+        if self.stats.doc_count == 0:
+            raise RuntimeError("local_bm25 requires rebuild() before embedding documents")
         return self._embed_document(token_hashes)
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if is_query:
             return [self.embed(text, is_query=True) for text in texts]
 
-        results: List[EmbedResult] = []
-        for text in texts:
-            tokens = _tokenize(text, self.token_pattern, self.tokenizer)
-            if not tokens:
-                results.append(EmbedResult(sparse_vector={}))
-                continue
-            results.append(self._embed_document([_hash_token(t) for t in tokens], persist=False))
+        tokenized_documents = self._tokenize_batch(texts)
+        self.rebuild_token_hashes(tokenized_documents)
+        return [
+            EmbedResult(sparse_vector=self._document_sparse_vector(token_hashes))
+            if token_hashes
+            else EmbedResult(sparse_vector={})
+            for token_hashes in tokenized_documents
+        ]
 
+    def rebuild(self, texts: List[str]) -> None:
+        self.rebuild_token_hashes(self._tokenize_batch(texts))
+
+    def rebuild_token_hashes(self, tokenized_documents: List[List[int]]) -> None:
+        self.stats.rebuild(tokenized_documents)
         if self._stats_path:
             self.stats.save(self._stats_path)
-        return results
 
-    def _embed_document(self, token_hashes: List[int], persist: bool = True) -> EmbedResult:
+    def _tokenize_batch(self, texts: List[str]) -> List[List[int]]:
+        tokenized_documents: List[List[int]] = []
+        for text in texts:
+            tokens = _tokenize(text, self.token_pattern, self.tokenizer)
+            tokenized_documents.append([_hash_token(t) for t in tokens])
+        return tokenized_documents
+
+    def _embed_document(self, token_hashes: List[int]) -> EmbedResult:
+        sparse = self._document_sparse_vector(token_hashes)
+        return EmbedResult(sparse_vector=sparse)
+
+    def _document_sparse_vector(self, token_hashes: List[int]) -> Dict[str, float]:
         doc_len = len(token_hashes)
         avgdl = self.stats.avgdl
 
@@ -185,12 +233,7 @@ class LocalBM25Embedder(SparseEmbedderBase):
         for h, tf in tf_counts.items():
             norm_tf = tf / (tf + self.k1 * (1 - self.b + self.b * doc_len / avgdl))
             sparse[str(h)] = norm_tf
-
-        self.stats.add_document(token_hashes, doc_len)
-        if persist and self._stats_path:
-            self.stats.save(self._stats_path)
-
-        return EmbedResult(sparse_vector=sparse)
+        return sparse
 
     def _embed_query(self, token_hashes: List[int]) -> EmbedResult:
         doc_count = self.stats.doc_count
