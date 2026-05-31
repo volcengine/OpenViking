@@ -1,112 +1,162 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Audio parser - Future implementation.
-
-Planned Features:
-1. Speech-to-text transcription using ASR models
-2. Audio metadata extraction (duration, sample rate, channels)
-3. Speaker diarization (identify different speakers)
-4. Timestamp alignment for transcribed text
-5. Generate structured ResourceNode with transcript
-
-Example workflow:
-    1. Load audio file
-    2. Extract metadata (duration, format, sample rate)
-    3. Transcribe speech to text using Whisper or similar
-    4. (Optional) Perform speaker diarization
-    5. Create ResourceNode with:
-       - type: NodeType.ROOT
-       - children: sections for each speaker/timestamp
-       - meta: audio metadata and timestamps
-    6. Return ParseResult
-
-Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A
-"""
+"""Audio parser with bounded semantic artifact generation."""
 
 import asyncio
 import base64
+import io
 import os
+import re
 import tempfile
+import time
+import wave
 from pathlib import Path
 from typing import List, Optional, Union
 
 import openai
 
-from openviking.parse.base import NodeType, ParseResult, ResourceNode
+from openviking.parse.base import NodeType, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking_cli.utils.config.parser_config import AudioConfig
 from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
 
+def _clean_text(value: str) -> str:
+    """Normalize whitespace for sidecar content."""
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    """Truncate text without leaving trailing whitespace."""
+    text = _clean_text(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _format_optional_number(value, *, digits: int = 2, suffix: str = "") -> str:
+    """Format metadata fields consistently."""
+    if value in (None, 0, 0.0, ""):
+        return "unknown"
+    if isinstance(value, float):
+        return f"{value:.{digits}f}{suffix}"
+    return f"{value}{suffix}"
+
+
+def _transcript_success(text: Optional[str]) -> bool:
+    """Return True when transcript text contains actual recognized speech."""
+    if not text:
+        return False
+    lowered = text.lower().strip()
+    return not lowered.startswith(
+        (
+            "audio transcription unavailable:",
+            "audio transcription failed:",
+            "audio transcription returned empty result.",
+            "transcription disabled",
+            "audio track extraction unavailable:",
+        )
+    )
+
+
 class AudioParser(BaseParser):
-    """
-    Audio parser for audio files.
-    """
+    """Parser for standalone audio resources."""
 
     def __init__(self, config: Optional[AudioConfig] = None, **kwargs):
-        """
-        Initialize AudioParser.
-
-        Args:
-            config: Audio parsing configuration
-            **kwargs: Additional configuration parameters
-        """
         self.config = config or AudioConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
-        """Return supported audio file extensions."""
         return AUDIO_EXTENSIONS
 
-    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse audio file - only copy original file and extract basic metadata, no content understanding.
-
-        Args:
-            source: Audio file path
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with audio content
-
-        Raises:
-            FileNotFoundError: If source file does not exist
-            IOError: If audio processing fails
-        """
-        from openviking.storage.viking_fs import get_viking_fs
-
-        # Convert to Path object
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs):
+        start_time = time.time()
         file_path = Path(source) if isinstance(source, str) else source
         if not file_path.exists():
             raise FileNotFoundError(f"Audio file not found: {source}")
 
-        viking_fs = get_viking_fs()
-        temp_uri = viking_fs.create_temp_uri()
-
-        # Phase 1: Generate temporary files
         audio_bytes = file_path.read_bytes()
-        ext = file_path.suffix
-
-        from openviking_cli.utils.uri import VikingURI
-
-        # Sanitize original filename (replace spaces with underscores)
+        ext = file_path.suffix.lower()
         original_filename = file_path.name.replace(" ", "_")
-        # Root directory name: filename stem + _ + extension (without dot)
         stem = file_path.stem.replace(" ", "_")
-        ext_no_dot = ext[1:] if ext else ""
+        ext_no_dot = ext[1:] if ext else "audio"
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
-        root_dir_uri = f"{temp_uri}/{root_dir_name}"
-        await viking_fs.mkdir(root_dir_uri, exist_ok=True)
 
-        # 1.1 Save original audio with original filename (sanitized)
+        viking_fs = self._get_viking_fs()
+        temp_uri = self._create_temp_uri()
+        root_dir_uri = f"{temp_uri}/{root_dir_name}"
+        await viking_fs.mkdir(temp_uri, exist_ok=True)
+        await viking_fs.mkdir(root_dir_uri, exist_ok=True)
         await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", audio_bytes)
 
-        # 1.2 Validate audio file using magic bytes
-        # Define magic bytes for supported audio formats
+        self._validate_audio_signature(file_path, audio_bytes)
+        metadata = self._extract_audio_metadata(file_path, audio_bytes)
+
+        transcript_status = "disabled"
+        transcript_text = "Transcription disabled by parser configuration."
+        if self.config.enable_transcription:
+            transcript_status, transcript_text = await self._build_transcript(audio_bytes)
+        await viking_fs.write_file(f"{root_dir_uri}/transcript.md", transcript_text)
+
+        description = self._build_description(
+            original_filename=original_filename,
+            metadata=metadata,
+            transcript_status=transcript_status,
+            transcript_text=transcript_text,
+        )
+        await viking_fs.write_file(f"{root_dir_uri}/description.md", description)
+
+        node = ResourceNode(
+            type=NodeType.ROOT,
+            title=file_path.stem,
+            level=0,
+            content_type="audio",
+            auxiliary_files={
+                "original": original_filename,
+                "description": "description.md",
+                "transcript": "transcript.md",
+            },
+            meta={
+                **metadata,
+                "content_type": "audio",
+                "source_title": file_path.stem,
+                "semantic_name": file_path.stem,
+                "original_filename": original_filename,
+                "file_size_bytes": len(audio_bytes),
+                "transcript_status": transcript_status,
+                "description_file": "description.md",
+                "transcript_file": "transcript.md",
+            },
+        )
+        await self._generate_semantic_info(
+            node=node,
+            description=description,
+            viking_fs=viking_fs,
+            has_transcript=_transcript_success(transcript_text),
+            root_dir_uri=root_dir_uri,
+        )
+
+        result = create_parse_result(
+            root=node,
+            source_path=str(file_path),
+            source_format="audio",
+            parser_name="AudioParser",
+            parse_time=time.time() - start_time,
+            meta={
+                "content_type": "audio",
+                "format": metadata["format"],
+                "transcript_status": transcript_status,
+            },
+        )
+        result.temp_dir_path = temp_uri
+        return result
+
+    def _validate_audio_signature(self, file_path: Path, audio_bytes: bytes) -> None:
+        """Validate common audio containers using lightweight signature checks."""
         audio_magic_bytes = {
             ".mp3": [b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"],
             ".wav": [b"RIFF"],
@@ -117,69 +167,131 @@ class AudioParser(BaseParser):
             ".opus": [b"OggS"],
         }
 
-        # Check magic bytes
-        valid = False
-        ext_lower = ext.lower()
+        ext_lower = file_path.suffix.lower()
         magic_list = audio_magic_bytes.get(ext_lower, [])
-        for magic in magic_list:
-            if len(audio_bytes) >= len(magic) and audio_bytes.startswith(magic):
-                valid = True
-                break
-
-        if not valid:
+        if not any(
+            len(audio_bytes) >= len(magic) and audio_bytes.startswith(magic) for magic in magic_list
+        ):
             raise ValueError(
-                f"Invalid audio file: {file_path}. File signature does not match expected format {ext_lower}"
+                f"Invalid audio file: {file_path}. "
+                f"File signature does not match expected format {ext_lower}"
             )
 
-        # Extract audio metadata (placeholder)
-        duration = 0
-        sample_rate = 0
-        channels = 0
-        format_str = ext[1:].upper()
+    def _extract_audio_metadata(self, file_path: Path, audio_bytes: bytes) -> dict:
+        """Collect lightweight audio metadata with standard-library fallbacks."""
+        metadata = {
+            "duration": None,
+            "sample_rate": None,
+            "channels": None,
+            "bitrate": None,
+            "format": (file_path.suffix.lstrip(".") or "audio").lower(),
+            "metadata_source": "extension",
+        }
 
-        # Create ResourceNode - metadata only, no content understanding yet
-        root_node = ResourceNode(
-            type=NodeType.ROOT,
-            title=file_path.stem,
-            level=0,
-            detail_file=None,
-            content_path=None,
-            children=[],
-            meta={
-                "duration": duration,
-                "sample_rate": sample_rate,
-                "channels": channels,
-                "format": format_str.lower(),
-                "content_type": "audio",
-                "source_title": file_path.stem,
-                "semantic_name": file_path.stem,
-                "original_filename": original_filename,
-            },
-        )
+        if file_path.suffix.lower() == ".wav":
+            try:
+                with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+                    frame_rate = wav_file.getframerate()
+                    frame_count = wav_file.getnframes()
+                    channels = wav_file.getnchannels()
+                    sample_width = wav_file.getsampwidth()
+                    metadata.update(
+                        {
+                            "duration": frame_count / frame_rate if frame_rate else None,
+                            "sample_rate": frame_rate or None,
+                            "channels": channels or None,
+                            "bitrate": frame_rate * channels * sample_width * 8
+                            if frame_rate and channels and sample_width
+                            else None,
+                            "metadata_source": "wave",
+                        }
+                    )
+            except Exception as exc:
+                logger.debug("Failed to read WAV metadata for %s: %s", file_path, exc)
 
-        # Phase 3: Build directory structure (handled by TreeBuilder)
-        return ParseResult(
-            root=root_node,
-            source_path=str(file_path),
-            temp_dir_path=temp_uri,
-            source_format="audio",
-            parser_name="AudioParser",
-            meta={"content_type": "audio", "format": format_str.lower()},
+        try:
+            from mutagen import File as MutagenFile
+
+            audio_info = MutagenFile(file_path)
+            info = getattr(audio_info, "info", None)
+            if info is not None:
+                metadata.update(
+                    {
+                        "duration": metadata["duration"] or getattr(info, "length", None),
+                        "sample_rate": metadata["sample_rate"]
+                        or getattr(info, "sample_rate", None),
+                        "channels": metadata["channels"] or getattr(info, "channels", None),
+                        "bitrate": metadata["bitrate"] or getattr(info, "bitrate", None),
+                        "metadata_source": "mutagen",
+                    }
+                )
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.debug("Failed to read Mutagen metadata for %s: %s", file_path, exc)
+
+        return metadata
+
+    async def _build_transcript(self, audio_bytes: bytes) -> tuple[str, str]:
+        """Generate the best available transcript artifact."""
+        timestamped = await self._asr_transcribe_with_timestamps(
+            audio_bytes, self.config.transcription_model
         )
+        if _transcript_success(timestamped):
+            return "timestamped", timestamped
+
+        plain = await self._asr_transcribe(audio_bytes, self.config.transcription_model)
+        if _transcript_success(plain):
+            return "plain", plain
+
+        return "unavailable", plain
+
+    def _build_description(
+        self,
+        *,
+        original_filename: str,
+        metadata: dict,
+        transcript_status: str,
+        transcript_text: str,
+    ) -> str:
+        """Build markdown summary for the audio resource."""
+        if _transcript_success(transcript_text):
+            summary = (
+                f"Audio transcript generated with `{transcript_status}` detail. "
+                f"Excerpt: {_truncate_text(transcript_text, 320)}"
+            )
+        else:
+            summary = (
+                f"Audio file `{original_filename}` in {metadata['format'].upper()} format. "
+                f"Automatic transcription is {transcript_status}."
+            )
+
+        parts = ["# Audio Summary", "", summary, "", "## Metadata"]
+        parts.append(
+            f"- Duration: {_format_optional_number(metadata.get('duration'), suffix='s')}"
+        )
+        parts.append(
+            f"- Sample rate: {_format_optional_number(metadata.get('sample_rate'), suffix=' Hz')}"
+        )
+        parts.append(f"- Channels: {_format_optional_number(metadata.get('channels'))}")
+        parts.append(f"- Bitrate: {_format_optional_number(metadata.get('bitrate'), suffix=' bps')}")
+        parts.append(f"- Format: {metadata['format'].upper()}")
+        parts.append(f"- Metadata source: {metadata.get('metadata_source', 'unknown')}")
+
+        parts.extend(
+            [
+                "",
+                "## Transcript Status",
+                transcript_status,
+                "",
+                "## Transcript",
+                transcript_text.strip(),
+            ]
+        )
+        return "\n".join(parts).strip() + "\n"
 
     async def _asr_transcribe(self, audio_bytes: bytes, model: Optional[str]) -> str:
-        """
-        Generate audio transcription using ASR.
-
-        Args:
-            audio_bytes: Audio binary data
-            model: ASR model name
-
-        Returns:
-            Audio transcription in markdown format
-
-        TODO: Integrate with actual ASR API (Whisper, etc.)
-        """
+        """Generate audio transcription using an OpenAI-compatible ASR backend."""
         model_name = model or self.config.transcription_model
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -200,10 +312,10 @@ class AudioParser(BaseParser):
                 temp_file.write(audio_bytes)
                 temp_file_path = temp_file.name
 
-            with open(temp_file_path, "rb") as f:
+            with open(temp_file_path, "rb") as audio_file:
                 response = client.audio.transcriptions.create(
                     model=model_name,
-                    file=f,
+                    file=audio_file,
                     language=self.config.language,
                 )
 
@@ -214,9 +326,9 @@ class AudioParser(BaseParser):
         try:
             text = await asyncio.get_event_loop().run_in_executor(None, _sync_transcribe)
             return text or "Audio transcription returned empty result."
-        except Exception as e:
-            logger.exception("Audio transcription failed: %s", e)
-            return f"Audio transcription failed: {str(e)}"
+        except Exception as exc:
+            logger.exception("Audio transcription failed: %s", exc)
+            return f"Audio transcription failed: {exc}"
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
                 try:
@@ -231,18 +343,7 @@ class AudioParser(BaseParser):
     async def _asr_transcribe_with_timestamps(
         self, audio_bytes: bytes, model: Optional[str]
     ) -> Optional[str]:
-        """
-        Extract transcription with timestamps from audio using ASR.
-
-        Args:
-            audio_bytes: Audio binary data
-            model: ASR model name
-
-        Returns:
-            Transcript with timestamps in markdown format, or None if not available
-
-        TODO: Integrate with ASR API
-        """
+        """Extract transcription with timestamps from audio using ASR."""
         model_name = model or self.config.transcription_model
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -268,21 +369,18 @@ class AudioParser(BaseParser):
                 temp_file.write(audio_bytes)
                 temp_file_path = temp_file.name
 
-            with open(temp_file_path, "rb") as f:
+            with open(temp_file_path, "rb") as audio_file:
                 response = client.audio.transcriptions.create(
                     model=model_name,
-                    file=f,
+                    file=audio_file,
                     language=self.config.language,
                     response_format="verbose_json",
                     timestamp_granularities=["segment"],
                 )
 
-            segments = None
-            if isinstance(response, dict):
-                segments = response.get("segments")
-            else:
-                segments = getattr(response, "segments", None)
-
+            segments = response.get("segments") if isinstance(response, dict) else getattr(
+                response, "segments", None
+            )
             if not segments:
                 return None
 
@@ -299,7 +397,6 @@ class AudioParser(BaseParser):
 
                 if start is None or end is None or not text:
                     continue
-
                 lines.append(f"**[{_format_timestamp(start)} - {_format_timestamp(end)}]** {text}")
 
             return "\n\n".join(lines) if lines else None
@@ -308,8 +405,8 @@ class AudioParser(BaseParser):
             return await asyncio.get_event_loop().run_in_executor(
                 None, _sync_transcribe_with_timestamps
             )
-        except Exception as e:
-            logger.exception("Timestamp transcription failed: %s", e)
+        except Exception as exc:
+            logger.exception("Timestamp transcription failed: %s", exc)
             return None
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
@@ -323,84 +420,56 @@ class AudioParser(BaseParser):
                     )
 
     async def _generate_semantic_info(
-        self, node: ResourceNode, description: str, viking_fs, has_transcript: bool
-    ):
-        """
-        Phase 2: Generate abstract and overview.
+        self,
+        node: ResourceNode,
+        description: str,
+        viking_fs,
+        has_transcript: bool,
+        root_dir_uri: str,
+    ) -> None:
+        """Populate and persist the audio L0/L1 summaries."""
+        if has_transcript:
+            abstract = _truncate_text(description, 220)
+        else:
+            abstract = (
+                f"Audio file {node.meta['original_filename']} "
+                f"({_format_optional_number(node.meta.get('duration'), suffix='s')})"
+            )
 
-        Args:
-            node: ResourceNode to update
-            description: Audio description
-            viking_fs: VikingFS instance
-            has_transcript: Whether transcript file exists
-        """
-        # Generate abstract (short summary, < 100 tokens)
-        abstract = description[:200] if len(description) > 200 else description
-
-        # Generate overview (content summary + file list + usage instructions)
         overview_parts = [
-            "## Content Summary\n",
-            description,
-            "\n\n## Available Files\n",
-            f"- {node.meta['original_filename']}: Original audio file ({node.meta['duration']}s, {node.meta['sample_rate']}Hz, {node.meta['channels']}ch, {node.meta['format'].upper()} format)\n",
+            "## Content Summary",
+            "",
+            _truncate_text(description, 1800),
+            "",
+            "## Available Files",
+            f"- {node.meta['original_filename']}: Original audio file",
+            "- description.md: Semantic markdown summary for the audio",
+            "- transcript.md: Transcript or fallback status for the audio track",
+            "",
+            "## Metadata",
+            f"- Duration: {_format_optional_number(node.meta.get('duration'), suffix='s')}",
+            f"- Sample rate: {_format_optional_number(node.meta.get('sample_rate'), suffix=' Hz')}",
+            f"- Channels: {_format_optional_number(node.meta.get('channels'))}",
+            f"- Bitrate: {_format_optional_number(node.meta.get('bitrate'), suffix=' bps')}",
+            f"- Format: {node.meta['format'].upper()}",
+            f"- Transcript status: {node.meta['transcript_status']}",
         ]
+        overview = "\n".join(overview_parts).strip() + "\n"
 
-        if has_transcript:
-            overview_parts.append("- transcript.md: Transcript with timestamps from the audio\n")
-
-        overview_parts.append("\n## Usage\n")
-        overview_parts.append("### Play Audio\n")
-        overview_parts.append("```python\n")
-        overview_parts.append("audio_bytes = await audio_resource.play()\n")
-        overview_parts.append("# Returns: Audio file binary data\n")
-        overview_parts.append("# Purpose: Play or save the audio\n")
-        overview_parts.append("```\n\n")
-
-        if has_transcript:
-            overview_parts.append("### Get Timestamps Transcript\n")
-            overview_parts.append("```python\n")
-            overview_parts.append("timestamps = await audio_resource.timestamps()\n")
-            overview_parts.append("# Returns: FileContent object or None\n")
-            overview_parts.append("# Purpose: Extract timestamped transcript from the audio\n")
-            overview_parts.append("```\n\n")
-
-        overview_parts.append("### Get Audio Metadata\n")
-        overview_parts.append("```python\n")
-        overview_parts.append(
-            f"duration = audio_resource.get_duration()  # {node.meta['duration']}s\n"
-        )
-        overview_parts.append(
-            f"sample_rate = audio_resource.get_sample_rate()  # {node.meta['sample_rate']}Hz\n"
-        )
-        overview_parts.append(
-            f"channels = audio_resource.get_channels()  # {node.meta['channels']}\n"
-        )
-        overview_parts.append(f'format = audio_resource.get_format()  # "{node.meta["format"]}"\n')
-        overview_parts.append("```\n")
-
-        overview = "".join(overview_parts)
-
-        # Store in node meta
         node.meta["abstract"] = abstract
         node.meta["overview"] = overview
 
+        await viking_fs.write_file(f"{root_dir_uri}/.abstract.md", abstract)
+        await viking_fs.write_file(f"{root_dir_uri}/.overview.md", overview)
+
     async def parse_content(
-        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
-    ) -> ParseResult:
-        """
-        Parse audio from base64 content string.
-
-        Args:
-            content: Audio content (base64 or binary string)
-            source_path: Optional source path for metadata
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with audio content
-
-        Raises:
-            ValueError: If content is not valid base64 audio data
-        """
+        self,
+        content: str,
+        source_path: Optional[str] = None,
+        instruction: str = "",
+        **kwargs,
+    ):
+        """Parse audio from base64 content string."""
         temp_file_path = None
         try:
             if content.startswith("data:") and "," in content:
@@ -419,9 +488,9 @@ class AudioParser(BaseParser):
             if source_path:
                 result.source_path = source_path
             return result
-        except Exception as e:
-            logger.exception("Failed to parse audio content: %s", e)
-            raise ValueError(f"Invalid audio content: {str(e)}") from e
+        except Exception as exc:
+            logger.exception("Failed to parse audio content: %s", exc)
+            raise ValueError(f"Invalid audio content: {exc}") from exc
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
                 try:
