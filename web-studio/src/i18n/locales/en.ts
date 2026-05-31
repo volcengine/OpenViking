@@ -215,6 +215,7 @@ const en = {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
       copied: 'Copied',
+      copyFailed: 'Could not copy to clipboard: {{message}}',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
     },
