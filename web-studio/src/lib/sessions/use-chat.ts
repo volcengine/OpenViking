@@ -6,14 +6,11 @@ import { addMessage, sendChatStream, serializeParts } from './api'
 import { generateTitle } from './generate-title'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
-
-function generateId(): string {
-  return `msg_${crypto.randomUUID().replace(/-/g, '')}`
-}
+import { createBrowserId } from '../browser-crypto'
 
 function createUserMessage(content: string): Message {
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'user',
     parts: [{ type: 'text', text: content }],
     created_at: new Date().toISOString(),
@@ -51,7 +48,7 @@ function buildAssistantMessage(
   }
 
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'assistant',
     parts,
     created_at: new Date().toISOString(),
