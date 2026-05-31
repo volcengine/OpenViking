@@ -12,7 +12,6 @@ export function ItemColumn({
   activeIndex,
   t,
   onSelect,
-  onSelectFile,
 }: {
   className?: string
   label: string
@@ -20,7 +19,6 @@ export function ItemColumn({
   activeIndex: number
   t: TFunction<'resources'>
   onSelect: (entry: VikingFsEntry, index: number) => void
-  onSelectFile: (entry: VikingFsEntry, index: number) => void
 }) {
   const { isScrolling, onScroll } = useTransientScrollbar()
 
@@ -67,9 +65,7 @@ export function ItemColumn({
                     ? 'bg-primary/8 text-foreground'
                     : 'text-foreground/80 hover:bg-muted/35',
                 )}
-                onClick={() =>
-                  isDir ? onSelect(entry, i) : onSelectFile(entry, i)
-                }
+                onClick={() => onSelect(entry, i)}
               >
                 {isActive && (
                   <span className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-primary" />

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import type { TFunction } from 'i18next'
 import { ArrowLeft, Folder, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,6 +27,16 @@ interface DirBrowserProps {
   onEnterDir: (uri: string) => void
   onGoBack: () => void
 }
+
+// What the right (detail) pane shows, computed once as an explicit value so the
+// render is a flat switch instead of a 6-deep ternary chain.
+type DetailView =
+  | { kind: 'preview'; file: VikingFsEntry }
+  | { kind: 'loading' }
+  | { kind: 'error' }
+  | { kind: 'subdir'; items: VikingFsEntry[]; label: string; enterUri: string }
+  | { kind: 'empty' }
+  | { kind: 'idle' }
 
 export function DirBrowser({
   currentUri,
@@ -63,6 +74,28 @@ export function DirBrowser({
   const peekPending = Boolean(subdirUri) && subdirUri !== debouncedSubdirUri
 
   const canGoBack = currentUri !== VIKING_ROOT_URI
+
+  const detail = useMemo<DetailView>(() => {
+    if (!cursorItem) return { kind: 'idle' }
+    if (!cursorItem.isDir) return { kind: 'preview', file: cursorItem }
+    if (peekPending || subdirQuery.isLoading) return { kind: 'loading' }
+    if (subdirQuery.isError) return { kind: 'error' }
+    if (subdirItems.length > 0) {
+      return {
+        kind: 'subdir',
+        items: subdirItems,
+        label: fileNameFromUri(cursorItem.uri),
+        enterUri: cursorItem.uri,
+      }
+    }
+    return { kind: 'empty' }
+  }, [
+    cursorItem,
+    peekPending,
+    subdirQuery.isLoading,
+    subdirQuery.isError,
+    subdirItems,
+  ])
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -107,64 +140,85 @@ export function DirBrowser({
               items={items}
               activeIndex={activeIndex}
               t={t}
-              onSelect={(entry) => onEnterDir(entry.uri)}
-              onSelectFile={(_, i) => onCursorChange(i)}
+              onSelect={(entry, i) =>
+                entry.isDir ? onEnterDir(entry.uri) : onCursorChange(i)
+              }
             />
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-l">
-              {cursorItem && !cursorItem.isDir ? (
-                <FilePreview
-                  file={cursorItem}
-                  onClose={() => {}}
-                  showCloseButton={false}
-                />
-              ) : peekPending || subdirQuery.isLoading ? (
-                <div className="flex flex-1 items-center justify-center">
-                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                </div>
-              ) : cursorItem?.isDir && subdirQuery.isError ? (
-                <div
-                  role="alert"
-                  className="flex flex-1 items-center justify-center px-6 text-sm text-destructive"
-                >
-                  {t('dirBrowser.error')}
-                </div>
-              ) : subdirItems.length > 0 ? (
-                <ItemColumn
-                  className="min-w-0 flex-1"
-                  label={cursorItem ? fileNameFromUri(cursorItem.uri) : ''}
-                  items={subdirItems}
-                  activeIndex={-1}
-                  t={t}
-                  onSelect={() => {
-                    if (cursorItem?.isDir) onEnterDir(cursorItem.uri)
-                  }}
-                  onSelectFile={() => {
-                    if (cursorItem?.isDir) onEnterDir(cursorItem.uri)
-                  }}
-                />
-              ) : cursorItem?.isDir ? (
-                <div className="flex flex-1 items-center justify-center px-6">
-                  <div className="max-w-[13rem] text-center">
-                    <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground/70 shadow-inner">
-                      <Folder className="size-4" />
-                    </div>
-                    <p className="text-sm font-medium text-foreground/70">
-                      {t('dirBrowser.empty.title')}
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground/75">
-                      {t('dirBrowser.empty.subtitle')}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted-foreground/60">
-                  {t('dirBrowser.empty.title')}
-                </div>
-              )}
+              <DetailPane detail={detail} t={t} onEnterDir={onEnterDir} />
             </div>
           </>
         )}
       </div>
     </div>
   )
+}
+
+function DetailPane({
+  detail,
+  t,
+  onEnterDir,
+}: {
+  detail: DetailView
+  t: TFunction<'resources'>
+  onEnterDir: (uri: string) => void
+}) {
+  switch (detail.kind) {
+    case 'preview':
+      return (
+        <FilePreview
+          file={detail.file}
+          onClose={() => {}}
+          showCloseButton={false}
+        />
+      )
+    case 'loading':
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        </div>
+      )
+    case 'error':
+      return (
+        <div
+          role="alert"
+          className="flex flex-1 items-center justify-center px-6 text-sm text-destructive"
+        >
+          {t('dirBrowser.error')}
+        </div>
+      )
+    case 'subdir':
+      return (
+        <ItemColumn
+          className="min-w-0 flex-1"
+          label={detail.label}
+          items={detail.items}
+          activeIndex={-1}
+          t={t}
+          onSelect={() => onEnterDir(detail.enterUri)}
+        />
+      )
+    case 'empty':
+      return (
+        <div className="flex flex-1 items-center justify-center px-6">
+          <div className="max-w-[13rem] text-center">
+            <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground/70 shadow-inner">
+              <Folder className="size-4" />
+            </div>
+            <p className="text-sm font-medium text-foreground/70">
+              {t('dirBrowser.empty.title')}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground/75">
+              {t('dirBrowser.empty.subtitle')}
+            </p>
+          </div>
+        </div>
+      )
+    case 'idle':
+      return (
+        <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted-foreground/60">
+          {t('dirBrowser.empty.title')}
+        </div>
+      )
+  }
 }
