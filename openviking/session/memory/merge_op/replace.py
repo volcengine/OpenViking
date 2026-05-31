@@ -119,7 +119,7 @@ class ReplaceOp(MergeOpBase):
 
     def apply(self, current_value: Any, patch_value: Any) -> Any:
         if isinstance(patch_value, ReplaceValueWithBase):
-            patch_value = patch_value.proposed_value
+            raise PatchParseError("ReplaceValueWithBase requires apply_async")
         if patch_value is None or patch_value == "":
             return current_value
         return patch_value
@@ -131,8 +131,11 @@ class ReplaceOp(MergeOpBase):
         proposed_value = patch_value.proposed_value
         if proposed_value is None or proposed_value == "":
             return current_value
-        if current_value is None or patch_value.base_value is None:
+        if current_value is None:
             return proposed_value
+        if patch_value.base_value is None:
+            get_current_telemetry().increment("memory.apply.replace_missing_base.rejected")
+            raise PatchParseError("existing replacement requires read-time base")
         if not _is_replace_stale(current_value, patch_value):
             return proposed_value
         telemetry = get_current_telemetry()

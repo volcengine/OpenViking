@@ -155,6 +155,26 @@ def _raise_if_unsupported_exact_file_patch(field: Any, patch_value: Any, *, uri:
     )
 
 
+def _raise_if_missing_exact_file_replace_base(
+    field: Any,
+    *,
+    current_value: Any,
+    base_value: Any,
+    uri: str,
+) -> None:
+    if not _memory_apply_exact_file_lock_enabled():
+        return
+    if getattr(field, "merge_op", None) != MergeOp.REPLACE:
+        return
+    if current_value is None or base_value is not None:
+        return
+    get_current_telemetry().increment("memory.apply.replace_missing_base.rejected_file_lock")
+    raise RuntimeError(
+        "replace update requires read-time base under exact file-lock mode: "
+        f"uri={uri}, field={field.name}"
+    )
+
+
 def _memory_apply_exact_file_lock_enabled() -> bool:
     try:
         from openviking_cli.utils.config import get_openviking_config
@@ -894,6 +914,12 @@ class MemoryUpdater:
                 _raise_if_unsupported_exact_file_patch(field, patch_value, uri=uri)
                 current_value = _field_value_from_memory_file(old_content, field.name)
                 base_value = _field_value_from_memory_file(read_base_content, field.name)
+                _raise_if_missing_exact_file_replace_base(
+                    field,
+                    current_value=current_value,
+                    base_value=base_value,
+                    uri=uri,
+                )
                 patch_value = _wrap_merge_value_with_read_base(
                     field,
                     patch_value,

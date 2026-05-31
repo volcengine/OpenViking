@@ -278,6 +278,17 @@ class TestSumOp:
 class TestReplaceOp:
     """Tests for ReplaceOp."""
 
+    def test_apply_rejects_base_wrapped_replacement(self):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value="new",
+            base_value="old",
+            source_operation_id="memory://example:content",
+        )
+
+        with pytest.raises(PatchParseError, match="requires apply_async"):
+            op.apply("old", value)
+
     def test_apply_replace_value_with_base_without_stale_keeps_replace_semantics(self):
         op = ReplaceOp()
         value = ReplaceValueWithBase(
@@ -288,6 +299,17 @@ class TestReplaceOp:
         )
 
         assert asyncio.run(op.apply_async("old", value)) == "new"
+
+    def test_apply_async_existing_replace_requires_base(self):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value="new",
+            base_value=None,
+            source_operation_id="memory://example:content",
+        )
+
+        with pytest.raises(PatchParseError, match="requires read-time base"):
+            asyncio.run(op.apply_async("latest", value))
 
     def test_apply_async_synthesizes_when_base_is_stale(self, monkeypatch):
         op = ReplaceOp()

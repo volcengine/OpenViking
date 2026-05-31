@@ -854,6 +854,59 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_upsert_rejects_replace_update_without_read_base_under_file_lock_mode(
+        self, monkeypatch
+    ):
+        memory_type = "notes"
+        uri = "viking://user/test/memories/notes/demo.md"
+
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description="notes",
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+            ],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                pass
+
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(MemoryFile(content="latest body"))
+        )
+        mock_viking_fs.write_file = AsyncMock()
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_upsert_lock_context",
+            lambda **kwargs: FakeExactLock(),
+        )
+
+        op = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"content": "new body"},
+            memory_type=memory_type,
+            uris=[uri],
+        )
+
+        with pytest.raises(RuntimeError, match="replace update requires read-time base"):
+            await updater._apply_upsert(op, MagicMock())
+
+        mock_viking_fs.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_apply_upsert_raises_latest_read_failure_under_file_lock_mode(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"

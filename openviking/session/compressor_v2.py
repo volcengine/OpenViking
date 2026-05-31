@@ -159,7 +159,9 @@ def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[st
                     continue
                 merge_op_label = getattr(merge_op, "value", str(merge_op))
                 field_type_label = getattr(field_type, "value", str(field_type))
-                unsupported.append(f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}")
+                unsupported.append(
+                    f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}"
+                )
                 continue
             if merge_op not in _EXACT_FILE_LOCK_SAFE_MERGE_OPS:
                 unsupported.append(f"{memory_type}.{field_name}:{merge_op}")
