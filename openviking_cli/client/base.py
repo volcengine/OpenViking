@@ -366,6 +366,16 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def memory_graph_health(
+        self,
+        uri: str,
+        node_limit: int = 5000,
+        sample_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Inspect memory link/backlink graph health for a memory root URI."""
+        ...
+
+    @abstractmethod
     async def health(self) -> bool:
         """Quick health check."""
         ...

@@ -10,6 +10,7 @@ import pytest
 
 from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import LOCK_FILE_NAME
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 
 
 def _lock_file_gone(agfs_client, lock_path: str) -> bool:
@@ -46,6 +47,27 @@ class TestLockManagerBasic:
         token = agfs_client.cat(f"{test_dir}/{LOCK_FILE_NAME}")
         token_str = token.decode("utf-8") if isinstance(token, bytes) else token
         assert ":T" in token_str
+
+        await lm.release(handle)
+
+    async def test_acquire_records_lock_bucket_telemetry(self, lm, test_dir):
+        handle = lm.create_handle()
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        tree_path = f"{test_dir}/agent/demo/memories/tools"
+        exact_path = f"{test_dir}/agent/demo/memories/experiences/example.md"
+
+        with bind_telemetry(telemetry):
+            assert await lm.acquire_tree(handle, tree_path) is True
+            assert await lm.acquire_exact_path(handle, exact_path) is True
+
+        result = telemetry.finish().summary
+
+        assert result["locks"]["acquire"]["tree"]["attempts"] == 1
+        assert result["locks"]["acquire"]["tree"]["buckets"]["memories_tools"]["attempts"] == 1
+        assert result["locks"]["acquire"]["exact"]["attempts"] == 1
+        assert (
+            result["locks"]["acquire"]["exact"]["buckets"]["memories_experiences"]["attempts"] == 1
+        )
 
         await lm.release(handle)
 

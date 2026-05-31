@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
+from openviking.session.memory.graph_health import inspect_memory_graph_health
 from openviking.telemetry import TelemetryRequest
 from openviking.telemetry.execution import (
     attach_telemetry_payload,
@@ -599,17 +600,11 @@ class LocalClient(BaseClient):
             else:
                 raise ValueError(f"messages[{index}]: either content or parts must be provided")
 
-            role_id = message.get("role_id")
-            if role_id is None and role == "user":
-                role_id = self._ctx.user.user_id
-            elif role_id is None and role == "assistant":
-                role_id = self._ctx.user.agent_id
-
             specs.append(
                 {
                     "role": role,
                     "parts": message_parts,
-                    "role_id": role_id,
+                    "role_id": self._ctx.resolve_role_id(role, message.get("role_id")),
                     "created_at": message.get("created_at"),
                 }
             )
@@ -682,6 +677,21 @@ class LocalClient(BaseClient):
         return await self._service.check_consistency(
             uri=uri,
             ctx=self._ctx,
+        )
+
+    async def memory_graph_health(
+        self,
+        uri: str,
+        node_limit: int = 5000,
+        sample_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Inspect memory link/backlink graph health for a memory root URI."""
+        return await inspect_memory_graph_health(
+            self._service.viking_fs,
+            uri,
+            ctx=self._ctx,
+            node_limit=node_limit,
+            sample_limit=sample_limit,
         )
 
     async def health(self) -> bool:

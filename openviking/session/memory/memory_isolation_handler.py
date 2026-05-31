@@ -36,8 +36,9 @@ class MemoryIsolationHandler:
         self.ctx = ctx
         self._extract_context = extract_context
         config = get_openviking_config()
-        self.role_id_memory_isolation_enabled = (
-            config.memory.role_id_memory_isolation_enabled if config.memory else False
+        memory_config = getattr(config, "memory", None)
+        self.role_id_memory_isolation_enabled = bool(
+            getattr(memory_config, "role_id_memory_isolation_enabled", False)
         )
 
     def prepare_messages(self) -> None:

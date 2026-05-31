@@ -18,13 +18,16 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.tool_result_synopsis import ToolResultSynopsis, generate_tool_result_synopsis
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
     make_preview,
     render_preview_from_synopsis,
     sha256_text,
+)
+from openviking.session.tool_result_synopsis import (
+    ToolResultSynopsis,
+    generate_tool_result_synopsis,
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -708,9 +711,7 @@ class Session:
         group_original_chars = sum(len(p.tool_output or "") for _, p in tool_parts)
         normal_indices: List[int] = []
         selected: set[int] = set()
-        externalized_preview_cache: Dict[
-            tuple[int, int, str], tuple[ToolResultSynopsis, int]
-        ] = {}
+        externalized_preview_cache: Dict[tuple[int, int, str], tuple[ToolResultSynopsis, int]] = {}
 
         for idx, (_msg, part) in enumerate(tool_parts):
             part.tool_output_group_id = group_id
@@ -766,7 +767,9 @@ class Session:
             for idx, (_, part) in enumerate(tool_parts):
                 output_len = len(part.tool_output or "")
                 if idx in selected_indices:
-                    _synopsis, rendered_len = prepared_externalized_preview(idx, part, preview_chars)
+                    _synopsis, rendered_len = prepared_externalized_preview(
+                        idx, part, preview_chars
+                    )
                     total += rendered_len
                 else:
                     total += output_len
@@ -905,12 +908,16 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        msgs = self.add_messages([{
-            "role": role,
-            "parts": parts,
-            "role_id": role_id,
-            "created_at": created_at,
-        }])
+        msgs = self.add_messages(
+            [
+                {
+                    "role": role,
+                    "parts": parts,
+                    "role_id": role_id,
+                    "created_at": created_at,
+                }
+            ]
+        )
         return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:
@@ -1297,11 +1304,21 @@ class Session:
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    long_term_extraction_enabled = bool(
+                        memory_extraction_enabled
+                        and getattr(ov_config.memory, "long_term_extraction_enabled", True)
+                    )
+                    agent_memory_extraction_enabled = bool(
+                        memory_extraction_enabled
+                        and getattr(ov_config.memory, "agent_memory_enabled", False)
+                    )
                     session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     if self._session_compressor and (
-                        memory_extraction_enabled or session_skill_extraction_enabled
+                        long_term_extraction_enabled
+                        or agent_memory_extraction_enabled
+                        or session_skill_extraction_enabled
                     ):
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
@@ -1319,7 +1336,7 @@ class Session:
                             return {"contexts": [], "session_skills": []}
 
                         async def _run_long_term_memories():
-                            if not memory_extraction_enabled:
+                            if not long_term_extraction_enabled:
                                 return []
                             return await self._session_compressor.extract_long_term_memories(
                                 messages=extraction_messages,
@@ -1333,7 +1350,9 @@ class Session:
                         async def _run_agent_memories():
                             if not has_agent_memory:
                                 return {"contexts": [], "session_skills": []}
-                            if not (memory_extraction_enabled or session_skill_extraction_enabled):
+                            if not (
+                                agent_memory_extraction_enabled or session_skill_extraction_enabled
+                            ):
                                 return {"contexts": [], "session_skills": []}
                             return await self._session_compressor.extract_agent_memories(
                                 messages=extraction_messages,
@@ -1375,7 +1394,7 @@ class Session:
                             agent_extracted = list(agent_result.get("contexts", []))
                             session_skills = list(agent_result.get("session_skills", []))
 
-                        if memory_extraction_enabled:
+                        if long_term_extraction_enabled:
                             logger.info(f"Extracted {len(extracted)} memories")
                             for ctx_item in extracted:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
@@ -1396,8 +1415,14 @@ class Session:
                         if self._session_compressor:
                             logger.info(
                                 "Memory and session skill extraction are disabled by config "
-                                "(memory.extraction_enabled=false, "
-                                "memory.session_skill_extraction_enabled=false)"
+                                "(memory.extraction_enabled=%s, "
+                                "memory.long_term_extraction_enabled=%s, "
+                                "memory.agent_memory_enabled=%s, "
+                                "memory.session_skill_extraction_enabled=%s)",
+                                memory_extraction_enabled,
+                                long_term_extraction_enabled,
+                                agent_memory_extraction_enabled,
+                                session_skill_extraction_enabled,
                             )
                         await _run_archive_summary()
 
@@ -1483,6 +1508,7 @@ class Session:
                             "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
                         },
                     },
+                    "telemetry": snapshot.to_dict(include_summary=True) if snapshot else None,
                 },
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,

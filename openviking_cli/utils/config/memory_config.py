@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -57,6 +57,63 @@ class MemoryConfig(BaseModel):
             "to true unless explicitly configured."
         ),
     )
+    agent_experience_per_trajectory_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Maximum number of per-trajectory experience consolidation phases to run "
+            "concurrently within one committed session when agent experience apply uses "
+            "operation_exact. Tree-lock apply still runs serially to preserve the existing "
+            "safe behavior."
+        ),
+    )
+    agent_experience_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
+        default="tree",
+        description=(
+            "Experimental lock scope for agent experience apply. 'tree' preserves the existing "
+            "schema-directory lock around read/LLM/apply. 'operation_exact' lets the read/LLM phase "
+            "run before acquiring exact locks for the concrete files that will be written."
+        ),
+    )
+    agent_trajectory_apply_lock_mode: Literal["tree", "operation_exact"] = Field(
+        default="tree",
+        description=(
+            "Experimental lock scope for agent trajectory apply. 'tree' preserves the existing "
+            "schema-directory lock around trajectory read/LLM/apply. 'operation_exact' lets the "
+            "trajectory LLM phase run before acquiring exact locks for the concrete trajectory files "
+            "and overview that will be written."
+        ),
+    )
+    operation_exact_apply_window_seconds: float = Field(
+        default=10.0,
+        ge=0.0,
+        description=(
+            "Server-side apply window for operation_exact phases. Requests for the same "
+            "concrete target set queue behind one in-process window owner. After the window "
+            "closes, the owner acquires the union of exact file locks and applies the queued "
+            "patches in arrival order while reading the latest locked content. Set to 0 to "
+            "disable the window."
+        ),
+    )
+    operation_exact_apply_window_conflict_synthesis_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled, same-URI operation_exact apply-window timelines that hit a "
+            "SEARCH/REPLACE conflict may call the configured model once to synthesize "
+            "the final target fields from the latest locked file and queued patches. "
+            "This is only used as a conflict fallback; the normal path remains "
+            "deterministic patch replay."
+        ),
+    )
+    operation_exact_apply_window_create_new_consolidation_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled, operation_exact apply windows may consolidate concurrent "
+            "create-new agent experience proposals that describe the same durable "
+            "experience before applying the batch. This reduces cross-URI near-duplicate "
+            "experience creation caused by parallel session commits."
+        ),
+    )
     eager_prefetch: bool = Field(
         default=True,
         description=(
@@ -78,9 +135,19 @@ class MemoryConfig(BaseModel):
         default=True,
         description=(
             "When enabled (default), memory extraction runs on session commit "
-            "to produce long-term memories. When disabled, sessions are archived "
-            "but no memory extraction is performed. Useful for read-only or "
-            "stateless deployments."
+            "to produce memories. When disabled, sessions are archived "
+            "but no standard or agent memory extraction is performed. Useful for "
+            "read-only or stateless deployments."
+        ),
+    )
+    long_term_extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), session commit extracts standard long-term "
+            "memories such as user memories, tool memories, and skill memories. "
+            "Set to false to skip this standard extraction while still allowing "
+            "archive summaries, agent memory extraction, and session skill "
+            "extraction when their own switches are enabled."
         ),
     )
     session_skill_extraction_enabled: bool = Field(

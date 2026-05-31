@@ -55,6 +55,9 @@ class TestCommit:
         assert "memories_extracted" in task_result["result"]
         memory_counts = task_result["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
+        telemetry = task_result["result"]["telemetry"]
+        assert telemetry["summary"]["operation"] == "session_commit_phase2"
+        assert telemetry["summary"]["status"] == "ok"
 
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
@@ -113,6 +116,34 @@ class TestCommit:
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
+    async def test_commit_can_skip_long_term_while_extracting_agent_memory(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = False
+        config.memory.agent_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            agent_context = MagicMock()
+            agent_context.category = "agent_experience"
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={"contexts": [agent_context], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {"agent_experience": 1}
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
@@ -240,9 +271,16 @@ class TestCommit:
         ]
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = False
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="latest_overview_threading_test")
 
         session.add_message("user", [TextPart("First round message")])
@@ -319,8 +357,17 @@ class TestCommit:
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
 
-    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
+    async def test_commit_blocks_after_failed_archive(
+        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
+    ):
         """A failed archive should block the next commit until it is resolved."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = False
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="failed_archive_blocks_new_commit")
 
         async def failing_extract(*args, **kwargs):

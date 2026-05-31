@@ -236,6 +236,7 @@ def test_openviking_config_memory_experimental_switch_defaults_agent_memory(monk
 
     assert default_config.memory.experimental_memory_switch is False
     assert default_config.memory.agent_memory_enabled is False
+    assert default_config.memory.long_term_extraction_enabled is True
     assert experimental_config.memory.experimental_memory_switch is True
     assert experimental_config.memory.agent_memory_enabled is True
     assert agent_only_config.memory.experimental_memory_switch is False

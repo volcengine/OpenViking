@@ -9,7 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -24,6 +24,8 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
@@ -36,6 +38,26 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+TimelineConflictSynthesizer = Callable[
+    [
+        str,
+        str,
+        Any,
+        Optional[MemoryFile],
+        List[ResolvedOperation],
+        List[Dict[str, Any]],
+        Any,
+        Any,
+    ],
+    Awaitable[Optional[MemoryFile]],
+]
+
+
+def _is_structured_string_patch(value: Any) -> bool:
+    if hasattr(value, "blocks"):
+        return True
+    return isinstance(value, dict) and isinstance(value.get("blocks"), list)
 
 
 async def write_stored_links(
@@ -318,12 +340,17 @@ class MemoryUpdater:
     """
 
     def __init__(
-        self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None
+        self,
+        registry: Optional[MemoryTypeRegistry] = None,
+        vikingdb=None,
+        transaction_handle=None,
+        timeline_conflict_synthesizer: Optional[TimelineConflictSynthesizer] = None,
     ):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
+        self._timeline_conflict_synthesizer = timeline_conflict_synthesizer
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -378,16 +405,28 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
-        for resolved_op in operations.upsert_operations:
+        # Apply unified operations. Adjacent upserts to the same URI can arrive
+        # from an operation-exact apply window; replay them in memory and write
+        # once so same-window patch timelines do not repeatedly rewrite the file.
+        upsert_groups = self._group_adjacent_upserts_by_uri(operations.upsert_operations)
+        for upsert_group in upsert_groups:
             try:
-                await self._apply_upsert(
-                    resolved_op,
-                    ctx,
-                    extract_context=extract_context,
-                )
+                if len(upsert_group) == 1:
+                    resolved_op = upsert_group[0]
+                    await self._apply_upsert(
+                        resolved_op,
+                        ctx,
+                        extract_context=extract_context,
+                    )
+                else:
+                    resolved_op = upsert_group[0]
+                    await self._apply_upsert_timeline(
+                        upsert_group,
+                        ctx,
+                        extract_context=extract_context,
+                    )
                 # Add all uris to result (uris is List[str])
-                if resolved_op.is_edit():
+                if any(op.is_edit() for op in upsert_group):
                     for uri in resolved_op.uris:
                         result.add_edited(uri)
                 else:
@@ -395,10 +434,10 @@ class MemoryUpdater:
                         result.add_written(uri)
             except Exception as e:
                 tracer.error(
-                    f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
+                    f"Failed to apply operation: op_type={type(upsert_group[0]).__name__}, uris={upsert_group[0].uris}",
                     e,
                 )
-                for uri in resolved_op.uris:
+                for uri in upsert_group[0].uris:
                     result.add_error(uri, e)
 
         # Apply delete operations (delete_file_contents is List[MemoryFile])
@@ -406,6 +445,7 @@ class MemoryUpdater:
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
+        deleted_uris = {file_content.uri for file_content in operations.delete_file_contents}
         for file_content in operations.delete_file_contents:
             if file_content.uri in upserted_uris:
                 tracer.info(
@@ -414,6 +454,7 @@ class MemoryUpdater:
                 )
                 continue
             try:
+                await self._cleanup_links_for_delete(file_content, ctx, deleted_uris=deleted_uris)
                 await self._apply_delete(file_content.uri, ctx)
                 result.add_deleted(file_content.uri)
             except Exception as e:
@@ -433,9 +474,13 @@ class MemoryUpdater:
         )
 
         # Apply links to endpoint files not covered by upsert_operations
-        if operations.resolved_links:
+        observed_links = await self._collect_links_from_upserted_files(result, ctx)
+        links_to_apply = self._dedupe_stored_links(
+            [*(operations.resolved_links or []), *observed_links]
+        )
+        if links_to_apply:
             await self._apply_links_to_existing_files(
-                operations.resolved_links,
+                links_to_apply,
                 result,
                 ctx,
                 deleted_uris=set(result.deleted_uris),
@@ -463,6 +508,201 @@ class MemoryUpdater:
 
         return result
 
+    def _group_adjacent_upserts_by_uri(
+        self, upsert_operations: List[ResolvedOperation]
+    ) -> List[List[ResolvedOperation]]:
+        """Group adjacent single-URI upserts that target the same memory file."""
+
+        groups: List[List[ResolvedOperation]] = []
+        for op in upsert_operations:
+            if len(op.uris) != 1:
+                groups.append([op])
+                continue
+            key = (op.memory_type, op.uris[0])
+            if (
+                groups
+                and len(groups[-1][0].uris) == 1
+                and (groups[-1][0].memory_type, groups[-1][0].uris[0]) == key
+            ):
+                groups[-1].append(op)
+            else:
+                groups.append([op])
+        return groups
+
+    async def _read_current_memory_file(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        fallback: Optional[MemoryFile],
+    ) -> Optional[MemoryFile]:
+        viking_fs = self._get_viking_fs()
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+            if content:
+                return MemoryFileUtils.read(content, uri=uri)
+        except Exception:
+            pass
+        return fallback
+
+    def _merge_upsert_into_memory_file(
+        self,
+        *,
+        uri: str,
+        resolved_op: ResolvedOperation,
+        old_content: Optional[MemoryFile],
+        schema: Any,
+        conflicts: Optional[List[Dict[str, Any]]] = None,
+    ) -> MemoryFile:
+        metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+
+        # Process fields defined in schema (apply merge_op)
+        for field in schema.fields:
+            if field.name in resolved_op.memory_fields:
+                patch_value = resolved_op.memory_fields[field.name]
+                # Get current value for this URI
+                if old_content is None:
+                    current_value = None
+                else:
+                    if field.name == "content":
+                        current_value = old_content.plain_content()
+                    else:
+                        current_value = old_content.extra_fields.get(field.name)
+                # Use merge_op to process field value. Operation-exact
+                # extraction may normalize a full-string replacement into
+                # a structured SEARCH/REPLACE patch even when the schema's
+                # regular prompt uses merge_op=replace; apply that patch
+                # against the latest on-disk content instead of replacing
+                # the whole field from a stale LLM snapshot.
+                if field.field_type == FieldType.STRING and _is_structured_string_patch(
+                    patch_value
+                ):
+                    merge_op = PatchOp(field.field_type)
+                else:
+                    merge_op = MergeOpFactory.from_field(field)
+                try:
+                    new_value = merge_op.apply(current_value, patch_value)
+                except Exception as e:
+                    tracer.info(
+                        f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
+                    )
+                    if conflicts is not None:
+                        conflicts.append(
+                            {
+                                "uri": uri,
+                                "memory_type": resolved_op.memory_type,
+                                "field": field.name,
+                                "error": str(e),
+                            }
+                        )
+                    if current_value is None:
+                        metadata.pop(field.name, None)
+                    else:
+                        metadata[field.name] = current_value
+                    continue
+                metadata[field.name] = new_value
+
+        # Preserve system-managed metadata from the old file that is not
+        # covered by the schema. These fields are written by the system,
+        # never by the LLM, so they would be silently dropped on every
+        # Update without this copy.
+        if old_content and old_content.extra_fields:
+            schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
+            for key, val in old_content.extra_fields.items():
+                if key not in schema_field_names and key not in metadata and val is not None:
+                    metadata[key] = val
+
+        # Handle links/backlinks fields: merge with existing
+        incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
+        incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
+        incoming_links = incoming_links_by_uri.get(uri, [])
+        incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
+        has_existing_links = old_content is not None
+        if (
+            incoming_links
+            or incoming_backlinks
+            or (has_existing_links and old_content.links)
+            or (has_existing_links and old_content.backlinks)
+        ):
+            from openviking.session.memory.merge_op.link_merge import merge_links
+
+            # Merge links
+            existing_links = old_content.links if has_existing_links else []
+            if incoming_links:
+                merged_links = merge_links(
+                    existing_links,
+                    [link.model_dump() for link in incoming_links],
+                )
+                metadata["links"] = merged_links
+            elif existing_links:
+                metadata["links"] = existing_links
+
+            # Merge backlinks
+            existing_backlinks = old_content.backlinks if has_existing_links else []
+            if incoming_backlinks:
+                merged_backlinks = merge_links(
+                    existing_backlinks,
+                    [link.model_dump() for link in incoming_backlinks],
+                )
+                metadata["backlinks"] = merged_backlinks
+            elif existing_backlinks:
+                metadata["backlinks"] = existing_backlinks
+
+        return MemoryFile.from_parsed(uri=uri, parsed=metadata)
+
+    async def _apply_upsert_timeline(
+        self,
+        resolved_ops: List[ResolvedOperation],
+        ctx: RequestContext,
+        extract_context: Any = None,
+    ) -> None:
+        """Replay same-URI upserts in memory, then persist the final file once."""
+
+        if not resolved_ops:
+            return
+        first = resolved_ops[0]
+        if len(first.uris) != 1:
+            await self._apply_upsert(first, ctx, extract_context=extract_context)
+            return
+
+        viking_fs = self._get_viking_fs()
+        memory_type = first.memory_type
+        schema = self._registry.get(memory_type)
+        uri = first.uris[0]
+        current = await self._read_current_memory_file(
+            uri,
+            ctx,
+            first.old_memory_file_content,
+        )
+        conflicts: List[Dict[str, Any]] = []
+        for resolved_op in resolved_ops:
+            current = self._merge_upsert_into_memory_file(
+                uri=uri,
+                resolved_op=resolved_op,
+                old_content=current,
+                schema=schema,
+                conflicts=conflicts,
+            )
+        if conflicts and self._timeline_conflict_synthesizer:
+            synthesized = await self._timeline_conflict_synthesizer(
+                uri,
+                memory_type,
+                schema,
+                current,
+                resolved_ops,
+                conflicts,
+                ctx,
+                extract_context,
+            )
+            if synthesized is not None:
+                current = synthesized
+
+        new_full_content = MemoryFileUtils.write(
+            current,
+            content_template=schema.content_template,
+            extract_context=extract_context,
+        )
+        await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+
     async def _apply_upsert(
         self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None
     ):
@@ -473,95 +713,17 @@ class MemoryUpdater:
         schema = self._registry.get(memory_type)
         # Process each URI independently
         for uri in resolved_op.uris:
-            # Always read from disk first to get the latest content,
-            # so consecutive patches to the same URI see each other's changes.
-            old_content: Optional[MemoryFile] = None
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if content:
-                    old_content = MemoryFileUtils.read(content, uri=uri)
-            except Exception:
-                # File doesn't exist yet, that's okay
-                pass
-            # Fall back to pre-fetched content if disk read failed
-            if old_content is None:
-                old_content = resolved_op.old_memory_file_content
-
-            metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
-            # Process fields defined in schema (apply merge_op)
-            for field in schema.fields:
-                if field.name in resolved_op.memory_fields:
-                    patch_value = resolved_op.memory_fields[field.name]
-                    # Get current value for this URI
-                    if old_content is None:
-                        current_value = None
-                    else:
-                        if field.name == "content":
-                            current_value = old_content.plain_content()
-                        else:
-                            current_value = old_content.extra_fields.get(field.name)
-                    # Use merge_op to process field value
-                    merge_op = MergeOpFactory.from_field(field)
-                    try:
-                        new_value = merge_op.apply(current_value, patch_value)
-                    except Exception as e:
-                        tracer.info(
-                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
-                        )
-                        if current_value is None:
-                            metadata.pop(field.name, None)
-                        else:
-                            metadata[field.name] = current_value
-                        continue
-                    metadata[field.name] = new_value
-
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
-            if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
-                for key, val in old_content.extra_fields.items():
-                    if key not in schema_field_names and key not in metadata and val is not None:
-                        metadata[key] = val
-
-            # Handle links/backlinks fields: merge with existing
-            incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
-            incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
-            incoming_links = incoming_links_by_uri.get(uri, [])
-            incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
-            has_existing_links = old_content is not None
-            if (
-                incoming_links
-                or incoming_backlinks
-                or (has_existing_links and old_content.links)
-                or (has_existing_links and old_content.backlinks)
-            ):
-                from openviking.session.memory.merge_op.link_merge import merge_links
-
-                # Merge links
-                existing_links = old_content.links if has_existing_links else []
-                if incoming_links:
-                    merged_links = merge_links(
-                        existing_links,
-                        [link.model_dump() for link in incoming_links],
-                    )
-                    metadata["links"] = merged_links
-                elif existing_links:
-                    metadata["links"] = existing_links
-
-                # Merge backlinks
-                existing_backlinks = old_content.backlinks if has_existing_links else []
-                if incoming_backlinks:
-                    merged_backlinks = merge_links(
-                        existing_backlinks,
-                        [link.model_dump() for link in incoming_backlinks],
-                    )
-                    metadata["backlinks"] = merged_backlinks
-                elif existing_backlinks:
-                    metadata["backlinks"] = existing_backlinks
-
-            mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+            old_content = await self._read_current_memory_file(
+                uri,
+                ctx,
+                resolved_op.old_memory_file_content,
+            )
+            mf = self._merge_upsert_into_memory_file(
+                uri=uri,
+                resolved_op=resolved_op,
+                old_content=old_content,
+                schema=schema,
+            )
             new_full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
@@ -611,6 +773,144 @@ class MemoryUpdater:
         upserted_uris = set(result.written_uris + result.edited_uris)
         skip = upserted_uris | (deleted_uris or set())
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+
+    def _dedupe_stored_links(self, links: List[StoredLink]) -> List[StoredLink]:
+        deduped: List[StoredLink] = []
+        seen: set[tuple[str, str, str]] = set()
+        for link in links:
+            key = (link.from_uri, link.to_uri, link.link_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(link)
+        return deduped
+
+    async def _collect_links_from_upserted_files(
+        self,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> List[StoredLink]:
+        """Read final upserted files and return their persisted graph edges.
+
+        Some links are not newly produced by the current operation. For example,
+        an edit may preserve an existing system-managed source link from the old
+        file. Treating those final links as graph edges lets the updater repair
+        missing reciprocal links/backlinks in the same apply path.
+        """
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return []
+
+        upserted_uris = list(dict.fromkeys(result.written_uris + result.edited_uris))
+        links: List[StoredLink] = []
+        for uri in upserted_uris:
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if not content:
+                    continue
+                mf = MemoryFileUtils.read(content, uri=uri)
+            except Exception as e:
+                tracer.error(f"Failed to collect links from upserted memory {uri}: {e}")
+                continue
+
+            for raw_link in [*(mf.links or []), *(mf.backlinks or [])]:
+                if not isinstance(raw_link, dict):
+                    continue
+                from_uri = str(raw_link.get("from_uri") or "")
+                to_uri = str(raw_link.get("to_uri") or "")
+                if not from_uri or not to_uri:
+                    continue
+                try:
+                    links.append(StoredLink(**raw_link))
+                except Exception as e:
+                    tracer.error(f"Failed to parse stored link from upserted memory {uri}: {e}")
+        return links
+
+    async def _cleanup_links_for_delete(
+        self,
+        file_content: MemoryFile,
+        ctx: RequestContext,
+        deleted_uris: Optional[set[str]] = None,
+    ) -> None:
+        """Remove links/backlinks in peer files before deleting a memory file."""
+
+        deleted_uri = file_content.uri
+        if not deleted_uri:
+            return
+
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return
+
+        skipped = deleted_uris or set()
+        links_for_cleanup: List[Dict[str, Any]] = []
+        seen_links: set[tuple[str, str, str]] = set()
+
+        def add_links(mf: MemoryFile) -> None:
+            for link in [*(mf.links or []), *(mf.backlinks or [])]:
+                if not isinstance(link, dict):
+                    continue
+                key = (
+                    str(link.get("from_uri") or ""),
+                    str(link.get("to_uri") or ""),
+                    str(link.get("link_type") or ""),
+                )
+                if key in seen_links:
+                    continue
+                seen_links.add(key)
+                links_for_cleanup.append(link)
+
+        add_links(file_content)
+        try:
+            latest = await viking_fs.read_file(deleted_uri, ctx=ctx)
+            if latest:
+                add_links(MemoryFileUtils.read(latest, uri=deleted_uri))
+        except NotFoundError:
+            # Another concurrent replace/delete may have already removed this file.
+            # The pre-resolved snapshot still carries the links we know how to clean.
+            pass
+        except Exception as e:
+            tracer.error(f"Failed to read latest memory before delete cleanup: {deleted_uri}", e)
+
+        endpoint_uris: List[str] = []
+
+        def add_endpoint(uri: str) -> None:
+            if uri and uri != deleted_uri and uri not in skipped and uri not in endpoint_uris:
+                endpoint_uris.append(uri)
+
+        for link in links_for_cleanup:
+            from_uri = link.get("from_uri")
+            to_uri = link.get("to_uri")
+            if from_uri == deleted_uri:
+                add_endpoint(to_uri)
+            elif to_uri == deleted_uri:
+                add_endpoint(from_uri)
+
+        if not endpoint_uris:
+            return
+
+        def keep_link(link: Dict[str, Any]) -> bool:
+            return link.get("from_uri") != deleted_uri and link.get("to_uri") != deleted_uri
+
+        for endpoint_uri in endpoint_uris:
+            try:
+                content = await viking_fs.read_file(endpoint_uri, ctx=ctx)
+                if not content:
+                    continue
+                mf = MemoryFileUtils.read(content, uri=endpoint_uri)
+                new_links = [link for link in mf.links if keep_link(link)]
+                new_backlinks = [link for link in mf.backlinks if keep_link(link)]
+                if len(new_links) == len(mf.links) and len(new_backlinks) == len(mf.backlinks):
+                    continue
+                mf.links = new_links
+                mf.backlinks = new_backlinks
+                await viking_fs.write_file(endpoint_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            except Exception as e:
+                tracer.error(
+                    f"Failed to clean links for deleted memory {deleted_uri} from {endpoint_uri}",
+                    e,
+                )
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

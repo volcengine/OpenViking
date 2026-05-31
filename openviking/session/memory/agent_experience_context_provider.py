@@ -45,6 +45,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         latest_archive_overview: str = "",
     ):
         super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
+        self._track_read_file_versions = True
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
         self.prefetched_uris: List[str] = []
@@ -66,7 +67,8 @@ For each distinct user intent in the trajectory, output a SEPARATE experience en
 Each entry:
 - `experience_name`: the name of the experience (new or existing)
 - `content`: the full experience content (rewrite holistically, incorporating old + new)
-- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
+- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when
+  the new name is genuinely different and broader. Leave empty otherwise.
 
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → updates it in place

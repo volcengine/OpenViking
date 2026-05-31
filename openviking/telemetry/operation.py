@@ -62,6 +62,32 @@ class TelemetrySummaryBuilder:
         "summarize": "resource.flags.summarize",
         "watch_enabled": "resource.flags.watch_enabled",
     }
+    _AGENT_MEMORY_PHASE_KEYS = (
+        "trajectory",
+        "experience_single",
+        "other",
+    )
+    _AGENT_MEMORY_PHASE_DURATION_KEYS = {
+        "total_ms": "total.duration_ms",
+        "lock_wait_ms": "lock_wait.duration_ms",
+        "llm_ms": "llm.duration_ms",
+        "memory_apply_ms": "memory_apply.duration_ms",
+        "post_apply_ms": "post_apply.duration_ms",
+        "skill_apply_ms": "skill_apply.duration_ms",
+        "operation_exact_apply_window_wait_ms": ("operation_exact_apply_window_wait.duration_ms"),
+        "operation_exact_apply_window_lock_wait_ms": (
+            "operation_exact_apply_window_lock_wait.duration_ms"
+        ),
+        "operation_exact_apply_window_coalesced_memory_apply_ms": (
+            "operation_exact_apply_window_coalesced_memory_apply.duration_ms"
+        ),
+        "operation_exact_apply_window_timeline_conflict_synthesis_ms": (
+            "operation_exact_apply_window_timeline_conflict_synthesis.duration_ms"
+        ),
+        "operation_exact_apply_window_create_new_consolidation_ms": (
+            "operation_exact_apply_window_create_new_consolidation.duration_ms"
+        ),
+    }
 
     @staticmethod
     def _i(value: Any, default: int = 0) -> int:
@@ -147,6 +173,64 @@ class TelemetrySummaryBuilder:
         return summary
 
     @classmethod
+    def _build_lock_acquire_summary(
+        cls, counters: Dict[str, float], gauges: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {}
+        for mode in ("tree", "exact"):
+            prefix = f"lock.acquire.{mode}"
+            if not cls._has_metric_prefix(prefix, counters, gauges):
+                continue
+            mode_summary: Dict[str, Any] = {
+                "attempts": cls._i(counters.get(f"{prefix}.attempts"), 0),
+                "successes": cls._i(counters.get(f"{prefix}.successes"), 0),
+                "failures": cls._i(counters.get(f"{prefix}.failures"), 0),
+                "duration_ms": cls._f(gauges.get(f"{prefix}.duration_ms"), 0.0),
+            }
+            bucket_prefix = f"{prefix}.bucket."
+            bucket_names = set()
+            for key in list(counters) + list(gauges):
+                if not key.startswith(bucket_prefix):
+                    continue
+                rest = key[len(bucket_prefix) :]
+                bucket_name = rest.split(".", 1)[0]
+                if bucket_name:
+                    bucket_names.add(bucket_name)
+            if bucket_names:
+                mode_summary["buckets"] = {
+                    bucket: {
+                        "attempts": cls._i(counters.get(f"{bucket_prefix}{bucket}.attempts"), 0),
+                        "successes": cls._i(counters.get(f"{bucket_prefix}{bucket}.successes"), 0),
+                        "failures": cls._i(counters.get(f"{bucket_prefix}{bucket}.failures"), 0),
+                        "duration_ms": cls._f(
+                            gauges.get(f"{bucket_prefix}{bucket}.duration_ms"), 0.0
+                        ),
+                    }
+                    for bucket in sorted(bucket_names)
+                }
+            summary[mode] = mode_summary
+        return summary
+
+    @classmethod
+    def _build_counter_suffix_summary(
+        cls,
+        counters: Dict[str, float],
+        prefix: str,
+    ) -> Dict[str, int]:
+        needle = f"{prefix}."
+        summary: Dict[str, int] = {}
+        for key, value in counters.items():
+            if not key.startswith(needle):
+                continue
+            suffix = key[len(needle) :]
+            if not suffix or "." in suffix:
+                continue
+            count = cls._i(value, 0)
+            if count > 0:
+                summary[suffix] = count
+        return dict(sorted(summary.items()))
+
+    @classmethod
     def build(
         cls,
         *,
@@ -163,9 +247,7 @@ class TelemetrySummaryBuilder:
         llm_output_tokens = cls._i(counters.get("tokens.llm.output"), 0)
         llm_total_tokens = cls._i(counters.get("tokens.llm.total"), 0)
         llm_prompt_cached_tokens = cls._i(counters.get("tokens.llm.prompt_cached"), 0)
-        llm_completion_reasoning_tokens = cls._i(
-            counters.get("tokens.llm.completion_reasoning"), 0
-        )
+        llm_completion_reasoning_tokens = cls._i(counters.get("tokens.llm.completion_reasoning"), 0)
         embedding_total_tokens = cls._i(counters.get("tokens.embedding.total"), 0)
         rerank_total_tokens = cls._i(counters.get("tokens.rerank.total"), 0)
         stage_token_summary = cls._build_stage_token_summary(counters)
@@ -231,6 +313,10 @@ class TelemetrySummaryBuilder:
                 "running": gauges.get("semantic_nodes.running"),
             }
 
+        lock_acquire_summary = cls._build_lock_acquire_summary(counters, gauges)
+        if lock_acquire_summary:
+            summary["locks"] = {"acquire": lock_acquire_summary}
+
         if cls._has_metric_prefix("memory", counters, gauges):
             memory_summary = {
                 "extracted": memories_extracted,
@@ -253,6 +339,360 @@ class TelemetrySummaryBuilder:
                         public_key: cls._f(gauges.get(metric_key), 0.0)
                         for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()
                     },
+                }
+            if cls._has_metric_prefix("memory.agent", counters, gauges):
+                phase_summary: Dict[str, Any] = {
+                    "count": cls._i(counters.get("memory.agent.extract.phase.count"), 0),
+                }
+                for phase_key in cls._AGENT_MEMORY_PHASE_KEYS:
+                    metric_prefix = f"memory.agent.extract.phase.{phase_key}"
+                    if not cls._has_metric_prefix(metric_prefix, counters, gauges):
+                        continue
+                    phase_summary[phase_key] = {
+                        "count": cls._i(counters.get(f"{metric_prefix}.count"), 0),
+                        "lock_retries": cls._i(counters.get(f"{metric_prefix}.lock_retries"), 0),
+                        "candidate_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.candidate_uri_count"), 0
+                        ),
+                        "operation_target_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_target_uri_count"), 0
+                        ),
+                        "candidate_target_overlap_count": cls._i(
+                            counters.get(f"{metric_prefix}.candidate_target_overlap_count"), 0
+                        ),
+                        "schema_exact_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.schema_exact_lock_path_count"), 0
+                        ),
+                        "schema_tree_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.schema_tree_lock_path_count"), 0
+                        ),
+                        "operation_exact_lock_path_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_lock_path_count"), 0
+                        ),
+                        "operation_exact_conflicts": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_conflicts"), 0
+                        ),
+                        "operation_exact_retries": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_retries"), 0
+                        ),
+                        "operation_exact_apply_window_entered": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_entered"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_leader": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_leader"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_follower": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_apply_window_follower"),
+                            0,
+                        ),
+                        "operation_exact_apply_window_batch_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_batch_items"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_coalesce_eligible": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesce_eligible"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_coalesced_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesced_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_coalesced_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_coalesced_items"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_lock_path_count_total": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_lock_path_count_total"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_synthesis": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_synthesis"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_synthesis_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_synthesis_failed"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_items": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_items"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_fields": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_fields"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_written_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_written_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_edited_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_edited_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_deleted_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_deleted_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_result_error_count": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_result_error_count"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_cross_uri_create_new_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_cross_uri_create_new_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_cross_uri_create_new_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_cross_uri_create_new_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_input_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_input_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_key_count": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_key_count"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_groups": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_groups"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_merged_uris": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_merged_uris"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_failed"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_overlap_rejected": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_overlap_rejected"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_attempts": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_attempts"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_success": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_success"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_failed": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_failed"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_missing_headings": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_missing_headings"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_schema_repair_heading_errors": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_schema_repair_heading_errors"
+                            ),
+                            0,
+                        ),
+                        "operation_exact_apply_window_create_new_consolidation_schema_rejected": cls._i(
+                            counters.get(
+                                f"{metric_prefix}.operation_exact_apply_window_create_new_consolidation_schema_rejected"
+                            ),
+                            0,
+                        ),
+                        "result_written_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_written_uris"), 0
+                        ),
+                        "result_edited_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_edited_uris"), 0
+                        ),
+                        "result_deleted_uris": cls._i(
+                            counters.get(f"{metric_prefix}.result_deleted_uris"), 0
+                        ),
+                        "result_error_count": cls._i(
+                            counters.get(f"{metric_prefix}.result_error_count"), 0
+                        ),
+                        "supersedes_requested": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_requested"), 0
+                        ),
+                        "supersedes_resolved": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_resolved"), 0
+                        ),
+                        "supersedes_unresolved": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_unresolved"), 0
+                        ),
+                        "supersedes_delete_queued": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_delete_queued"), 0
+                        ),
+                        "supersedes_inheritance_targets": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_inheritance_targets"), 0
+                        ),
+                        "supersedes_graph_links_delta": cls._i(
+                            counters.get(f"{metric_prefix}.supersedes_graph_links_delta"), 0
+                        ),
+                        "operation_exact_stale_read_uri_count": cls._i(
+                            counters.get(f"{metric_prefix}.operation_exact_stale_read_uri_count"),
+                            0,
+                        ),
+                        "operation_exact_retry_attempt": cls._i(
+                            gauges.get(f"{metric_prefix}.operation_exact_retry_attempt"), 0
+                        ),
+                        "operation_exact_conflict_sensitive_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_sensitive_bucket",
+                            )
+                        ),
+                        "operation_exact_conflict_sensitive_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_sensitive_reason",
+                            )
+                        ),
+                        "operation_exact_conflict_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_bucket",
+                            )
+                        ),
+                        "operation_exact_conflict_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_conflict_reason",
+                            )
+                        ),
+                        "operation_exact_retry_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_retry_bucket",
+                            )
+                        ),
+                        "operation_exact_retry_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_retry_reason",
+                            )
+                        ),
+                        "operation_exact_apply_window_batch_sizes": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_batch_size",
+                            )
+                        ),
+                        "operation_exact_apply_window_coalesce_skipped_reasons": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_coalesce_skipped",
+                            )
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_buckets": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_buckets",
+                            )
+                        ),
+                        "operation_exact_apply_window_timeline_conflict_fields_by_name": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_apply_window_timeline_conflict_fields_by_name",
+                            )
+                        ),
+                        "operation_exact_stale_base_states": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_stale_base_state",
+                            )
+                        ),
+                        "operation_exact_stale_current_states": (
+                            cls._build_counter_suffix_summary(
+                                counters,
+                                f"{metric_prefix}.operation_exact_stale_current_state",
+                            )
+                        ),
+                        **{
+                            public_key: cls._f(gauges.get(f"{metric_prefix}.{metric_key}"), 0.0)
+                            for public_key, metric_key in (
+                                cls._AGENT_MEMORY_PHASE_DURATION_KEYS.items()
+                            )
+                        },
+                    }
+
+                memory_summary["agent"] = {
+                    "trajectories_created": cls._i(
+                        gauges.get("memory.agent.trajectories.created"), 0
+                    ),
+                    "experience_per_trajectory": {
+                        "max_concurrency": cls._i(
+                            gauges.get("memory.agent.experience.per_trajectory.max_concurrency"),
+                            0,
+                        ),
+                        "input_trajectories": cls._i(
+                            gauges.get("memory.agent.experience.per_trajectory.input_trajectories"),
+                            0,
+                        ),
+                    },
+                    "phase": phase_summary,
                 }
             summary["memory"] = memory_summary
 
@@ -293,7 +733,16 @@ class TelemetrySummaryBuilder:
                 "message": error_message,
             }
 
-        for key in ("tokens", "queue", "vector", "semantic_nodes", "memory", "resource", "errors"):
+        for key in (
+            "tokens",
+            "queue",
+            "vector",
+            "semantic_nodes",
+            "locks",
+            "memory",
+            "resource",
+            "errors",
+        ):
             if key not in summary:
                 continue
             pruned_value = cls._prune_zero_metrics(summary[key])

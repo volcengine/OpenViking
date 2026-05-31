@@ -101,6 +101,250 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"expected boolean value, got {value!r}")
+
+
+def _has_openviking_train_strategy(config: dict[str, Any]) -> bool:
+    return any(
+        strategy.get("memory_backend") == "openviking" and strategy.get("train_required")
+        for strategy in config.get("strategies") or []
+    )
+
+
+def _openviking_agent_experience_config(config: dict[str, Any]) -> dict[str, Any]:
+    openviking = config.get("openviking") or {}
+    agent_memory_enabled = openviking.get("agent_memory_enabled")
+    apply_lock_mode = openviking.get("agent_experience_apply_lock_mode")
+    trajectory_apply_lock_mode = openviking.get("agent_trajectory_apply_lock_mode")
+    long_term_extraction_enabled = openviking.get("long_term_extraction_enabled")
+    session_skill_extraction_enabled = openviking.get("session_skill_extraction_enabled")
+    operation_exact_apply_window_seconds = openviking.get("operation_exact_apply_window_seconds")
+    result: dict[str, Any] = {
+        "expected_agent_memory_enabled": _optional_bool(agent_memory_enabled),
+        "expected_agent_experience_apply_lock_mode": (
+            str(apply_lock_mode) if apply_lock_mode is not None else None
+        ),
+        "expected_agent_trajectory_apply_lock_mode": (
+            str(trajectory_apply_lock_mode) if trajectory_apply_lock_mode is not None else None
+        ),
+        "expected_long_term_extraction_enabled": _optional_bool(long_term_extraction_enabled),
+        "expected_session_skill_extraction_enabled": _optional_bool(
+            session_skill_extraction_enabled
+        ),
+        "expected_operation_exact_apply_window_seconds": (
+            float(operation_exact_apply_window_seconds)
+            if operation_exact_apply_window_seconds is not None
+            else None
+        ),
+    }
+    if result["expected_agent_experience_apply_lock_mode"] not in {
+        None,
+        "tree",
+        "operation_exact",
+    }:
+        raise ValueError(
+            "openviking.agent_experience_apply_lock_mode must be 'tree' or 'operation_exact'"
+        )
+    if result["expected_agent_trajectory_apply_lock_mode"] not in {
+        None,
+        "tree",
+        "operation_exact",
+    }:
+        raise ValueError(
+            "openviking.agent_trajectory_apply_lock_mode must be 'tree' or 'operation_exact'"
+        )
+    if (
+        result["expected_operation_exact_apply_window_seconds"] is not None
+        and result["expected_operation_exact_apply_window_seconds"] < 0
+    ):
+        raise ValueError("openviking.operation_exact_apply_window_seconds must be >= 0")
+    return result
+
+
+def _openviking_wait_timeout_seconds(
+    config: dict[str, Any], strategy: dict[str, Any]
+) -> int | None:
+    openviking = config.get("openviking") or {}
+    value = strategy.get("openviking_wait_timeout_seconds")
+    if value is None:
+        value = openviking.get("wait_timeout_seconds")
+    if value is None:
+        return None
+    timeout = int(value)
+    if timeout <= 0:
+        raise ValueError("openviking.wait_timeout_seconds must be positive")
+    return timeout
+
+
+def _openviking_timeout_seconds(config: dict[str, Any], strategy: dict[str, Any]) -> float | None:
+    openviking = config.get("openviking") or {}
+    value = strategy.get("openviking_timeout_seconds")
+    if value is None:
+        value = openviking.get("timeout_seconds")
+    if value is None:
+        return None
+    timeout = float(value)
+    if timeout <= 0:
+        raise ValueError("openviking.timeout_seconds must be positive")
+    return timeout
+
+
+def _corpus_session_commit_concurrency(
+    config: dict[str, Any], strategy: dict[str, Any]
+) -> int | None:
+    openviking = config.get("openviking") or {}
+    value = strategy.get("corpus_session_commit_concurrency")
+    if value is None:
+        value = openviking.get("corpus_session_commit_concurrency")
+    if value is None:
+        return None
+    concurrency = int(value)
+    if concurrency <= 0:
+        raise ValueError("openviking.corpus_session_commit_concurrency must be positive")
+    return concurrency
+
+
+def _openviking_server_config_path(config: dict[str, Any]) -> Path:
+    openviking = config.get("openviking") or {}
+    raw = openviking.get("server_config_file") or os.environ.get("OPENVIKING_CONFIG_FILE")
+    if raw:
+        return resolve_path(str(raw))
+    return Path.home() / ".openviking" / "ov.conf"
+
+
+def _openviking_server_memory_config_report(
+    config: dict[str, Any], *, strict: bool
+) -> tuple[dict[str, Any], list[str]]:
+    expected = _openviking_agent_experience_config(config)
+    report: dict[str, Any] = {
+        "expected": expected,
+        "config_path": None,
+        "exists": False,
+        "actual": None,
+        "checked": False,
+    }
+    errors: list[str] = []
+    if not _has_openviking_train_strategy(config):
+        return report, errors
+    if not any(value is not None for value in expected.values()):
+        return report, errors
+
+    config_path = _openviking_server_config_path(config)
+    report["config_path"] = str(config_path)
+    report["exists"] = config_path.is_file()
+    if not config_path.is_file():
+        if strict:
+            errors.append(
+                "cannot verify OpenViking server memory config for agent-experience "
+                f"consolidation; set OPENVIKING_CONFIG_FILE or openviking.server_config_file "
+                f"(checked {config_path})"
+            )
+        return report, errors
+
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        if strict:
+            errors.append(f"invalid OpenViking server config JSON at {config_path}: {exc}")
+        report["error"] = str(exc)
+        return report, errors
+
+    memory = raw.get("memory") if isinstance(raw, dict) else {}
+    if not isinstance(memory, dict):
+        memory = {}
+    actual = {
+        "agent_memory_enabled": memory.get("agent_memory_enabled", False),
+        "agent_experience_apply_lock_mode": memory.get("agent_experience_apply_lock_mode", "tree"),
+        "agent_trajectory_apply_lock_mode": memory.get("agent_trajectory_apply_lock_mode", "tree"),
+        "long_term_extraction_enabled": memory.get("long_term_extraction_enabled", True),
+        "session_skill_extraction_enabled": memory.get("session_skill_extraction_enabled", False),
+        "operation_exact_apply_window_seconds": memory.get(
+            "operation_exact_apply_window_seconds", 0.0
+        ),
+    }
+    report["actual"] = actual
+    report["checked"] = True
+
+    expected_agent_memory_enabled = expected["expected_agent_memory_enabled"]
+    if (
+        expected_agent_memory_enabled is not None
+        and _optional_bool(actual["agent_memory_enabled"]) != expected_agent_memory_enabled
+    ):
+        errors.append(
+            "OpenViking server memory.agent_memory_enabled mismatch: "
+            f"expected {expected_agent_memory_enabled!r}, actual "
+            f"{actual['agent_memory_enabled']!r} in {config_path}"
+        )
+    expected_apply_lock_mode = expected["expected_agent_experience_apply_lock_mode"]
+    if (
+        expected_apply_lock_mode is not None
+        and actual["agent_experience_apply_lock_mode"] != expected_apply_lock_mode
+    ):
+        errors.append(
+            "OpenViking server memory.agent_experience_apply_lock_mode mismatch: "
+            f"expected {expected_apply_lock_mode!r}, actual "
+            f"{actual['agent_experience_apply_lock_mode']!r} in {config_path}"
+        )
+    expected_trajectory_apply_lock_mode = expected["expected_agent_trajectory_apply_lock_mode"]
+    if (
+        expected_trajectory_apply_lock_mode is not None
+        and actual["agent_trajectory_apply_lock_mode"] != expected_trajectory_apply_lock_mode
+    ):
+        errors.append(
+            "OpenViking server memory.agent_trajectory_apply_lock_mode mismatch: "
+            f"expected {expected_trajectory_apply_lock_mode!r}, actual "
+            f"{actual['agent_trajectory_apply_lock_mode']!r} in {config_path}"
+        )
+    expected_long_term_extraction_enabled = expected["expected_long_term_extraction_enabled"]
+    if (
+        expected_long_term_extraction_enabled is not None
+        and _optional_bool(actual["long_term_extraction_enabled"])
+        != expected_long_term_extraction_enabled
+    ):
+        errors.append(
+            "OpenViking server memory.long_term_extraction_enabled mismatch: "
+            f"expected {expected_long_term_extraction_enabled!r}, actual "
+            f"{actual['long_term_extraction_enabled']!r} in {config_path}"
+        )
+    expected_session_skill_extraction_enabled = expected[
+        "expected_session_skill_extraction_enabled"
+    ]
+    if (
+        expected_session_skill_extraction_enabled is not None
+        and _optional_bool(actual["session_skill_extraction_enabled"])
+        != expected_session_skill_extraction_enabled
+    ):
+        errors.append(
+            "OpenViking server memory.session_skill_extraction_enabled mismatch: "
+            f"expected {expected_session_skill_extraction_enabled!r}, actual "
+            f"{actual['session_skill_extraction_enabled']!r} in {config_path}"
+        )
+    expected_window_seconds = expected["expected_operation_exact_apply_window_seconds"]
+    try:
+        actual_window_seconds = float(actual["operation_exact_apply_window_seconds"])
+    except (TypeError, ValueError):
+        actual_window_seconds = None
+    if expected_window_seconds is not None and actual_window_seconds != expected_window_seconds:
+        errors.append(
+            "OpenViking server memory.operation_exact_apply_window_seconds mismatch: "
+            f"expected {expected_window_seconds!r}, actual "
+            f"{actual['operation_exact_apply_window_seconds']!r} in {config_path}"
+        )
+    if not strict:
+        errors = []
+    return report, errors
+
+
 def _require_fixed_first_user(config: dict[str, Any]) -> bool:
     return _enabled(config.get("eval", {}).get("require_fixed_first_user"))
 
@@ -312,6 +556,7 @@ def _tau2_command(
         if not search_uri:
             search_uri = _search_uri(agent_id, search_memory_type)
         budget = _retrieval_budget(config, strategy)
+        agent_experience_config = _openviking_agent_experience_config(config)
         command = [
             sys.executable,
             str(Path(__file__).with_name("run_memory_v2_eval.py")),
@@ -372,6 +617,64 @@ def _tau2_command(
             "--seed",
             str(seed),
         ]
+        timeout_seconds = _openviking_timeout_seconds(config, strategy)
+        if timeout_seconds is not None:
+            command.extend(["--openviking-timeout", str(timeout_seconds)])
+        wait_timeout_seconds = _openviking_wait_timeout_seconds(config, strategy)
+        if wait_timeout_seconds is not None:
+            command.extend(["--openviking-wait-timeout", str(wait_timeout_seconds)])
+        corpus_commit_concurrency = _corpus_session_commit_concurrency(config, strategy)
+        if corpus_commit_concurrency is not None:
+            command.extend(
+                [
+                    "--corpus-session-commit-concurrency",
+                    str(corpus_commit_concurrency),
+                ]
+            )
+        if agent_experience_config["expected_agent_memory_enabled"] is not None:
+            command.extend(
+                [
+                    "--expected-agent-memory-enabled",
+                    str(agent_experience_config["expected_agent_memory_enabled"]).lower(),
+                ]
+            )
+        if agent_experience_config["expected_agent_experience_apply_lock_mode"] is not None:
+            command.extend(
+                [
+                    "--expected-agent-experience-apply-lock-mode",
+                    agent_experience_config["expected_agent_experience_apply_lock_mode"],
+                ]
+            )
+        if agent_experience_config["expected_agent_trajectory_apply_lock_mode"] is not None:
+            command.extend(
+                [
+                    "--expected-agent-trajectory-apply-lock-mode",
+                    agent_experience_config["expected_agent_trajectory_apply_lock_mode"],
+                ]
+            )
+        if agent_experience_config["expected_long_term_extraction_enabled"] is not None:
+            command.extend(
+                [
+                    "--expected-long-term-extraction-enabled",
+                    str(agent_experience_config["expected_long_term_extraction_enabled"]).lower(),
+                ]
+            )
+        if agent_experience_config["expected_session_skill_extraction_enabled"] is not None:
+            command.extend(
+                [
+                    "--expected-session-skill-extraction-enabled",
+                    str(
+                        agent_experience_config["expected_session_skill_extraction_enabled"]
+                    ).lower(),
+                ]
+            )
+        if agent_experience_config["expected_operation_exact_apply_window_seconds"] is not None:
+            command.extend(
+                [
+                    "--expected-operation-exact-apply-window-seconds",
+                    str(agent_experience_config["expected_operation_exact_apply_window_seconds"]),
+                ]
+            )
         if budget["memory_inject_max_chars"] is not None:
             command.extend(["--memory-inject-max-chars", str(budget["memory_inject_max_chars"])])
         if budget["first_user_memory_inject_max_chars"] is not None:
@@ -605,6 +908,22 @@ def _build_plan(
                         ),
                         "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
                         "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
+                        "openviking_memory_config": _openviking_agent_experience_config(config)
+                        if strategy.get("memory_backend") == "openviking"
+                        else None,
+                        "openviking_timeout_seconds": _openviking_timeout_seconds(config, strategy)
+                        if strategy.get("memory_backend") == "openviking"
+                        else None,
+                        "openviking_wait_timeout_seconds": _openviking_wait_timeout_seconds(
+                            config, strategy
+                        )
+                        if strategy.get("memory_backend") == "openviking"
+                        else None,
+                        "corpus_session_commit_concurrency": (
+                            _corpus_session_commit_concurrency(config, strategy)
+                            if strategy.get("memory_backend") == "openviking"
+                            else None
+                        ),
                         "retrieval_budget": _retrieval_budget(config, strategy),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
@@ -631,6 +950,7 @@ def _build_plan(
         "eval_protocol": config.get("eval", {}).get("protocol"),
         "require_fixed_first_user": require_fixed_first_user,
         "simulator_policy": policy_report,
+        "openviking_memory_config": _openviking_agent_experience_config(config),
         "cell_count": len(cells),
         "executable_cell_count": executable_cell_count,
         "pending_cell_count": len(cells) - executable_cell_count,
@@ -728,6 +1048,14 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
             raise RuntimeError(
                 "cached corpus train_skip_failed_sessions mismatch for "
                 f"{key}: {cached_skip_failed!r} != {requested_skip_failed!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
+        cached_memory_config = manifest.get("openviking_memory_config")
+        requested_memory_config = cell.get("openviking_memory_config")
+        if cached_memory_config != requested_memory_config:
+            raise RuntimeError(
+                "cached corpus openviking_memory_config mismatch for "
+                f"{key}: {cached_memory_config!r} != {requested_memory_config!r}; "
                 "use a distinct corpus_id or rebuild the corpus"
             )
         row = {
@@ -956,6 +1284,10 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
     llm_env = normalize_litellm_env()
     tau2_info = tau2_context(config)
     policy_report = simulator_policy_report(config)
+    openviking_memory_config_report, openviking_memory_config_errors = (
+        _openviking_server_memory_config_report(config, strict=strict)
+    )
+    errors.extend(openviking_memory_config_errors)
     if strict and not tau2_info["tau2_repo_exists"]:
         errors.append(f"missing TAU-2 repo: {tau2_info['tau2_repo']}")
     if strict and not tau2_info["tau2_cli_resolved"]:
@@ -1009,6 +1341,7 @@ def _preflight(config: dict[str, Any], out: Path, *, strict: bool) -> int:
         "require_fixed_first_user": _require_fixed_first_user(config),
         "llm_env": llm_env,
         "simulator_policy": policy_report,
+        "openviking_memory_config": openviking_memory_config_report,
         "domains": domains(config),
         "strategies": strategy_ids(config),
         "imports": import_rows,

@@ -7,9 +7,22 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.agent_experience_context_provider import (
+    AgentExperienceContextProvider,
+)
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.versioning import content_digest
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_session_provider_does_not_track_read_file_versions_by_default():
+    provider = SessionExtractContextProvider(messages=[])
+
+    tool_ctx = provider.create_tool_context()
+
+    assert tool_ctx.read_file_versions is None
 
 
 def test_create_tool_context_uses_extract_context_page_id_map():
@@ -27,6 +40,7 @@ def test_create_tool_context_uses_extract_context_page_id_map():
     tool_ctx = provider.create_tool_context()
 
     assert tool_ctx.page_id_map is extract_context.page_id_map
+    assert tool_ctx.read_file_versions is provider.read_file_versions
 
 
 @pytest.mark.asyncio
@@ -77,7 +91,9 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider._transaction_handle = None
 
     provider.search_files = AsyncMock(
-        return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]
+        return_value=[
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+        ]
     )
 
     read_result = {
@@ -102,5 +118,40 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
 
     assert any(msg.get("role") == "user" for msg in messages)
     assert add_tool_call_pair.call_count == 2
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert (
+        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
+        == "candidate_experience"
+    )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_records_content_version_digest():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+
+    uri = "viking://agent/agent_sample_9/memories/experiences/debug.md"
+    raw_content = MemoryFileUtils.write(
+        MemoryFile(
+            uri=uri,
+            content="debug content",
+            links=[],
+            backlinks=[],
+            memory_type="experiences",
+            extra_fields={"experience_name": "debug"},
+        )
+    )
+    provider._viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw_content))
+
+    result = await provider.read_file(uri)
+
+    assert result["experience_name"] == "debug"
+    assert provider.read_file_versions[uri] == content_digest(raw_content)

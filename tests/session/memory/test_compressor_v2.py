@@ -6,10 +6,11 @@ Test for SessionCompressorV2.
 Uses MockVikingFS and real VLM (from config).
 """
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -17,12 +18,29 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import compressor_v2 as compressor_v2_module
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
+    StoredLink,
+)
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import RoleScope
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdater,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.merge_op.patch import PatchOp
+from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.versioning import content_digest
+from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking.telemetry.operation import TelemetrySummaryBuilder
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
 
@@ -33,6 +51,1498 @@ for logger_name in ["openviking", "openviking.session.memory"]:
     logger.setLevel(logging.DEBUG)
 
 logger = logging.getLogger(__name__)
+
+
+def test_coalesced_window_order_groups_same_uri_timelines():
+    exp_a = "viking://agent/default/memories/experiences/a.md"
+    exp_b = "viking://agent/default/memories/experiences/b.md"
+    op_a1 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_b = ResolvedOperation(memory_type="experiences", uris=[exp_b], memory_fields={})
+    op_a2 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_multi = ResolvedOperation(
+        memory_type="experiences",
+        uris=[exp_a, exp_b],
+        memory_fields={},
+    )
+
+    ordered = compressor_v2_module._order_upserts_for_coalesced_timeline(
+        [op_a1, op_b, op_a2, op_multi]
+    )
+
+    assert ordered == [op_a1, op_a2, op_b, op_multi]
+
+
+def test_same_uri_timeline_stats_counts_only_replayed_groups():
+    exp_a = "viking://agent/default/memories/experiences/a.md"
+    exp_b = "viking://agent/default/memories/experiences/b.md"
+    op_a1 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_a2 = ResolvedOperation(memory_type="experiences", uris=[exp_a], memory_fields={})
+    op_b = ResolvedOperation(memory_type="experiences", uris=[exp_b], memory_fields={})
+    op_multi = ResolvedOperation(
+        memory_type="experiences",
+        uris=[exp_a, exp_b],
+        memory_fields={},
+    )
+
+    assert compressor_v2_module._same_uri_timeline_stats([op_a1, op_a2, op_b, op_multi]) == (1, 2)
+
+
+def test_create_new_experience_window_keys_group_cross_uri_candidates():
+    exp_dir = "viking://agent/default/memories/experiences"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[f"{exp_dir}/first.md"],
+                memory_fields={
+                    "experience_name": "first",
+                    "content": "First create-new experience.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[f"{exp_dir}/second.md"],
+                memory_fields={
+                    "experience_name": "second",
+                    "content": "Second create-new experience.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=MemoryFile(uri=f"{exp_dir}/existing.md"),
+                memory_type="experiences",
+                uris=[f"{exp_dir}/existing.md"],
+                memory_fields={
+                    "experience_name": "existing",
+                    "content": "Existing update should keep its exact URI key.",
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    assert compressor_v2_module._create_new_experience_window_keys(operations) == [
+        f"create-new-experience-window:{exp_dir}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_new_experience_consolidation_merges_same_window_duplicates():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            assert "candidate_experiences" in messages[1]["content"]
+            return (
+                '{"groups": ['
+                '{"canonical_index": 0, "member_indices": [0, 1], '
+                '"content": "## Situation\\n- User wants to cancel all pending orders\\n\\n'
+                "## Approach\\n- Verify identity, then cancel every pending order\\n\\n"
+                '## Reflect\\n- Do not merge delivered-order returns into this rule"}'
+                "]}"
+            )
+
+    canonical_uri = "viking://agent/default/memories/experiences/bulk_pending_order_cancellation.md"
+    duplicate_uri = "viking://agent/default/memories/experiences/pending_order_bulk_cancellation.md"
+    distinct_uri = "viking://agent/default/memories/experiences/pending_order_item_modification.md"
+    traj_1 = "viking://agent/default/memories/trajectories/one.md"
+    traj_2 = "viking://agent/default/memories/trajectories/two.md"
+    traj_3 = "viking://agent/default/memories/trajectories/three.md"
+
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[canonical_uri],
+                memory_fields={
+                    "experience_name": "bulk_pending_order_cancellation",
+                    "content": "Cancel all pending orders after verifying identity.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[duplicate_uri],
+                memory_fields={
+                    "experience_name": "pending_order_bulk_cancellation",
+                    "content": "Bulk-cancel pending orders after verifying identity.",
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[distinct_uri],
+                memory_fields={
+                    "experience_name": "pending_order_item_modification",
+                    "content": "Modify one item in a pending order.",
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(from_uri=canonical_uri, to_uri=traj_1, link_type="derived_from"),
+            StoredLink(from_uri=duplicate_uri, to_uri=traj_2, link_type="derived_from"),
+            StoredLink(from_uri=distinct_uri, to_uri=traj_3, link_type="derived_from"),
+        ],
+    )
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        remap = await compressor_v2_module._synthesize_create_new_experience_consolidation(
+            vlm=FakeVLM(),
+            operations=operations,
+            phase_metric_key="experience_single",
+        )
+
+    assert remap == {duplicate_uri: canonical_uri}
+    assert [op.uris[0] for op in operations.upsert_operations] == [canonical_uri, distinct_uri]
+    assert "Verify identity" in operations.upsert_operations[0].memory_fields["content"]
+    assert {(link.from_uri, link.to_uri) for link in operations.resolved_links or []} == {
+        (canonical_uri, traj_1),
+        (canonical_uri, traj_2),
+        (distinct_uri, traj_3),
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_new_experience_consolidation_ignores_overlapping_groups():
+    class FakeVLM:
+        async def get_completion_async(self, messages):
+            return JsonUtils.dumps(
+                {
+                    "groups": [
+                        {
+                            "canonical_index": 0,
+                            "member_indices": [0, 1],
+                            "content": "Merged A and B",
+                        },
+                        {
+                            "canonical_index": 1,
+                            "member_indices": [1, 2],
+                            "content": "Invalid overlapping merge",
+                        },
+                    ]
+                }
+            )
+
+    uris = [f"viking://agent/default/memories/experiences/card_{index}.md" for index in range(3)]
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="experiences",
+                uris=[uri],
+                memory_fields={
+                    "experience_name": f"card_{index}",
+                    "content": f"Experience card {index}",
+                },
+            )
+            for index, uri in enumerate(uris)
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[],
+    )
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        remap = await compressor_v2_module._synthesize_create_new_experience_consolidation(
+            vlm=FakeVLM(),
+            operations=operations,
+            phase_metric_key="experience_single",
+        )
+
+    assert remap == {uris[1]: uris[0]}
+    assert [op.uris[0] for op in operations.upsert_operations] == [uris[0], uris[2]]
+    assert operations.upsert_operations[0].memory_fields["content"] == "Merged A and B"
+    assert operations.upsert_operations[1].memory_fields["content"] == "Experience card 2"
+
+
+def test_agent_phase_summary_exposes_apply_window_quality_counters():
+    prefix = "memory.agent.extract.phase.experience_single"
+    summary = TelemetrySummaryBuilder.build(
+        operation="session.commit",
+        status="ok",
+        duration_ms=1.0,
+        counters={
+            "memory.agent.extract.phase.count": 1,
+            f"{prefix}.count": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_groups": 2,
+            f"{prefix}.operation_exact_apply_window_timeline_items": 5,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_groups": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_fields": 2,
+            f"{prefix}.operation_exact_apply_window_result_written_uris": 4,
+            f"{prefix}.operation_exact_apply_window_cross_uri_create_new_groups": 1,
+            f"{prefix}.operation_exact_apply_window_cross_uri_create_new_uris": 4,
+            f"{prefix}.operation_exact_apply_window_create_new_consolidation_groups": 1,
+            f"{prefix}.operation_exact_apply_window_create_new_consolidation_merged_uris": 2,
+            f"{prefix}.result_written_uris": 4,
+            f"{prefix}.result_edited_uris": 1,
+            f"{prefix}.supersedes_requested": 2,
+            f"{prefix}.supersedes_resolved": 1,
+            f"{prefix}.supersedes_unresolved": 1,
+            f"{prefix}.supersedes_delete_queued": 1,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_buckets.experiences": 2,
+            f"{prefix}.operation_exact_apply_window_timeline_conflict_fields_by_name.content": 2,
+        },
+        gauges={},
+        error_stage="",
+        error_code="",
+        error_message="",
+    )
+
+    phase = summary["memory"]["agent"]["phase"]["experience_single"]
+    assert phase["operation_exact_apply_window_timeline_groups"] == 2
+    assert phase["operation_exact_apply_window_timeline_items"] == 5
+    assert phase["operation_exact_apply_window_timeline_conflict_groups"] == 1
+    assert phase["operation_exact_apply_window_timeline_conflict_fields"] == 2
+    assert phase["operation_exact_apply_window_result_written_uris"] == 4
+    assert phase["operation_exact_apply_window_cross_uri_create_new_groups"] == 1
+    assert phase["operation_exact_apply_window_cross_uri_create_new_uris"] == 4
+    assert phase["operation_exact_apply_window_create_new_consolidation_groups"] == 1
+    assert phase["operation_exact_apply_window_create_new_consolidation_merged_uris"] == 2
+    assert phase["result_written_uris"] == 4
+    assert phase["result_edited_uris"] == 1
+    assert phase["supersedes_requested"] == 2
+    assert phase["supersedes_resolved"] == 1
+    assert phase["supersedes_unresolved"] == 1
+    assert phase["supersedes_delete_queued"] == 1
+    assert phase["operation_exact_apply_window_timeline_conflict_buckets"] == {"experiences": 2}
+    assert phase["operation_exact_apply_window_timeline_conflict_fields_by_name"] == {"content": 2}
+
+
+def test_plain_string_patch_conversion_makes_tool_memory_merge_safe():
+    schema = MemoryTypeSchema(
+        memory_type="tools",
+        fields=[
+            MemoryField(
+                name="tool_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="guidelines",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(get=lambda memory_type: schema if memory_type == "tools" else None)
+    old_file = MemoryFile(
+        uri="viking://agent/default/memories/tools/search.md",
+        memory_type="tools",
+        extra_fields={"guidelines": "## Guidelines\n- Prefer specific queries.\n"},
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="tools",
+        uris=["viking://agent/default/memories/tools/search.md"],
+        memory_fields={
+            "tool_name": "search",
+            "guidelines": "## Guidelines\n- Prefer specific queries.\n- Add source qualifiers.\n",
+        },
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    conversions = compressor_v2_module._convert_plain_string_patches_to_structured(
+        operations,
+        registry,
+    )
+
+    assert conversions == [
+        {
+            "uri": "viking://agent/default/memories/tools/search.md",
+            "memory_type": "tools",
+            "field": "guidelines",
+        }
+    ]
+    assert isinstance(operation.memory_fields["guidelines"], StrPatch)
+    latest_guidelines = "## Guidelines\n- Prefer specific queries.\n- Keep user locale.\n"
+    assert (
+        PatchOp(FieldType.STRING).apply(latest_guidelines, operation.memory_fields["guidelines"])
+        == "## Guidelines\n- Prefer specific queries.\n- Add source qualifiers.\n"
+        "- Keep user locale.\n"
+    )
+    assert (
+        compressor_v2_module._operation_conflict_reason(operation, registry) != "plain_string_patch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeline_conflict_synthesis_only_updates_conflicted_string_fields():
+    class FakeVLM:
+        def __init__(self):
+            self.messages = None
+
+        async def get_completion_async(self, messages):
+            self.messages = messages
+            return '{"fields": {"content": "ALPHA BETA gamma", "summary": "ignored"}}'
+
+    schema = MemoryTypeSchema(
+        memory_type="notes",
+        fields=[
+            MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+            MemoryField(name="summary", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
+        ],
+    )
+    current = MemoryFile(
+        uri="viking://agent/default/memories/notes/a.md",
+        content="ALPHA beta gamma",
+        extra_fields={"summary": "keep me"},
+    )
+    base = MemoryFile(uri=current.uri, content="alpha beta gamma", extra_fields={"summary": "old"})
+    operations = [
+        ResolvedOperation(
+            old_memory_file_content=base,
+            memory_type="notes",
+            uris=[current.uri],
+            memory_fields={"content": "ALPHA beta gamma", "summary": "not in conflict"},
+        )
+    ]
+    fake_vlm = FakeVLM()
+
+    with bind_telemetry(OperationTelemetry(operation="test", enabled=True)):
+        synthesized = await compressor_v2_module._synthesize_timeline_conflict_fields(
+            vlm=fake_vlm,
+            uri=current.uri,
+            memory_type="notes",
+            schema=schema,
+            current_file=current,
+            resolved_ops=operations,
+            conflicts=[
+                {
+                    "uri": current.uri,
+                    "memory_type": "notes",
+                    "field": "content",
+                    "error": "Patch application failed",
+                }
+            ],
+            phase_metric_key="experience_single",
+        )
+
+    assert synthesized is not None
+    assert synthesized.content == "ALPHA BETA gamma"
+    assert synthesized.extra_fields["summary"] == "keep me"
+    assert fake_vlm.messages is not None
+    assert "queued_operations_in_arrival_order" in fake_vlm.messages[1]["content"]
+
+
+def test_operation_exact_lock_uris_include_deleted_link_endpoints():
+    exp_uri = "viking://agent/default/memories/experiences/old.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    operations = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[
+            MemoryFile(
+                uri=exp_uri,
+                links=[
+                    {
+                        "from_uri": exp_uri,
+                        "to_uri": traj_uri,
+                        "link_type": "derived_from",
+                    }
+                ],
+            )
+        ],
+        errors=[],
+    )
+
+    lock_uris = compressor_v2_module._collect_operation_lock_uris(operations)
+
+    assert exp_uri in lock_uris
+    assert traj_uri in lock_uris
+    assert "viking://agent/default/memories/experiences/.overview.md" in lock_uris
+    assert "viking://agent/default/memories/trajectories/.overview.md" in lock_uris
+
+
+def test_source_trajectory_links_attach_before_exact_lock():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_uri = "viking://agent/default/memories/experiences/new.md"
+    current_traj_uri = "viking://agent/default/memories/trajectories/current.md"
+    inherited_traj_uri = "viking://agent/default/memories/trajectories/old.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={"experience_name": "new"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    provider = SimpleNamespace(trajectory_uri=current_traj_uri)
+
+    attached = compressor._attach_source_trajectory_links_to_operations(
+        operations,
+        provider=provider,
+        inheritance_map={exp_uri: [inherited_traj_uri]},
+        source_attribution_map={},
+    )
+
+    assert attached == 2
+    assert provider._source_links_attached_in_operations is True
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (exp_uri, current_traj_uri, "derived_from"),
+        (exp_uri, inherited_traj_uri, "derived_from"),
+    }
+    lock_uris = compressor_v2_module._collect_operation_lock_uris(operations)
+    assert exp_uri in lock_uris
+    assert current_traj_uri in lock_uris
+    assert inherited_traj_uri in lock_uris
+    assert "viking://agent/default/memories/trajectories/.overview.md" in lock_uris
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_consumes_field_only_after_resolved():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert operations.delete_file_contents[0].uri == old_uri
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (f"{exp_dir}/new.md", traj_uri, "derived_from")
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_tracks_deleted_file_version_for_exact_retry():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    new_uri = f"{exp_dir}/new.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_link = StoredLink(from_uri=old_uri, to_uri=traj_uri, link_type="derived_from")
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[old_link.model_dump()],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[new_uri],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    old_content = MemoryFileUtils.write(old_file)
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.content = old_content
+
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return self.content
+
+    read_versions: dict[str, str] = {}
+    provider = SimpleNamespace(
+        _render_experience_dir=lambda _ctx: exp_dir,
+        _track_read_file_versions=True,
+        _read_file_versions=read_versions,
+        read_file_versions=read_versions,
+        _get_registry=lambda: None,
+    )
+    viking_fs = FakeVikingFS()
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await compressor._resolve_supersedes(operations, ctx, viking_fs, provider)
+
+    assert read_versions[old_uri] == content_digest(old_content)
+
+    changed_link = StoredLink(
+        from_uri=old_uri,
+        to_uri="viking://agent/default/memories/trajectories/t2.md",
+        link_type="derived_from",
+    )
+    viking_fs.content = MemoryFileUtils.write(
+        MemoryFile(
+            uri=old_uri,
+            memory_type="experiences",
+            links=[old_link.model_dump(), changed_link.model_dump()],
+        )
+    )
+
+    conflicts = await compressor._find_operation_version_conflicts(
+        operations=operations,
+        provider=provider,
+        ctx=ctx,
+        viking_fs=viking_fs,
+    )
+
+    assert [conflict["uri"] for conflict in conflicts] == [old_uri]
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_migrates_peer_links_to_replacement_uri():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    new_uri = f"{exp_dir}/new.md"
+    peer_uri = f"{exp_dir}/peer.md"
+    topic_uri = "viking://agent/default/memories/topics/refund.md"
+    outbound = StoredLink(
+        from_uri=old_uri,
+        to_uri=topic_uri,
+        link_type="related_to",
+        description="old pointed to topic",
+    )
+    inbound = StoredLink(
+        from_uri=peer_uri,
+        to_uri=old_uri,
+        link_type="evolved_from",
+        description="peer pointed to old",
+    )
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[outbound.model_dump()],
+        backlinks=[inbound.model_dump()],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[new_uri],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert inheritance_map == {}
+    assert operations.errors == []
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (new_uri, topic_uri, "related_to"),
+        (peer_uri, new_uri, "evolved_from"),
+    }
+    assert old_uri not in {
+        uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri)
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_accepts_multiple_replaced_experiences():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri_1 = f"{exp_dir}/old_one.md"
+    old_uri_2 = f"{exp_dir}/old_two.md"
+    traj_uri_1 = "viking://agent/default/memories/trajectories/t1.md"
+    traj_uri_2 = "viking://agent/default/memories/trajectories/t2.md"
+    old_files = {
+        old_uri_1: MemoryFile(
+            uri=old_uri_1,
+            memory_type="experiences",
+            links=[
+                {
+                    "from_uri": old_uri_1,
+                    "to_uri": traj_uri_1,
+                    "link_type": "derived_from",
+                },
+                {
+                    "from_uri": old_uri_1,
+                    "to_uri": old_uri_2,
+                    "link_type": "related_to",
+                },
+            ],
+        ),
+        old_uri_2: MemoryFile(
+            uri=old_uri_2,
+            memory_type="experiences",
+            links=[
+                {
+                    "from_uri": old_uri_2,
+                    "to_uri": traj_uri_2,
+                    "link_type": "derived_from",
+                }
+            ],
+        ),
+    }
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old_one, old_two"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            return MemoryFileUtils.write(old_files[uri])
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert {item.uri for item in operations.delete_file_contents} == {old_uri_1, old_uri_2}
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri_1, traj_uri_2]}
+    assert {(link.from_uri, link.to_uri, link.link_type) for link in operations.resolved_links} == {
+        (f"{exp_dir}/new.md", traj_uri_1, "derived_from"),
+        (f"{exp_dir}/new.md", traj_uri_2, "derived_from"),
+    }
+    assert not any(
+        uri in {old_uri_1, old_uri_2}
+        for link in operations.resolved_links
+        for uri in (link.from_uri, link.to_uri)
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_keeps_partial_multi_target_resolution():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    missing_uri = f"{exp_dir}/missing.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old, missing"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            if uri == old_uri:
+                return MemoryFileUtils.write(old_file)
+            if uri == missing_uri:
+                raise FileNotFoundError(uri)
+            raise AssertionError(uri)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert [item.uri for item in operations.delete_file_contents] == [old_uri]
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_prefers_exact_name_before_splitting():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old, with comma.md"
+    traj_uri = "viking://agent/default/memories/trajectories/t1.md"
+    old_file = MemoryFile(
+        uri=old_uri,
+        memory_type="experiences",
+        links=[
+            {
+                "from_uri": old_uri,
+                "to_uri": traj_uri,
+                "link_type": "derived_from",
+            }
+        ],
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old, with comma"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            return MemoryFileUtils.write(old_file)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert operations.errors == []
+    assert [item.uri for item in operations.delete_file_contents] == [old_uri]
+    assert operations.upsert_operations[0].memory_fields == {"experience_name": "new"}
+    assert inheritance_map == {f"{exp_dir}/new.md": [traj_uri]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_retries_when_prefetched_target_disappears():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/old.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "old"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            raise FileNotFoundError(uri)
+
+    provider = SimpleNamespace(
+        _render_experience_dir=lambda _ctx: exp_dir,
+        prefetched_uris=[old_uri],
+        read_file_versions={old_uri: "base-digest"},
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises(compressor_v2_module.OperationExactVersionConflict) as exc_info:
+        await compressor._resolve_supersedes(operations, ctx, FakeVikingFS(), provider)
+
+    assert exc_info.value.conflicts == [old_uri]
+    assert operations.delete_file_contents == []
+    assert operations.errors == []
+    assert operations.upsert_operations[0].memory_fields["supersedes"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_resolve_supersedes_unresolved_target_marks_operations_invalid():
+    compressor = SessionCompressorV2(vikingdb=None)
+    exp_dir = "viking://agent/default/memories/experiences"
+    old_uri = f"{exp_dir}/missing.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[f"{exp_dir}/new.md"],
+                memory_fields={"experience_name": "new", "supersedes": "missing"},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri: str, ctx=None):
+            assert uri == old_uri
+            raise FileNotFoundError(uri)
+
+    provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    inheritance_map = await compressor._resolve_supersedes(
+        operations,
+        ctx,
+        FakeVikingFS(),
+        provider,
+    )
+
+    assert inheritance_map == {}
+    assert operations.delete_file_contents == []
+    assert len(operations.errors) == 1
+    assert "failed to resolve" in operations.errors[0]
+    assert operations.upsert_operations[0].memory_fields["supersedes"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_replace_string_update_can_be_normalized_to_patch_and_replayed():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.REPLACE,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    exp_uri = "viking://agent/default/memories/experiences/debug.md"
+    old_content = "## Situation\n- old\n"
+    stale_replacement = "## Situation\n- old\n- learned from stale read\n"
+    latest_content = "## Situation\n- old\n- concurrent update\n"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content=old_content,
+        extra_fields={"experience_name": "debug"},
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="experiences",
+        uris=[exp_uri],
+        memory_fields={
+            "experience_name": "debug",
+            "content": stale_replacement,
+        },
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[operation],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    conversions = compressor_v2_module._convert_plain_string_patches_to_structured(
+        operations,
+        registry,
+    )
+
+    assert conversions == [
+        {
+            "uri": exp_uri,
+            "memory_type": "experiences",
+            "field": "content",
+        }
+    ]
+    assert isinstance(operation.memory_fields["content"], StrPatch)
+    assert compressor_v2_module._operation_conflict_reason(operation, registry) == ""
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.files = {
+                exp_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=exp_uri,
+                        memory_type="experiences",
+                        content=latest_content,
+                        extra_fields={"experience_name": "debug"},
+                    )
+                )
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert result.edited_uris == [exp_uri]
+    final = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert final.content == "## Situation\n- old\n- learned from stale read\n- concurrent update"
+
+
+@pytest.mark.asyncio
+async def test_same_uri_upsert_timeline_writes_once():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    exp_uri = "viking://agent/default/memories/experiences/window.md"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content="## Situation\n- old\n",
+        extra_fields={"experience_name": "window"},
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- first update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- second update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.write_count = 0
+            self.files = {
+                exp_uri: MemoryFileUtils.write(old_file),
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.write_count += 1
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert fake_fs.write_count == 1
+    assert result.edited_uris == [exp_uri]
+    final = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert "- first update" in final.content
+    assert "- second update" in final.content
+
+
+@pytest.mark.asyncio
+async def test_same_uri_upsert_timeline_preserves_source_links():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        fields=[
+            MemoryField(
+                name="experience_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    registry = SimpleNamespace(
+        get=lambda memory_type: schema if memory_type == "experiences" else None
+    )
+    exp_uri = "viking://agent/default/memories/experiences/window.md"
+    traj_1 = "viking://agent/default/memories/trajectories/one.md"
+    traj_2 = "viking://agent/default/memories/trajectories/two.md"
+    old_file = MemoryFile(
+        uri=exp_uri,
+        memory_type="experiences",
+        content="## Situation\n- old\n",
+        extra_fields={"experience_name": "window"},
+    )
+    trajectory_file = MemoryFile(
+        memory_type="trajectories",
+        content="source",
+    )
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- old\n",
+                                "replace": "- old\n- first update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+            ResolvedOperation(
+                old_memory_file_content=old_file,
+                memory_type="experiences",
+                uris=[exp_uri],
+                memory_fields={
+                    "experience_name": "window",
+                    "content": StrPatch(
+                        blocks=[
+                            {
+                                "search": "- first update\n",
+                                "replace": "- first update\n- second update\n",
+                            }
+                        ]
+                    ),
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(from_uri=exp_uri, to_uri=traj_1, link_type="derived_from"),
+            StoredLink(from_uri=exp_uri, to_uri=traj_2, link_type="derived_from"),
+        ],
+    )
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.write_counts: Dict[str, int] = {}
+            self.files = {
+                exp_uri: MemoryFileUtils.write(old_file),
+                traj_1: MemoryFileUtils.write(trajectory_file),
+                traj_2: MemoryFileUtils.write(trajectory_file),
+            }
+
+        async def read_file(self, uri: str, ctx=None):
+            return self.files.get(uri, "")
+
+        async def write_file(self, uri: str, content: str, ctx=None):
+            self.write_counts[uri] = self.write_counts.get(uri, 0) + 1
+            self.files[uri] = content
+
+    fake_fs = FakeVikingFS()
+    updater = MemoryUpdater(registry=registry)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.session.memory.memory_updater.get_viking_fs", return_value=fake_fs),
+        patch.object(updater, "generate_overview", new_callable=AsyncMock),
+    ):
+        result = await updater.apply_operations(operations, ctx)
+
+    assert fake_fs.write_counts[exp_uri] == 1
+    assert result.edited_uris == [exp_uri]
+    final_exp = MemoryFileUtils.read(await fake_fs.read_file(exp_uri), uri=exp_uri)
+    assert {link["to_uri"] for link in final_exp.links} == {traj_1, traj_2}
+    for traj_uri in [traj_1, traj_2]:
+        final_traj = MemoryFileUtils.read(await fake_fs.read_file(traj_uri), uri=traj_uri)
+        assert any(link["from_uri"] == exp_uri for link in final_traj.backlinks)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_batches_followers():
+    unique_path = "viking://agent/default/memories/experiences/window_test.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[unique_path],
+            lock_paths=[unique_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(worker("first"), worker("second"))
+
+    assert results == ["first", "second"]
+    assert events == ["apply:first:window-handle", "apply:second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [unique_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_batches_overlapping_targets():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    first_path = "viking://agent/default/memories/experiences/first.md"
+    second_path = "viking://agent/default/memories/experiences/second.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str, paths: list[str]):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=paths,
+            lock_paths=paths,
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(
+            worker("first", [first_path, shared_path]),
+            worker("second", [shared_path, second_path]),
+        )
+
+    assert results == ["first", "second"]
+    assert events == ["apply:first:window-handle", "apply:second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [first_path, shared_path, second_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_same_key_payloads():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str):
+        async def coalesce_func(payloads, lock_handle):
+            events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+            return [f"result:{payload}" for payload in payloads]
+
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=(shared_path,),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(worker("first"), worker("second"))
+
+    assert results == ["result:first", "result:second"]
+    assert events == ["coalesce:first,second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_cross_uri_create_new_key():
+    first_path = "viking://agent/default/memories/experiences/first.md"
+    second_path = "viking://agent/default/memories/experiences/second.md"
+    create_new_key = "create-new-experience-window:viking://agent/default/memories/experiences"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def worker(label: str, lock_path: str):
+        async def coalesce_func(payloads, lock_handle):
+            events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+            return [f"result:{payload}" for payload in payloads]
+
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[lock_path, create_new_key],
+            lock_paths=[lock_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=("memory-upsert-window",),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(
+            worker("first", first_path),
+            worker("second", second_path),
+        )
+
+    assert results == ["result:first", "result:second"]
+    assert events == ["coalesce:first,second:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [first_path, second_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_coalesces_same_key_across_phases():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def coalesce_func(payloads, lock_handle):
+        events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+        return [f"result:{payload}" for payload in payloads]
+
+    async def worker(label: str, phase: str):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path],
+            window_seconds=0.01,
+            phase_metric_key=phase,
+            apply_func=apply_func,
+            coalesce_key=("memory-upsert-window",),
+            coalesce_payload=label,
+            coalesce_func=coalesce_func,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        results = await asyncio.gather(
+            worker("trajectory", "trajectory"),
+            worker("experience", "experience_single"),
+        )
+
+    assert results == ["result:trajectory", "result:experience"]
+    assert events == ["coalesce:trajectory,experience:window-handle"]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_operation_exact_apply_window_preserves_order_across_overlapping_uncoalesced_item():
+    shared_path = "viking://agent/default/memories/experiences/shared.md"
+    other_path = "viking://agent/default/memories/experiences/other.md"
+    events: List[str] = []
+
+    handle = SimpleNamespace(id="window-handle", locks=[])
+    lock_manager = SimpleNamespace(
+        create_handle=Mock(return_value=handle),
+        acquire_exact_path_batch=AsyncMock(return_value=True),
+        release=AsyncMock(),
+    )
+
+    async def coalesce_func(payloads, lock_handle):
+        events.append(f"coalesce:{','.join(payloads)}:{lock_handle.id}")
+        return [f"result:{payload}" for payload in payloads]
+
+    async def worker(label: str, *, coalesce: bool):
+        async def apply_func(lock_handle):
+            events.append(f"apply:{label}:{lock_handle.id}")
+            return label
+
+        return await compressor_v2_module._enqueue_operation_exact_apply_window(
+            lock_manager=lock_manager,
+            window_key_paths=[shared_path],
+            lock_paths=[shared_path, other_path] if not coalesce else [shared_path],
+            window_seconds=0.01,
+            phase_metric_key="experience_single",
+            apply_func=apply_func,
+            coalesce_key=(shared_path,) if coalesce else None,
+            coalesce_payload=label if coalesce else None,
+            coalesce_func=coalesce_func if coalesce else None,
+        )
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        first = asyncio.create_task(worker("first", coalesce=True))
+        await asyncio.sleep(0)
+        middle = asyncio.create_task(worker("middle", coalesce=False))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(worker("second", coalesce=True))
+        results = await asyncio.gather(first, middle, second)
+
+    assert results == ["first", "middle", "second"]
+    assert events == [
+        "apply:first:window-handle",
+        "apply:middle:window-handle",
+        "apply:second:window-handle",
+    ]
+    lock_manager.create_handle.assert_called_once()
+    lock_manager.acquire_exact_path_batch.assert_awaited_once_with(
+        handle,
+        [shared_path, other_path],
+        timeout=None,
+    )
+    lock_manager.release.assert_awaited_once_with(handle)
 
 
 class MockVikingFS:
@@ -474,6 +1984,7 @@ class TestCompressorV2:
             patch("openviking.session.compressor_v2.logger.warning") as warning_mock,
             patch("openviking.session.compressor_v2.logger.debug") as debug_mock,
         ):
+            initialize_openviking_config()
             result = await compressor.extract_long_term_memories(
                 messages=messages,
                 ctx=ctx,
@@ -575,7 +2086,13 @@ class TestCompressorV2:
 
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
-                return []
+                return [
+                    SimpleNamespace(
+                        memory_type="experiences",
+                        directory="viking://agent/default/memories/experiences",
+                        filename_template="{{experience_name}}.md",
+                    )
+                ]
 
             def _get_registry(self):
                 return object()
@@ -585,7 +2102,20 @@ class TestCompressorV2:
                 pass
 
             async def run(self):
-                return SimpleNamespace(upsert_operations=[], delete_file_contents=[]), []
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="experiences",
+                                uris=["viking://agent/default/memories/experiences/debug.md"],
+                                memory_fields={"experience_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
 
         class DummyUpdater:
             async def apply_operations(self, operations, ctx, **kwargs):
@@ -617,10 +2147,11 @@ class TestCompressorV2:
             release=AsyncMock(side_effect=release),
         )
 
-        async def post_apply(result, inheritance_map, lock_handle):
+        async def post_apply(result, inheritance_map, lock_handle, source_attribution_map):
             assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
             assert lock_handle is handle
+            assert source_attribution_map == {}
             events.append("post_apply")
 
         with (
@@ -635,17 +2166,416 @@ class TestCompressorV2:
             patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
             patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
         ):
-            result = await compressor._run_extract_phase(
-                provider=DummyProvider(),
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-                phase_label="experience(test)",
-                post_apply=post_apply,
-            )
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                    post_apply=post_apply,
+                )
 
         assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
         assert events == ["acquire", "apply", "post_apply", "release"]
+        summary = telemetry.finish().summary
+        phase = summary["memory"]["agent"]["phase"]["experience_single"]
+        assert phase["count"] == 1
+        assert phase.get("total_ms", 0) >= 0
+        assert phase.get("lock_wait_ms", 0) >= 0
+        assert phase.get("memory_apply_ms", 0) >= 0
+        assert phase.get("post_apply_ms", 0) >= 0
+        assert phase["schema_tree_lock_path_count"] == 1
+        assert phase.get("schema_exact_lock_path_count", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_experience_operation_exact_apply_locks_after_llm(self):
+        """Experimental exact-apply mode should not hold the schema tree lock during LLM."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        events: List[str] = []
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+            async def read_file(self, uri: str, ctx=None):
+                return ""
+
+        class DummyProvider:
+            prefetched_uris = [
+                exp_uri,
+                "viking://agent/default/memories/experiences/other.md",
+            ]
+            read_file_versions = {}
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                events.append("llm")
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="experiences",
+                                uris=[exp_uri],
+                                memory_fields={"experience_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = [exp_uri]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+                agent_experience_apply_lock_mode="operation_exact",
+            ),
+        )
+        handle = SimpleNamespace(id="handle-1", locks=[])
+
+        async def acquire_exact_path_batch(_handle, paths, **kwargs):
+            events.append("acquire_exact")
+            assert paths == [
+                exp_uri,
+                "viking://agent/default/memories/experiences/.overview.md",
+            ]
+            return True
+
+        async def post_apply(result, inheritance_map, lock_handle, source_attribution_map):
+            assert lock_handle is handle
+            events.append("post_apply")
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(),
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            release=AsyncMock(side_effect=lambda _handle: events.append("release")),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                    post_apply=post_apply,
+                )
+
+        assert result[0] == [exp_uri]
+        assert events == ["llm", "acquire_exact", "apply", "post_apply", "release"]
+        lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
+        assert phase_summary["candidate_uri_count"] == 2
+        assert phase_summary["operation_target_uri_count"] == 2
+        assert phase_summary["candidate_target_overlap_count"] == 1
+        assert phase_summary["operation_exact_lock_path_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_trajectory_operation_exact_apply_locks_after_llm(self):
+        """Trajectory exact-apply mode should not hold the schema tree lock during LLM."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        events: List[str] = []
+        traj_uri = "viking://agent/default/memories/trajectories/debug_20260524010101.md"
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+            async def read_file(self, uri: str, ctx=None):
+                return ""
+
+        class DummyProvider:
+            prefetched_uris = []
+            read_file_versions = {}
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run(self):
+                events.append("llm")
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="trajectories",
+                                uris=[traj_uri],
+                                memory_fields={"trajectory_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = [traj_uri]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+                agent_experience_apply_lock_mode="tree",
+                agent_trajectory_apply_lock_mode="operation_exact",
+            ),
+        )
+        handle = SimpleNamespace(id="handle-trajectory", locks=[])
+
+        async def acquire_exact_path_batch(_handle, paths, **kwargs):
+            events.append("acquire_exact")
+            assert paths == [
+                traj_uri,
+                "viking://agent/default/memories/trajectories/.overview.md",
+            ]
+            return True
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(),
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            release=AsyncMock(side_effect=lambda _handle: events.append("release")),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="trajectory",
+                )
+
+        assert result[0] == [traj_uri]
+        assert events == ["llm", "acquire_exact", "apply", "release"]
+        lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["trajectory"]
+        assert phase_summary["operation_exact_lock_path_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_experience_operation_exact_apply_detects_stale_prefetch(self):
+        """Exact-apply mode should keep retrying with refreshed reads after stale reads."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+        events: List[str] = []
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+            async def read_file(self, uri: str, ctx=None):
+                return "new-content"
+
+        class DummyProvider:
+            def __init__(self):
+                self._read_file_versions = {exp_uri: content_digest("old-content")}
+                self._read_file_contents = {}
+
+            @property
+            def read_file_versions(self):
+                return self._read_file_versions
+
+            def get_memory_schemas(self, _ctx):
+                return []
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            run_count = 0
+
+            def __init__(self, **kwargs):
+                self.provider = kwargs["context_provider"]
+
+            async def run(self):
+                DummyExtractLoop.run_count += 1
+                events.append("llm")
+                if DummyExtractLoop.run_count < 3:
+                    self.provider._read_file_versions[exp_uri] = content_digest(
+                        f"old-content-{DummyExtractLoop.run_count}"
+                    )
+                else:
+                    self.provider._read_file_versions[exp_uri] = content_digest("new-content")
+                return (
+                    ResolvedOperations(
+                        upsert_operations=[
+                            ResolvedOperation(
+                                memory_type="experiences",
+                                uris=[exp_uri],
+                                memory_fields={"experience_name": "debug"},
+                            )
+                        ],
+                        delete_file_contents=[],
+                        errors=[],
+                    ),
+                    [],
+                )
+
+        class DummyUpdater:
+            async def apply_operations(self, operations, ctx, **kwargs):
+                events.append("apply")
+                result = MemoryUpdateResult()
+                result.written_uris = [exp_uri]
+                return result
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                enable_role_id_memory_isolate=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+                agent_experience_apply_lock_mode="operation_exact",
+            ),
+        )
+        handles = [
+            SimpleNamespace(id="handle-1", locks=[]),
+            SimpleNamespace(id="handle-2", locks=[]),
+            SimpleNamespace(id="handle-3", locks=[]),
+        ]
+
+        async def acquire_exact_path_batch(_handle, _paths, **kwargs):
+            events.append("acquire_exact")
+            return True
+
+        async def acquire_exact_tree_batch(_handle, **kwargs):
+            events.append("acquire_tree")
+            return True
+
+        async def release(_handle):
+            events.append(f"release:{_handle.id}")
+
+        lock_manager = SimpleNamespace(
+            create_handle=Mock(side_effect=handles),
+            acquire_exact_path_batch=AsyncMock(side_effect=acquire_exact_path_batch),
+            acquire_exact_tree_batch=AsyncMock(side_effect=acquire_exact_tree_batch),
+            release=AsyncMock(side_effect=release),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
+        ):
+            telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+            with bind_telemetry(telemetry):
+                result = await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="experience(test)",
+                )
+
+        assert result[0] == [exp_uri]
+        assert events == [
+            "llm",
+            "acquire_exact",
+            "release:handle-1",
+            "llm",
+            "acquire_exact",
+            "release:handle-2",
+            "llm",
+            "acquire_exact",
+            "apply",
+            "release:handle-3",
+        ]
+        lock_manager.acquire_exact_tree_batch.assert_not_called()
+        phase_summary = telemetry.finish().summary["memory"]["agent"]["phase"]["experience_single"]
+        assert phase_summary["operation_exact_conflicts"] == 2
+        assert phase_summary["operation_exact_retries"] == 2
+        assert phase_summary["operation_exact_stale_read_uri_count"] == 2
+        assert phase_summary["operation_exact_retry_attempt"] == 2
+        assert phase_summary["operation_exact_conflict_sensitive_buckets"] == {"experiences": 3}
+        assert phase_summary["operation_exact_conflict_sensitive_reasons"] == {"unknown_schema": 3}
+        assert phase_summary["operation_exact_conflict_buckets"] == {"experiences": 2}
+        assert phase_summary["operation_exact_conflict_reasons"] == {"unknown_schema": 2}
+        assert phase_summary["operation_exact_retry_buckets"] == {"experiences": 2}
+        assert phase_summary["operation_exact_retry_reasons"] == {"unknown_schema": 2}
+        assert phase_summary["operation_exact_stale_base_states"] == {"present": 2}
+        assert phase_summary["operation_exact_stale_current_states"] == {"present": 2}
 
     @pytest.mark.asyncio
     async def test_append_trajectories_uses_exact_lock(self):
@@ -707,23 +2637,139 @@ class TestCompressorV2:
         # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
         exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
         assert "source_trajectories" not in exp_mf.extra_fields
-        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), (
+            "exp.links should point to traj"
+        )
         assert exp_mf.backlinks == [], "exp should have no backlinks"
 
         # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
         traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
         assert traj_mf.links == [], "traj should have no forward links"
-        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), (
+            "traj.backlinks should reference exp"
+        )
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",   # exp read
+            "read",  # exp read
             "write",  # exp write (exp.links)
-            "read",   # traj read  (write_stored_links)
+            "read",  # traj read  (write_stored_links)
             "write",  # traj write (traj.backlinks)
             "release",
         ]
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_default_keeps_per_trajectory_experience_phases(self):
+        """Default config should preserve one experience phase per trajectory."""
+        from openviking.session.memory.agent_experience_context_provider import (
+            AgentExperienceContextProvider,
+        )
+
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        calls: List[str] = []
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            calls.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            assert isinstance(kwargs["provider"], AgentExperienceContextProvider)
+            assert phase_label.startswith(
+                "experience(viking://agent/default/memories/trajectories/"
+            )
+            return [f"exp-for-{len(calls)}"], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+        ):
+            await compressor.extract_agent_memories(messages, ctx=ctx)
+
+        assert calls == [
+            "trajectory",
+            f"experience({traj_uris[0]})",
+            f"experience({traj_uris[1]})",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_agent_memory_operation_exact_runs_per_trajectory_experience_concurrently(self):
+        """Operation-exact apply can overlap same-session per-trajectory experience phases."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = create_test_conversation()
+        traj_uris = [
+            "viking://agent/default/memories/trajectories/first.md",
+            "viking://agent/default/memories/trajectories/second.md",
+        ]
+        phase_labels: List[str] = []
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None):
+                return MemoryFileUtils.write(
+                    MemoryFile(uri=uri, content=f"content for {uri}", extra_fields={})
+                )
+
+        async def fake_run_extract_phase(**kwargs):
+            phase_label = kwargs["phase_label"]
+            phase_labels.append(phase_label)
+            if phase_label == "trajectory":
+                return traj_uris, [], [], {}, []
+
+            if phase_label == f"experience({traj_uris[0]})":
+                first_started.set()
+                await asyncio.wait_for(second_started.wait(), timeout=1)
+            elif phase_label == f"experience({traj_uris[1]})":
+                second_started.set()
+                await asyncio.wait_for(first_started.wait(), timeout=1)
+            else:
+                pytest.fail(f"unexpected phase label: {phase_label}")
+            return [f"exp-for-{phase_label}"], [], [], {}, []
+
+        config = SimpleNamespace(
+            memory=SimpleNamespace(
+                agent_memory_enabled=True,
+                agent_experience_apply_lock_mode="operation_exact",
+                agent_experience_per_trajectory_max_concurrency=2,
+            )
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch.object(compressor, "_run_extract_phase", side_effect=fake_run_extract_phase),
+        ):
+            await asyncio.wait_for(compressor.extract_agent_memories(messages, ctx=ctx), timeout=2)
+
+        assert phase_labels[0] == "trajectory"
+        assert set(phase_labels[1:]) == {
+            f"experience({traj_uris[0]})",
+            f"experience({traj_uris[1]})",
+        }
 
 
 class TestExtractLoopPatchRepair:

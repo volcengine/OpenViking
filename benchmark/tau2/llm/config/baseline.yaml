@@ -48,6 +48,22 @@ openviking:
   url: ${OPENVIKING_URL:-http://localhost:1933}
   account: ${OPENVIKING_ACCOUNT:-default}
   agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
+  # Agent Harness / TAU-2 experiment corpus preparation defaults to concurrent
+  # per-session commits plus server-side exact apply for agent trajectory /
+  # experience memory.
+  agent_memory_enabled: true
+  agent_experience_apply_lock_mode: operation_exact
+  agent_trajectory_apply_lock_mode: operation_exact
+  operation_exact_apply_window_seconds: 10.0
+  long_term_extraction_enabled: false
+  session_skill_extraction_enabled: false
+  corpus_session_commit_concurrency: 4
+  # Corpus prepare can legitimately take far longer than the low-level client
+  # default on tree-lock paths. Keep tree/exact lock experiments comparable by
+  # making both the HTTP client and task wait timeout explicit in the generated
+  # run plan.
+  timeout_seconds: 3600
+  wait_timeout_seconds: 3600
   reuse_corpus_across_runs: true
   retrieval_top_k: 4
   prewrite_retrieval_top_k: 6

@@ -223,6 +223,36 @@ Per-cell execution records live under `cell_results/`, raw TAU-2 result JSON
 lives under `memory_cells/`, and corpus identity / generated memory checks live
 under `memory_corpora/`.
 
+Agent Harness / TAU-2 corpus preparation opts into the faster agent-memory
+write path. The default evidence path keeps experience consolidation on the
+normal per-trajectory route and relies on concurrent session commits plus
+server-side exact apply for agent trajectory / experience files only.
+Configure the running OpenViking server with:
+
+- `memory.agent_memory_enabled=true`
+- `memory.agent_experience_apply_lock_mode="operation_exact"`
+- `memory.agent_trajectory_apply_lock_mode="operation_exact"`
+- `memory.operation_exact_apply_window_seconds=10.0`
+- `memory.long_term_extraction_enabled=false`
+- `memory.session_skill_extraction_enabled=false`
+
+`--strict-preflight` checks `OPENVIKING_CONFIG_FILE` (or `~/.openviking/ov.conf`)
+and fails fast if the server-side memory config does not match the experiment
+config. The `10.0s` operation-exact apply window is now also the OpenViking
+product default; the remaining settings are benchmark / Vaka corpus-prepare
+defaults for faster iteration. `long_term_extraction_enabled=false` is the
+important exp-only switch: standard user/tool/skill long-term extraction is
+skipped, while agent trajectory / experience memory still runs when
+`agent_memory_enabled=true`. Experience consolidation keeps the normal
+per-trajectory semantics, while same-session experience phases may run
+concurrently when operation-exact apply is enabled. The operation-exact apply
+window is a server-side owner
+primitive: requests for the same concrete target set queue during a short
+engineering window, then one owner acquires the union of exact locks and applies
+the queued patch timeline in order against locked, latest content. It is not a
+client-side sleep and does not require the benchmark runner to serialize session
+commits.
+
 ## Memory Adapter
 
 Memory cells run through a small TAU-2 agent adapter in this directory:
@@ -252,18 +282,22 @@ The current trajectory config uses:
 
 The runner prepares each distinct `domain + corpus_id` once and reuses it across
 eval run ids when the cached `corpus_manifest.json` is present. Different
-corpora may be prepared in parallel with `benchmark.corpus_prepare_concurrency`;
-session commits inside one corpus remain serial to preserve OpenViking write
-semantics.
+corpora may be prepared in parallel with `benchmark.corpus_prepare_concurrency`.
+Session commits inside one corpus can also be submitted concurrently with
+`openviking.corpus_session_commit_concurrency`; use `1` to keep the historical
+serial commit / wait behavior. The corpus manifest records both the configured
+concurrency and stable input-order rows so later eval runs can fail fast on
+mismatched corpus-build semantics.
 
 By default, trajectory extraction is transcript-only: the runner replays TAU-2
 messages into an OpenViking session and does not expose held-out reward or
 assertion results to the extractor.
 
 Eval cells run in parallel with `benchmark.strategy_concurrency` by default and
-can be overridden with `--strategy-concurrency`. This only parallelizes read-only
-TAU-2 eval cells; corpus writes inside one corpus are still serialized by the
-prepare step.
+can be overridden with `--strategy-concurrency`. This parallelizes read-only
+TAU-2 eval cells; corpus writes are controlled separately by
+`benchmark.corpus_prepare_concurrency` across corpora and
+`openviking.corpus_session_commit_concurrency` within a corpus.
 
 For exploratory gates, prefer a bounded run with `--cell-timeout-seconds`.
 Timed-out cells are recorded with return code `124`, `timed_out=true`, and are
