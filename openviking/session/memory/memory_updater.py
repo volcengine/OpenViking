@@ -26,7 +26,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import FieldType, MergeOp, MergeOpFactory, StrPatch
-from openviking.session.memory.merge_op.base import StrPatchWithBase
+from openviking.session.memory.merge_op.base import ReplaceValueWithBase, StrPatchWithBase
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
@@ -90,6 +90,47 @@ def _wrap_patch_with_read_base(
         base_digest=_text_digest(base_value),
         source_operation_id=source_operation_id,
     )
+
+
+def _wrap_replace_with_read_base(
+    patch_value: Any,
+    *,
+    base_value: Any,
+    source_operation_id: str,
+) -> Any:
+    if isinstance(patch_value, ReplaceValueWithBase):
+        return patch_value
+    if base_value is None:
+        return patch_value
+    return ReplaceValueWithBase(
+        proposed_value=patch_value,
+        base_value=base_value,
+        base_digest=_text_digest(base_value) if isinstance(base_value, str) else None,
+        source_operation_id=source_operation_id,
+    )
+
+
+def _wrap_merge_value_with_read_base(
+    field: Any,
+    patch_value: Any,
+    *,
+    base_value: Any,
+    source_operation_id: str,
+) -> Any:
+    merge_op = getattr(field, "merge_op", None)
+    if merge_op == MergeOp.PATCH:
+        return _wrap_patch_with_read_base(
+            patch_value,
+            base_value=base_value,
+            source_operation_id=source_operation_id,
+        )
+    if merge_op == MergeOp.REPLACE:
+        return _wrap_replace_with_read_base(
+            patch_value,
+            base_value=base_value,
+            source_operation_id=source_operation_id,
+        )
+    return patch_value
 
 
 def _is_structured_string_patch(patch_value: Any) -> bool:
@@ -853,7 +894,8 @@ class MemoryUpdater:
                 _raise_if_unsupported_exact_file_patch(field, patch_value, uri=uri)
                 current_value = _field_value_from_memory_file(old_content, field.name)
                 base_value = _field_value_from_memory_file(read_base_content, field.name)
-                patch_value = _wrap_patch_with_read_base(
+                patch_value = _wrap_merge_value_with_read_base(
+                    field,
                     patch_value,
                     base_value=base_value,
                     source_operation_id=f"{uri}:{field.name}",

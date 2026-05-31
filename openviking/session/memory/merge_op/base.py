@@ -124,6 +124,16 @@ class StrPatchWithBase(StrPatch):
     attempt_id: int = 0
 
 
+class ReplaceValueWithBase(BaseModel):
+    """Runtime envelope for a full-value replacement plus its read-time base."""
+
+    proposed_value: Any
+    base_value: Optional[Any] = None
+    base_digest: Optional[str] = None
+    source_operation_id: Optional[str] = None
+    attempt_id: int = 0
+
+
 class MergeOp(str, Enum):
     """Merge operation enumeration."""
 

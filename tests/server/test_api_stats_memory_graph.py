@@ -15,6 +15,22 @@ async def _write_memory(service, uri: str, memory_file: MemoryFile) -> None:
     await service.viking_fs.write_file(uri, MemoryFileUtils.write(memory_file), ctx=ctx)
 
 
+async def test_memory_graph_health_treats_missing_root_as_empty_graph(client):
+    resp = await client.get(
+        "/api/v1/stats/memory-graph",
+        params={"uri": "viking://agent/default/memories"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert result["healthy"] is True
+    assert result["scanned_entry_count"] == 0
+    assert result["memory_file_count"] == 0
+    assert result["samples"] == []
+
+
 async def test_memory_graph_health_reports_healthy_bidirectional_links(client, service):
     root_uri = "viking://agent/default/memories"
     exp_uri = f"{root_uri}/experiences/refund.md"

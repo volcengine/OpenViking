@@ -27,7 +27,7 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
     write_stored_links,
 )
-from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -44,7 +44,12 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
-_EXACT_FILE_LOCK_SAFE_MERGE_OPS = {MergeOp.PATCH, MergeOp.SUM, MergeOp.IMMUTABLE}
+_EXACT_FILE_LOCK_SAFE_MERGE_OPS = {
+    MergeOp.PATCH,
+    MergeOp.REPLACE,
+    MergeOp.SUM,
+    MergeOp.IMMUTABLE,
+}
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
 
@@ -130,9 +135,9 @@ def _memory_apply_exact_file_lock_enabled_from_config(config: Any) -> bool:
 def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[str]]:
     """Return whether schemas can safely skip broad tree locks in exact apply mode.
 
-    PR-1 only supports base-aware stale rewrite for structured string patches.
-    Full-value replacement fields still need the existing schema tree lock unless
-    a future field adapter can synthesize replace proposals against latest state.
+    PR-1 supports base-aware stale rewrite for structured string patches and
+    base-aware synthesis for stale string replacements. Non-patch, non-replace
+    merge semantics remain conservative unless they are deterministic.
     """
     unsupported: list[str] = []
     for schema in schemas:
@@ -143,8 +148,20 @@ def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[st
                 merge_op = MergeOp(raw_merge_op)
             except Exception:
                 merge_op = raw_merge_op
+            field_name = getattr(field, "name", "unknown") or "unknown"
+            if merge_op == MergeOp.REPLACE:
+                raw_field_type = getattr(field, "field_type", None)
+                try:
+                    field_type = FieldType(raw_field_type)
+                except Exception:
+                    field_type = raw_field_type
+                if field_type == FieldType.STRING:
+                    continue
+                merge_op_label = getattr(merge_op, "value", str(merge_op))
+                field_type_label = getattr(field_type, "value", str(field_type))
+                unsupported.append(f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}")
+                continue
             if merge_op not in _EXACT_FILE_LOCK_SAFE_MERGE_OPS:
-                field_name = getattr(field, "name", "unknown") or "unknown"
                 unsupported.append(f"{memory_type}.{field_name}:{merge_op}")
     return not unsupported, unsupported
 

@@ -8,6 +8,7 @@ import re
 from collections import Counter, defaultdict
 from typing import Any
 
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import LINK_TYPE_DEFAULT
 from openviking.session.memory.schema_quality import (
@@ -17,6 +18,7 @@ from openviking.session.memory.schema_quality import (
     normalize_heading,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking_cli.exceptions import NotFoundError
 
 _SKIP_MEMORY_FILENAMES = {".overview.md", ".abstract.md", ".graph.html"}
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
@@ -296,14 +298,17 @@ async def inspect_memory_graph_health(
     corpus-build gates and diagnostics after concurrent memory writes, not for
     hot-path request metrics.
     """
-    entries = await viking_fs.tree(
-        root_uri,
-        output="original",
-        show_all_hidden=False,
-        node_limit=node_limit,
-        level_limit=None,
-        ctx=ctx,
-    )
+    try:
+        entries = await viking_fs.tree(
+            root_uri,
+            output="original",
+            show_all_hidden=False,
+            node_limit=node_limit,
+            level_limit=None,
+            ctx=ctx,
+        )
+    except (AGFSNotFoundError, FileNotFoundError, NotFoundError):
+        entries = []
     md_uris = [str(entry.get("uri")) for entry in entries if _is_memory_markdown(entry)]
 
     nodes: dict[str, Any] = {}

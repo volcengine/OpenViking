@@ -12,18 +12,26 @@ import pytest
 from openviking.session.memory.dataclass import (
     MemoryField,
 )
-from openviking.session.memory.memory_updater import _wrap_patch_with_read_base
+from openviking.session.memory.memory_updater import (
+    _wrap_merge_value_with_read_base,
+    _wrap_patch_with_read_base,
+)
 from openviking.session.memory.merge_op import (
     ImmutableOp,
     MergeOp,
     MergeOpFactory,
     PatchOp,
+    ReplaceOp,
     SearchReplaceBlock,
     StrPatch,
     SumOp,
     apply_str_patch,
 )
-from openviking.session.memory.merge_op.base import FieldType, StrPatchWithBase
+from openviking.session.memory.merge_op.base import (
+    FieldType,
+    ReplaceValueWithBase,
+    StrPatchWithBase,
+)
 from openviking.session.memory.merge_op.patch_handler import PatchParseError
 
 # ============================================================================
@@ -267,6 +275,81 @@ class TestSumOp:
         assert op.apply("not a number", 10) == "not a number"
 
 
+class TestReplaceOp:
+    """Tests for ReplaceOp."""
+
+    def test_apply_replace_value_with_base_without_stale_keeps_replace_semantics(self):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value="new",
+            base_value="old",
+            base_digest=hashlib.sha256("old".encode("utf-8")).hexdigest(),
+            source_operation_id="memory://example:content",
+        )
+
+        assert asyncio.run(op.apply_async("old", value)) == "new"
+
+    def test_apply_async_synthesizes_when_base_is_stale(self, monkeypatch):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value="alpha\nbeta\nproposed\n",
+            base_value="alpha\nbeta\n",
+            base_digest=hashlib.sha256("alpha\nbeta\n".encode("utf-8")).hexdigest(),
+            source_operation_id="memory://example:content",
+        )
+        calls = []
+
+        async def fake_rewrite(*, current_value, patch_value, intent_diff, reason):
+            calls.append((current_value, patch_value, intent_diff, reason))
+            return "alpha\ncurrent\nproposed\n"
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.replace._stale_replace_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.replace._rewrite_stale_replace",
+            fake_rewrite,
+        )
+
+        result = asyncio.run(op.apply_async("alpha\ncurrent\n", value))
+
+        assert result == "alpha\ncurrent\nproposed\n"
+        assert len(calls) == 1
+        assert calls[0][0] == "alpha\ncurrent\n"
+        assert calls[0][1].source_operation_id == "memory://example:content"
+        assert "--- base" in calls[0][2]
+        assert calls[0][3] == "base_digest_mismatch"
+
+    def test_apply_async_stale_replace_requires_enabled_synthesis(self, monkeypatch):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value="new",
+            base_value="old",
+            base_digest=hashlib.sha256("old".encode("utf-8")).hexdigest(),
+            source_operation_id="memory://example:content",
+        )
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.replace._stale_replace_rewrite_config",
+            lambda: (False, 0),
+        )
+
+        with pytest.raises(PatchParseError, match="stale replacement requires LLM synthesis"):
+            asyncio.run(op.apply_async("latest", value))
+
+    def test_apply_async_stale_non_string_replace_is_not_silently_applied(self):
+        op = ReplaceOp()
+        value = ReplaceValueWithBase(
+            proposed_value={"items": ["new"]},
+            base_value={"items": ["old"]},
+            source_operation_id="memory://example:metadata",
+        )
+
+        with pytest.raises(PatchParseError, match="stale non-string replacement"):
+            asyncio.run(op.apply_async({"items": ["latest"]}, value))
+
+
 class TestImmutableOp:
     """Tests for ImmutableOp."""
 
@@ -312,6 +395,11 @@ class TestMergeOpFactory:
         """Factory should create ImmutableOp for IMMUTABLE."""
         op = MergeOpFactory.create(MergeOp.IMMUTABLE, FieldType.STRING)
         assert isinstance(op, ImmutableOp)
+
+    def test_create_replace(self):
+        """Factory should create ReplaceOp for REPLACE."""
+        op = MergeOpFactory.create(MergeOp.REPLACE, FieldType.STRING)
+        assert isinstance(op, ReplaceOp)
 
     def test_from_field(self):
         """Factory should create from MemoryField."""
@@ -409,6 +497,26 @@ class TestStrPatchWithBase:
         assert isinstance(wrapped, StrPatchWithBase)
         assert wrapped.blocks == patch.blocks
         assert wrapped.base_value == "hello old"
+        assert wrapped.base_digest is not None
+        assert wrapped.source_operation_id == "memory://example:content"
+
+    def test_wrap_merge_value_with_read_base_wraps_replace_values(self):
+        field = MemoryField(
+            name="content",
+            field_type=FieldType.STRING,
+            merge_op=MergeOp.REPLACE,
+        )
+
+        wrapped = _wrap_merge_value_with_read_base(
+            field,
+            "new content",
+            base_value="old content",
+            source_operation_id="memory://example:content",
+        )
+
+        assert isinstance(wrapped, ReplaceValueWithBase)
+        assert wrapped.proposed_value == "new content"
+        assert wrapped.base_value == "old content"
         assert wrapped.base_digest is not None
         assert wrapped.source_operation_id == "memory://example:content"
 

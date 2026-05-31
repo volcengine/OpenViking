@@ -30,7 +30,7 @@ def test_schema_exact_file_apply_gate_allows_patch_sum_immutable():
     assert unsupported == []
 
 
-def test_schema_exact_file_apply_gate_rejects_replace_fields():
+def test_schema_exact_file_apply_gate_allows_replace_fields():
     schema = MemoryTypeSchema(
         memory_type="experiences",
         fields=[
@@ -45,5 +45,19 @@ def test_schema_exact_file_apply_gate_rejects_replace_fields():
 
     allowed, unsupported = compressor_v2_module._schemas_support_exact_file_apply([schema])
 
+    assert allowed is True
+    assert unsupported == []
+
+
+def test_schema_exact_file_apply_gate_rejects_non_string_replace_fields():
+    schema = MemoryTypeSchema(
+        memory_type="scores",
+        fields=[
+            MemoryField(name="score", field_type=FieldType.INT64, merge_op=MergeOp.REPLACE),
+        ],
+    )
+
+    allowed, unsupported = compressor_v2_module._schemas_support_exact_file_apply([schema])
+
     assert allowed is False
-    assert unsupported == ["experiences.content:MergeOp.REPLACE"]
+    assert unsupported == ["scores.score:replace:int64"]
