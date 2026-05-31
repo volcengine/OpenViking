@@ -1,0 +1,2004 @@
+import { Type } from "@sinclair/typebox";
+import { memoryOpenVikingConfigSchema } from "./config.js";
+import { registerSetupCli } from "./commands/setup.js";
+
+import { OpenVikingClient, isMemoryUri } from "./client.js";
+import type {
+  AddResourceInput,
+  AddResourceResult,
+  AddSkillInput,
+  AddSkillResult,
+  FindResult,
+  FindResultItem,
+  CommitSessionResult,
+  OVMessage,
+} from "./client.js";
+import { formatMessageFaithful, toRoleId } from "./context-engine.js";
+import {
+  compileSessionPatterns,
+  shouldBypassSession,
+  extractNewTurnMessages,
+} from "./text-utils.js";
+import {
+  clampScore,
+  postProcessMemories,
+  pickMemoriesForInjection,
+} from "./memory-ranking.js";
+import { withTimeout } from "./process-manager.js";
+import {
+  createMemoryOpenVikingContextEngine,
+  openClawSessionToOvStorageId,
+  openClawSessionRefToOvStorageId,
+} from "./context-engine.js";
+import type { ContextEngineWithCommit } from "./context-engine.js";
+import {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+  prepareRecallQuery,
+} from "./auto-recall.js";
+export {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+  prepareRecallQuery,
+};
+export type {
+  BuildMemoryLinesOptions,
+  BuildMemoryLinesWithBudgetOptions,
+  PreparedRecallQuery,
+} from "./auto-recall.js";
+
+type PluginLogger = {
+  debug?: (message: string) => void;
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+};
+
+type HookAgentContext = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+type SessionAgentLookup = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+};
+
+type PluginSessionRouting = {
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+  agentId: string;
+};
+
+type SessionAgentResolveBranch =
+  | "session_resolved"
+  | "config_only_fallback"
+  | "default_no_session";
+
+export type SessionAgentResolveResult = {
+  resolved: string;
+  resolvedBeforeSanitize: string;
+  branch: SessionAgentResolveBranch;
+  mappedResolvedAgentId: string | null;
+  aliases: string[];
+  fromExplicitBinding: boolean;
+};
+
+type ToolDefinition = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+};
+
+type ToolContext = {
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  senderId?: string;
+};
+
+type PluginCommandContext = {
+  args?: string;
+  commandBody: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  ovSessionId?: string;
+};
+
+type CommandResult = {
+  text: string;
+  details?: Record<string, unknown>;
+};
+
+type CommandDefinition = {
+  name: string;
+  description: string;
+  acceptsArgs?: boolean;
+  requireAuth?: boolean;
+  handler: (ctx: PluginCommandContext) => CommandResult | Promise<CommandResult>;
+};
+
+type AddResourceToolInput = {
+  source?: string;
+  to?: string;
+  parent?: string;
+  reason?: string;
+  instruction?: string;
+  wait?: boolean;
+  timeout?: number;
+};
+
+type AddSkillToolInput = {
+  source?: string;
+  data?: unknown;
+  wait?: boolean;
+  timeout?: number;
+};
+
+type OVSearchInput = {
+  query: string;
+  uri?: string;
+  limit?: number;
+};
+
+type ToolResultRef = {
+  sessionId: string;
+  toolResultId: string;
+  ref: string;
+};
+
+function parseToolResultRef(value: unknown): ToolResultRef | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/^viking:\/\/session\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/);
+  if (!match) {
+    return null;
+  }
+  const sessionId = decodeURIComponent(match[1]!);
+  const toolResultId = decodeURIComponent(match[2]!);
+  if (!sessionId || !toolResultId) {
+    return null;
+  }
+  return {
+    sessionId,
+    toolResultId,
+    ref: `viking://session/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}`,
+  };
+}
+
+function getOptionalInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+function getPositiveInteger(value: unknown, fallback: number): number {
+  return Math.max(1, getOptionalInteger(value, fallback));
+}
+
+type OpenClawPluginApi = {
+  pluginConfig?: unknown;
+  logger: PluginLogger;
+  registerTool: {
+    (tool: ToolDefinition, opts?: { name?: string; names?: string[] }): void;
+    (
+      factory: (ctx: ToolContext) => ToolDefinition,
+      opts?: { name?: string; names?: string[] },
+    ): void;
+  };
+  registerCommand?: (command: CommandDefinition) => void;
+  registerService: (service: {
+    id: string;
+    start: (ctx?: unknown) => void | Promise<void>;
+    stop?: (ctx?: unknown) => void | Promise<void>;
+  }) => void;
+  registerContextEngine?: (id: string, factory: () => unknown) => void;
+  registerCli?: (
+    factory: (ctx: { program: unknown; workspaceDir?: string }) => void,
+    opts?: { commands?: string[] },
+  ) => void;
+  on: (
+    hookName: string,
+    handler: (event: unknown, ctx?: HookAgentContext) => unknown,
+    opts?: { priority?: number },
+  ) => void;
+};
+
+const DEFAULT_OPENCLAW_AGENT_ID = "main";
+
+/**
+ * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
+ * (see openviking_cli/session/user_id.py). OpenClaw ids may contain ":"
+ * (e.g. session keys); never send raw colons in X-OpenViking-Agent.
+ */
+export function sanitizeOpenVikingAgentIdHeader(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  const normalized = trimmed
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  return normalized.length > 0 ? normalized : "ov_agent";
+}
+
+export function tokenizeCommandArgs(args: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i]!;
+    const next = args[i + 1];
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      const shouldEscape =
+        quote === '"'
+          ? next === '"' || next === "\\"
+          : !quote && Boolean(next && (/\s/.test(next) || next === '"' || next === "'"));
+      if (shouldEscape) {
+        escaping = true;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+    if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
+      quote = quote ? null : ch;
+      continue;
+    }
+    if (!quote && /\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Unterminated quoted argument");
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+type ParsedFlagArgs = {
+  positionals: string[];
+  flags: Map<string, string | boolean>;
+};
+
+function parseFlagArgs(args: string): ParsedFlagArgs {
+  const tokens = tokenizeCommandArgs(args);
+  const positionals: string[] = [];
+  const flags = new Map<string, string | boolean>();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+    const raw = token.slice(2);
+    if (!raw) {
+      continue;
+    }
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex >= 0) {
+      flags.set(raw.slice(0, eqIndex), raw.slice(eqIndex + 1));
+      continue;
+    }
+    const next = tokens[i + 1];
+    if (next && !next.startsWith("--")) {
+      flags.set(raw, next);
+      i += 1;
+    } else {
+      flags.set(raw, true);
+    }
+  }
+
+  return { positionals, flags };
+}
+
+function getStringFlag(flags: Map<string, string | boolean>, name: string): string | undefined {
+  const value = flags.get(name);
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getNumberFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+  const raw = getStringFlag(flags, name);
+  if (!raw) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`--${name} must be a number`);
+  }
+  return value;
+}
+
+function getBoolFlag(flags: Map<string, string | boolean>, name: string): boolean {
+  return flags.get(name) === true;
+}
+
+function extractToolSenderId(ctx: unknown): string | undefined {
+  if (!ctx || typeof ctx !== "object") {
+    return undefined;
+  }
+  const toolCtx = ctx as Record<string, unknown>;
+  if (typeof toolCtx.requesterSenderId === "string") {
+    const trimmed = toolCtx.requesterSenderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof toolCtx.senderId === "string") {
+    const trimmed = toolCtx.senderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+export function parseAddResourceCommandArgs(args: string): AddResourceToolInput {
+  const parsed = parseFlagArgs(args);
+  const source =
+    parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
+  if (!source) {
+    throw new Error("Usage: /add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]");
+  }
+  const to = getStringFlag(parsed.flags, "to");
+  const parent = getStringFlag(parsed.flags, "parent");
+  if (to && parent) {
+    throw new Error("Cannot specify both --to and --parent.");
+  }
+  return {
+    source,
+    to,
+    parent,
+    reason: getStringFlag(parsed.flags, "reason"),
+    instruction: getStringFlag(parsed.flags, "instruction"),
+    wait: getBoolFlag(parsed.flags, "wait"),
+    timeout: getNumberFlag(parsed.flags, "timeout"),
+  };
+}
+
+export function parseAddSkillCommandArgs(args: string): AddSkillToolInput {
+  const parsed = parseFlagArgs(args);
+  const source =
+    parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
+  if (!source) {
+    throw new Error("Usage: /add-skill <source> [--wait] [--timeout SEC]");
+  }
+  if (parsed.flags.has("to") || parsed.flags.has("parent") || parsed.flags.has("reason") || parsed.flags.has("instruction")) {
+    throw new Error("--to, --parent, --reason, and --instruction are resource-only options.");
+  }
+  return {
+    source,
+    wait: getBoolFlag(parsed.flags, "wait"),
+    timeout: getNumberFlag(parsed.flags, "timeout"),
+  };
+}
+
+export function parseOVSearchCommandArgs(args: string): OVSearchInput {
+  const parsed = parseFlagArgs(args);
+  // `/ov-search` only accepts a single query string, so positional segments are
+  // always re-joined to preserve unquoted multi-word searches.
+  const query = parsed.positionals.join(" ").trim();
+  if (!query) {
+    throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
+  }
+  return {
+    query,
+    uri: getStringFlag(parsed.flags, "uri"),
+    limit: getNumberFlag(parsed.flags, "limit"),
+  };
+}
+
+function extractAgentIdFromSessionKey(sessionKey?: string): string | undefined {
+  const raw = typeof sessionKey === "string" ? sessionKey.trim() : "";
+  if (!raw) {
+    return undefined;
+  }
+
+  const match = raw.match(/^agent:([^:]+):/);
+  const agentId = match?.[1]?.trim();
+  return agentId || undefined;
+}
+
+function collectSessionAgentAliases(
+  sessionId?: string,
+  sessionKey?: string,
+  ovSessionId?: string,
+): string[] {
+  const aliases = new Set<string>();
+  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+  const sk = typeof sessionKey === "string" ? sessionKey.trim() : "";
+  const ovSid = typeof ovSessionId === "string" ? ovSessionId.trim() : "";
+
+  if (sid) {
+    aliases.add(sid);
+  }
+  if (sk) {
+    aliases.add(sk);
+  }
+  if (ovSid) {
+    aliases.add(ovSid);
+  }
+
+  if (!ovSid && (sid || sk)) {
+    try {
+      aliases.add(
+        openClawSessionToOvStorageId(
+          sid || undefined,
+          sk || undefined,
+        ),
+      );
+    } catch {
+      /* need a resolvable OpenClaw session identity */
+    }
+  }
+
+  return [...aliases];
+}
+
+export function createSessionAgentResolver(configAgentId: string) {
+  const configAgentPrefix = configAgentId.trim() === "default" ? "" : configAgentId.trim();
+  const sessionAgentIds = new Map<string, string>();
+
+  const remember = (ctx: SessionAgentLookup): void => {
+    const sessionScopedAgentId =
+      extractAgentIdFromSessionKey(ctx.sessionKey) ||
+      extractAgentIdFromSessionKey(ctx.sessionId);
+    const rawAgentId =
+      (typeof ctx.agentId === "string" ? ctx.agentId.trim() : "") ||
+      sessionScopedAgentId ||
+      "";
+    if (!rawAgentId) {
+      return;
+    }
+
+    const prefix = configAgentPrefix;
+    const resolvedBeforeSanitize = prefix ? `${prefix}_${rawAgentId}` : rawAgentId;
+    const resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
+    for (const alias of collectSessionAgentAliases(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId)) {
+      sessionAgentIds.set(alias, resolved);
+    }
+  };
+
+  const resolve = (
+    sessionId?: string,
+    sessionKey?: string,
+    ovSessionId?: string,
+  ): SessionAgentResolveResult => {
+    const aliases = collectSessionAgentAliases(sessionId, sessionKey, ovSessionId);
+    const mappedAlias = aliases.find((alias) => sessionAgentIds.has(alias));
+    const mappedResolvedAgentId = mappedAlias ? sessionAgentIds.get(mappedAlias) : undefined;
+    const sessionScopedAgentId =
+      extractAgentIdFromSessionKey(sessionKey) ||
+      extractAgentIdFromSessionKey(sessionId);
+
+    let resolvedBeforeSanitize: string;
+    let resolved: string;
+    let branch: SessionAgentResolveBranch;
+    const prefix = configAgentPrefix;
+
+    if (mappedResolvedAgentId) {
+      resolvedBeforeSanitize = mappedResolvedAgentId;
+      resolved = mappedResolvedAgentId;
+      branch = "session_resolved";
+    } else if (sessionScopedAgentId) {
+      resolvedBeforeSanitize = prefix ? `${prefix}_${sessionScopedAgentId}` : sessionScopedAgentId;
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
+      branch = "session_resolved";
+    } else if (!prefix) {
+      resolvedBeforeSanitize = DEFAULT_OPENCLAW_AGENT_ID;
+      resolved = DEFAULT_OPENCLAW_AGENT_ID;
+      branch = "default_no_session";
+    } else {
+      resolvedBeforeSanitize = `${prefix}_${DEFAULT_OPENCLAW_AGENT_ID}`;
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
+      branch = "config_only_fallback";
+    }
+
+    return {
+      resolved,
+      resolvedBeforeSanitize,
+      branch,
+      mappedResolvedAgentId: mappedResolvedAgentId ?? null,
+      aliases,
+      fromExplicitBinding: !!(mappedResolvedAgentId || sessionScopedAgentId),
+    };
+  };
+
+  return {
+    remember,
+    resolve,
+  };
+}
+
+function totalCommitMemories(r: CommitSessionResult): number {
+  const m = r.memories_extracted;
+  if (!m || typeof m !== "object") return 0;
+  return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
+}
+
+const contextEnginePlugin = {
+  id: "openviking",
+  name: "Context Engine (OpenViking)",
+  description: "OpenViking-backed context-engine memory with auto-recall/capture",
+  kind: "context-engine" as const,
+  configSchema: memoryOpenVikingConfigSchema,
+
+  register(api: OpenClawPluginApi) {
+    const rawCfg =
+      api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
+        ? (api.pluginConfig as Record<string, unknown>)
+        : {};
+
+    if (rawCfg.mode && rawCfg.mode !== "remote") {
+      api.logger.warn(
+        `openviking: legacy local mode detected (mode="${String(rawCfg.mode)}"). ` +
+          "Migrating to remote mode. Please run 'openclaw openviking setup' to configure the remote server.",
+      );
+      rawCfg.mode = "remote";
+      delete rawCfg.localBinaryPath;
+      delete rawCfg.localDataDir;
+      delete rawCfg.localPort;
+      delete rawCfg.autoStart;
+    }
+
+    let cfg: ReturnType<typeof memoryOpenVikingConfigSchema.parse>;
+    try {
+      cfg = memoryOpenVikingConfigSchema.parse(rawCfg);
+    } catch (parseErr) {
+      api.logger.warn(
+        `openviking: config parse failed (${parseErr instanceof Error ? parseErr.message : String(parseErr)}). ` +
+          "Plugin loaded in setup-only mode. Run: openclaw openviking setup",
+      );
+      registerSetupCli(api);
+      return;
+    }
+
+    const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
+    const rawAgentId = rawCfg.agent_prefix;
+    if (cfg.logFindRequests) {
+      api.logger.info(
+        "openviking: routing debug logging enabled (config logFindRequests, or env OPENVIKING_LOG_ROUTING=1 / OPENVIKING_DEBUG=1)",
+      );
+    }
+    const verboseRoutingInfo = (message: string) => {
+      if (cfg.logFindRequests) {
+        api.logger.info(message);
+      }
+    };
+    verboseRoutingInfo(
+      `openviking: loaded plugin config agent_prefix="${cfg.agent_prefix}" ` +
+        `(raw plugins.entries.openviking.config.agent_prefix=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
+        `${
+          cfg.agent_prefix
+            ? 'non-empty → X-OpenViking-Agent is <agent_prefix>_<ctx.agentId> when hooks expose session agent, or <agent_prefix>_main when ctx.agentId is unknown'
+            : 'empty → X-OpenViking-Agent follows OpenClaw ctx.agentId per session, or "main" when ctx.agentId is unknown'
+        })`,
+    );
+    verboseRoutingInfo(
+      `openviking: auth/namespace config ` +
+        JSON.stringify({
+          isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
+          isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
+          deprecatedAgentScopeMode: cfg.agentScopeMode,
+        }),
+    );
+    const routingDebugLog = cfg.logFindRequests
+      ? (msg: string) => {
+          api.logger.info(msg);
+        }
+      : undefined;
+    const tenantAccount = cfg.accountId;
+    const tenantUser = cfg.userId;
+
+    const clientPromise = Promise.resolve(
+      new OpenVikingClient(
+        cfg.baseUrl,
+        cfg.apiKey,
+        cfg.agent_prefix,
+        cfg.timeoutMs,
+        tenantAccount,
+        tenantUser,
+        routingDebugLog,
+        cfg.isolateUserScopeByAgent,
+        cfg.isolateAgentScopeByUser,
+      ),
+    );
+
+    const getClient = (): Promise<OpenVikingClient> => clientPromise;
+
+    const isBypassedSession = (ctx?: {
+      sessionId?: string;
+      sessionKey?: string;
+    }): boolean => shouldBypassSession(ctx ?? {}, bypassSessionPatterns);
+
+    const makeBypassedToolResult = (toolName: string) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: `OpenViking is bypassed for this session by bypassSessionPatterns; ${toolName} was skipped.`,
+        },
+      ],
+      details: {
+        action: "bypassed",
+        reason: "session_bypassed",
+        toolName,
+      },
+    });
+
+    const resolvePluginSessionRouting = (ctx?: SessionAgentLookup): PluginSessionRouting => {
+      const sessionId = typeof ctx?.sessionId === "string" ? ctx.sessionId.trim() : "";
+      const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
+      let ovSessionId = typeof ctx?.ovSessionId === "string" ? ctx.ovSessionId.trim() : "";
+
+      if (!ovSessionId && (sessionId || sessionKey)) {
+        ovSessionId = openClawSessionToOvStorageId(
+          sessionId || undefined,
+          sessionKey || undefined,
+        );
+      }
+
+      const session = {
+        agentId: ctx?.agentId,
+        sessionId: sessionId || undefined,
+        sessionKey: sessionKey || undefined,
+        ovSessionId: ovSessionId || undefined,
+      };
+      rememberSessionAgentId(session);
+
+      return {
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ovSessionId: session.ovSessionId,
+        agentId: resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId),
+      };
+    };
+
+    const formatResourceImportText = (result: AddResourceResult): string => {
+      const root = result.root_uri ? ` ${result.root_uri}` : "";
+      const warnings = result.warnings?.length ? ` Warnings: ${result.warnings.join("; ")}` : "";
+      return `Imported OpenViking resource.${root}${warnings}`.trim();
+    };
+
+    const formatSkillImportText = (result: AddSkillResult): string => {
+      const uri = result.uri ? ` ${result.uri}` : "";
+      const name = result.name ? ` (${result.name})` : "";
+      return `Imported OpenViking skill${name}.${uri}`.trim();
+    };
+
+    const importResource = async (input: AddResourceInput, agentId?: string) => {
+      const client = await getClient();
+      const result = await client.addResource(input, agentId);
+      return {
+        content: [{ type: "text" as const, text: formatResourceImportText(result) }],
+        details: {
+          action: "resource_imported",
+          ...result,
+        },
+      };
+    };
+
+    const importSkill = async (input: AddSkillInput, agentId?: string) => {
+      const client = await getClient();
+      const result = await client.addSkill(input, agentId);
+      return {
+        content: [{ type: "text" as const, text: formatSkillImportText(result) }],
+        details: {
+          action: "skill_imported",
+          ...result,
+        },
+      };
+    };
+
+    const addResourceOpenViking = (input: AddResourceToolInput, agentId?: string) =>
+      importResource({
+        pathOrUrl: input.source ?? "",
+        to: input.to,
+        parent: input.parent,
+        reason: input.reason,
+        instruction: input.instruction,
+        wait: input.wait,
+        timeout: input.timeout,
+      }, agentId);
+
+    const addSkillOpenViking = (input: AddSkillToolInput, agentId?: string) =>
+      importSkill({
+        path: input.source,
+        data: input.data,
+        wait: input.wait,
+        timeout: input.timeout,
+      }, agentId);
+
+    const mergeFindResults = (results: FindResult[]): FindResult => {
+      const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+        const seen = new Map<string, FindResultItem>();
+        for (const item of items) {
+          if (!seen.has(item.uri)) {
+            seen.set(item.uri, item);
+          }
+        }
+        return Array.from(seen.values());
+      };
+      const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+      const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+      const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+      return {
+        memories,
+        resources,
+        skills,
+        total: memories.length + resources.length + skills.length,
+      };
+    };
+
+    const formatOVSearchRows = (result: FindResult): string[] => {
+      const truncateSummary = (value: string, maxChars = 220): string => {
+        const collapsed = value.replace(/\s+/g, " ").trim();
+        if (collapsed.length <= maxChars) {
+          return collapsed;
+        }
+        return `${collapsed.slice(0, maxChars - 3)}...`;
+      };
+      const truncateUri = (value: string, maxChars = 84): string => {
+        if (value.length <= maxChars) {
+          return value;
+        }
+        return `${value.slice(0, maxChars - 3)}...`;
+      };
+      const items = [
+        ...(result.memories ?? []).map((item) => ({ contextType: "memory", item })),
+        ...(result.resources ?? []).map((item) => ({ contextType: "resource", item })),
+        ...(result.skills ?? []).map((item) => ({ contextType: "skill", item })),
+      ];
+      if (items.length === 0) {
+        return [];
+      }
+      const numberHeader = "no";
+      const numberWidth = Math.max(numberHeader.length, String(items.length).length);
+      const typeWidth = Math.max("type".length, ...items.map(({ contextType }) => contextType.length));
+      const uriWidth = Math.max("uri".length, ...items.map(({ item }) => truncateUri(item.uri).length));
+      const levelWidth = Math.max("level".length, ...items.map(({ item }) => String(item.level ?? "").length));
+      const scoreWidth = Math.max(
+        "score".length,
+        ...items.map(({ item }) => (typeof item.score === "number" ? item.score.toFixed(2).length : 0)),
+      );
+      return [
+        `${numberHeader.padEnd(numberWidth)}  ${"type".padEnd(typeWidth)}  ${"uri".padEnd(uriWidth)}  ${"level".padEnd(levelWidth)}  ${"score".padEnd(scoreWidth)}  abstract`,
+        ...items.map(({ contextType, item }, index) => {
+          const score = typeof item.score === "number" ? item.score.toFixed(2) : "";
+          const summary = truncateSummary(item.abstract || item.overview || "(no summary)");
+          return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${truncateUri(item.uri).padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
+        }),
+      ];
+    };
+
+    const formatOVSearchText = (query: string, uri: string | undefined, result: FindResult): string => {
+      if ((result.total ?? 0) <= 0) {
+        const scope = uri ? ` under ${uri}` : "";
+        return `No OpenViking resource or skill results found for "${query}"${scope}.`;
+      }
+      const scope = uri ? ` under ${uri}` : "";
+      const lines = [
+        `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
+        "",
+        ...formatOVSearchRows(result),
+      ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
+      return lines.join("\n");
+    };
+
+    const searchOpenViking = async (input: OVSearchInput, agentId?: string) => {
+      const query = input.query.trim();
+      if (!query) {
+        throw new Error("query is required");
+      }
+      const limit = Math.max(1, Math.floor(input.limit ?? 10));
+      const client = await getClient();
+      let result: FindResult;
+      if (input.uri) {
+        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
+      } else {
+        const [resourcesSettled, skillsSettled] = await Promise.allSettled([
+          client.find(query, { targetUri: "viking://resources", limit }, agentId),
+          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
+        ]);
+        const successful: FindResult[] = [];
+        if (resourcesSettled.status === "fulfilled") {
+          successful.push(resourcesSettled.value);
+        }
+        if (skillsSettled.status === "fulfilled") {
+          successful.push(skillsSettled.value);
+        }
+        if (successful.length === 0) {
+          const firstError =
+            resourcesSettled.status === "rejected"
+              ? resourcesSettled.reason
+              : skillsSettled.status === "rejected"
+                ? skillsSettled.reason
+                : "Both searches failed";
+          throw firstError instanceof Error ? firstError : new Error(String(firstError));
+        }
+        if (resourcesSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
+        }
+        if (skillsSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+        }
+        result = mergeFindResults(successful);
+      }
+      return {
+        content: [{ type: "text" as const, text: formatOVSearchText(query, input.uri, result) }],
+        details: {
+          action: "searched",
+          query,
+          uri: input.uri,
+          memories: result.memories ?? [],
+          resources: result.resources ?? [],
+          skills: result.skills ?? [],
+          total: result.total ?? 0,
+        },
+      };
+    };
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "add_resource",
+        label: "Add Resource (OpenViking)",
+        description:
+          "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
+          "For a '[media attached: /path ...]' document, set source to that exact local media path. Do not invent OpenViking upload REST endpoints.",
+        parameters: Type.Object({
+          source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
+          to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs" })),
+          parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources" })),
+          reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
+          instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
+          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("add_resource");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return addResourceOpenViking({
+            source: typeof params.source === "string" ? params.source : undefined,
+            to: typeof params.to === "string" ? params.to : undefined,
+            parent: typeof params.parent === "string" ? params.parent : undefined,
+            reason: typeof params.reason === "string" ? params.reason : undefined,
+            instruction: typeof params.instruction === "string" ? params.instruction : undefined,
+            wait: typeof params.wait === "boolean" ? params.wait : undefined,
+            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "add_resource" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "add_skill",
+        label: "Add Skill (OpenViking)",
+        description:
+          "Use only when the user explicitly asks to import, add, install, or register a skill into OpenViking. " +
+          "Set source to a local SKILL.md file or skill directory, or data to raw SKILL.md content or an MCP tool dict.",
+        parameters: Type.Object({
+          source: Type.Optional(Type.String({ description: "Local SKILL.md path or skill directory path" })),
+          data: Type.Optional(Type.Any({ description: "Raw SKILL.md content or MCP tool dict" })),
+          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("add_skill");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return addSkillOpenViking({
+            source: typeof params.source === "string" ? params.source : undefined,
+            data: params.data,
+            wait: typeof params.wait === "boolean" ? params.wait : undefined,
+            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "add_skill" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_search",
+        label: "Search (OpenViking)",
+        description:
+          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus agent skills." })),
+          limit: Type.Optional(Type.Number({ description: "Max results per search scope. Default: 10" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_search");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return searchOpenViking({
+            query: String((params as { query?: unknown }).query ?? ""),
+            uri: typeof params.uri === "string" ? params.uri : undefined,
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "ov_search" },
+    );
+
+    api.registerCommand?.({
+      name: "add-resource",
+      description: "Add a resource into OpenViking.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("add_resource");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const input = parseAddResourceCommandArgs(ctx.args ?? "");
+          const result = await addResourceOpenViking(input, session.agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking add resource failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    api.registerCommand?.({
+      name: "add-skill",
+      description: "Add a skill into OpenViking.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("add_skill");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const input = parseAddSkillCommandArgs(ctx.args ?? "");
+          const result = await addSkillOpenViking(input, session.agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking add skill failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    api.registerCommand?.({
+      name: "ov-search",
+      description: "Search OpenViking resources and skills.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_search");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const input = parseOVSearchCommandArgs(ctx.args ?? "");
+          const result = await searchOpenViking(input, session.agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "memory_recall",
+        label: "Memory Recall (OpenViking)",
+        description:
+          "Search long-term memories from OpenViking. Use when you need past user preferences, facts, or decisions.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          limit: Type.Optional(
+            Type.Number({ description: "Max results (default: plugin config)" }),
+          ),
+          scoreThreshold: Type.Optional(
+            Type.Number({ description: "Minimum score (0-1, default: plugin config)" }),
+          ),
+          targetUri: Type.Optional(
+            Type.String({ description: "Search scope URI (default: plugin config)" }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_recall");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const { query } = params as { query: string };
+          const limit =
+            typeof (params as { limit?: number }).limit === "number"
+              ? Math.max(1, Math.floor((params as { limit: number }).limit))
+              : cfg.recallLimit;
+          const scoreThreshold =
+            typeof (params as { scoreThreshold?: number }).scoreThreshold === "number"
+              ? Math.max(0, Math.min(1, (params as { scoreThreshold: number }).scoreThreshold))
+              : cfg.recallScoreThreshold;
+          const targetUri =
+            typeof (params as { targetUri?: string }).targetUri === "string"
+              ? (params as { targetUri: string }).targetUri
+              : undefined;
+          const requestLimit = Math.max(limit * 4, 20);
+
+          const recallClient = await getClient();
+          if (cfg.logFindRequests) {
+            api.logger.info(
+              `openviking: memory_recall X-OpenViking-Agent="${session.agentId}" ` +
+                `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
+            );
+          }
+
+          let result;
+          if (targetUri) {
+            // 如果指定了目标 URI，只检索该位置
+            result = await recallClient.find(
+              query,
+              {
+                targetUri,
+                limit: requestLimit,
+                scoreThreshold: 0,
+              },
+              session.agentId,
+            );
+          } else {
+            const searchPromises: Promise<FindResult>[] = [
+              recallClient.find(
+                query,
+                {
+                  targetUri: "viking://user/memories",
+                  limit: requestLimit,
+                  scoreThreshold: 0,
+                },
+                session.agentId,
+              ),
+              recallClient.find(
+                query,
+                {
+                  targetUri: "viking://agent/memories",
+                  limit: requestLimit,
+                  scoreThreshold: 0,
+                },
+                session.agentId,
+              ),
+            ];
+            if (cfg.recallResources) {
+              searchPromises.push(
+                recallClient.find(
+                  query,
+                  {
+                    targetUri: "viking://resources",
+                    limit: requestLimit,
+                    scoreThreshold: 0,
+                  },
+                  session.agentId,
+                ),
+              );
+            }
+            const settled = await Promise.allSettled(searchPromises);
+            const allMemories: FindResultItem[] = [];
+            for (const s of settled) {
+              if (s.status === "fulfilled") {
+                allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+              }
+            }
+            const uniqueMemories = allMemories.filter((memory, index, self) =>
+              index === self.findIndex((m) => m.uri === memory.uri)
+            );
+            const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
+            result = {
+              memories: leafOnly,
+              total: leafOnly.length,
+            };
+          }
+
+          const leafOnly = (result.memories ?? []).filter((m) => !m.level || m.level === 2);
+          const processed = postProcessMemories(leafOnly, {
+            limit: requestLimit,
+            scoreThreshold,
+          });
+          const memories = pickMemoriesForInjection(processed, limit, query);
+          if (memories.length === 0) {
+            return {
+              content: [{ type: "text", text: "No relevant OpenViking memories found." }],
+              details: { count: 0, total: result.total ?? 0, scoreThreshold },
+            };
+          }
+          const { lines: memoryLines } = await buildMemoryLinesWithBudget(
+            memories,
+            (uri) => recallClient.read(uri, session.agentId),
+            {
+              recallPreferAbstract: false,
+              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+            },
+          );
+          if (memoryLines.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No complete OpenViking memories fit recallMaxInjectedChars=${cfg.recallMaxInjectedChars}.`,
+                },
+              ],
+              details: {
+                count: 0,
+                memories,
+                total: result.total ?? memories.length,
+                scoreThreshold,
+                requestLimit,
+                recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+              },
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`,
+              },
+            ],
+            details: {
+              count: memoryLines.length,
+              memories,
+              total: result.total ?? memories.length,
+              scoreThreshold,
+              requestLimit,
+              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+            },
+          };
+        },
+      }),
+      { name: "memory_recall" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "memory_store",
+        label: "Memory Store (OpenViking)",
+        description:
+          "Store text in OpenViking memory pipeline by writing to a session and running memory extraction.",
+        parameters: Type.Object({
+          text: Type.String({ description: "Information to store as memory source text" }),
+          role: Type.Optional(Type.String({ description: "Session role, default user" })),
+          sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_store");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const { text } = params as { text: string };
+          const role =
+            typeof (params as { role?: string }).role === "string"
+              ? (params as { role: string }).role
+              : "user";
+          const explicitSessionId =
+            typeof (params as { sessionId?: unknown }).sessionId === "string" &&
+              (params as { sessionId: string }).sessionId.trim()
+              ? openClawSessionRefToOvStorageId((params as { sessionId: string }).sessionId)
+              : undefined;
+
+          if (cfg.logFindRequests) {
+            api.logger.info?.(
+              `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${explicitSessionId ?? "auto"})`,
+            );
+          }
+
+          let sessionId = explicitSessionId;
+          let usedTempSession = false;
+          try {
+            const c = await getClient();
+            if (!sessionId) {
+              sessionId = `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              usedTempSession = true;
+            }
+            const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
+            await c.addSessionMessage(
+              sessionId,
+              role,
+              [{ type: "text" as const, text }],
+              session.agentId,
+              undefined,
+              roleId,
+            );
+            const commitResult = await c.commitSession(sessionId, {
+              wait: true,
+              agentId: session.agentId,
+              keepRecentCount: 0,
+            });
+            const memoriesCount = totalCommitMemories(commitResult);
+            if (commitResult.status === "failed") {
+              api.logger.warn(
+                `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
+              );
+              return {
+                content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
+                details: {
+                  action: "failed",
+                  sessionId,
+                  status: "failed",
+                  error: commitResult.error,
+                  usedTempSession,
+                },
+              };
+            }
+            if (commitResult.status === "timeout") {
+              api.logger.warn(
+                `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
+              );
+              return {
+                content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
+                details: {
+                  action: "timeout",
+                  sessionId,
+                  status: "timeout",
+                  taskId: commitResult.task_id,
+                  usedTempSession,
+                },
+              };
+            }
+            if (memoriesCount === 0) {
+              api.logger.warn(
+                `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
+                  "No OpenViking-managed long-term memory was created. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text was judged not durable.",
+              );
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Memory extraction completed for session ${sessionId}, but produced 0 memories. ` +
+                      "No OpenViking-managed long-term memory was stored. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text is durable enough to remember.",
+                  },
+                ],
+                details: {
+                  action: "failed",
+                  sessionId,
+                  status: commitResult.status,
+                  error: "no_memories_extracted",
+                  memoriesCount,
+                  archived: commitResult.archived ?? false,
+                  usedTempSession,
+                },
+              };
+            } else {
+              api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
+                },
+              ],
+              details: {
+                action: "stored",
+                sessionId,
+                memoriesCount,
+                status: commitResult.status,
+                archived: commitResult.archived ?? false,
+                usedTempSession,
+              },
+            };
+          } catch (err) {
+            api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
+            throw err;
+          }
+        },
+      }),
+      { name: "memory_store" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "memory_forget",
+        label: "Memory Forget (OpenViking)",
+        description:
+          "Forget memory by URI, or search then delete when a strong single match is found.",
+        parameters: Type.Object({
+          uri: Type.Optional(Type.String({ description: "Exact memory URI to delete" })),
+          query: Type.Optional(Type.String({ description: "Search query to find memory URI" })),
+          targetUri: Type.Optional(
+            Type.String({ description: "Search scope URI (default: plugin config)" }),
+          ),
+          limit: Type.Optional(Type.Number({ description: "Search limit (default: 5)" })),
+          scoreThreshold: Type.Optional(
+            Type.Number({ description: "Minimum score (0-1, default: plugin config)" }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_forget");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const client = await getClient();
+          const uri = (params as { uri?: string }).uri;
+          if (uri) {
+            if (!isMemoryUri(uri)) {
+              return {
+                content: [{ type: "text", text: `Refusing to delete non-memory URI: ${uri}` }],
+                details: { action: "rejected", uri },
+              };
+            }
+            await client.deleteUri(uri, session.agentId);
+            return {
+              content: [{ type: "text", text: `Forgotten: ${uri}` }],
+              details: { action: "deleted", uri },
+            };
+          }
+
+          const query = (params as { query?: string }).query;
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Provide uri or query." }],
+              details: { error: "missing_param" },
+            };
+          }
+
+          const limit =
+            typeof (params as { limit?: number }).limit === "number"
+              ? Math.max(1, Math.floor((params as { limit: number }).limit))
+              : 5;
+          const scoreThreshold =
+            typeof (params as { scoreThreshold?: number }).scoreThreshold === "number"
+              ? Math.max(0, Math.min(1, (params as { scoreThreshold: number }).scoreThreshold))
+              : cfg.recallScoreThreshold;
+          const targetUri =
+            typeof (params as { targetUri?: string }).targetUri === "string"
+              ? (params as { targetUri: string }).targetUri
+              : cfg.targetUri;
+          const requestLimit = Math.max(limit * 4, 20);
+
+          const result = await client.find(
+            query,
+            {
+              targetUri,
+              limit: requestLimit,
+              scoreThreshold: 0,
+            },
+            session.agentId,
+          );
+          const candidates = postProcessMemories(result.memories ?? [], {
+            limit: requestLimit,
+            scoreThreshold,
+            leafOnly: true,
+          }).filter((item) => isMemoryUri(item.uri));
+          if (candidates.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No matching leaf memory candidates found. Try a more specific query.",
+                },
+              ],
+              details: { action: "none", scoreThreshold },
+            };
+          }
+          const top = candidates[0];
+          if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
+            await client.deleteUri(top.uri, session.agentId);
+            return {
+              content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
+              details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
+            };
+          }
+
+          const list = candidates
+            .map((item) => `- ${item.uri} (${(clampScore(item.score) * 100).toFixed(0)}%)`)
+            .join("\n");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${candidates.length} candidates. Specify uri:\n${list}`,
+              },
+            ],
+            details: { action: "candidates", candidates, scoreThreshold, requestLimit },
+          };
+        },
+      }),
+      { name: "memory_forget" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_archive_search",
+        label: "Archive Search (OpenViking)",
+        description:
+          "Keyword-grep across all archived original conversation messages of the current session. " +
+          "Use this whenever the [Session History Summary] does not contain the specific detail " +
+          "the user is asking about. Extract 2-3 concrete entity words from the question " +
+          "(names, places, objects, dates) and search each separately. " +
+          "Only conclude information is unavailable after trying at least 2 different keyword variations.",
+        parameters: Type.Object({
+          query: Type.String({
+            description:
+              "A single keyword or short phrase to grep. Use concrete nouns, names, dates, " +
+              "or distinctive phrases. Case-insensitive. Prefer entity words over full sentences.",
+          }),
+          archiveId: Type.Optional(
+            Type.String({
+              description: 'Optional: limit search to one archive (e.g. "archive_005")',
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_archive_search");
+          }
+          rememberSessionAgentId(ctx);
+          const sessionId = ctx.sessionId ?? "";
+          const sessionKey = ctx.sessionKey ?? "";
+          if (!sessionId && !sessionKey) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+          const ovSessionId = openClawSessionToOvStorageId(ctx.sessionId, ctx.sessionKey);
+          const query = String((params as { query?: string }).query ?? "").trim();
+          const archiveId = (params as { archiveId?: string }).archiveId;
+
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Error: query is required." }],
+              details: { error: "missing_param", param: "query" },
+            };
+          }
+
+          const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          api.logger.info?.(`openviking: ov_archive_search query="${query}" escaped="${escapedQuery}" archive=${archiveId ?? "all"} session=${ovSessionId}`);
+
+          try {
+            const client = await getClient();
+            const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+            const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
+              archiveId,
+              caseInsensitive: true,
+              agentId,
+            });
+
+            if (!result.matches || result.matches.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: `No matches found for "${query}". Try a different keyword — ` +
+                    "the original conversation may use different wording than the question. " +
+                    "Try synonyms, related terms, or shorter fragments.",
+                }],
+                details: { query, matchCount: 0 },
+              };
+            }
+
+            const MAX_MATCHES = 12;
+            const MAX_LINE_LEN = 1500;
+            const shown = result.matches.slice(0, MAX_MATCHES);
+            const blocks = shown.map((m, i) => {
+              const archiveTag = m.uri.match(/archive_\d+/)?.[0] ?? "unknown";
+              const truncated = m.content.length > MAX_LINE_LEN
+                ? m.content.slice(0, MAX_LINE_LEN) + "…(truncated)"
+                : m.content;
+              return `## Match ${i + 1}: ${archiveTag} (line ${m.line})\n${truncated}`;
+            });
+
+            const header = `Found ${result.matches.length} match(es) for "${query}"` +
+              (result.matches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
+
+            return {
+              content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
+              details: { query, matchCount: result.matches.length },
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.error?.(`openviking: ov_archive_search error: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Archive search failed: ${msg}` }],
+              details: { error: msg },
+            };
+          }
+        },
+      }),
+      { name: "ov_archive_search" },
+    );
+
+    api.registerTool((ctx: ToolContext) => ({
+      name: "ov_archive_expand",
+      label: "Archive Expand (OpenViking)",
+      description:
+        "Retrieve original messages from a compressed session archive. " +
+        "Use when a session summary lacks specific details " +
+        "such as exact commands, file paths, code snippets, or config values. " +
+        "Check [Archive Index] to find the right archive ID.",
+      parameters: Type.Object({
+        archiveId: Type.String({
+          description:
+            'Archive ID from [Archive Index] (e.g. "archive_002")',
+        }),
+      }),
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        if (isBypassedSession(ctx)) {
+          return makeBypassedToolResult("ov_archive_expand");
+        }
+        const session = resolvePluginSessionRouting(ctx);
+        const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
+        const sessionId = session.sessionId ?? "";
+        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
+
+        if (!archiveId) {
+          api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
+          return {
+            content: [{ type: "text", text: "Error: archiveId is required." }],
+            details: { error: "missing_param", param: "archiveId" },
+          };
+        }
+
+        if (!session.ovSessionId) {
+          return {
+            content: [{ type: "text", text: "Error: no active session." }],
+            details: { error: "no_session" },
+          };
+        }
+
+        try {
+          const client = await getClient();
+          const detail = await client.getSessionArchive(
+            session.ovSessionId,
+            archiveId,
+            session.agentId,
+          );
+
+          const header = [
+            `## ${detail.archive_id}`,
+            detail.abstract ? `**Summary**: ${detail.abstract}` : "",
+            `**Messages**: ${detail.messages.length}`,
+            "",
+          ].filter(Boolean).join("\n");
+
+          const body = detail.messages
+            .map((m: OVMessage) => formatMessageFaithful(m))
+            .join("\n\n");
+
+          api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${sessionId}`);
+          return {
+            content: [{ type: "text", text: `${header}\n${body}` }],
+            details: {
+              action: "expanded",
+              archiveId: detail.archive_id,
+              messageCount: detail.messages.length,
+              sessionId,
+              ovSessionId: session.ovSessionId,
+            },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
+          return {
+            content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
+            details: { error: msg, archiveId, sessionId, ovSessionId: session.ovSessionId },
+          };
+        }
+      },
+    }), { name: "ov_archive_expand" });
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "openviking_tool_result_read",
+        label: "Tool Result Read (OpenViking)",
+        description:
+          "Restore the full original content of a tool result that was externalized by OpenViking. " +
+          "Use when a previous tool result was externalized and only a preview is visible — " +
+          "the preview contains a [tool-result-ref] or viking://session/.../tool-results/... URI. " +
+          "\"Read\" tool returns the same truncated preview; this tool returns the complete content. " +
+          "To read all content: pass offset=0 and a limit large enough to cover the whole result " +
+          "(e.g. limit=100000). Use offset/limit for paging only when you need a specific section.",
+        parameters: Type.Object({
+          tool_output_ref: Type.String({
+            description:
+              "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+          }),
+          offset: Type.Optional(Type.Number({ description: "Unicode character offset. Default: 0" })),
+          limit: Type.Optional(Type.Number({ description: "Maximum Unicode characters to read. Default: 20000" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("openviking_tool_result_read");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          if (!session.ovSessionId) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+
+          const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
+          if (!parsed) {
+            return {
+              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+              details: { error: "invalid_tool_output_ref" },
+            };
+          }
+          if (parsed.sessionId !== session.ovSessionId) {
+            return {
+              content: [{ type: "text", text: "Error: refusing to read a tool result from another session." }],
+              details: {
+                error: "session_mismatch",
+                requestedSessionId: parsed.sessionId,
+                currentSessionId: session.ovSessionId,
+              },
+            };
+          }
+
+          const offset = Math.max(0, getOptionalInteger(params.offset, 0));
+          const limit = getOptionalInteger(params.limit, 20_000);
+          if (limit < -1) {
+            return {
+              content: [{ type: "text", text: "Error: limit must be -1 or greater than or equal to 0." }],
+              details: { error: "invalid_limit", limit },
+            };
+          }
+
+          try {
+            const client = await getClient();
+            const result = await client.readToolResult(
+              session.ovSessionId,
+              parsed.toolResultId,
+              { offset, limit, includeMetadata: true },
+              session.agentId,
+            );
+            const returnedChars = result.content.length;
+            const nextOffset = result.offset + returnedChars;
+            const text = result.content || "(empty tool result chunk)";
+            return {
+              content: [{ type: "text", text }],
+              details: {
+                action: "read",
+                tool_output_ref: parsed.ref,
+                tool_result_id: result.tool_result_id,
+                offset: result.offset,
+                limit: result.limit,
+                returned_chars: returnedChars,
+                total_chars: result.total_chars,
+                has_more: result.has_more,
+                next_offset: result.has_more ? nextOffset : null,
+                metadata: result.metadata ?? null,
+              },
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.warn?.(`openviking: openviking_tool_result_read failed: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Failed to read tool result: ${msg}` }],
+              details: { error: msg, tool_output_ref: parsed.ref },
+            };
+          }
+        },
+      }),
+      { name: "openviking_tool_result_read" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "openviking_tool_result_search",
+        label: "Tool Result Search (OpenViking)",
+        description:
+          "Search inside an externalized tool result for a keyword. " +
+          "Use when you need to find specific content in a large externalized result, " +
+          "before reading it with openviking_tool_result_read. " +
+          "Returns matching snippets with their character offsets.",
+        parameters: Type.Object({
+          tool_output_ref: Type.String({
+            description:
+              "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+          }),
+          query: Type.String({ description: "Keyword or exact text to search for" }),
+          limit: Type.Optional(Type.Number({ description: "Maximum matches. Default: 20" })),
+          context_chars: Type.Optional(Type.Number({ description: "Characters around each match. Default: 300" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("openviking_tool_result_search");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          if (!session.ovSessionId) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+
+          const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
+          if (!parsed) {
+            return {
+              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+              details: { error: "invalid_tool_output_ref" },
+            };
+          }
+          if (parsed.sessionId !== session.ovSessionId) {
+            return {
+              content: [{ type: "text", text: "Error: refusing to search a tool result from another session." }],
+              details: {
+                error: "session_mismatch",
+                requestedSessionId: parsed.sessionId,
+                currentSessionId: session.ovSessionId,
+              },
+            };
+          }
+
+          const query = String(params.query ?? "").trim();
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Error: query is required." }],
+              details: { error: "missing_param", param: "query" },
+            };
+          }
+          const limit = getPositiveInteger(params.limit, 20);
+          const contextChars = Math.max(
+            0,
+            getOptionalInteger(params.context_chars ?? params.contextChars, 300),
+          );
+
+          try {
+            const client = await getClient();
+            const result = await client.searchToolResult(
+              session.ovSessionId,
+              parsed.toolResultId,
+              query,
+              { limit, contextChars },
+              session.agentId,
+            );
+            const matches = result.matches ?? [];
+            const text = matches.length
+              ? [
+                  `Found ${matches.length} match(es) for "${query}" in ${parsed.ref}:`,
+                  "",
+                  ...matches.map((match, index) =>
+                    `## Match ${index + 1} (offset ${match.offset})\n${match.snippet}`,
+                  ),
+                ].join("\n")
+              : `No matches found for "${query}" in ${parsed.ref}.`;
+            return {
+              content: [{ type: "text", text }],
+              details: {
+                action: "searched",
+                tool_output_ref: parsed.ref,
+                tool_result_id: result.tool_result_id,
+                query,
+                match_count: matches.length,
+                matches,
+              },
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.warn?.(`openviking: openviking_tool_result_search failed: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Failed to search tool result: ${msg}` }],
+              details: { error: msg, tool_output_ref: parsed.ref, query },
+            };
+          }
+        },
+      }),
+      { name: "openviking_tool_result_search" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "openviking_tool_result_list",
+        label: "Tool Result List (OpenViking)",
+        description:
+          "List externalized tool results for the current session. " +
+          "Use to discover available refs before calling openviking_tool_result_read. " +
+          "Optionally filter by tool_name to narrow down results.",
+        parameters: Type.Object({
+          tool_name: Type.Optional(Type.String({ description: "Optional exact tool name filter" })),
+          limit: Type.Optional(Type.Number({ description: "Maximum results. Default: 50" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("openviking_tool_result_list");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          if (!session.ovSessionId) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+
+          const toolName =
+            typeof params.tool_name === "string" && params.tool_name.trim()
+              ? params.tool_name.trim()
+              : typeof params.toolName === "string" && params.toolName.trim()
+                ? params.toolName.trim()
+                : undefined;
+          const limit = getPositiveInteger(params.limit, 50);
+
+          try {
+            const client = await getClient();
+            const result = await client.listToolResults(
+              session.ovSessionId,
+              { toolName, limit },
+              session.agentId,
+            );
+            const items = result.tool_results ?? [];
+            const text = items.length
+              ? [
+                  `Found ${items.length} externalized tool result(s) in current session:`,
+                  "",
+                  ...items.map((item, index) => {
+                    const ref = typeof item.storage_uri === "string" ? item.storage_uri : "(missing ref)";
+                    const name = typeof item.tool_name === "string" ? item.tool_name : "tool";
+                    const chars = typeof item.original_chars === "number" ? item.original_chars : "unknown";
+                    const created = typeof item.created_at === "string" ? ` created_at=${item.created_at}` : "";
+                    return `${index + 1}. ${name} original_chars=${chars}${created}\nref: ${ref}`;
+                  }),
+                ].join("\n")
+              : toolName
+                ? `No externalized tool results found for tool "${toolName}" in current session.`
+                : "No externalized tool results found in current session.";
+            return {
+              content: [{ type: "text", text }],
+              details: {
+                action: "listed",
+                session_id: session.ovSessionId,
+                tool_name: toolName ?? null,
+                count: items.length,
+                tool_results: items,
+              },
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.warn?.(`openviking: openviking_tool_result_list failed: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Failed to list tool results: ${msg}` }],
+              details: { error: msg, session_id: session.ovSessionId, tool_name: toolName ?? null },
+            };
+          }
+        },
+      }),
+      { name: "openviking_tool_result_list" },
+    );
+
+    let contextEngineRef: ContextEngineWithCommit | null = null;
+    const sessionAgentResolver = createSessionAgentResolver(cfg.agent_prefix);
+    const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
+      sessionAgentResolver.remember(ctx);
+    };
+    const resolveAgentId = (
+      sessionId?: string,
+      sessionKey?: string,
+      ovSessionId?: string,
+    ): string => {
+      const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+      const sk = typeof sessionKey === "string" ? sessionKey.trim() : "";
+      const ovSid = typeof ovSessionId === "string" ? ovSessionId.trim() : "";
+      const result = sessionAgentResolver.resolve(sid, sk, ovSid);
+      if (cfg.logFindRequests) {
+        api.logger.info(
+          `openviking: resolveAgentId ${JSON.stringify({
+            sessionId: sid || "(empty)",
+            sessionKey: sk || "(empty)",
+            ovSessionId: ovSid || "(empty)",
+            parsedConfigAgentPrefix: cfg.agent_prefix,
+            mappedResolvedAgentId: result.mappedResolvedAgentId,
+            resolvedBeforeSanitize: result.resolvedBeforeSanitize,
+            resolved: result.resolved,
+            branch: result.branch,
+            aliases: result.aliases,
+            fromExplicitBinding: result.fromExplicitBinding,
+          })}`,
+        );
+      }
+      return result.resolved;
+    };
+
+    api.on("session_start", async (_event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("before_reset", async (_event: unknown, ctx?: HookAgentContext) => {
+      if (isBypassedSession(ctx)) {
+        verboseRoutingInfo(
+          `openviking: bypassing before_reset due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
+        );
+        return;
+      }
+      const sessionId = ctx?.sessionId;
+      if (sessionId && contextEngineRef) {
+        try {
+          const ok = await contextEngineRef.commitOVSession({
+            sessionId,
+            sessionKey: ctx?.sessionKey,
+          });
+          if (ok) {
+            api.logger.info(`openviking: committed OV session on reset for session=${sessionId}`);
+          }
+        } catch (err) {
+          api.logger.warn(`openviking: failed to commit OV session on reset: ${String(err)}`);
+        }
+      }
+    });
+    api.on("after_compaction", async (_event: unknown, _ctx?: HookAgentContext) => {
+      // Reserved hook registration for future post-compaction memory integration.
+    });
+
+    if (typeof api.registerContextEngine === "function") {
+      api.registerContextEngine(contextEnginePlugin.id, () => {
+        contextEngineRef = createMemoryOpenVikingContextEngine({
+          id: contextEnginePlugin.id,
+          name: contextEnginePlugin.name,
+          version: "0.1.0",
+          cfg,
+          logger: api.logger,
+          getClient,
+          resolveAgentId,
+          rememberSessionAgentId,
+        });
+        return contextEngineRef;
+      });
+      api.logger.info(
+        "openviking: registered context-engine (assemble=archive+active+auto-recall, afterTurn=auto-capture, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
+      );
+    } else {
+      api.logger.warn(
+        "openviking: registerContextEngine is unavailable; context-engine behavior will not run",
+      );
+    }
+
+    registerSetupCli(api);
+
+    api.registerService({
+      id: "openviking",
+      start: async () => {
+        await (await getClient()).healthCheck().catch(() => {});
+        api.logger.info(
+          `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
+        );
+      },
+      stop: () => {
+        api.logger.info("openviking: stopped");
+      },
+    });
+  },
+};
+
+export default contextEnginePlugin;
