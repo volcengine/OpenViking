@@ -27,6 +27,7 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
     write_stored_links,
 )
+from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -43,6 +44,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
+_EXACT_FILE_LOCK_SAFE_MERGE_OPS = {MergeOp.PATCH, MergeOp.SUM, MergeOp.IMMUTABLE}
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
 
@@ -123,6 +125,28 @@ def _render_memory_schema_locks(
 def _memory_apply_exact_file_lock_enabled_from_config(config: Any) -> bool:
     memory_config = getattr(config, "memory", None)
     return bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False))
+
+
+def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[str]]:
+    """Return whether schemas can safely skip broad tree locks in exact apply mode.
+
+    PR-1 only supports base-aware stale rewrite for structured string patches.
+    Full-value replacement fields still need the existing schema tree lock unless
+    a future field adapter can synthesize replace proposals against latest state.
+    """
+    unsupported: list[str] = []
+    for schema in schemas:
+        memory_type = getattr(schema, "memory_type", "unknown") or "unknown"
+        for field in getattr(schema, "fields", []) or []:
+            raw_merge_op = getattr(field, "merge_op", MergeOp.PATCH)
+            try:
+                merge_op = MergeOp(raw_merge_op)
+            except Exception:
+                merge_op = raw_merge_op
+            if merge_op not in _EXACT_FILE_LOCK_SAFE_MERGE_OPS:
+                field_name = getattr(field, "name", "unknown") or "unknown"
+                unsupported.append(f"{memory_type}.{field_name}:{merge_op}")
+    return not unsupported, unsupported
 
 
 class SessionCompressorV2:
@@ -307,7 +331,16 @@ class SessionCompressorV2:
                 transaction_handle=transaction_handle,
             )
             read_scope = isolation_handler.get_read_scope()
-            if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
+            if lock_manager:
+                schemas = orchestrator.context_provider.get_memory_schemas(ctx)
+                exact_apply_supported, unsupported_exact_apply_fields = (
+                    _schemas_support_exact_file_apply(schemas)
+                )
+            if (
+                lock_manager
+                and _memory_apply_exact_file_lock_enabled_from_config(config)
+                and exact_apply_supported
+            ):
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
                 )
@@ -316,7 +349,15 @@ class SessionCompressorV2:
                     "using per-file rewrite locks at apply time"
                 )
             elif lock_manager:
-                schemas = orchestrator.context_provider.get_memory_schemas(ctx)
+                if _memory_apply_exact_file_lock_enabled_from_config(config):
+                    get_current_telemetry().increment(
+                        "memory.extract.schema_tree_lock_kept_for_unsupported_merge_ops"
+                    )
+                    tracer.info(
+                        "[memory_lock] Keeping extraction schema locks because exact "
+                        "file apply does not yet support all merge ops: %s",
+                        unsupported_exact_apply_fields,
+                    )
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
                     schemas=schemas,
                     ctx=ctx,
@@ -715,7 +756,20 @@ class SessionCompressorV2:
             transaction_handle = lock_manager.create_handle()
 
         try:
-            if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
+            if lock_manager:
+                schemas = [
+                    schema
+                    for schema in provider.get_memory_schemas(ctx)
+                    if getattr(schema, "memory_type", None) != SESSION_SKILL_MEMORY_TYPE
+                ]
+                exact_apply_supported, unsupported_exact_apply_fields = (
+                    _schemas_support_exact_file_apply(schemas)
+                )
+            if (
+                lock_manager
+                and _memory_apply_exact_file_lock_enabled_from_config(config)
+                and exact_apply_supported
+            ):
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
                 )
@@ -724,11 +778,15 @@ class SessionCompressorV2:
                     "using per-file rewrite locks at apply time"
                 )
             elif lock_manager:
-                schemas = [
-                    schema
-                    for schema in provider.get_memory_schemas(ctx)
-                    if getattr(schema, "memory_type", None) != SESSION_SKILL_MEMORY_TYPE
-                ]
+                if _memory_apply_exact_file_lock_enabled_from_config(config):
+                    get_current_telemetry().increment(
+                        "memory.extract.schema_tree_lock_kept_for_unsupported_merge_ops"
+                    )
+                    tracer.info(
+                        f"[{phase_label}] Keeping extraction schema locks because exact "
+                        "file apply does not yet support all merge ops: "
+                        f"{unsupported_exact_apply_fields}"
+                    )
                 user_ids = [ctx.user.user_id] if ctx and ctx.user else ["default"]
                 agent_ids = [ctx.user.agent_id] if ctx and ctx.user else ["default"]
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(

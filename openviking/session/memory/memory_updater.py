@@ -25,7 +25,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op import MergeOpFactory, StrPatch
+from openviking.session.memory.merge_op import FieldType, MergeOp, MergeOpFactory, StrPatch
 from openviking.session.memory.merge_op.base import StrPatchWithBase
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -89,6 +89,28 @@ def _wrap_patch_with_read_base(
         base_value=base_value,
         base_digest=_text_digest(base_value),
         source_operation_id=source_operation_id,
+    )
+
+
+def _is_structured_string_patch(patch_value: Any) -> bool:
+    if isinstance(patch_value, StrPatch):
+        return True
+    return isinstance(patch_value, dict) and isinstance(patch_value.get("blocks"), list)
+
+
+def _raise_if_unsupported_exact_file_patch(field: Any, patch_value: Any, *, uri: str) -> None:
+    if not _memory_apply_exact_file_lock_enabled():
+        return
+    if getattr(field, "merge_op", None) != MergeOp.PATCH:
+        return
+    if getattr(field, "field_type", None) != FieldType.STRING:
+        return
+    if _is_structured_string_patch(patch_value):
+        return
+    get_current_telemetry().increment("memory.apply.patch_unstructured.rejected_file_lock")
+    raise RuntimeError(
+        "unstructured string patch is not supported under exact file-lock mode: "
+        f"uri={uri}, field={field.name}"
     )
 
 
@@ -828,6 +850,7 @@ class MemoryUpdater:
         for field in schema.fields:
             if field.name in resolved_op.memory_fields:
                 patch_value = resolved_op.memory_fields[field.name]
+                _raise_if_unsupported_exact_file_patch(field, patch_value, uri=uri)
                 current_value = _field_value_from_memory_file(old_content, field.name)
                 base_value = _field_value_from_memory_file(read_base_content, field.name)
                 patch_value = _wrap_patch_with_read_base(
