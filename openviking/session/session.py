@@ -28,6 +28,7 @@ from openviking.session.tool_result_store import (
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
@@ -1287,8 +1288,8 @@ class Session:
                                 uri=f"{archive_uri}/.meta.json",
                                 content=json.dumps(
                                     {
-                                        "overview_tokens": -(-len(summary) // 4),
-                                        "abstract_tokens": -(-len(abstract) // 4),
+                                        "overview_tokens": estimate_text_tokens(summary),
+                                        "abstract_tokens": estimate_text_tokens(abstract),
                                     }
                                 ),
                                 ctx=self.ctx,
@@ -1726,7 +1727,7 @@ class Session:
                     {
                         "archive_id": archive["archive_id"],
                         "abstract": abstract,
-                        "tokens": -(-len(abstract) // 4),
+                        "tokens": estimate_text_tokens(abstract),
                     }
                 )
             else:
@@ -1831,12 +1832,13 @@ class Session:
 
     async def _read_archive_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
-        overview_tokens = -(-len(overview) // 4)
+        overview_tokens = estimate_text_tokens(overview)
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{archive_uri}/.meta.json", ctx=self.ctx
             )
-            overview_tokens = json.loads(meta_content).get("overview_tokens", overview_tokens)
+            meta_tokens = int(json.loads(meta_content).get("overview_tokens", overview_tokens))
+            overview_tokens = max(overview_tokens, meta_tokens)
         except Exception:
             pass
         return overview_tokens
@@ -2348,7 +2350,7 @@ class Session:
             if name in Session._WM_APPEND_ONLY_SECTIONS:
                 continue
             items = Session._wm_extract_bullet_items(body)
-            est_tokens = len(body) // 4
+            est_tokens = estimate_text_tokens(body)
             if (
                 len(items) > Session._WM_SECTION_BULLET_THRESHOLD
                 or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
@@ -2730,7 +2732,7 @@ class Session:
             return op
         if op_name == "APPEND":
             old_items = Session._wm_extract_bullet_items(old_content or "")
-            est_tokens = len(old_content or "") // 4
+            est_tokens = estimate_text_tokens(old_content or "")
             bullet_over = len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD
             token_over = est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
             if not bullet_over and not token_over:
@@ -2784,7 +2786,7 @@ class Session:
         if not old_items:
             return op
 
-        est_tokens = len(old_content or "") // 4
+        est_tokens = estimate_text_tokens(old_content or "")
         is_emergency = (
             len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD * 2
             or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD * 2

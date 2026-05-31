@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { estimateAgentMessagesTokens, estimateTextTokens } from "../../token-estimator.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -12,11 +13,11 @@ const cfg = memoryOpenVikingConfigSchema.parse({
 });
 
 function roughEstimate(messages: unknown[]): number {
-  return Math.ceil(JSON.stringify(messages).length / 4);
+  return estimateAgentMessagesTokens(messages);
 }
 
 function systemPromptTokens(text?: string): number {
-  return text ? Math.ceil(text.length / 4) : 0;
+  return estimateTextTokens(text);
 }
 
 function makeLogger() {
@@ -212,6 +213,29 @@ describe("context-engine assemble()", () => {
     expect(getClient).not.toHaveBeenCalled();
     expect(result.messages).toBe(sourceMessages);
     expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+  });
+
+  it("does not underestimate CJK messages when passing through transformContext", async () => {
+    const { engine, getClient } = makeEngine({
+      latest_archive_overview: "unused",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "\u4f60\u597d".repeat(100) },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-cjk-estimate",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBeGreaterThanOrEqual(300);
   });
 
   it("treats prompt-less assemble with availableTools as main assemble", async () => {

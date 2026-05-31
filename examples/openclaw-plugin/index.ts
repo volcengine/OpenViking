@@ -43,6 +43,12 @@ export {
   estimateTokenCount,
   prepareRecallQuery,
 };
+export {
+  estimateAgentMessageTokens,
+  estimateAgentMessagesTokens,
+  estimateSerializedTokens,
+  estimateTextTokens,
+} from "./token-estimator.js";
 export type {
   BuildMemoryLinesOptions,
   BuildMemoryLinesWithBudgetOptions,
