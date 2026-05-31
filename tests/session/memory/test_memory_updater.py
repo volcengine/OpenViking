@@ -804,9 +804,7 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_rejects_plain_string_patch_under_file_lock_mode(
-        self, monkeypatch
-    ):
+    async def test_apply_upsert_rejects_plain_string_patch_under_file_lock_mode(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
