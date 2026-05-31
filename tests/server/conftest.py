@@ -3,6 +3,7 @@
 
 """Shared fixtures for OpenViking server tests."""
 
+import json
 import shutil
 import socket
 import threading
@@ -23,7 +24,9 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,34 @@ def _install_fake_vlm(monkeypatch):
     monkeypatch.setattr(VLMConfig, "get_vision_completion_async", _fake_get_vision_completion)
 
 
+def _configure_test_env(temp_dir: Path, monkeypatch) -> None:
+    """Use an isolated ov.conf so server tests never read user-global config."""
+    config_path = temp_dir / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "storage": {
+                    "workspace": str(temp_dir / "workspace"),
+                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "vectordb": {"backend": "local"},
+                },
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "test-embedder",
+                        "api_base": "http://127.0.0.1:11434/v1",
+                        "dimension": 1024,
+                    }
+                },
+                "encryption": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    OpenVikingConfigSingleton.reset_instance()
+
+
 # ---------------------------------------------------------------------------
 # Core fixtures: service + app + async client (HTTP API tests, in-process)
 # ---------------------------------------------------------------------------
@@ -138,6 +169,7 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService in embedded mode."""
     reset_lock_manager()
+    _configure_test_env(temp_dir, monkeypatch)
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
@@ -147,6 +179,7 @@ async def service(temp_dir: Path, monkeypatch):
     svc.viking_fs.query_embedder = fake_embedder_cls()
     yield svc
     await svc.close()
+    OpenVikingConfigSingleton.reset_instance()
     reset_lock_manager()
 
 
@@ -193,6 +226,7 @@ async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
     await AsyncOpenViking.reset()
     reset_lock_manager()
+    _configure_test_env(temp_dir, monkeypatch)
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
@@ -237,3 +271,4 @@ async def running_server(temp_dir: Path, monkeypatch):
     thread.join(timeout=5)
     await svc.close()
     await AsyncOpenViking.reset()
+    OpenVikingConfigSingleton.reset_instance()
