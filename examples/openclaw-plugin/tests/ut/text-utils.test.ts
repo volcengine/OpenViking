@@ -223,7 +223,7 @@ describe("extractNewTurnTexts", () => {
 });
 
 describe("extractNewTurnMessages", () => {
-  it("keeps assistant toolCall messages that have no text block", () => {
+  it("emits a structured tool part for assistant toolCall messages with no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -240,12 +240,20 @@ describe("extractNewTurnMessages", () => {
     expect(extracted).toEqual([
       {
         role: "assistant",
-        parts: [{ type: "text", text: "[tool: read_file]" }],
+        parts: [
+          {
+            type: "tool",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolInput: { path: "a.txt" },
+            toolStatus: "running",
+          },
+        ],
       },
     ]);
   });
 
-  it("keeps assistant toolUse messages that have no text block", () => {
+  it("emits a structured tool part for assistant toolUse messages with no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -262,12 +270,20 @@ describe("extractNewTurnMessages", () => {
     expect(extracted).toEqual([
       {
         role: "assistant",
-        parts: [{ type: "text", text: "[tool: grep]" }],
+        parts: [
+          {
+            type: "tool",
+            toolCallId: "call_2",
+            toolName: "grep",
+            toolInput: { pattern: "TODO" },
+            toolStatus: "running",
+          },
+        ],
       },
     ]);
   });
 
-  it("keeps multiple textless assistant tool calls in one placeholder", () => {
+  it("emits one tool part per call for multiple textless assistant tool calls in one message", () => {
     const messages = [
       {
         role: "assistant",
@@ -283,7 +299,10 @@ describe("extractNewTurnMessages", () => {
     expect(extracted).toEqual([
       {
         role: "assistant",
-        parts: [{ type: "text", text: "[tool: read_file, grep]" }],
+        parts: [
+          { type: "tool", toolCallId: "call_1", toolName: "read_file", toolStatus: "running" },
+          { type: "tool", toolCallId: "call_2", toolName: "grep", toolStatus: "running" },
+        ],
       },
     ]);
   });
