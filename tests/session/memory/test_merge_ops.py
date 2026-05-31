@@ -120,7 +120,9 @@ class TestPatchOp:
 
         async def fake_rewrite(*, current_value, patch_value, error):
             rewrite_calls.append((current_value, patch_value, error))
-            return StrPatch(blocks=[SearchReplaceBlock(search="latest policy", replace="new policy")])
+            return StrPatch(
+                blocks=[SearchReplaceBlock(search="latest policy", replace="new policy")]
+            )
 
         monkeypatch.setattr(
             "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",

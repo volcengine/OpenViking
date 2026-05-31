@@ -22,7 +22,11 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateResult,
+    write_stored_links,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -304,7 +308,9 @@ class SessionCompressorV2:
             )
             read_scope = isolation_handler.get_read_scope()
             if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
-                get_current_telemetry().increment("memory.extract.schema_tree_lock_skipped_for_exact_apply")
+                get_current_telemetry().increment(
+                    "memory.extract.schema_tree_lock_skipped_for_exact_apply"
+                )
                 tracer.info(
                     "[memory_lock] Skipping extraction schema locks; "
                     "using per-file rewrite locks at apply time"
@@ -710,7 +716,9 @@ class SessionCompressorV2:
 
         try:
             if lock_manager and _memory_apply_exact_file_lock_enabled_from_config(config):
-                get_current_telemetry().increment("memory.extract.schema_tree_lock_skipped_for_exact_apply")
+                get_current_telemetry().increment(
+                    "memory.extract.schema_tree_lock_skipped_for_exact_apply"
+                )
                 tracer.info(
                     f"[{phase_label}] Skipping extraction schema locks; "
                     "using per-file rewrite locks at apply time"
@@ -1002,7 +1010,9 @@ class SessionCompressorV2:
         # write_stored_links writes it to exp.links (forward) and traj.backlinks (reverse) automatically.
         now = datetime.now(timezone.utc).isoformat()
         links = [
-            StoredLink(from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now)
+            StoredLink(
+                from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now
+            )
             for t in traj_uris
         ]
 
@@ -1012,12 +1022,16 @@ class SessionCompressorV2:
 
         if links_changed:
             await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
-            tracer.info(f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})")
+            tracer.info(
+                f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})"
+            )
         else:
             tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
         # Write traj.backlinks — exp_uri already handled above
-        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri}, lock_handle=lock_handle)
+        await write_stored_links(
+            links, ctx, viking_fs, skip_uris={exp_uri}, lock_handle=lock_handle
+        )
 
     async def _build_memory_diff(
         self,

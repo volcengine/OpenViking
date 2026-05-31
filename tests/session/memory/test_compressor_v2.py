@@ -827,20 +827,24 @@ class TestCompressorV2:
         # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
         exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
         assert "source_trajectories" not in exp_mf.extra_fields
-        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), (
+            "exp.links should point to traj"
+        )
         assert exp_mf.backlinks == [], "exp should have no backlinks"
 
         # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
         traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
         assert traj_mf.links == [], "traj should have no forward links"
-        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), (
+            "traj.backlinks should reference exp"
+        )
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",   # exp read
+            "read",  # exp read
             "write",  # exp write (exp.links)
-            "read",   # traj read  (write_stored_links)
+            "read",  # traj read  (write_stored_links)
             "write",  # traj write (traj.backlinks)
             "release",
         ]
