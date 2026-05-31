@@ -506,9 +506,15 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
+              className="relative flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
               role="group"
             >
+              <span
+                className={cn(
+                  'absolute h-8 min-w-10 rounded-xl bg-foreground shadow-sm transition-transform duration-200 ease-in-out',
+                  currentLanguage === 'en' && 'translate-x-full',
+                )}
+              />
               {LANGUAGE_OPTIONS.map((item) => {
                 const isActive = item.value === currentLanguage
 
@@ -518,8 +524,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                      isActive && 'bg-foreground text-background shadow-sm',
+                      'relative z-10 h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                      isActive && 'text-background',
                     )}
                     onClick={() => {
                       if (!isActive) {
