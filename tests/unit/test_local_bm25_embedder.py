@@ -125,10 +125,17 @@ class TestBM25Stats:
 class TestLocalBM25Embedder:
     def test_embed_document_returns_sparse(self):
         embedder = LocalBM25Embedder()
+        embedder.rebuild(["hello world"])
         result = embedder.embed("hello world", is_query=False)
         assert result.sparse_vector is not None
         assert result.dense_vector is None
         assert len(result.sparse_vector) == 2
+
+    def test_embed_document_requires_rebuild(self):
+        embedder = LocalBM25Embedder()
+
+        with pytest.raises(RuntimeError, match="requires rebuild"):
+            embedder.embed("hello world", is_query=False)
 
     def test_embed_query_empty_corpus(self):
         embedder = LocalBM25Embedder()
@@ -137,8 +144,7 @@ class TestLocalBM25Embedder:
 
     def test_embed_query_after_docs(self):
         embedder = LocalBM25Embedder()
-        embedder.embed("hello world", is_query=False)
-        embedder.embed("hello foo", is_query=False)
+        embedder.embed_batch(["hello world", "hello foo"], is_query=False)
 
         result = embedder.embed("hello", is_query=True)
         assert result.sparse_vector is not None
@@ -150,9 +156,10 @@ class TestLocalBM25Embedder:
 
     def test_idf_rare_term_higher_weight(self):
         embedder = LocalBM25Embedder()
-        embedder.embed("common rare_xyz", is_query=False)
-        embedder.embed("common another", is_query=False)
-        embedder.embed("common third", is_query=False)
+        embedder.embed_batch(
+            ["common rare_xyz", "common another", "common third"],
+            is_query=False,
+        )
 
         result = embedder.embed("common rare_xyz", is_query=True)
         h_common = str(_hash_token("common"))
@@ -164,8 +171,10 @@ class TestLocalBM25Embedder:
     def test_dot_product_ranking(self):
         """Verify that dot product of query x doc vectors produces correct BM25 ranking."""
         embedder = LocalBM25Embedder()
-        doc_a = embedder.embed("openviking memory provider", is_query=False)
-        doc_b = embedder.embed("hermes model provider", is_query=False)
+        doc_a, doc_b = embedder.embed_batch(
+            ["openviking memory provider", "hermes model provider"],
+            is_query=False,
+        )
 
         query = embedder.embed("openviking", is_query=True)
 
@@ -190,7 +199,7 @@ class TestLocalBM25Embedder:
         stats_path = tmp_path / "bm25_stats.json"
 
         embedder1 = LocalBM25Embedder(stats_path=str(stats_path))
-        embedder1.embed("hello world test", is_query=False)
+        embedder1.rebuild(["hello world test"])
         embedder1.close()
 
         embedder2 = LocalBM25Embedder(stats_path=str(stats_path))
@@ -203,6 +212,7 @@ class TestLocalBM25Embedder:
 
     def test_custom_k1_b(self):
         embedder = LocalBM25Embedder(k1=2.0, b=0.5)
+        embedder.rebuild(["test document here"])
         result = embedder.embed("test document here", is_query=False)
         assert result.sparse_vector is not None
         assert len(result.sparse_vector) == 3
@@ -211,9 +221,9 @@ class TestLocalBM25Embedder:
         regex_embedder = LocalBM25Embedder(tokenizer="regex")
         jieba_embedder = LocalBM25Embedder()
 
-        regex_doc = regex_embedder.embed("信息检索系统支持混合搜索", is_query=False)
+        regex_doc = regex_embedder.embed_batch(["信息检索系统支持混合搜索"], is_query=False)[0]
         regex_query = regex_embedder.embed("信息检索", is_query=True)
-        jieba_doc = jieba_embedder.embed("信息检索系统支持混合搜索", is_query=False)
+        jieba_doc = jieba_embedder.embed_batch(["信息检索系统支持混合搜索"], is_query=False)[0]
         jieba_query = jieba_embedder.embed("信息检索", is_query=True)
 
         def dot_product(q, d):
@@ -241,9 +251,29 @@ class TestLocalBM25Embedder:
         assert embedder.stats.doc_count == 2
         assert save_calls == 1
 
+    def test_embed_batch_rebuilds_before_vectorizing_entire_batch(self):
+        embedder = LocalBM25Embedder()
+
+        first, _, third = embedder.embed_batch(
+            ["alpha", "gamma gamma gamma gamma", "alpha"],
+            is_query=False,
+        )
+
+        assert first.sparse_vector == third.sparse_vector
+
+    def test_embed_batch_replaces_previous_stats(self):
+        embedder = LocalBM25Embedder()
+
+        embedder.embed_batch(["alpha beta"], is_query=False)
+        embedder.embed_batch(["gamma"], is_query=False)
+
+        assert embedder.stats.doc_count == 1
+        assert _hash_token("alpha") not in embedder.stats.term_doc_freq
+        assert embedder.stats.term_doc_freq[_hash_token("gamma")] == 1
+
     def test_embed_batch_query_does_not_update_stats(self):
         embedder = LocalBM25Embedder()
-        embedder.embed("alpha beta", is_query=False)
+        embedder.rebuild(["alpha beta"])
 
         results = embedder.embed_batch(["alpha", "beta"], is_query=True)
 
