@@ -337,7 +337,35 @@ server {
 
 Do not set `VITE_OV_BASE_URL` to `https://ov.example.com/web-studio`. `/web-studio/` is only the frontend mount path; OpenViking API requests should still go to `https://ov.example.com/api/*` and `https://ov.example.com/bot/*`.
 
-### 6. Docker Server Dependency
+### 6. Auto-Proxy Mode (Single-Process Backend)
+
+Auto-proxy mode is a public-friendly deployment where:
+
+- The browser never receives the OpenViking root API key.
+- The frontend talks to the **same origin** with no `X-API-Key` of its own.
+- A thin Node.js backend (`server/proxy.mjs`) injects `X-API-Key` and forwards
+  requests to a configured upstream OpenViking Server.
+
+This is the right mode when you want anyone who can open the website to
+connect to the underlying OV cluster, with credentials kept on the server.
+
+```bash
+cd web-studio
+npm ci
+npm run build
+
+OV_STUDIO_UPSTREAM=https://ov-api.example.com \
+OV_STUDIO_API_KEY=$ROOT_API_KEY \
+npm run proxy
+```
+
+When the proxy is active, Web Studio reads `GET /_studio/runtime-config.json`
+at boot, hides the connection dialog form, and stops persisting credentials
+in browser storage. See [`server/README.md`](server/README.md) for env vars
+and threat model. Do not set `VITE_OV_BASE_URL` for auto-proxy builds — the
+SPA must call same-origin paths so the proxy can inject auth headers.
+
+### 7. Docker Server Dependency
 
 The official OpenViking image can be used as the API server dependency:
 

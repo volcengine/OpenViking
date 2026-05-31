@@ -337,7 +337,29 @@ server {
 
 不要把 `VITE_OV_BASE_URL` 设置成 `https://ov.example.com/web-studio`。`/web-studio/` 只是前端挂载路径；OpenViking API 请求仍应访问 `https://ov.example.com/api/*` 和 `https://ov.example.com/bot/*`。
 
-### 6. Docker 服务端依赖
+### 6. 自动代理模式（单进程后端）
+
+自动代理模式适用于希望公开访问的场景：
+
+- 浏览器始终拿不到 OpenViking 的根 API Key。
+- 前端只访问**同域**接口，不携带任何 `X-API-Key`。
+- 一个极简的 Node.js 后端（`server/proxy.mjs`）在服务端注入 `X-API-Key` 并转发到上游 OpenViking Server。
+
+适合让任何能打开网站的人都直接连上 OV 集群，凭据始终留在服务端。
+
+```bash
+cd web-studio
+npm ci
+npm run build
+
+OV_STUDIO_UPSTREAM=https://ov-api.example.com \
+OV_STUDIO_API_KEY=$ROOT_API_KEY \
+npm run proxy
+```
+
+启动后 Web Studio 会在启动时读取 `GET /_studio/runtime-config.json`，自动隐藏连接对话框中的字段，并不再把任何凭据写入浏览器存储。环境变量与威胁模型见 [`server/README.md`](server/README.md)。自动代理模式下不要设置 `VITE_OV_BASE_URL`，前端需要走同源路径，代理才能注入鉴权头。
+
+### 7. Docker 服务端依赖
 
 官方 OpenViking 镜像可以作为 API server 依赖：
 

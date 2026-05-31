@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
+import { getStudioRuntime } from '#/lib/studio-runtime'
 
 import { detectServerMode, normalizeBaseUrl } from './use-server-mode'
 import type { ServerMode } from './use-server-mode'
@@ -25,6 +26,7 @@ type AppConnectionContextValue = {
   connection: ConnectionDraft
   isConnectionDialogOpen: boolean
   openConnectionDialog: () => void
+  proxyMode: boolean
   saveConnection: (next: ConnectionDraft) => void
   serverMode: ServerMode
   setConnectionDialogOpen: (open: boolean) => void
@@ -66,8 +68,11 @@ function readStoredConnection(): Partial<ConnectionDraft> {
   }
 }
 
-function persistConnection(connection: ConnectionDraft): void {
-  if (!isBrowser()) {
+function persistConnection(
+  connection: ConnectionDraft,
+  proxyMode: boolean,
+): void {
+  if (!isBrowser() || proxyMode) {
     return
   }
 
@@ -81,6 +86,16 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 }
 
+function buildProxyConnection(): ConnectionDraft {
+  return {
+    accountId: '',
+    agentId: DEFAULT_CONNECTION.agentId,
+    apiKey: '',
+    baseUrl: isBrowser() ? window.location.origin : '',
+    userId: '',
+  }
+}
+
 function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
@@ -91,19 +106,26 @@ function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft 
   }
 }
 
-function applyConnection(connection: ConnectionDraft): void {
+function applyConnection(
+  connection: ConnectionDraft,
+  proxyMode: boolean,
+): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
+    proxyMode,
   })
   ovClient.setConnection({
-    accountId: connection.accountId,
+    accountId: proxyMode ? '' : connection.accountId,
     agentId: connection.agentId,
-    apiKey: connection.apiKey,
-    userId: connection.userId,
+    apiKey: proxyMode ? '' : connection.apiKey,
+    userId: proxyMode ? '' : connection.userId,
   })
 }
 
-function readInitialConnection(): ConnectionDraft {
+function readInitialConnection(proxyMode: boolean): ConnectionDraft {
+  if (proxyMode) {
+    return normalizeConnectionDraft(buildProxyConnection())
+  }
   const storedConnection = readStoredConnection()
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
@@ -157,10 +179,11 @@ export function AppConnectionProvider({
   children: React.ReactNode
 }) {
   const queryClient = useQueryClient()
+  const proxyMode = getStudioRuntime().proxyMode
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
   if (initialConnectionRef.current === null) {
-    initialConnectionRef.current = readInitialConnection()
-    applyConnection(initialConnectionRef.current)
+    initialConnectionRef.current = readInitialConnection(proxyMode)
+    applyConnection(initialConnectionRef.current, proxyMode)
   }
 
   const [connection, setConnection] = React.useState<ConnectionDraft>(
@@ -171,10 +194,10 @@ export function AppConnectionProvider({
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
   React.useEffect(() => {
-    applyConnection(connection)
-    persistConnection(connection)
+    applyConnection(connection, proxyMode)
+    persistConnection(connection, proxyMode)
     void queryClient.invalidateQueries()
-  }, [connection, queryClient])
+  }, [connection, proxyMode, queryClient])
 
   React.useEffect(() => {
     let cancelled = false
@@ -196,6 +219,7 @@ export function AppConnectionProvider({
       (response) => response,
       (error) => {
         if (
+          !proxyMode &&
           isOvClientError(error) &&
           (error.statusCode === 401 || error.statusCode === 403)
         ) {
@@ -208,19 +232,24 @@ export function AppConnectionProvider({
     return () => {
       ovClient.instance.interceptors.response.eject(interceptorId)
     }
-  }, [])
+  }, [proxyMode])
 
   const value = React.useMemo<AppConnectionContextValue>(
     () => ({
       connection,
       isConnectionDialogOpen,
       openConnectionDialog: () => setConnectionDialogOpen(true),
-      saveConnection: (next) =>
-        setConnection(normalizeConnectionDraft(next)),
+      proxyMode,
+      saveConnection: (next) => {
+        if (proxyMode) {
+          return
+        }
+        setConnection(normalizeConnectionDraft(next))
+      },
       serverMode,
       setConnectionDialogOpen,
     }),
-    [connection, isConnectionDialogOpen, serverMode],
+    [connection, isConnectionDialogOpen, proxyMode, serverMode],
   )
 
   return (

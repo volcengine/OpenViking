@@ -32,6 +32,7 @@ export function ConnectionDialog() {
   const {
     connection,
     isConnectionDialogOpen,
+    proxyMode,
     saveConnection,
     serverMode,
     setConnectionDialogOpen,
@@ -49,6 +50,36 @@ export function ConnectionDialog() {
 
   const isDevImplicit = serverMode === 'dev'
   const showIdentityFields = !isDevImplicit || showAdvancedInDevMode
+
+  if (proxyMode) {
+    return (
+      <Dialog
+        open={isConnectionDialogOpen}
+        onOpenChange={setConnectionDialogOpen}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('dialog.title', { ns: 'connection' })}</DialogTitle>
+          </DialogHeader>
+          <Card size="sm" className="gap-3 border bg-background/70 shadow-none">
+            <CardHeader className="gap-2">
+              <CardTitle className="text-sm">
+                {t('proxyMode.title', { ns: 'connection' })}
+              </CardTitle>
+              <CardDescription>
+                {t('proxyMode.description', { ns: 'connection' })}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <DialogFooter>
+            <Button onClick={() => setConnectionDialogOpen(false)}>
+              {t('close', { ns: 'common', keyPrefix: 'action' })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
 
   return (
     <Dialog

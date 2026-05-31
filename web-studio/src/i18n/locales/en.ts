@@ -40,6 +40,7 @@ const en = {
   common: {
     action: {
       cancel: 'Cancel',
+      close: 'Close',
       saveConnection: 'Save Connection',
       showAdvancedIdentityFields: 'Show Advanced Identity Fields',
     },
@@ -66,6 +67,11 @@ const en = {
     },
     dialog: {
       title: 'Connection & Identity',
+    },
+    proxyMode: {
+      title: 'Auto-proxy mode',
+      description:
+        'A same-origin proxy is forwarding requests to the OpenViking server with a server-managed API key. The browser never sees credentials, so connection settings are locked.',
     },
     identitySummary: {
       dev: 'Server-managed identity',

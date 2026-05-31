@@ -1,0 +1,17 @@
+# Railway deployment config for OpenViking Web Studio auto-proxy mode.
+#
+# Use with a Railway service rooted at this directory (Settings → Service →
+# Root Directory = `web-studio`). Railway injects $PORT; the proxy honors it
+# automatically. Set OV_STUDIO_UPSTREAM and OV_STUDIO_API_KEY as service
+# variables before the first deploy.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node server/proxy.mjs"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+healthcheckPath = "/_studio/runtime-config.json"
+healthcheckTimeout = 10

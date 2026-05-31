@@ -19,6 +19,7 @@ export interface OvClientOptions {
   connection?: Partial<OvConnectionState>
   defaultHeaders?: Record<string, string>
   defaultTelemetry?: boolean
+  proxyMode?: boolean
 }
 
 export interface OvClientAdapter {
@@ -28,17 +29,17 @@ export interface OvClientAdapter {
   getConnection: () => Readonly<OvConnectionState>
   getOptions: () => Readonly<
     Required<
-      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'proxyMode'>
     >
   >
   setConnection: (next: Partial<OvConnectionState>) => OvConnectionState
   setOptions: (
     next: Partial<
-      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'proxyMode'>
     >,
   ) => Readonly<
     Required<
-      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry'>
+      Pick<OvClientOptions, 'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'proxyMode'>
     >
   >
 }

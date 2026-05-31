@@ -150,6 +150,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     apiKeyStorageKey: options.apiKeyStorageKey || DEFAULT_API_KEY_STORAGE_KEY,
     baseUrl: normalizeBaseUrl(options.baseUrl),
     defaultTelemetry: options.defaultTelemetry ?? true,
+    proxyMode: options.proxyMode ?? false,
   }
 
   let connection: OvConnectionState = {
@@ -177,9 +178,15 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       headers.set(key, value)
     }
 
-    setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
-    setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-    setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+    if (!runtimeOptions.proxyMode) {
+      setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
+      setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
+      setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+    } else {
+      headers.delete('X-API-Key')
+      headers.delete('X-OpenViking-Account')
+      headers.delete('X-OpenViking-User')
+    }
     headers.set('X-OpenViking-Agent', connection.agentId || WEB_STUDIO_AGENT_ID)
 
     config.headers = headers
@@ -277,6 +284,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
           : runtimeOptions.baseUrl,
       defaultTelemetry:
         next.defaultTelemetry ?? runtimeOptions.defaultTelemetry,
+      proxyMode: next.proxyMode ?? runtimeOptions.proxyMode,
     }
 
     if (previousStorageKey !== runtimeOptions.apiKeyStorageKey) {

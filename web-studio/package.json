@@ -9,6 +9,7 @@
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "preview": "vite preview",
+    "proxy": "node server/proxy.mjs",
     "test": "vitest run",
     "lint": "eslint src --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts' --ignore-pattern 'src/components/ui/**'",
     "format": "prettier --check 'src/**/*.{ts,tsx}'",
