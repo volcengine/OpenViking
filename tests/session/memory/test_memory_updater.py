@@ -1155,7 +1155,7 @@ class TestConsecutivePatchesSameURI:
         updater = MemoryUpdater()
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         monkeypatch.setattr(
-            "openviking.session.memory.memory_updater._exact_file_lock_context",
+            "openviking.session.memory.memory_updater._exact_file_lock_context_for_uris",
             lambda **kwargs: FakeExactLock(),
         )
         monkeypatch.setattr(
@@ -1201,7 +1201,7 @@ class TestConsecutivePatchesSameURI:
         updater = MemoryUpdater()
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         monkeypatch.setattr(
-            "openviking.session.memory.memory_updater._exact_file_lock_context",
+            "openviking.session.memory.memory_updater._exact_file_lock_context_for_uris",
             lambda **kwargs: FakeExactLock(),
         )
         monkeypatch.setattr(
@@ -1213,6 +1213,321 @@ class TestConsecutivePatchesSameURI:
 
         assert deleted is True
         assert events == ["lock", "read", "rm", "unlock"]
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_removes_peer_backlinks(self, monkeypatch):
+        old_uri = "viking://agent/demo/memories/experiences/old.md"
+        new_uri = "viking://agent/demo/memories/experiences/new.md"
+        target_uri = "viking://agent/demo/memories/trajectories/target.md"
+        stale_link = StoredLink(
+            from_uri=old_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            match_text="target",
+            description="old source",
+        )
+        live_link = StoredLink(
+            from_uri=new_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            match_text="target",
+            description="new source",
+        )
+        old_file = MemoryFile(
+            uri=old_uri,
+            content="old body",
+            links=[stale_link.model_dump()],
+            extra_fields={"experience_name": "old", "memory_type": "experiences"},
+        )
+        target_file = MemoryFile(
+            uri=target_uri,
+            content="target body",
+            backlinks=[stale_link.model_dump(), live_link.model_dump()],
+            extra_fields={"memory_type": "trajectories"},
+        )
+        store = {
+            old_uri: MemoryFileUtils.write(old_file),
+            target_uri: MemoryFileUtils.write(target_file),
+        }
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            return store.get(read_uri)
+
+        async def mock_write_file(write_uri, content, **kwargs):
+            store[write_uri] = content
+
+        async def mock_rm(delete_uri, **kwargs):
+            store.pop(delete_uri, None)
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.rm = mock_rm
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: False,
+        )
+
+        deleted = await updater._apply_delete(old_uri, MagicMock(), expected=old_file)
+
+        assert deleted is True
+        assert old_uri not in store
+        parsed = parse_memory_file_with_fields(store[target_uri])
+        assert [link["from_uri"] for link in parsed["backlinks"]] == [new_uri]
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_removes_peer_links_from_backlink_only_file(self, monkeypatch):
+        source_uri = "viking://agent/demo/memories/trajectories/source.md"
+        deleted_uri = "viking://agent/demo/memories/experiences/deleted.md"
+        stale_link = StoredLink(
+            from_uri=source_uri,
+            to_uri=deleted_uri,
+            link_type="has_experience",
+            match_text="deleted",
+        )
+        deleted_file = MemoryFile(
+            uri=deleted_uri,
+            content="deleted body",
+            backlinks=[stale_link.model_dump()],
+            extra_fields={"experience_name": "deleted", "memory_type": "experiences"},
+        )
+        source_file = MemoryFile(
+            uri=source_uri,
+            content="source body",
+            links=[stale_link.model_dump()],
+            extra_fields={"memory_type": "trajectories"},
+        )
+        store = {
+            source_uri: MemoryFileUtils.write(source_file),
+            deleted_uri: MemoryFileUtils.write(deleted_file),
+        }
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            return store.get(read_uri)
+
+        async def mock_write_file(write_uri, content, **kwargs):
+            store[write_uri] = content
+
+        async def mock_rm(delete_uri, **kwargs):
+            store.pop(delete_uri, None)
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.rm = mock_rm
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: False,
+        )
+
+        deleted = await updater._apply_delete(deleted_uri, MagicMock(), expected=deleted_file)
+
+        assert deleted is True
+        parsed = parse_memory_file_with_fields(store[source_uri])
+        assert parsed.get("links", []) == []
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_removes_peer_links_with_drifted_match_text(self, monkeypatch):
+        old_uri = "viking://agent/demo/memories/experiences/old.md"
+        target_uri = "viking://agent/demo/memories/trajectories/target.md"
+        expected_link = StoredLink(
+            from_uri=old_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            match_text="expected",
+        )
+        drifted_link = StoredLink(
+            from_uri=old_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            match_text="drifted",
+        )
+        old_file = MemoryFile(
+            uri=old_uri,
+            content="old body",
+            links=[expected_link.model_dump()],
+            extra_fields={"experience_name": "old", "memory_type": "experiences"},
+        )
+        target_file = MemoryFile(
+            uri=target_uri,
+            content="target body",
+            backlinks=[drifted_link.model_dump()],
+            extra_fields={"memory_type": "trajectories"},
+        )
+        store = {
+            old_uri: MemoryFileUtils.write(old_file),
+            target_uri: MemoryFileUtils.write(target_file),
+        }
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            return store.get(read_uri)
+
+        async def mock_write_file(write_uri, content, **kwargs):
+            store[write_uri] = content
+
+        async def mock_rm(delete_uri, **kwargs):
+            store.pop(delete_uri, None)
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.rm = mock_rm
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: False,
+        )
+
+        deleted = await updater._apply_delete(old_uri, MagicMock(), expected=old_file)
+
+        assert deleted is True
+        parsed = parse_memory_file_with_fields(store[target_uri])
+        assert parsed.get("backlinks", []) == []
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_exact_lock_batches_peer_cleanup(self, monkeypatch):
+        old_uri = "viking://agent/demo/memories/experiences/old.md"
+        target_uri = "viking://agent/demo/memories/trajectories/target.md"
+        events: list[str] = []
+        captured_uris: list[str] = []
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                events.append("lock")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("unlock")
+
+        stale_link = StoredLink(
+            from_uri=old_uri,
+            to_uri=target_uri,
+            link_type="derived_from",
+            match_text="target",
+        )
+        old_file = MemoryFile(
+            uri=old_uri,
+            content="old body",
+            links=[stale_link.model_dump()],
+            extra_fields={"experience_name": "old", "memory_type": "experiences"},
+        )
+        target_file = MemoryFile(
+            uri=target_uri,
+            content="target body",
+            backlinks=[stale_link.model_dump()],
+            extra_fields={"memory_type": "trajectories"},
+        )
+        store = {
+            old_uri: MemoryFileUtils.write(old_file),
+            target_uri: MemoryFileUtils.write(target_file),
+        }
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            events.append(f"read:{read_uri.rsplit('/', 1)[-1]}")
+            return store.get(read_uri)
+
+        async def mock_write_file(write_uri, content, **kwargs):
+            events.append(f"write:{write_uri.rsplit('/', 1)[-1]}")
+            store[write_uri] = content
+
+        async def mock_rm(delete_uri, **kwargs):
+            events.append("rm")
+            store.pop(delete_uri, None)
+
+        def fake_lock_context_for_uris(**kwargs):
+            captured_uris.extend(kwargs["uris"])
+            return FakeExactLock()
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.rm = mock_rm
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_file_lock_context_for_uris",
+            fake_lock_context_for_uris,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_file_lock_context",
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected nested lock")),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+
+        deleted = await updater._apply_delete(old_uri, MagicMock(), expected=old_file)
+
+        assert deleted is True
+        assert set(captured_uris) == {old_uri, target_uri}
+        assert events == [
+            "lock",
+            "read:old.md",
+            "read:target.md",
+            "write:target.md",
+            "rm",
+            "unlock",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_exact_lock_reuses_active_handle_for_rm(self, monkeypatch):
+        uri = "viking://agent/demo/memories/experiences/old.md"
+        expected = MemoryFile(
+            uri=uri,
+            content="old body",
+            extra_fields={"experience_name": "old", "memory_type": "experiences"},
+        )
+        events: list[str] = []
+
+        class FakeHandle:
+            pass
+
+        active_handle = FakeHandle()
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                events.append("lock")
+                return active_handle
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("unlock")
+
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            return MemoryFileUtils.write(expected)
+
+        async def mock_rm(delete_uri, **kwargs):
+            assert kwargs["lock_handle"] is active_handle
+            events.append("rm")
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.rm = mock_rm
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_file_lock_context_for_uris",
+            lambda **kwargs: FakeExactLock(),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+
+        deleted = await updater._apply_delete(uri, MagicMock(), expected=expected)
+
+        assert deleted is True
+        assert events == ["lock", "rm", "unlock"]
 
     @pytest.mark.asyncio
     async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):

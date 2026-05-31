@@ -136,6 +136,35 @@ def _exact_file_lock_context(
     )
 
 
+def _exact_file_lock_context_for_uris(
+    *,
+    viking_fs: Any,
+    uris: List[str],
+    ctx: RequestContext,
+    transaction_handle: Any,
+    purpose: str,
+) -> Any:
+    if not _memory_apply_exact_file_lock_enabled():
+        return None
+    try:
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        lock_manager = get_lock_manager()
+    except Exception as exc:
+        get_current_telemetry().increment("memory.apply.exact_file_lock.unavailable")
+        raise RuntimeError(
+            f"Exact file lock unavailable for {purpose}: uris={uris}, error={exc}"
+        ) from exc
+    get_current_telemetry().increment("memory.apply.exact_file_lock.used")
+    return LockContext(
+        lock_manager,
+        lock_paths,
+        lock_mode="exact",
+        handle=transaction_handle,
+    )
+
+
 def _exact_upsert_lock_context(
     *,
     viking_fs: Any,
@@ -150,6 +179,53 @@ def _exact_upsert_lock_context(
         transaction_handle=transaction_handle,
         purpose="upsert",
     )
+
+
+def _stored_link_key(link: Dict[str, Any]) -> tuple[str, str, Optional[str]]:
+    return (
+        str(link.get("from_uri") or ""),
+        str(link.get("to_uri") or ""),
+        link.get("match_text"),
+    )
+
+
+def _remove_links(
+    existing_links: List[Dict],
+    links_to_remove: List[Dict],
+    *,
+    deleted_uri: Optional[str] = None,
+) -> List[Dict]:
+    if deleted_uri:
+        return [
+            link
+            for link in existing_links
+            if link.get("from_uri") != deleted_uri and link.get("to_uri") != deleted_uri
+        ]
+
+    remove_keys = {_stored_link_key(link) for link in links_to_remove}
+    if not remove_keys:
+        return existing_links
+    return [link for link in existing_links if _stored_link_key(link) not in remove_keys]
+
+
+def _stored_links_from_memory_file(memory_file: MemoryFile) -> List[StoredLink]:
+    links: List[StoredLink] = []
+    for raw_link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+        try:
+            links.append(StoredLink(**raw_link))
+        except Exception:
+            tracer.error(f"Skipping malformed stored link during delete cleanup: {raw_link}")
+    return links
+
+
+def _peer_uris_for_links(links: List[StoredLink], deleted_uri: str) -> set[str]:
+    peers: set[str] = set()
+    for link in links:
+        if link.from_uri != deleted_uri:
+            peers.add(link.from_uri)
+        if link.to_uri != deleted_uri:
+            peers.add(link.to_uri)
+    return peers
 
 
 async def write_stored_links(
@@ -212,6 +288,81 @@ async def write_stored_links(
                     f"Failed to apply links under exact file-lock mode: uri={uri}, error={e}"
                 ) from e
             tracer.error(f"Failed to apply links to {uri}: {e}")
+
+
+async def remove_stored_links(
+    links: List[StoredLink],
+    ctx: RequestContext,
+    viking_fs: Any,
+    skip_uris: Optional[set] = None,
+    lock_handle: Any = None,
+    lock_endpoints: bool = True,
+    deleted_uri: Optional[str] = None,
+) -> None:
+    """Remove StoredLinks from endpoint files' links/backlinks fields.
+
+    This is the inverse of ``write_stored_links`` and is used before deleting a
+    memory file so peer endpoints do not retain dangling graph edges.
+    """
+    skip = skip_uris or set()
+    file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
+    for link in links:
+        if link.from_uri not in skip:
+            file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
+            file_links[link.from_uri]["links"].append(link)
+        if link.to_uri not in skip:
+            file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
+            file_links[link.to_uri]["backlinks"].append(link)
+
+    async def _remove_links_for_uri(uri: str, link_groups: Dict[str, List[StoredLink]]) -> None:
+        content = await viking_fs.read_file(uri, ctx=ctx)
+        if not content:
+            return
+        mf = MemoryFileUtils.read(content, uri=uri)
+        changed = False
+        if link_groups["links"]:
+            next_links = _remove_links(
+                mf.links,
+                [link.model_dump() for link in link_groups["links"]],
+                deleted_uri=deleted_uri,
+            )
+            changed = changed or len(next_links) != len(mf.links)
+            mf.links = next_links
+        if link_groups["backlinks"]:
+            next_backlinks = _remove_links(
+                mf.backlinks,
+                [link.model_dump() for link in link_groups["backlinks"]],
+                deleted_uri=deleted_uri,
+            )
+            changed = changed or len(next_backlinks) != len(mf.backlinks)
+            mf.backlinks = next_backlinks
+        if changed:
+            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+
+    for uri, link_groups in file_links.items():
+        try:
+            lock_context = None
+            if lock_endpoints:
+                lock_context = _exact_file_lock_context(
+                    viking_fs=viking_fs,
+                    uri=uri,
+                    ctx=ctx,
+                    transaction_handle=lock_handle,
+                    purpose="link-cleanup",
+                )
+            if lock_context is not None:
+                async with lock_context:
+                    await _remove_links_for_uri(uri, link_groups)
+                continue
+
+            await _remove_links_for_uri(uri, link_groups)
+        except Exception as e:
+            if lock_handle is not None or _memory_apply_exact_file_lock_enabled():
+                get_current_telemetry().increment("memory.apply.links.failed_file_lock")
+                raise RuntimeError(
+                    f"Failed to remove links under exact file-lock mode: uri={uri}, error={e}"
+                ) from e
+            tracer.error(f"Failed to remove links from {uri}: {e}")
 
 
 class ExtractContext:
@@ -811,7 +962,26 @@ class MemoryUpdater:
         """Apply delete operation (uri is already a string)."""
         viking_fs = self._get_viking_fs()
 
-        async def _delete_with_stale_guard() -> bool:
+        async def _cleanup_deleted_file_links(
+            memory_file: MemoryFile, *, lock_endpoints: bool
+        ) -> None:
+            links = _stored_links_from_memory_file(memory_file)
+            if not links:
+                return
+            await remove_stored_links(
+                links,
+                ctx,
+                viking_fs,
+                skip_uris={uri},
+                lock_handle=self._transaction_handle,
+                lock_endpoints=lock_endpoints,
+                deleted_uri=uri,
+            )
+
+        async def _delete_with_stale_guard(
+            *, lock_cleanup_endpoints: bool, lock_handle: Any = None
+        ) -> bool:
+            file_to_delete = expected
             if expected is not None and _memory_apply_exact_file_lock_enabled():
                 try:
                     current_raw = await viking_fs.read_file(uri, ctx=ctx)
@@ -829,34 +999,48 @@ class MemoryUpdater:
                         "file changed after delete was planned"
                     )
                     return False
+                file_to_delete = current
 
             try:
+                if file_to_delete is not None:
+                    await _cleanup_deleted_file_links(
+                        file_to_delete,
+                        lock_endpoints=lock_cleanup_endpoints,
+                    )
                 await viking_fs.rm(
                     uri,
                     recursive=False,
                     ctx=ctx,
-                    lock_handle=self._transaction_handle,
+                    lock_handle=lock_handle or self._transaction_handle,
                 )
             except NotFoundError:
                 tracer.error(f"Memory not found for delete: {uri}")
                 # Idempotent - deleting non-existent file succeeds
             return True
 
-        lock_context = _exact_file_lock_context(
+        delete_lock_uris = [uri]
+        if expected is not None:
+            delete_lock_uris.extend(
+                sorted(_peer_uris_for_links(_stored_links_from_memory_file(expected), uri))
+            )
+        lock_context = _exact_file_lock_context_for_uris(
             viking_fs=viking_fs,
-            uri=uri,
+            uris=delete_lock_uris,
             ctx=ctx,
             transaction_handle=self._transaction_handle,
             purpose="delete",
         )
         if lock_context is not None:
-            async with lock_context:
-                return await _delete_with_stale_guard()
+            async with lock_context as active_handle:
+                return await _delete_with_stale_guard(
+                    lock_cleanup_endpoints=False,
+                    lock_handle=active_handle,
+                )
 
         # Delete from VikingFS. VikingFS automatically handles vector index cleanup.
         # Pass transaction_handle so rm() reuses the compressor's tree lock instead
         # of trying to acquire a new lock when the caller still holds one.
-        return await _delete_with_stale_guard()
+        return await _delete_with_stale_guard(lock_cleanup_endpoints=True)
 
     async def _vectorize_memories(
         self,
