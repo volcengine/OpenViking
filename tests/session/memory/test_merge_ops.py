@@ -12,6 +12,7 @@ import pytest
 from openviking.session.memory.dataclass import (
     MemoryField,
 )
+from openviking.session.memory.memory_updater import _wrap_patch_with_read_base
 from openviking.session.memory.merge_op import (
     ImmutableOp,
     MergeOp,
@@ -24,7 +25,6 @@ from openviking.session.memory.merge_op import (
 )
 from openviking.session.memory.merge_op.base import FieldType, StrPatchWithBase
 from openviking.session.memory.merge_op.patch_handler import PatchParseError
-from openviking.session.memory.memory_updater import _wrap_patch_with_read_base
 
 # ============================================================================
 # Test MergeOp Base Classes

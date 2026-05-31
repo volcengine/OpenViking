@@ -8,6 +8,7 @@ import json
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -491,6 +492,7 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
 
 
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
+    requested_commit_concurrency = int(args.corpus_session_commit_concurrency)
     if corpus_manifest.is_file() and not args.force_train:
         manifest = json.loads(corpus_manifest.read_text())
         cached_transcript_format = str(
@@ -525,6 +527,13 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 f"{cached_skip_failed!r} != {bool(args.train_skip_failed_sessions)!r}; "
                 "use a distinct corpus_id or --force-train"
             )
+        cached_commit_concurrency = int(manifest.get("corpus_session_commit_concurrency") or 1)
+        if cached_commit_concurrency != requested_commit_concurrency:
+            raise ValueError(
+                "cached corpus_session_commit_concurrency mismatch: "
+                f"{cached_commit_concurrency!r} != {requested_commit_concurrency!r}; "
+                "use a distinct corpus_id or --force-train"
+            )
         return manifest
 
     if train_results.is_file() and not args.force_train:
@@ -552,29 +561,31 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         data = json.loads(train_results.read_text())
         assert_tau2_results_complete(data, context=f"{args.domain} train")
 
-    client = _client(args)
-    committed = []
     system_prompt_text = ""
     if args.train_include_system_prompt:
         policy = _load_domain_policy(args.tau2_repo, args.domain)
         system_prompt_text = _build_system_prompt(policy)
     skipped_failed_sessions: list[dict[str, Any]] = []
-    try:
-        for sim in data.get("simulations") or []:
-            if args.train_skip_failed_sessions and not _task_success(sim):
-                skipped_failed_sessions.append(
-                    {
-                        "session_id": (
-                            f"tau2-{args.domain}-train-{sim.get('task_id')}-"
-                            f"trial-{sim.get('trial', 0)}"
-                        ),
-                        "task_id": sim.get("task_id"),
-                        "trial": sim.get("trial", 0),
-                        "reward": _reward(sim),
-                        "db_match": _db_match(sim),
-                    }
-                )
-                continue
+    commit_jobs: list[tuple[int, dict[str, Any]]] = []
+    for index, sim in enumerate(data.get("simulations") or []):
+        if args.train_skip_failed_sessions and not _task_success(sim):
+            skipped_failed_sessions.append(
+                {
+                    "session_id": (
+                        f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+                    ),
+                    "task_id": sim.get("task_id"),
+                    "trial": sim.get("trial", 0),
+                    "reward": _reward(sim),
+                    "db_match": _db_match(sim),
+                }
+            )
+            continue
+        commit_jobs.append((index, sim))
+
+    def commit_one(index: int, sim: dict[str, Any]) -> dict[str, Any]:
+        client = _client(args)
+        try:
             session_id = (
                 f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
             )
@@ -604,20 +615,35 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                     )
             result = client.commit_session(sid, telemetry=True)
             task = _wait_task(client, result.get("task_id"), args.openviking_wait_timeout)
-            committed.append(
-                {
-                    "session_id": sid,
-                    "task_id": sim.get("task_id"),
-                    "trial": sim.get("trial", 0),
-                    "reward": _reward(sim),
-                    "db_match": _db_match(sim),
-                    "commit_status": result.get("status"),
-                    "openviking_task_id": result.get("task_id"),
-                    "openviking_task_status": task.get("status"),
-                }
-            )
-    finally:
-        client.close()
+            return {
+                "_input_index": index,
+                "session_id": sid,
+                "task_id": sim.get("task_id"),
+                "trial": sim.get("trial", 0),
+                "reward": _reward(sim),
+                "db_match": _db_match(sim),
+                "commit_status": result.get("status"),
+                "openviking_task_id": result.get("task_id"),
+                "openviking_task_status": task.get("status"),
+            }
+        finally:
+            client.close()
+
+    committed_rows: list[dict[str, Any]] = []
+    worker_count = min(max(1, requested_commit_concurrency), len(commit_jobs) or 1)
+    if worker_count == 1:
+        committed_rows = [commit_one(index, sim) for index, sim in commit_jobs]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(commit_one, index, sim): (index, sim) for index, sim in commit_jobs
+            }
+            for future in as_completed(futures):
+                committed_rows.append(future.result())
+    committed = [
+        {key: value for key, value in row.items() if key != "_input_index"}
+        for row in sorted(committed_rows, key=lambda item: int(item["_input_index"]))
+    ]
 
     client = _client(args)
     try:
@@ -639,6 +665,8 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         "train_include_system_prompt": bool(args.train_include_system_prompt),
         "train_skip_failed_sessions": bool(args.train_skip_failed_sessions),
         "train_tool_output_max_chars": args.train_tool_output_max_chars,
+        "corpus_session_commit_concurrency": requested_commit_concurrency,
+        "corpus_session_commit_worker_count": worker_count,
         "committed_sessions": committed,
         "committed_session_count": len(committed),
         "skipped_failed_sessions": skipped_failed_sessions,
@@ -944,6 +972,15 @@ def main() -> int:
     parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
+    parser.add_argument(
+        "--corpus-session-commit-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Maximum concurrent OpenViking session commits while preparing the train corpus. "
+            "Defaults to 1 to preserve the serial baseline."
+        ),
+    )
     parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument("--first-user-retrieval-top-k", type=int)
@@ -1005,6 +1042,8 @@ def main() -> int:
     normalize_litellm_env()
     if args.train_tool_output_max_chars <= 0:
         parser.error("--train-tool-output-max-chars must be positive")
+    if args.corpus_session_commit_concurrency < 1:
+        parser.error("--corpus-session-commit-concurrency must be >= 1")
     for name in (
         "memory_inject_max_chars",
         "first_user_memory_inject_max_chars",

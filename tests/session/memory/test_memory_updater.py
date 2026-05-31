@@ -4,7 +4,6 @@
 Tests for MemoryUpdater.
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,8 +12,8 @@ from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.session.memory.dataclass import (
-    MemoryFile,
     MemoryField,
+    MemoryFile,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,

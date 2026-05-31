@@ -1001,6 +1001,7 @@ class SessionCompressorV2:
         lock_handle: Optional[Any] = None,
     ) -> None:
         from datetime import timezone
+
         from openviking.session.memory.merge_op.link_merge import merge_links
 
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
