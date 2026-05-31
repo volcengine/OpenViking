@@ -101,6 +101,71 @@ function extractToolResultText(content) {
     .join("\n");
 }
 
+// Structured parts (parts-mode capture) — mirrors auto-capture.mjs. Tool calls /
+// results become dedicated `tool` parts instead of being inlined into content.
+const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
+
+function truncateToolOutput(s) {
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
+  return (
+    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
+  );
+}
+
+function collectToolNamesById(messages) {
+  const map = {};
+  for (const msg of messages) {
+    const content = msg?.content ?? msg?.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block?.type === "tool_use" &&
+        typeof block.id === "string" &&
+        typeof block.name === "string"
+      ) {
+        map[block.id] = block.name;
+      }
+    }
+  }
+  return map;
+}
+
+function buildParts(content, toolNameById) {
+  const out = [];
+  if (typeof content === "string") {
+    if (content.trim()) out.push({ type: "text", text: content });
+    return out;
+  }
+  if (!Array.isArray(content)) return out;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      if (block.text.trim()) out.push({ type: "text", text: block.text });
+    } else if (block.type === "tool_use" && typeof block.name === "string") {
+      out.push({
+        type: "tool",
+        tool_id: typeof block.id === "string" ? block.id : undefined,
+        tool_name: block.name,
+        tool_input:
+          block.input && typeof block.input === "object" ? block.input : undefined,
+        tool_status: "running",
+      });
+    } else if (block.type === "tool_result") {
+      const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      out.push({
+        type: "tool",
+        tool_id: id,
+        tool_name: id ? toolNameById[id] : undefined,
+        tool_output: truncateToolOutput(extractToolResultText(block.content)),
+        tool_status: block.is_error ? "error" : "completed",
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Tier-1 parts extraction — shared shape with auto-capture.mjs.
  * Kept inline here so SubagentStop does not import auto-capture's globals.
@@ -108,12 +173,14 @@ function extractToolResultText(content) {
  * (TOOL_RESULT_MAX_CHARS = 0) and retained only if explicitly enabled.
  */
 function extractTurns(messages) {
+  const toolNameById = collectToolNamesById(messages);
   const turns = [];
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") continue;
     let role = msg.role;
     let text = "";
     const toolNames = [];
+    let parts = [];
 
     const harvestContent = (content) => {
       if (typeof content === "string") {
@@ -139,16 +206,19 @@ function extractTurns(messages) {
       }
     };
 
+    let rawContent;
     if (msg.content !== undefined) {
-      harvestContent(msg.content);
+      rawContent = msg.content;
     } else if (typeof msg.message === "object" && msg.message) {
       role = msg.message.role || role;
-      harvestContent(msg.message.content);
+      rawContent = msg.message.content;
     }
+    harvestContent(rawContent);
+    parts = buildParts(rawContent, toolNameById);
 
     if (role !== "user" && role !== "assistant") continue;
-    if (!text.trim() && toolNames.length === 0) continue;
-    turns.push({ role, text: text.trim(), toolNames });
+    if (parts.length === 0) continue;
+    turns.push({ role, text: text.trim(), toolNames, parts });
   }
   return turns;
 }
@@ -161,10 +231,13 @@ async function pushTurns(ovSessionId, ovAgentId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    // Tool input / result already inlined as `[tool: NAME]` / `[tool result]` during harvest.
-    const content = turn.text;
-    if (!content) continue;
-    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });
+    // Send structured parts: tool calls/results are dedicated `tool` parts, not
+    // inlined into content, so the server can process them separately.
+    const parts = (turn.parts || []).filter(
+      (p) => p.type !== "text" || (p.text && p.text.trim()),
+    );
+    if (parts.length === 0) continue;
+    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, parts });
     if (res.ok) ok++;
     else failed++;
   }
