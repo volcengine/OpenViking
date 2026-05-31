@@ -1006,6 +1006,7 @@ class VikingFS:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
+        mode: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -1015,6 +1016,7 @@ class VikingFS:
             limit: Return count
             score_threshold: Score threshold
             filter: Metadata filter
+            mode: Optional retriever mode override
 
         Returns:
             FindResult
@@ -1064,13 +1066,16 @@ class VikingFS:
             f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
         )
 
-        result = await retriever.retrieve(
-            typed_query,
-            ctx=real_ctx,
-            limit=limit,
-            score_threshold=score_threshold,
-            scope_dsl=filter,
-        )
+        retrieve_kwargs = {
+            "ctx": real_ctx,
+            "limit": limit,
+            "score_threshold": score_threshold,
+            "scope_dsl": filter,
+        }
+        if mode is not None:
+            retrieve_kwargs["mode"] = mode
+
+        result = await retriever.retrieve(typed_query, **retrieve_kwargs)
 
         # Convert QueryResult to FindResult
         memories, resources, skills = [], [], []

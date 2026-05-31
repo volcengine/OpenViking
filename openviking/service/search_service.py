@@ -89,6 +89,7 @@ class SearchService:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        mode: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -98,18 +99,23 @@ class SearchService:
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
+            mode: Optional retriever mode override
 
         Returns:
             FindResult
         """
         _ensure_non_empty_query(query)
         viking_fs = self._ensure_initialized()
-        result = await viking_fs.find(
-            query=query,
-            ctx=ctx,
-            target_uri=target_uri,
-            limit=limit,
-            score_threshold=score_threshold,
-            filter=filter,
-        )
+        find_kwargs = {
+            "query": query,
+            "ctx": ctx,
+            "target_uri": target_uri,
+            "limit": limit,
+            "score_threshold": score_threshold,
+            "filter": filter,
+        }
+        if mode is not None:
+            find_kwargs["mode"] = mode
+
+        result = await viking_fs.find(**find_kwargs)
         return result

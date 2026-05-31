@@ -35,6 +35,18 @@ def _sanitize_floats(obj: Any) -> Any:
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 TimeField = Literal["updated_at", "created_at"]
+FindMode = Literal["auto", "fast", "deep"]
+
+
+def _resolve_retriever_mode(mode: FindMode) -> Optional[str]:
+    if mode == "auto":
+        return None
+
+    from openviking.retrieve.hierarchical_retriever import RetrieverMode
+
+    if mode == "fast":
+        return RetrieverMode.QUICK
+    return RetrieverMode.THINKING
 
 
 def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
@@ -68,6 +80,7 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    mode: FindMode = "auto"
 
     since: Optional[str] = None
     until: Optional[str] = None
@@ -126,17 +139,22 @@ async def find(
         request.until,
         request.time_field,
     )
+    retriever_mode = _resolve_retriever_mode(request.mode)
+    find_kwargs = {
+        "query": request.query,
+        "ctx": _ctx,
+        "target_uri": request.target_uri,
+        "limit": actual_limit,
+        "score_threshold": request.score_threshold,
+        "filter": effective_filter,
+    }
+    if retriever_mode is not None:
+        find_kwargs["mode"] = retriever_mode
+
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
-        fn=lambda: service.search.find(
-            query=request.query,
-            ctx=_ctx,
-            target_uri=request.target_uri,
-            limit=actual_limit,
-            score_threshold=request.score_threshold,
-            filter=effective_filter,
-        ),
+        fn=lambda: service.search.find(**find_kwargs),
     )
     result = execution.result
     if hasattr(result, "to_dict"):
