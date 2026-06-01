@@ -2,12 +2,13 @@
 """Step 3 (Performance): Benchmark grep performance and recall.
 
 Runs grep queries against the synthetic dataset, measuring both latency
-and recall. Target words from step0 are used as test queries, with
-expected hit counts computed from the injection probabilities.
+and recall. Ground truth (match counts per word) is obtained by running
+grep with engine=fs on first run, then cached.
 
 Run twice with different ov.conf engine settings to compare:
   1. Set ov.conf: "grep": {"engine": "fs"}, restart, then:
      python3 step3_benchmark.py --engine-label fs
+     (This also generates the ground truth cache)
   2. Set ov.conf: "grep": {"engine": "auto", "switch_to_remote_threshold": 0}, restart, then:
      python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 
@@ -17,14 +18,19 @@ Results are saved to step3_result_{engine_label}.json.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import time
 
-from openviking.sync_client import SyncOpenViking
+from openviking_cli.client.sync_http import SyncHTTPClient
 
 BASE_URI = "viking://resources/benchmark/performance"
-DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
+DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark")
+GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
+MISS_DIR = os.path.join(DATA_DIR, ".miss")
+SYNTHETIC_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
 
 # Same target words as step0_prepare_data.py
 TARGET_WORDS = {
@@ -37,37 +43,148 @@ TARGET_WORDS = {
 RUNS = 3
 WARMUP = 1
 
+GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
+MISS_DIR = os.path.join(DATA_DIR, ".miss")
+SYNTHETIC_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
+
+
+def _sanitize_filename(s: str, max_len: int = 40) -> str:
+    s = re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
+    s = s.strip("_")
+    return s[:max_len]
+
+
+def _perf_cache_path(uri: str) -> str:
+    h = hashlib.sha256(uri.encode()).hexdigest()[:8]
+    return os.path.join(GROUND_TRUTH_DIR, f"perf_{h}.json")
+
+
+def _load_ground_truth_cache(uri: str) -> dict[str, int] | None:
+    path = _perf_cache_path(uri)
+    if not os.path.isfile(path):
+        # Fallback: try old-style filename
+        old_h = hashlib.sha256(SYNTHETIC_DIR.encode())
+        for prob in sorted(TARGET_WORDS.keys()):
+            for word in TARGET_WORDS[prob]:
+                old_h.update(word.encode())
+        old_key = old_h.hexdigest()[:16]
+        old_path = os.path.join(GROUND_TRUTH_DIR, f"perf_{old_key}.json")
+        if os.path.isfile(old_path):
+            with open(old_path) as f:
+                data = json.load(f)
+            return data.get("word_counts")
+        return None
+    with open(path) as f:
+        data = json.load(f)
+    return data.get("word_counts")
+
+
+def _save_ground_truth_cache(uri: str, word_counts: dict[str, int]) -> None:
+    os.makedirs(GROUND_TRUTH_DIR, exist_ok=True)
+    path = _perf_cache_path(uri)
+    with open(path, "w") as f:
+        json.dump({"uri": uri, "word_counts": word_counts}, f, indent=2)
+
+
+def _perf_miss_path(engine_label: str) -> str:
+    h = hashlib.sha256(BASE_URI.encode()).hexdigest()[:8]
+    safe_label = _sanitize_filename(engine_label)
+    return os.path.join(MISS_DIR, f"perf_{safe_label}_{h}.json")
+
+
+def _save_perf_miss(
+    engine_label: str,
+    results: list[dict],
+    ground_truth: dict[str, int],
+) -> None:
+    """Save miss analysis (count diff per word) for performance benchmark."""
+    miss_data: list[dict] = []
+    has_miss = False
+    for r in results:
+        if "error" in r or "word" not in r:
+            continue
+        word = r["word"]
+        found = r.get("matches", 0)
+        expected = ground_truth.get(word, 0)
+        if found != expected or expected > 0:
+            miss_data.append(
+                {
+                    "word": word,
+                    "probability": r.get("probability"),
+                    "expected": expected,
+                    "found": found,
+                    "diff": found - expected,
+                    "recall_approx": r.get("recall_approx"),
+                }
+            )
+            if found < expected:
+                has_miss = True
+    if not has_miss:
+        return
+    os.makedirs(MISS_DIR, exist_ok=True)
+    path = _perf_miss_path(engine_label)
+    with open(path, "w") as f:
+        json.dump({"engine_label": engine_label, "uri": BASE_URI, "misses": miss_data}, f, indent=2)
+
+
+def compute_ground_truth(client: SyncHTTPClient, uri: str) -> tuple[dict[str, int], float]:
+    """Compute ground truth via OV grep (fs engine). Returns word -> match count."""
+    cached = _load_ground_truth_cache(uri)
+    if cached is not None:
+        return cached, 0.0
+
+    all_words = []
+    for prob in sorted(TARGET_WORDS.keys()):
+        all_words.extend(TARGET_WORDS[prob])
+
+    word_counts: dict[str, int] = {}
+    t0 = time.monotonic()
+    for w in all_words:
+        result = client.grep(uri=uri, pattern=w, node_limit=100000)
+        count = 0
+        if isinstance(result, dict):
+            count = len(result.get("matches", []))
+        word_counts[w] = count
+    elapsed = time.monotonic() - t0
+
+    _save_ground_truth_cache(uri, word_counts)
+    return word_counts, elapsed
+
 
 def count_local_files() -> int:
     """Count total .txt files in the synthetic dataset."""
     count = 0
-    if not os.path.isdir(DATA_DIR):
+    if not os.path.isdir(SYNTHETIC_DIR):
         return 0
-    for root, _dirs, files in os.walk(DATA_DIR):
+    for _root, _dirs, files in os.walk(SYNTHETIC_DIR):
         for f in files:
             if f.endswith(".txt"):
                 count += 1
     return count
 
 
-def run_grep(client: SyncOpenViking, pattern: str, uri: str) -> tuple[float, int]:
+def run_grep(client: SyncHTTPClient, pattern: str, uri: str) -> tuple[float, int, set[str]]:
     start = time.monotonic()
     result = client.grep(uri=uri, pattern=pattern, node_limit=100000)
     elapsed = time.monotonic() - start
-    match_count = 0
+    match_uris: set[str] = set()
     if isinstance(result, dict):
-        matches = result.get("matches", [])
-        match_count = len(matches)
-    return elapsed, match_count
+        for match in result.get("matches", []):
+            uri_val = match.get("uri", "")
+            if uri_val:
+                match_uris.add(uri_val.rstrip("/"))
+    return elapsed, len(match_uris), match_uris
 
 
-def benchmark_engine(client: SyncOpenViking, total_files: int) -> list[dict]:
+def benchmark_engine(
+    client: SyncHTTPClient, total_files: int, ground_truth: dict[str, int]
+) -> list[dict]:
     results = []
 
     for prob in sorted(TARGET_WORDS.keys(), reverse=True):
         words = TARGET_WORDS[prob]
         for word in words:
-            expected = int(total_files * prob)
+            expected = ground_truth.get(word, int(total_files * prob))
             label = f"{word} (p={prob * 100:.2f}%, expect~{expected})"
 
             print(f"  {label} ...", end=" ", flush=True)
@@ -85,7 +202,7 @@ def benchmark_engine(client: SyncOpenViking, total_files: int) -> list[dict]:
             failed = False
             for _ in range(RUNS):
                 try:
-                    elapsed, matches = run_grep(client, word, BASE_URI)
+                    elapsed, matches, _ = run_grep(client, word, BASE_URI)
                     times.append(elapsed)
                     match_count = matches
                 except Exception as e:
@@ -132,7 +249,7 @@ def benchmark_engine(client: SyncOpenViking, total_files: int) -> list[dict]:
     failed = False
     for _ in range(RUNS):
         try:
-            elapsed, matches = run_grep(client, "zzz_nonexistent_perf", BASE_URI)
+            elapsed, matches, _ = run_grep(client, "zzz_nonexistent_perf", BASE_URI)
             times.append(elapsed)
             match_count = matches
         except Exception as e:
@@ -216,6 +333,16 @@ def main():
 
     total_files = count_local_files()
 
+    client = SyncHTTPClient(account="default", user="default")
+    client.initialize()
+
+    print("Computing ground truth (OV grep, fs engine)...")
+    ground_truth, gt_elapsed = compute_ground_truth(client, BASE_URI)
+    if gt_elapsed > 0:
+        print(f"  Ground truth computed in {gt_elapsed:.1f}s")
+    else:
+        print("  Ground truth loaded from cache")
+
     print("=" * 80)
     print(f"Step 3 (Performance): Grep Benchmark — engine={args.engine_label}")
     print("=" * 80)
@@ -226,11 +353,8 @@ def main():
     print("Ensure ov.conf has the desired grep config and the server is restarted.")
     print()
 
-    client = SyncOpenViking()
-    client.initialize()
-
     try:
-        results = benchmark_engine(client, total_files)
+        results = benchmark_engine(client, total_files, ground_truth)
     finally:
         client.close()
 
@@ -242,6 +366,9 @@ def main():
             indent=2,
         )
     print(f"\nResults saved to {output_file}")
+
+    # Save miss analysis
+    _save_perf_miss(args.engine_label, results, ground_truth)
 
     print()
     print(
@@ -269,6 +396,9 @@ def main():
             prev_label = prev.get("engine_label", "previous")
             prev_results = prev.get("results", [])
             print_comparison(args.engine_label, results, prev_label, prev_results)
+
+    print(f"\nMiss analysis saved to: {MISS_DIR}/")
+    print(f"Ground truth cache:     {GROUND_TRUTH_DIR}/")
 
 
 if __name__ == "__main__":
