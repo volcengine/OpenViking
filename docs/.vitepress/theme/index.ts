@@ -243,7 +243,11 @@ function mainSiteUrlWithPreference(href: string) {
       url.hostname
     )
   ) {
-    return new URL(LOCAL_PLAYGROUND_URL)
+    const localUrl = new URL(LOCAL_PLAYGROUND_URL)
+    localUrl.pathname = url.pathname
+    localUrl.search = url.search
+    localUrl.hash = url.hash
+    return localUrl
   }
 
   return url
