@@ -135,7 +135,9 @@ index_meta = {
 |------|------|
 | `local` | 本地持久化 |
 | `http` | HTTP 远程服务 |
+| `qdrant` | Qdrant 向量数据库 |
 | `volcengine` | 火山引擎 VikingDB |
+| `vikingdb` | VikingDB 私有化部署 |
 
 ## 向量同步
 

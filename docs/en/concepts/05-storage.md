@@ -137,7 +137,9 @@ index_meta = {
 |---------|-------------|
 | `local` | Local persistence |
 | `http` | HTTP remote service |
+| `qdrant` | Qdrant vector database |
 | `volcengine` | Volcengine VikingDB |
+| `vikingdb` | VikingDB private deployment |
 
 ## Vector Synchronization
 
