@@ -104,7 +104,10 @@ function managedHead(meta) {
 
 function injectPage({ html, meta, body }) {
   let out = html
-    .replace(/<html[^>]*>/, `<html lang="${escapeAttr(meta.lang)}" data-theme="kami">`)
+    .replace(
+      /<html[^>]*>/,
+      `<html lang="${escapeAttr(meta.lang)}" data-theme="kami" class="blog-preference-booting">`
+    )
     .replace(/\s*<title>[\s\S]*?<\/title>/, '')
     .replace(/\s*<meta name="description" content="[\s\S]*?" \/>/, '');
 

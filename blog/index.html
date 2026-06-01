@@ -1,7 +1,16 @@
 <!doctype html>
-<html lang="en" data-theme="kami">
+<html lang="en" data-theme="kami" class="blog-preference-booting">
 <head>
   <meta charset="utf-8" />
+  <style>
+    html.blog-preference-booting,
+    html.blog-preference-booting *,
+    html.blog-preference-booting *::before,
+    html.blog-preference-booting *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+  </style>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>OpenViking Blog</title>
   <meta name="description" content="Technical notes from the OpenViking team." />
@@ -19,6 +28,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-dark.png" media="(prefers-color-scheme: dark)" />
   <script>
     (() => {
+      const root = document.documentElement;
       const cookieKey = 'openviking-preferences';
       const readCookiePreference = () => {
         const cookie = document.cookie.split('; ').find((item) => item.startsWith(cookieKey + '='));
@@ -41,12 +51,15 @@
           : preference.theme === 'light'
             ? 'kami'
             : localStorage.getItem('blog.theme');
-        if (lang) document.documentElement.lang = lang;
+        if (lang) root.lang = lang;
         if (theme === 'kami' || theme === 'washi') {
-          document.documentElement.setAttribute('data-theme', theme);
-          document.documentElement.style.colorScheme = theme === 'washi' ? 'dark' : 'light';
+          root.setAttribute('data-theme', theme);
+          root.style.colorScheme = theme === 'washi' ? 'dark' : 'light';
         }
       } catch {}
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => root.classList.remove('blog-preference-booting'));
+      });
     })();
 
     if (location.hash.startsWith('#/')) {
