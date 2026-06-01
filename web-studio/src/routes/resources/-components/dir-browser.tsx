@@ -25,6 +25,7 @@ interface DirBrowserProps {
   errored?: boolean
   onCursorChange: (index: number) => void
   onEnterDir: (uri: string) => void
+  onOpenFile: (uri: string) => void
   onGoBack: () => void
 }
 
@@ -46,6 +47,7 @@ export function DirBrowser({
   errored = false,
   onCursorChange,
   onEnterDir,
+  onOpenFile,
   onGoBack,
 }: DirBrowserProps) {
   const { t } = useTranslation('resources')
@@ -144,7 +146,12 @@ export function DirBrowser({
               }
             />
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-l">
-              <DetailPane detail={detail} t={t} onEnterDir={onEnterDir} />
+              <DetailPane
+                detail={detail}
+                t={t}
+                onEnterDir={onEnterDir}
+                onOpenFile={onOpenFile}
+              />
             </div>
           </>
         )}
@@ -157,10 +164,12 @@ function DetailPane({
   detail,
   t,
   onEnterDir,
+  onOpenFile,
 }: {
   detail: DetailView
   t: TFunction<'resources'>
   onEnterDir: (uri: string) => void
+  onOpenFile: (uri: string) => void
 }) {
   switch (detail.kind) {
     case 'preview':
@@ -194,7 +203,13 @@ function DetailPane({
           items={detail.items}
           activeIndex={-1}
           t={t}
-          onSelect={(entry) => onEnterDir(entry.uri)}
+          onSelect={(entry) => {
+            if (entry.isDir) {
+              onEnterDir(entry.uri)
+              return
+            }
+            onOpenFile(entry.uri)
+          }}
         />
       )
     case 'empty':

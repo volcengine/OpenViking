@@ -392,6 +392,10 @@ export function FindPalette({
               errored={dirListQuery.isError}
               onCursorChange={setIndex}
               onEnterDir={enterDir}
+              onOpenFile={(uri) => {
+                onNavigate(uri)
+                onClose()
+              }}
               onGoBack={goToParent}
             />
           ) : (
