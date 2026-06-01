@@ -615,7 +615,7 @@ class ExtractContext:
         return first_time.split("-")[2] if first_time else None
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
-        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
+        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSSffffff），用于文件名去重。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
@@ -623,19 +623,18 @@ class ExtractContext:
 
         msg_range = self.read_message_ranges(ranges_str) if ranges_str else None
         if msg_range:
-            for elem in msg_range.elements:
-                if isinstance(elem, str):
-                    continue
-                created_at = getattr(elem, "created_at", None)
-                if created_at:
-                    try:
-                        return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
-                    except (ValueError, TypeError):
-                        continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+            for msg_group in msg_range.elements:
+                for msg in msg_group:
+                    created_at = getattr(msg, "created_at", None)
+                    if created_at:
+                        try:
+                            return parse_iso_datetime(created_at).strftime("%Y%m%d%H%M%S%f")
+                        except (ValueError, TypeError):
+                            continue
+        return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     def get_session_timestamp(self) -> str:
-        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
+        """取对话第一条消息的时间戳（YYYYMMDDHHMMSSffffff），用于文件名唯一化。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
@@ -645,10 +644,10 @@ class ExtractContext:
             created_at = getattr(msg, "created_at", None)
             if created_at:
                 try:
-                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    return parse_iso_datetime(created_at).strftime("%Y%m%d%H%M%S%f")
                 except (ValueError, TypeError):
                     continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+        return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""

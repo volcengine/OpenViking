@@ -7,12 +7,12 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
-from openviking.session.memory.memory_updater import MessageRange
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.memory_updater import ExtractContext, MessageRange
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.utils import MemoryFileUtils
-from openviking.session.memory.dataclass import MemoryFile
 
 
 def _message(*, created_at: str, role: str = "user", text: str = "hello") -> Message:
@@ -69,6 +69,26 @@ def test_message_range_accepts_extended_fractional_seconds():
 
     assert msg_range._first_message_time() == "2026-04-17"
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
+
+
+def test_extract_context_session_timestamp_preserves_microseconds():
+    context = ExtractContext(
+        [
+            _message(created_at="2026-06-01T12:00:33.859218+00:00"),
+        ]
+    )
+
+    assert context.get_session_timestamp() == "20260601120033859218"
+
+
+def test_extract_context_range_timestamp_preserves_microseconds():
+    context = ExtractContext(
+        [
+            _message(created_at="2026-06-01T12:00:33.837654Z"),
+        ]
+    )
+
+    assert context.get_timestamp_from_ranges("0") == "20260601120033837654"
 
 
 def test_deserialize_full_parses_memory_metadata_timestamps_with_z_suffix():
