@@ -1,8 +1,6 @@
 # MCP Integration
 
-## Step 1: Configure MCP
-
-Add the OpenViking MCP server to your MCP client configuration:
+Step 1 MCP configuration
 
 ```json
 {
@@ -10,21 +8,15 @@ Add the OpenViking MCP server to your MCP client configuration:
     "ov-mcp-server": {
       "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
       "headers": {
-        "Authorization": "Bearer <API Key>"
+        "Authorization": "Bearer ZGVmYXV********YzdlZjhiMg"
       }
     }
   }
 }
 ```
 
-The `Authorization` value must include the `Bearer` prefix and one space before the API key.
+**Important**: The `Authorization` value must include the `Bearer` prefix and a space. The full format is `Bearer <API Key>`.
 
-## Step 2: Verify the connection
+Step 2 Test MCP tool connectivity
 
-Ask your agent to run:
-
-```text
-ov health
-```
-
-If the tool returns the OpenViking version and service status, the MCP connection is ready.
+Enter `ov health` to check the OpenViking version and connection status.

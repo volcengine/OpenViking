@@ -1,18 +1,15 @@
-# Opencode Plugin
+# OpenCode Plugin
 
-OpenViking provides two OpenCode plugin modes:
+OpenCode has two plugin variants with different designs. Choose the one that matches how you want to use it.
 
-- tool mode, where the model can choose when to call OpenViking tools
-- context mode, where OpenViking injects relevant context into the session
+## `opencode-memory-plugin` - Explicit tool version
 
-## Configure
+Source: [examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
 
-Install the OpenViking OpenCode plugin from the OpenViking plugin package or local marketplace, then configure the service URL and API Key:
+This variant exposes OpenViking memory as explicit tools through OpenCode's tool mechanism. The model decides when to call them, and data is fetched on demand.
 
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
+## `opencode/plugin` - Context injection version
 
-## Verify
+Source: [examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
 
-Start OpenCode and confirm the OpenViking plugin is loaded. Ask the agent to inspect OpenViking status or search memory to verify connectivity.
+This variant injects indexed code repositories into OpenCode context and starts the OpenViking server automatically when needed.

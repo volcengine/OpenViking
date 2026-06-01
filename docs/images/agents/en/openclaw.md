@@ -1,23 +1,21 @@
-# OpenClaw Plugin
+## Step 1 Install OpenViking
 
-## Step 1: Install OpenViking
-
-Run the following command in the terminal where OpenClaw is installed:
+On the machine running OpenClaw, run the following command to install the OpenViking plugin:
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
 ```
 
-## Step 2: Enter connection information
+## Step 2 Enter the following information
 
-The setup command will prompt for:
+After running the install command, the setup wizard prompts for the following values. Copy and paste them into your agent terminal:
 
 - Base URL: `https://api.vikingdb.cn-beijing.volces.com/openviking`
-- API Key: copy the API Key shown in the OpenViking console
+- API Key: Copy the API Key shown on the page into your agent terminal
 
-## Step 3: Restart OpenClaw
+## Step 3 Restart OpenClaw
 
-Restart OpenClaw so the plugin can load the new configuration:
+Copy the following command into the agent terminal to restart OpenClaw. After restart, the console automatically detects the agent connection status.
 
 ```bash
 openclaw gateway restart

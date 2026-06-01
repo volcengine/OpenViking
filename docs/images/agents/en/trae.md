@@ -1,16 +1,58 @@
-# TRAE MCP Integration
+# Trae MCP Integration
 
-## Step 1: Get an API Key
+# 1. Use cases
 
-Copy the API Key from the OpenViking console. It will be used as the MCP `Authorization` token.
+Use OpenViking to:
 
-## Step 2: Open TRAE MCP settings
+- Remember technology stack preferences across sessions, including language versions, frameworks, package managers, and build systems.
 
-In TRAE, open Settings and select **MCP** to enter the MCP Servers page.
+- Persist coding style preferences, including naming conventions, comment style, whether to write tests, and TDD/BDD habits.
 
-## Step 3: Add an MCP server
+- Remember common project context, such as monorepo structure, build commands, deployment flow, and environment differences.
 
-Choose manual configuration and paste:
+- Store historical decisions and troubleshooting notes, such as why option X was avoided or what failed last time with option Y.
+
+- Persist long-term personal goals, OKRs, or roadmaps so the agent can align with them while planning tasks.
+
+---
+
+# 2. Prerequisite: Get an API Key
+
+All MCP clients use the same **Authorization Token**, which is the API Key from the OpenViking console. Get it first and keep it secure.
+
+## 2.1 Where to find it
+
+1. In the left menu, choose **User Management**.
+
+2. Find the target user in the user list. For personal editions, the default user is usually `default` / `admin`. Click the **copy** icon in the API Key column.
+
+3. Save the copied `ZGV...hiMg` string. It will be used as the `Authorization` value for agent integration.
+
+**Security note**: The API Key is equivalent to an account secret. Do not commit it to Git or publish it anywhere. Prefer environment variables or encrypted configuration.
+
+---
+
+# 3. Trae Integration Guide
+
+**Trae** is an AI IDE from ByteDance. It natively supports loading external tools and context services through MCP. This is the standard OpenViking integration flow.
+
+## 3.1 Integration steps
+
+### Step 1 - Open settings
+
+In the Trae main window, click **Settings** in the upper-right corner to open the settings panel.
+
+### Step 2 - Open the MCP configuration page
+
+In the left menu, select **MCP** to open the MCP Servers page.
+
+### Step 3 - Add an MCP Server
+
+Click the **+ Add** button on the right, then choose **Manual configuration** from the dropdown.
+
+### Step 4 - Paste the JSON configuration
+
+In the configuration dialog, paste the following JSON and replace `Authorization` with the API Key copied in section 2:
 
 ```json
 {
@@ -18,30 +60,45 @@ Choose manual configuration and paste:
     "ov-mcp-server": {
       "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
       "headers": {
-        "Authorization": "Bearer <API Key>"
+        "Authorization": "Bearer ZGVmYXV********YzdlZjhiMg"
       }
     }
   }
 }
 ```
 
-## Step 4: Enable and verify
+**Important**: The `Authorization` value must include the `Bearer` prefix and a space. The full format is `Bearer <API Key>`.
 
-After saving, TRAE should load `ov-mcp-server` and enable the tools.
+### Step 5 - Confirm and enable
 
-Run:
+Click **Confirm**. Trae automatically connects to the MCP server and loads the tools. When the connection succeeds, `ov-mcp-server` appears in the configured MCP Servers list. The switch on the right should be green, which means the server is loaded and enabled.
 
-```text
-ov ls
-ov health
-```
+### Step 6 - Check MCP connectivity
 
-The integration is ready when `ov ls` returns OpenViking directories and `ov health` returns service status.
+After connecting, run two simple queries in Trae to verify the MCP server:
 
-## Troubleshooting
+**1.** **`ov ls`** - List OpenViking root directories and confirm the connection returns the expected structure.
 
-| Problem | Fix |
+**2.** **`ov health`** - Call the health tool to confirm server status and current identity.
+
+**Acceptance criteria**: `ov ls` returns directories such as `agent / resources / session / user`; `ov health` returns `service initialized` and the current username.
+
+## 3.2 Configuration fields
+
+| Field | Required | Description |
+|---|---|---|
+| `mcpServers` | Yes | Root node for MCP server configuration |
+| `ov-mcp-server` | Yes | Service alias. It can be customized, but keeping this name helps contextual recognition |
+| `url` | Yes | OpenViking MCP endpoint. For CN, use `https://api.vikingdb.cn-beijing.volces.com/openviking/mcp` |
+| `headers.Authorization` | Yes | Format: `Bearer <API Key>`. Source: section 2 |
+
+---
+
+# 4. FAQ
+
+| Problem | Suggested fix |
 |---|---|
-| `401 Unauthorized` | Check the API Key and the `Bearer` prefix. |
-| Network timeout | Confirm the network can reach the OpenViking API domain. |
-| Tool schema is incompatible with the current model | Switch models or upgrade TRAE to the latest version. |
+| Connection failed / 401 Unauthorized | Check that `Authorization` includes the `Bearer` prefix and that the API Key is valid |
+| Connection failed / network timeout | Confirm the network can reach `api.vikingdb.cn-beijing.volces.com`; add an allowlist entry for corporate networks if needed |
+| Agent cannot see tools | Confirm the MCP server is enabled. Some clients need a process restart before loading new config |
+| MCP tool reports argument schema incompatibility with the current model, or asks you to switch/fix the MCP server or model (4027) | Try switching models or upgrading Trae to the latest version |

@@ -1,8 +1,8 @@
 # Hermes Agent
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) includes OpenViking as a native memory provider. No plugin installation is required.
+[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) includes OpenViking as a built-in memory provider. No plugin installation is required. Point Hermes to your OpenViking service to enable native memory storage, recall, and extraction.
 
-## Configure memory
+## Configure
 
 Run the Hermes memory setup wizard:
 
@@ -12,11 +12,11 @@ hermes memory setup
 
 The wizard asks for:
 
-- OpenViking service URL, such as `https://api.vikingdb.cn-beijing.volces.com/openviking`
-- API Key
-- Tenant account, user, and agent ID for multi-tenant deployments
+- **OpenViking service URL** - A self-hosted server (default `http://127.0.0.1:1933`) or Volcengine OpenViking Cloud
+- **API Key** - Leave empty for local development mode
+- **Tenant account / user / agent ID** - Used for multi-tenant deployments
 
-Hermes stores the configuration in `config.yaml` and `.env`.
+The configuration is saved to Hermes `config.yaml` and `.env` files.
 
 ## Verify
 
@@ -24,4 +24,10 @@ Hermes stores the configuration in `config.yaml` and `.env`.
 hermes memory status
 ```
 
-After setup, Hermes uses OpenViking for long-term memory storage, recall, and extraction.
+After configuration, Hermes automatically uses OpenViking as long-term memory. Memory tools such as `viking_remember` and `viking_recall` are available immediately.
+
+## See also
+
+- [Hermes - OpenViking memory provider documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) - Full configuration guide
+- [Deployment Guide](../guides/03-deployment.md) - Set up the OpenViking service
+- [Authentication](../guides/04-authentication.md) - API Key settings for remote access
