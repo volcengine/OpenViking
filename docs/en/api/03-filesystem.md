@@ -134,7 +134,7 @@ Read L2 full content.
 
 **Notes**
 
-- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`.
+- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 **Python SDK (Embedded / HTTP)**
