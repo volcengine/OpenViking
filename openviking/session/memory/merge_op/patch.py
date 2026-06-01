@@ -4,7 +4,6 @@
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-import hashlib
 from typing import Any, Optional, Type
 
 from openviking.session.memory.merge_op.base import (
@@ -16,6 +15,7 @@ from openviking.session.memory.merge_op.base import (
     StrPatch,
     StrPatchWithBase,
     get_python_type_for_field,
+    text_digest,
 )
 from openviking.session.memory.merge_op.patch_handler import PatchParseError
 from openviking.telemetry import get_current_telemetry
@@ -24,14 +24,10 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
-def _text_digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _is_patch_stale(current_value: str, patch_value: StrPatchWithBase) -> bool:
     """Return whether a runtime patch was generated against an older field value."""
     if patch_value.base_digest:
-        return _text_digest(current_value) != patch_value.base_digest
+        return text_digest(current_value) != patch_value.base_digest
     return patch_value.base_value is not None and current_value != patch_value.base_value
 
 
@@ -205,7 +201,7 @@ class PatchOp(MergeOpBase):
 
             retry_patch = rewritten.with_base(
                 base_value=current_value,
-                base_digest=_text_digest(current_value),
+                base_digest=text_digest(current_value),
                 source_operation_id=patch_value.source_operation_id,
                 attempt_id=patch_value.attempt_id + 1,
             )

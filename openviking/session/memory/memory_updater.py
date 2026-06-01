@@ -32,7 +32,11 @@ from openviking.session.memory.merge_op import (
     SearchReplaceBlock,
     StrPatch,
 )
-from openviking.session.memory.merge_op.base import ReplaceValueWithBase, StrPatchWithBase
+from openviking.session.memory.merge_op.base import (
+    ReplaceValueWithBase,
+    StrPatchWithBase,
+    text_digest,
+)
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
@@ -59,12 +63,6 @@ def _field_value_from_memory_file(
     return memory_file.extra_fields.get(field_name)
 
 
-def _text_digest(value: Optional[str]) -> Optional[str]:
-    if value is None:
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _merge_value_shape(value: Any) -> str:
     if isinstance(value, ReplaceValueWithBase):
         return "ReplaceValueWithBase"
@@ -85,7 +83,7 @@ def _merge_value_shape(value: Any) -> str:
 
 def _field_trace_digest(value: Any) -> Optional[str]:
     if isinstance(value, str):
-        return _text_digest(value)
+        return text_digest(value)
     return None
 
 
@@ -142,7 +140,7 @@ def _wrap_patch_with_read_base(
             return ReplaceValueWithBase(
                 proposed_value=patch_text,
                 base_value=base_value,
-                base_digest=_text_digest(base_value),
+                base_digest=text_digest(base_value),
                 source_operation_id=source_operation_id,
             )
         if base_value is None:
@@ -158,7 +156,7 @@ def _wrap_patch_with_read_base(
         return patch_value
     return patch_value.with_base(
         base_value=base_value,
-        base_digest=_text_digest(base_value),
+        base_digest=text_digest(base_value),
         source_operation_id=source_operation_id,
     )
 
@@ -176,7 +174,7 @@ def _wrap_replace_with_read_base(
     return ReplaceValueWithBase(
         proposed_value=patch_value,
         base_value=base_value,
-        base_digest=_text_digest(base_value) if isinstance(base_value, str) else None,
+        base_digest=text_digest(base_value) if isinstance(base_value, str) else None,
         source_operation_id=source_operation_id,
     )
 

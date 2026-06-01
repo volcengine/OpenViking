@@ -10,7 +10,6 @@ cannot accidentally output StrPatch blocks.
 """
 
 import difflib
-import hashlib
 from typing import Any, Optional, Type
 
 from pydantic import BaseModel
@@ -21,6 +20,7 @@ from openviking.session.memory.merge_op.base import (
     MergeOpBase,
     ReplaceValueWithBase,
     get_python_type_for_field,
+    text_digest,
 )
 from openviking.session.memory.merge_op.patch_handler import PatchParseError
 from openviking.telemetry import get_current_telemetry
@@ -29,13 +29,9 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
-def _text_digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _is_replace_stale(current_value: Any, patch_value: ReplaceValueWithBase) -> bool:
     if patch_value.base_digest and isinstance(current_value, str):
-        return _text_digest(current_value) != patch_value.base_digest
+        return text_digest(current_value) != patch_value.base_digest
     if isinstance(current_value, str) and isinstance(patch_value.base_value, str):
         return current_value != patch_value.base_value
     return current_value != patch_value.base_value

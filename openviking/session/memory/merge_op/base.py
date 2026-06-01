@@ -4,6 +4,7 @@
 Merge operation base classes and registry.
 """
 
+import hashlib
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type
@@ -30,6 +31,13 @@ _FIELD_TYPE_TO_PYTHON: Dict[FieldType, Type[Any]] = {
     FieldType.FLOAT32: float,
     FieldType.BOOL: bool,
 }
+
+
+def text_digest(value: Optional[str]) -> Optional[str]:
+    """Return a stable digest for text values used in exact-lock base checks."""
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def get_python_type_for_field(field_type: FieldType, default: Type[Any] = str) -> Type[Any]:
