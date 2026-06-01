@@ -1220,37 +1220,29 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
-        path = self._uri_to_path(uri, ctx=ctx)
-        all_entries = []
-        real_ctx = self._ctx_or_default(ctx)
-
-        async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if node_limit is not None and len(all_entries) >= node_limit:
-                return
-            if level_limit is not None and current_depth >= level_limit:
-                return
-            for entry in await self._ls_entries(current_path):
-                if node_limit is not None and len(all_entries) >= node_limit:
-                    break
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                rel_path = f"{current_rel}/{name}" if current_rel else name
-                new_entry = dict(entry)
-                new_entry["rel_path"] = rel_path
-                new_entry["uri"] = self._path_to_uri(f"{current_path}/{name}", ctx=ctx)
-                if not self._is_accessible(new_entry["uri"], real_ctx):
-                    continue
-                if entry.get("isDir"):
-                    all_entries.append(new_entry)
-                    await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
-                elif not name.startswith("."):
-                    all_entries.append(new_entry)
-                elif show_all_hidden:
-                    all_entries.append(new_entry)
-
-        await _walk(path, "", 0)
-        return all_entries
+        result = []
+        async for entry, entry_uri in self._iter_visible_tree_entries(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        ):
+            info = entry["info"]
+            new_entry = dict(entry.get("extra", {}))
+            new_entry.update(
+                {
+                    "name": info["name"],
+                    "size": info["size"],
+                    "mode": info["mode"],
+                    "modTime": info["modTime"],
+                    "isDir": info["isDir"],
+                    "rel_path": entry["rel_path"],
+                    "uri": entry_uri,
+                }
+            )
+            result.append(new_entry)
+        return result
 
     async def _tree_agent(
         self,
@@ -1262,46 +1254,32 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
-        path = self._uri_to_path(uri, ctx=ctx)
-        all_entries = []
+        result = []
         now = datetime.now(timezone.utc)
-        real_ctx = self._ctx_or_default(ctx)
 
-        async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if node_limit is not None and len(all_entries) >= node_limit:
-                return
-            if level_limit is not None and current_depth >= level_limit:
-                return
-            for entry in await self._ls_entries(current_path):
-                if node_limit is not None and len(all_entries) >= node_limit:
-                    break
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                rel_path = f"{current_rel}/{name}" if current_rel else name
-                is_dir = entry.get("isDir", False)
-                new_entry = {
-                    "uri": self._path_to_uri(f"{current_path}/{name}", ctx=ctx),
-                    "size": 0 if is_dir else entry.get("size", 0),
+        async for entry, entry_uri in self._iter_visible_tree_entries(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        ):
+            info = entry["info"]
+            is_dir = info["isDir"]
+            result.append(
+                {
+                    "name": info["name"],
+                    "uri": entry_uri,
+                    "size": 0 if is_dir else info["size"],
                     "isDir": is_dir,
-                    "modTime": format_simplified(parse_iso_datetime(entry.get("modTime", "")), now),
+                    "modTime": format_simplified(parse_iso_datetime(info["modTime"]), now),
+                    "rel_path": entry["rel_path"],
                 }
-                new_entry["rel_path"] = rel_path
-                if not self._is_accessible(new_entry["uri"], real_ctx):
-                    continue
-                if is_dir:
-                    all_entries.append(new_entry)
-                    await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
-                elif not name.startswith("."):
-                    all_entries.append(new_entry)
-                elif show_all_hidden:
-                    all_entries.append(new_entry)
+            )
 
-        await _walk(path, "", 0)
+        await self._batch_fetch_abstracts(result, abs_limit, ctx=ctx)
 
-        await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
-
-        return all_entries
+        return result
 
     # ========== VikingFS Specific Capabilities ==========
 
@@ -1759,6 +1737,101 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._read_relation_table(path, ctx=ctx)
+
+    # ========== Tree Traversal (Refactored) ==========
+
+    def _is_name_visible_at_path(self, name: str, parent_path: str) -> bool:
+        """Check if name would appear in _ls_entries(parent_path).
+
+        At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
+        At other levels, uses _INTERNAL_NAMES blacklist.
+        """
+        parts = [p for p in parent_path.strip("/").split("/") if p]
+        if len(parts) == 2 and parts[0] == "local":
+            return name in VikingURI.LISTABLE_SCOPES
+        return name not in self._INTERNAL_NAMES
+
+    def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
+        """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
+
+        Walks from base_path (exclusive) to entry's parent directory (exclusive),
+        checking each component against _is_name_visible_at_path.
+        """
+        base_parts = [p for p in base_path.strip("/").split("/") if p]
+        entry_parts = [p for p in entry_path.strip("/").split("/") if p]
+
+        for i in range(len(base_parts), len(entry_parts) - 1):
+            name = entry_parts[i]
+            parent_parts = entry_parts[:i]
+            parent_path = "/" + "/".join(parent_parts) if parent_parts else "/"
+            if not self._is_name_visible_at_path(name, parent_path):
+                return True
+        return False
+
+    def _is_tree_entry_visible(
+        self, entry: Dict[str, Any], base_path: str, ctx: RequestContext
+    ) -> bool:
+        """Check visibility for a single TreeEntry returned by Rust tree_directory.
+
+        Applies three layers of filtering:
+        1. Ancestor chain — if any ancestor directory would be filtered by _ls_entries,
+           all descendants are invisible.
+        2. Self — the entry's own name must pass _ls_entries at its parent level.
+        3. ACL — the entry must be accessible by the requesting context.
+        """
+        entry_path = entry["path"]
+
+        if self._ancestor_is_filtered(entry_path, base_path):
+            return False
+
+        entry_parts = [p for p in entry_path.strip("/").split("/") if p]
+        if entry_parts:
+            name = entry_parts[-1]
+            parent_parts = entry_parts[:-1]
+            parent_path = "/" + "/".join(parent_parts) if parent_parts else "/"
+            if not self._is_name_visible_at_path(name, parent_path):
+                return False
+
+        uri = self._path_to_uri(entry_path, ctx=ctx)
+        if not self._is_accessible(uri, ctx):
+            return False
+
+        return True
+
+    async def _iter_visible_tree_entries(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: Optional[int] = None,
+        ctx: Optional[RequestContext] = None,
+    ):
+        """Shared generator: fetch raw TreeEntry list from Rust, yield (entry, uri) tuples.
+
+        node_limit is NOT passed to Rust — applied after Python-side filtering.
+        level_limit IS passed to Rust.
+        """
+        path = self._uri_to_path(uri, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
+
+        raw_entries = await self._async_agfs.tree_directory(
+            path,
+            show_hidden=show_all_hidden,
+            node_limit=None,
+            level_limit=level_limit,
+        )
+
+        visible_count = 0
+        for entry in raw_entries:
+            if node_limit is not None and visible_count >= node_limit:
+                break
+
+            if not self._is_tree_entry_visible(entry, path, real_ctx):
+                continue
+
+            visible_count += 1
+            entry_uri = self._path_to_uri(entry["path"], ctx=ctx)
+            yield entry, entry_uri
 
     # ========== URI Conversion ==========
 

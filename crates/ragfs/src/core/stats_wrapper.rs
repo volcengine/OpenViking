@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::{
     FileInfo, FileSystem, FsOperation, GrepResult, OperationTimer, Result, StatsCollector,
-    WriteFlag,
+    TreeEntry, WriteFlag,
 };
 
 /// A wrapper around FileSystem that automatically collects operation statistics
@@ -158,6 +158,22 @@ impl FileSystem for StatsWrappedFS {
                 exclude_path,
                 level_limit,
             )
+            .await;
+        timer.finish().await;
+        result
+    }
+
+    async fn tree_directory(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        let timer = OperationTimer::start(FsOperation::TreeDir, Arc::clone(&self.stats));
+        let result = self
+            .inner
+            .tree_directory(path, show_hidden, node_limit, level_limit)
             .await;
         timer.finish().await;
         result

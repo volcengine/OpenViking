@@ -17,6 +17,7 @@ pub mod cache;
 pub mod client;
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -28,8 +29,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
-    ServicePlugin, WriteFlag,
+    ServicePlugin, TreeEntry, WriteFlag,
 };
+use crate::core::filesystem::{relative_depth, relative_match_file};
 
 /// Check whether `path` is under `exclude_path` (including itself).
 fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
@@ -41,44 +43,6 @@ fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
         || path
             .strip_prefix(exclude_path)
             .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-/// Convert an absolute/plugin path to a query-root-relative grep match path.
-fn s3_relative_match_file(query_root: &str, path: &str) -> String {
-    let base = if query_root == "/" {
-        "/".to_string()
-    } else {
-        query_root.trim_end_matches('/').to_string()
-    };
-
-    if path == base {
-        return ".".to_string();
-    }
-
-    if base == "/" {
-        return path.trim_start_matches('/').to_string();
-    }
-
-    match path.strip_prefix(&base) {
-        Some(rest) => {
-            let rel = rest.trim_start_matches('/');
-            if rel.is_empty() {
-                ".".to_string()
-            } else {
-                rel.to_string()
-            }
-        }
-        None => path.trim_start_matches('/').to_string(),
-    }
-}
-
-/// Compute depth from a query-root-relative path.
-fn s3_relative_depth(rel: &str) -> usize {
-    if rel.is_empty() || rel == "." {
-        0
-    } else {
-        rel.split('/').filter(|p| !p.is_empty()).count()
-    }
 }
 
 /// Abstract trait for reading chunks from a file during grep.
@@ -197,6 +161,120 @@ async fn grep_stream(
     Ok(matches)
 }
 
+fn s3_file_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or("").to_string()
+}
+
+fn build_tree_entries_from_flat_listing<F>(
+    query_root: &str,
+    objects: &[client::ObjectMeta],
+    show_hidden: bool,
+    level_limit: Option<usize>,
+    key_to_path: F,
+) -> Result<Vec<TreeEntry>>
+where
+    F: Fn(&str) -> String,
+{
+    let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut entries: Vec<(String, bool, u64, SystemTime)> = Vec::new();
+
+    for obj in objects {
+        let raw_path = key_to_path(&obj.key);
+        let raw_path = if raw_path.starts_with('/') {
+            raw_path
+        } else {
+            format!("/{}", raw_path)
+        };
+
+        if obj.is_dir_marker {
+            let dir_path = raw_path.trim_end_matches('/').to_string();
+            if dir_path.is_empty() || dir_path == query_root {
+                continue;
+            }
+            if seen_dirs.insert(dir_path.clone()) {
+                entries.push((dir_path, true, 0, SystemTime::now()));
+            }
+        } else {
+            let file_path = raw_path;
+            entries.push((file_path.clone(), false, obj.size as u64, obj.last_modified));
+
+            let parts: Vec<&str> = file_path
+                .trim_start_matches('/')
+                .split('/')
+                .filter(|p| !p.is_empty())
+                .collect();
+            for i in 1..parts.len() {
+                let dir_path = format!("/{}", parts[..i].join("/"));
+                if dir_path == query_root {
+                    continue;
+                }
+                if seen_dirs.insert(dir_path.clone()) {
+                    entries.push((dir_path, true, 0, SystemTime::now()));
+                }
+            }
+        }
+    }
+
+    let mut filtered: Vec<&(String, bool, u64, SystemTime)> = Vec::new();
+    for entry in &entries {
+        let (path, is_dir, _size, _mod_time) = entry;
+        let name = s3_file_name(path);
+
+        if !*is_dir && name.starts_with('.') && !show_hidden {
+            continue;
+        }
+
+        if let Some(limit) = level_limit {
+            let rel = relative_match_file(query_root, path);
+            let depth = relative_depth(&rel);
+            // S3FS uses `depth > limit` (post-generation filter) vs default
+            // impl's `current_depth >= limit` (pre-expansion guard).  Both are
+            // semantically equivalent: level_limit=N means entries at depth
+            // <= N are included, entries at depth > N are excluded.
+            if depth > limit {
+                continue;
+            }
+        }
+
+        filtered.push(entry);
+    }
+
+    filtered.sort_by(|(a_path, ..), (b_path, ..)| {
+        let a_parts: Vec<&str> = a_path
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect();
+        let b_parts: Vec<&str> = b_path
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect();
+        a_parts.cmp(&b_parts)
+    });
+
+    let mut result = Vec::new();
+    for (path, is_dir, size, mod_time) in filtered {
+        let rel_path = relative_match_file(query_root, path);
+        let name = s3_file_name(path);
+
+        result.push(TreeEntry {
+            path: path.clone(),
+            rel_path,
+            info: FileInfo {
+                name,
+                size: *size,
+                mode: if *is_dir { 0o755 } else { 0o644 },
+                mod_time: *mod_time,
+                is_dir: *is_dir,
+            },
+            extra: HashMap::new(),
+        });
+    }
+
+    Ok(result)
+}
+
 /// S3-backed file system
 pub struct S3FileSystem {
     client: Arc<S3Client>,
@@ -306,7 +384,7 @@ impl S3FileSystem {
     ) -> Result<Vec<GrepMatch>> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
-        let rel_file = s3_relative_match_file(base_path, path);
+        let rel_file = relative_match_file(base_path, path);
         let mut reader = S3ChunkReader {
             client: &self.client,
             key: &key,
@@ -774,8 +852,8 @@ impl FileSystem for S3FileSystem {
                 }
             }
             if let Some(limit) = level_limit {
-                let rel = s3_relative_match_file(&normalized, &normalized);
-                if s3_relative_depth(&rel) > limit {
+                let rel = relative_match_file(&normalized, &normalized);
+                if relative_depth(&rel) > limit {
                     return Ok(GrepResult::new());
                 }
             }
@@ -809,8 +887,8 @@ impl FileSystem for S3FileSystem {
             }
 
             if !recursive || level_limit.is_some() {
-                let rel = s3_relative_match_file(&normalized, &fs_path);
-                let depth = s3_relative_depth(&rel);
+                let rel = relative_match_file(&normalized, &fs_path);
+                let depth = relative_depth(&rel);
 
                 if !recursive && depth > 1 {
                     continue;
@@ -831,6 +909,42 @@ impl FileSystem for S3FileSystem {
 
         self.grep_files_concurrent(&normalized, files, &re, node_limit)
             .await
+    }
+
+    async fn tree_directory(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        let normalized = Self::normalize_path(path);
+
+        let prefix = if normalized == "/" {
+            self.client.build_key("")
+        } else {
+            format!("{}/", self.client.build_key(&normalized))
+        };
+
+        let objects = self.client.list_tree_objects(&prefix).await?;
+
+        let ordered = build_tree_entries_from_flat_listing(
+            &normalized,
+            &objects,
+            show_hidden,
+            level_limit,
+            |key| self.client.strip_prefix(key),
+        )?;
+
+        let mut result = Vec::new();
+        for entry in ordered {
+            if node_limit.is_some_and(|limit| result.len() >= limit) {
+                break;
+            }
+            result.push(entry);
+        }
+
+        Ok(result)
     }
 }
 
@@ -1242,64 +1356,64 @@ mod tests {
     }
 
     #[test]
-    fn test_s3_relative_match_file_same_path() {
-        assert_eq!(s3_relative_match_file("/foo", "/foo"), ".");
-        assert_eq!(s3_relative_match_file("/", "/"), ".");
+    fn test_relative_match_file_same_path() {
+        assert_eq!(relative_match_file("/foo", "/foo"), ".");
+        assert_eq!(relative_match_file("/", "/"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_root_base() {
-        assert_eq!(s3_relative_match_file("/", "/a"), "a");
-        assert_eq!(s3_relative_match_file("/", "/a/b"), "a/b");
+    fn test_relative_match_file_root_base() {
+        assert_eq!(relative_match_file("/", "/a"), "a");
+        assert_eq!(relative_match_file("/", "/a/b"), "a/b");
         assert_eq!(
-            s3_relative_match_file("/", "/deep/nested/file"),
+            relative_match_file("/", "/deep/nested/file"),
             "deep/nested/file"
         );
     }
 
     #[test]
-    fn test_s3_relative_match_file_subdirectory() {
-        assert_eq!(s3_relative_match_file("/a", "/a/b"), "b");
-        assert_eq!(s3_relative_match_file("/a", "/a/b/c"), "b/c");
-        assert_eq!(s3_relative_match_file("/dir", "/dir/file.txt"), "file.txt");
+    fn test_relative_match_file_subdirectory() {
+        assert_eq!(relative_match_file("/a", "/a/b"), "b");
+        assert_eq!(relative_match_file("/a", "/a/b/c"), "b/c");
+        assert_eq!(relative_match_file("/dir", "/dir/file.txt"), "file.txt");
     }
 
     #[test]
-    fn test_s3_relative_match_file_no_prefix_match() {
-        assert_eq!(s3_relative_match_file("/a", "/b"), "b");
-        assert_eq!(s3_relative_match_file("/x", "/y/z"), "y/z");
+    fn test_relative_match_file_no_prefix_match() {
+        assert_eq!(relative_match_file("/a", "/b"), "b");
+        assert_eq!(relative_match_file("/x", "/y/z"), "y/z");
     }
 
     #[test]
-    fn test_s3_relative_match_file_trailing_slash_base() {
-        assert_eq!(s3_relative_match_file("/foo/", "/foo/bar"), "bar");
-        assert_eq!(s3_relative_match_file("/foo/", "/foo"), ".");
+    fn test_relative_match_file_trailing_slash_base() {
+        assert_eq!(relative_match_file("/foo/", "/foo/bar"), "bar");
+        assert_eq!(relative_match_file("/foo/", "/foo"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_empty_remainder() {
-        assert_eq!(s3_relative_match_file("/dir", "/dir/"), ".");
+    fn test_relative_match_file_empty_remainder() {
+        assert_eq!(relative_match_file("/dir", "/dir/"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_leading_slash_in_rest() {
-        assert_eq!(s3_relative_match_file("/dir", "/dir//sub"), "sub");
+    fn test_relative_match_file_leading_slash_in_rest() {
+        assert_eq!(relative_match_file("/dir", "/dir//sub"), "sub");
     }
 
     #[test]
-    fn test_s3_relative_depth() {
-        assert_eq!(s3_relative_depth("."), 0);
-        assert_eq!(s3_relative_depth(""), 0);
-        assert_eq!(s3_relative_depth("a"), 1);
-        assert_eq!(s3_relative_depth("a/b"), 2);
-        assert_eq!(s3_relative_depth("a/b/c"), 3);
-        assert_eq!(s3_relative_depth("deep/nested/path/to/file"), 5);
+    fn test_relative_depth() {
+        assert_eq!(relative_depth("."), 0);
+        assert_eq!(relative_depth(""), 0);
+        assert_eq!(relative_depth("a"), 1);
+        assert_eq!(relative_depth("a/b"), 2);
+        assert_eq!(relative_depth("a/b/c"), 3);
+        assert_eq!(relative_depth("deep/nested/path/to/file"), 5);
     }
 
     #[test]
-    fn test_s3_relative_depth_filters_empty_segments() {
-        assert_eq!(s3_relative_depth("a//b"), 2);
-        assert_eq!(s3_relative_depth("///"), 0);
+    fn test_relative_depth_filters_empty_segments() {
+        assert_eq!(relative_depth("a//b"), 2);
+        assert_eq!(relative_depth("///"), 0);
     }
 
     #[test]
@@ -1523,5 +1637,217 @@ mod tests {
 
         assert_eq!(matches.len(), 1, "should match 'last' after binary line");
         assert_eq!(matches[0].content, "last");
+    }
+
+    // ── build_tree_entries_from_flat_listing tests ──
+
+    fn make_meta(key: &str, size: i64, is_dir_marker: bool) -> client::ObjectMeta {
+        client::ObjectMeta {
+            key: key.to_string(),
+            size,
+            last_modified: std::time::SystemTime::now(),
+            is_dir_marker,
+        }
+    }
+
+    fn identity_key_to_path(key: &str) -> String {
+        format!("/{}", key)
+    }
+
+    #[test]
+    fn test_build_tree_entries_empty_listing() {
+        let objects: Vec<client::ObjectMeta> = vec![];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_build_tree_entries_dir_from_marker() {
+        let objects = vec![make_meta("mydir/", 0, true)];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].info.is_dir);
+        assert_eq!(result[0].path, "/mydir");
+        assert_eq!(result[0].rel_path, "mydir");
+    }
+
+    #[test]
+    fn test_build_tree_entries_dir_dedup() {
+        let objects = vec![
+            make_meta("mydir/", 0, true),
+            make_meta("mydir/file.txt", 100, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].info.is_dir);
+        assert!(result[1].info.is_dir == false);
+    }
+
+    #[test]
+    fn test_build_tree_entries_dfs_order() {
+        let objects = vec![
+            make_meta("a/a.txt", 100, false),
+            make_meta("a/b/c.txt", 200, false),
+            make_meta("a/b.txt", 150, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["/a", "/a/a.txt", "/a/b", "/a/b/c.txt", "/a/b.txt"]
+        );
+    }
+
+    #[test]
+    fn test_build_tree_entries_level_limit() {
+        let objects = vec![
+            make_meta("a.txt", 100, false),
+            make_meta("sub/b.txt", 200, false),
+            make_meta("sub/deep/c.txt", 300, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            Some(1),
+            identity_key_to_path,
+        )
+        .unwrap();
+        let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["/a.txt", "/sub"]);
+    }
+
+    #[test]
+    fn test_build_tree_entries_show_hidden_false() {
+        let objects = vec![
+            make_meta("a.txt", 100, false),
+            make_meta(".hidden", 50, false),
+            make_meta("sub/b.txt", 200, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let names: Vec<&str> = result.iter().map(|e| e.info.name.as_str()).collect();
+        assert!(names.contains(&"a.txt"));
+        assert!(names.contains(&"sub"));
+        assert!(names.contains(&"b.txt"));
+        assert!(!names.contains(&".hidden"));
+    }
+
+    #[test]
+    fn test_build_tree_entries_show_hidden_true() {
+        let objects = vec![
+            make_meta("a.txt", 100, false),
+            make_meta(".hidden", 50, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            true,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let names: Vec<&str> = result.iter().map(|e| e.info.name.as_str()).collect();
+        assert!(names.contains(&"a.txt"));
+        assert!(names.contains(&".hidden"));
+    }
+
+    #[test]
+    fn test_build_tree_entries_dir_metadata() {
+        let objects = vec![make_meta("mydir/", 0, true)];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let dir = &result[0];
+        assert!(dir.info.is_dir);
+        assert_eq!(dir.info.size, 0);
+        assert_eq!(dir.info.mode, 0o755);
+    }
+
+    #[test]
+    fn test_build_tree_entries_rel_path() {
+        let objects = vec![
+            make_meta("a.txt", 100, false),
+            make_meta("sub/b.txt", 200, false),
+        ];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let rels: Vec<&str> = result.iter().map(|e| e.rel_path.as_str()).collect();
+        assert!(rels.contains(&"a.txt"));
+        assert!(rels.contains(&"sub/b.txt"));
+    }
+
+    #[test]
+    fn test_build_tree_entries_query_root_skipped() {
+        let objects = vec![make_meta("root/file.txt", 100, false)];
+        let result = build_tree_entries_from_flat_listing("/root", &objects, false, None, |key| {
+            format!("/{}", key)
+        })
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, "/root/file.txt");
+    }
+
+    #[test]
+    fn test_build_tree_entries_nested_dir_recovery() {
+        let objects = vec![make_meta("a/b/c/d/file.txt", 100, false)];
+        let result = build_tree_entries_from_flat_listing(
+            "/root",
+            &objects,
+            false,
+            None,
+            identity_key_to_path,
+        )
+        .unwrap();
+        let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/file.txt"]
+        );
     }
 }
