@@ -156,15 +156,33 @@ export function FindPalette({
     return activeEntry
   }, [activeEntry, statQuery.data, debouncedStatUri])
 
+  const focusInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    })
+  }, [])
+
   useEffect(() => {
     if (open) {
       reset()
-      requestAnimationFrame(() => {
-        inputRef.current?.focus()
-        inputRef.current?.select()
-      })
+      focusInput()
     }
-  }, [open, reset])
+  }, [open, reset, focusInput])
+
+  useEffect(() => {
+    if (!open) return
+
+    const restoreFocus = () => {
+      if (document.visibilityState === 'visible') focusInput()
+    }
+    window.addEventListener('focus', focusInput)
+    document.addEventListener('visibilitychange', restoreFocus)
+    return () => {
+      window.removeEventListener('focus', focusInput)
+      document.removeEventListener('visibilitychange', restoreFocus)
+    }
+  }, [open, focusInput])
 
   // Cursor resets on query change (navigation / filter typing) and whenever the
   // visible list identity changes (new data arrives). Arrow moves don't touch

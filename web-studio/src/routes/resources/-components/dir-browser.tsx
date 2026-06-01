@@ -34,7 +34,7 @@ type DetailView =
   | { kind: 'preview'; file: VikingFsEntry }
   | { kind: 'loading' }
   | { kind: 'error' }
-  | { kind: 'subdir'; items: VikingFsEntry[]; label: string; enterUri: string }
+  | { kind: 'subdir'; items: VikingFsEntry[]; label: string }
   | { kind: 'empty' }
   | { kind: 'idle' }
 
@@ -85,7 +85,6 @@ export function DirBrowser({
         kind: 'subdir',
         items: subdirItems,
         label: fileNameFromUri(cursorItem.uri),
-        enterUri: cursorItem.uri,
       }
     }
     return { kind: 'empty' }
@@ -195,7 +194,7 @@ function DetailPane({
           items={detail.items}
           activeIndex={-1}
           t={t}
-          onSelect={() => onEnterDir(detail.enterUri)}
+          onSelect={(entry) => onEnterDir(entry.uri)}
         />
       )
     case 'empty':
