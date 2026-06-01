@@ -31,8 +31,8 @@ from openviking.session.tool_result_synopsis import (
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.token_estimation import estimate_text_tokens
 from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
