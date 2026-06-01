@@ -6,6 +6,8 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const base = process.env.DOCS_BASE || '/'
+const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
+const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
 const preferenceBootstrapScript = `;(() => {
   const prefix = 'openviking-preferences:'
   const cookieKey = 'openviking-preferences'
@@ -262,7 +264,7 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/ov-logo.png',
-    logoLink: 'https://www.openviking.ai/',
+    logoLink: mainSiteBase,
     search: {
       provider: 'local'
     },
