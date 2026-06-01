@@ -262,7 +262,7 @@ export function FindPalette({
             if (activeEntry && !activeEntry.isDir) {
               onNavigate(activeEntry.uri)
               onClose()
-            } else {
+            } else if (dirListQuery.isSuccess) {
               confirmDirScope(mode.uri)
             }
             return
@@ -298,6 +298,7 @@ export function FindPalette({
       mode,
       activeEntry,
       visibleEntries.length,
+      dirListQuery.isSuccess,
       moveUp,
       moveDown,
       enterDir,

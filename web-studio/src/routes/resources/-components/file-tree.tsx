@@ -131,11 +131,10 @@ function TreeNode({
   const handleSelect = useCallback(() => {
     if (entryRef.current.isDir) {
       onSelectDirectory(entryRef.current)
-      handleToggle()
     } else {
       onSelectFile?.(entryRef.current)
     }
-  }, [onSelectDirectory, onSelectFile, handleToggle])
+  }, [onSelectDirectory, onSelectFile])
 
   const handleMouseEnter = useCallback(() => {
     if (entry.isDir && !isOpen && prefetch) prefetch(entry.uri)
