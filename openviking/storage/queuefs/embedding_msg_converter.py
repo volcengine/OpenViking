@@ -70,9 +70,8 @@ class EmbeddingMsgConverter:
 
         # Store full content in content field for bm25 full-text search.
         # Use full_text (raw file content) when available; fall back to vectorization_text.
-        # Truncate to 64KB (VikingDB text field limit).
         full_content = context.vectorize.full_text or vectorization_text
-        context_data["content"] = full_content[:65536]
+        context_data["content"] = full_content
 
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,

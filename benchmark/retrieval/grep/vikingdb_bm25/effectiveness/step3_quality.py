@@ -29,9 +29,10 @@ import time
 from openviking_cli.client.sync_http import SyncHTTPClient
 
 BASE_URI = "viking://resources/benchmark/effectiveness"
-DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark")
+DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark/effectiveness")
 GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
 MISS_DIR = os.path.join(DATA_DIR, ".miss")
+RESULT_DIR = os.path.join(DATA_DIR, ".result")
 
 KEYWORDS: list[str] = [
     # High frequency English
@@ -56,10 +57,15 @@ KEYWORDS: list[str] = [
 
 
 def _sanitize_filename(s: str, max_len: int = 40) -> str:
-    """Make a string safe for use as a filename component."""
-    s = re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
-    s = s.strip("_")
+    """Make a string safe for use as a filename component. Preserves Unicode."""
+    s = re.sub(r'[/\\:*?"<>|\0]', "_", s)
+    s = s.strip("_ ")
     return s[:max_len]
+
+
+def _cache_hash(uri: str, pattern: str) -> str:
+    """Short hash for cache disambiguation."""
+    return hashlib.sha256(uri.encode("utf-8") + pattern.encode("utf-8")).hexdigest()[:8]
 
 
 def build_test_patterns(keywords: list[str] | None = None) -> list[tuple[str, str]]:
@@ -86,18 +92,8 @@ def run_sdk_grep(client: SyncHTTPClient, uri: str, pattern: str) -> tuple[set[st
     return uris, elapsed
 
 
-def _cache_filename(prefix: str, pattern: str, uri: str) -> str:
-    """Generate filename: {prefix}_{sanitized_pattern}_{hash}.json"""
-    h = (
-        hashlib.sha256(uri.encode()).update(pattern.encode())
-        or hashlib.sha256(uri.encode() + pattern.encode()).hexdigest()[:8]
-    )
-    safe_pattern = _sanitize_filename(pattern)
-    return f"{prefix}_{safe_pattern}_{h}.json"
-
-
 def _ground_truth_cache_path(pattern: str, uri: str) -> str:
-    h = hashlib.sha256(uri.encode() + pattern.encode()).hexdigest()[:8]
+    h = _cache_hash(uri, pattern)
     safe_pattern = _sanitize_filename(pattern)
     return os.path.join(GROUND_TRUTH_DIR, f"eff_{safe_pattern}_{h}.json")
 
@@ -105,16 +101,16 @@ def _ground_truth_cache_path(pattern: str, uri: str) -> str:
 def _load_ground_truth_cache(pattern: str, uri: str) -> set[str] | None:
     path = _ground_truth_cache_path(pattern, uri)
     if not os.path.isfile(path):
-        # Fallback: try old-style filename for backward compat
-        old_h = hashlib.sha256(uri.encode()).hexdigest()
-        old_h += hashlib.sha256(pattern.encode()).hexdigest()[:16]
+        # Fallback: try old-style hash-only filename
+        old_h = hashlib.sha256(uri.encode("utf-8")).hexdigest()
+        old_h += hashlib.sha256(pattern.encode("utf-8")).hexdigest()[:16]
         old_path = os.path.join(GROUND_TRUTH_DIR, f"eff_{old_h[:16]}.json")
         if os.path.isfile(old_path):
-            with open(old_path) as f:
+            with open(old_path, encoding="utf-8") as f:
                 data = json.load(f)
             return set(data.get("uris", []))
         return None
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     return set(data.get("uris", []))
 
@@ -122,8 +118,10 @@ def _load_ground_truth_cache(pattern: str, uri: str) -> set[str] | None:
 def _save_ground_truth_cache(pattern: str, uri: str, uris: set[str]) -> None:
     os.makedirs(GROUND_TRUTH_DIR, exist_ok=True)
     path = _ground_truth_cache_path(pattern, uri)
-    with open(path, "w") as f:
-        json.dump({"pattern": pattern, "uri": uri, "uris": sorted(uris)}, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"pattern": pattern, "uri": uri, "uris": sorted(uris)}, f, indent=2, ensure_ascii=False
+        )
 
 
 def compute_ground_truth(client: SyncHTTPClient, uri: str, pattern: str) -> tuple[set[str], float]:
@@ -137,14 +135,18 @@ def compute_ground_truth(client: SyncHTTPClient, uri: str, pattern: str) -> tupl
     return truth_uris, elapsed
 
 
+def _miss_cache_path(pattern: str, uri: str) -> str:
+    h = _cache_hash(uri, pattern)
+    safe_pattern = _sanitize_filename(pattern)
+    return os.path.join(MISS_DIR, f"eff_{safe_pattern}_{h}.json")
+
+
 def _save_miss(pattern: str, uri: str, missed_uris: set[str], extra_uris: set[str]) -> None:
     """Save miss analysis (FN and FP) to .miss directory."""
     if not missed_uris and not extra_uris:
         return
     os.makedirs(MISS_DIR, exist_ok=True)
-    h = hashlib.sha256(uri.encode() + pattern.encode()).hexdigest()[:8]
-    safe_pattern = _sanitize_filename(pattern)
-    path = os.path.join(MISS_DIR, f"eff_{safe_pattern}_{h}.json")
+    path = _miss_cache_path(pattern, uri)
     data: dict = {"pattern": pattern, "uri": uri}
     if missed_uris:
         data["missed_fn"] = sorted(missed_uris)
@@ -152,8 +154,8 @@ def _save_miss(pattern: str, uri: str, missed_uris: set[str], extra_uris: set[st
     if extra_uris:
         data["extra_fp"] = sorted(extra_uris)
         data["extra_fp_count"] = len(extra_uris)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def compute_metrics(truth: set[str], predicted: set[str]) -> dict:
@@ -273,6 +275,7 @@ def main():
     finally:
         client.close()
 
+    # Summary table
     print()
     print("=" * 120)
     print(
@@ -291,8 +294,19 @@ def main():
                 f"{r['recall']:>8.4f} {r['precision']:>8.4f} {r['f1']:>8.4f} {r['fn']:>8} {r['fp']:>8}"
             )
     print()
-    print(f"Miss analysis saved to: {MISS_DIR}/")
-    print(f"Ground truth cache:     {GROUND_TRUTH_DIR}/")
+
+    # Save results to local file
+    output_file = os.path.join(RESULT_DIR, "step3_result.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(
+            {"uri": uri, "patterns": len(test_patterns), "results": results},
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
+    print(f"Results saved to:        {output_file}")
+    print(f"Miss analysis saved to:  {MISS_DIR}/")
+    print(f"Ground truth cache:      {GROUND_TRUTH_DIR}/")
 
 
 if __name__ == "__main__":

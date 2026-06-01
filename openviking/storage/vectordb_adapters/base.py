@@ -31,6 +31,29 @@ from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# VikingDB text field byte limit
+# ---------------------------------------------------------------------------
+# VikingDB rejects upsert when any text field exceeds this byte length.
+# Truncation is applied at a valid UTF-8 character boundary so that
+# multi-byte sequences are never split in the middle.
+VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 65535
+
+
+def _truncate_text_field(text: str, byte_limit: int = VIKINGDB_TEXT_FIELD_BYTE_LIMIT) -> str:
+    """Truncate *text* so its UTF-8 encoding does not exceed *byte_limit*.
+
+    Walks backwards from *byte_limit* to find the nearest valid UTF-8 lead
+    byte, ensuring no multi-byte character is split.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= byte_limit:
+        return text
+    cut = byte_limit
+    while cut > 0 and (encoded[cut] & 0xC0) == 0x80:
+        cut -= 1
+    return encoded[:cut].decode("utf-8")
+
 
 def _parse_url(url: str) -> tuple[str, int]:
     normalized = url
@@ -63,6 +86,13 @@ class CollectionAdapter(ABC):
 
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
+
+    # Text fields subject to byte-limit truncation before upsert.
+    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content", "abstract")
+
+    # Per-backend byte limit for text fields.  ``None`` means no truncation.
+    # Subclasses backed by VikingDB should set this to ``VIKINGDB_TEXT_FIELD_BYTE_LIMIT``.
+    _TEXT_FIELD_BYTE_LIMIT: int | None = None
 
     def __init__(self, collection_name: str, index_name: str = DEFAULT_INDEX_NAME):
         self._collection_name = collection_name
@@ -214,6 +244,11 @@ class CollectionAdapter(ABC):
         for key in self._URI_FIELD_NAMES:
             if key in normalized:
                 normalized[key] = self._encode_uri_field_value(normalized[key])
+        if self._TEXT_FIELD_BYTE_LIMIT is not None:
+            for field in self._TRUNCATABLE_TEXT_FIELDS:
+                value = normalized.get(field)
+                if isinstance(value, str):
+                    normalized[field] = _truncate_text_field(value, self._TEXT_FIELD_BYTE_LIMIT)
         return normalized
 
     @staticmethod

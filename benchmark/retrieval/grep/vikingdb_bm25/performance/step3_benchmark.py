@@ -27,7 +27,7 @@ import time
 from openviking_cli.client.sync_http import SyncHTTPClient
 
 BASE_URI = "viking://resources/benchmark/performance"
-DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark")
+DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark/performance")
 GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
 MISS_DIR = os.path.join(DATA_DIR, ".miss")
 SYNTHETIC_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
@@ -55,7 +55,7 @@ def _sanitize_filename(s: str, max_len: int = 40) -> str:
 
 
 def _perf_cache_path(uri: str) -> str:
-    h = hashlib.sha256(uri.encode()).hexdigest()[:8]
+    h = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:8]
     return os.path.join(GROUND_TRUTH_DIR, f"perf_{h}.json")
 
 
@@ -63,18 +63,18 @@ def _load_ground_truth_cache(uri: str) -> dict[str, int] | None:
     path = _perf_cache_path(uri)
     if not os.path.isfile(path):
         # Fallback: try old-style filename
-        old_h = hashlib.sha256(SYNTHETIC_DIR.encode())
+        old_h = hashlib.sha256(SYNTHETIC_DIR.encode("utf-8"))
         for prob in sorted(TARGET_WORDS.keys()):
             for word in TARGET_WORDS[prob]:
-                old_h.update(word.encode())
+                old_h.update(word.encode("utf-8"))
         old_key = old_h.hexdigest()[:16]
         old_path = os.path.join(GROUND_TRUTH_DIR, f"perf_{old_key}.json")
         if os.path.isfile(old_path):
-            with open(old_path) as f:
+            with open(old_path, encoding="utf-8") as f:
                 data = json.load(f)
             return data.get("word_counts")
         return None
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     return data.get("word_counts")
 
@@ -82,12 +82,12 @@ def _load_ground_truth_cache(uri: str) -> dict[str, int] | None:
 def _save_ground_truth_cache(uri: str, word_counts: dict[str, int]) -> None:
     os.makedirs(GROUND_TRUTH_DIR, exist_ok=True)
     path = _perf_cache_path(uri)
-    with open(path, "w") as f:
-        json.dump({"uri": uri, "word_counts": word_counts}, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"uri": uri, "word_counts": word_counts}, f, indent=2, ensure_ascii=False)
 
 
 def _perf_miss_path(engine_label: str) -> str:
-    h = hashlib.sha256(BASE_URI.encode()).hexdigest()[:8]
+    h = hashlib.sha256(BASE_URI.encode("utf-8")).hexdigest()[:8]
     safe_label = _sanitize_filename(engine_label)
     return os.path.join(MISS_DIR, f"perf_{safe_label}_{h}.json")
 
@@ -123,8 +123,13 @@ def _save_perf_miss(
         return
     os.makedirs(MISS_DIR, exist_ok=True)
     path = _perf_miss_path(engine_label)
-    with open(path, "w") as f:
-        json.dump({"engine_label": engine_label, "uri": BASE_URI, "misses": miss_data}, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"engine_label": engine_label, "uri": BASE_URI, "misses": miss_data},
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
 
 def compute_ground_truth(client: SyncHTTPClient, uri: str) -> tuple[dict[str, int], float]:
@@ -359,11 +364,12 @@ def main():
         client.close()
 
     output_file = f"step3_result_{args.engine_label}.json"
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(
             {"engine_label": args.engine_label, "total_files": total_files, "results": results},
             f,
             indent=2,
+            ensure_ascii=False,
         )
     print(f"\nResults saved to {output_file}")
 
