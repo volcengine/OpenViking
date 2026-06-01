@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from openviking.models.vlm.backends import codex_auth
+from openviking.models.vlm.backends import codex_responses_adapter
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -361,6 +362,34 @@ def test_codex_auth_refresh_requires_persisted_client_id(tmp_path, monkeypatch):
 
     with pytest.raises(codex_auth.CodexAuthError, match="client_id"):
         resolve_codex_runtime_credentials(force_refresh=True)
+
+
+def test_codex_response_parser_accepts_null_output(monkeypatch):
+    import openai.lib._parsing._responses as parsing_module
+    import openai.resources.responses.responses as responses_module
+
+    def _sdk_parse_response(*args, **kwargs):
+        response = kwargs["response"]
+        for _output in response.output:
+            pass
+        return response
+
+    monkeypatch.setattr(parsing_module, "parse_response", _sdk_parse_response)
+    monkeypatch.setattr(responses_module, "parse_response", _sdk_parse_response)
+    monkeypatch.setattr(codex_responses_adapter, "_OPENAI_NULL_OUTPUT_GUARD_APPLIED", False)
+
+    codex_responses_adapter._ensure_openai_response_output_null_guard()
+
+    response = SimpleNamespace(output=None)
+    parsed = parsing_module.parse_response(
+        text_format=None,
+        input_tools=None,
+        response=response,
+    )
+
+    assert parsed is response
+    assert response.output == []
+    assert parsing_module.parse_response is responses_module.parse_response
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
