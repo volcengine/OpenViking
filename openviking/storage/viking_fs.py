@@ -103,7 +103,7 @@ def _get_cpu_count() -> int:
 
 def _get_abstract_worker_count() -> int:
     default = max(4, min(12, min(32, _get_cpu_count() + 4) // 2))
-    env_val = os.getenv("OPENVIKING_LS_ABSTRACT_CONCURRENCY")
+    env_val = os.getenv("OPENVIKING_FILE_OPS_CONCURRENCY")
     if env_val is not None:
         try:
             return max(1, int(env_val))
