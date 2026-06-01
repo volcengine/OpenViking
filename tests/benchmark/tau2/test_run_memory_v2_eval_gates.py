@@ -78,6 +78,78 @@ def test_memory_extract_skipped_from_task_reads_telemetry_summary():
     assert module._memory_extract_skipped_from_task({"telemetry": {}}) == 0
 
 
+def test_corpus_provenance_records_train_config_and_git_identity(tmp_path, monkeypatch):
+    module = _load_runner_module()
+    train_results = tmp_path / "train_results.json"
+    train_results.write_text('{"simulations":[]}', encoding="utf-8")
+    config_file = tmp_path / "ov.conf"
+    config_file.write_text('{"memory":{"agent_memory_enabled":true}}', encoding="utf-8")
+
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_file))
+    monkeypatch.setattr(
+        module,
+        "_git_head_commit",
+        lambda repo: f"commit:{Path(repo).name}",
+    )
+
+    provenance = module._corpus_provenance(
+        SimpleNamespace(tau2_repo=tmp_path / "tau2"),
+        train_results,
+    )
+
+    assert provenance["train_results_sha256"] == module._file_sha256(train_results)
+    assert provenance["tau2"] == {
+        "repo": str(tmp_path / "tau2"),
+        "commit": "commit:tau2",
+    }
+    assert provenance["openviking"]["repo"] == str(module.REPO_ROOT)
+    assert provenance["openviking"]["commit"] == f"commit:{module.REPO_ROOT.name}"
+    assert provenance["openviking"]["config_file"] == str(config_file)
+    assert provenance["openviking"]["config_file_sha256"] == module._file_sha256(config_file)
+
+
+def test_cached_corpus_rejects_train_results_sha_mismatch(tmp_path):
+    module = _load_runner_module()
+    train_results = tmp_path / "train_results.json"
+    train_results.write_text('{"simulations":[]}', encoding="utf-8")
+    corpus_manifest = tmp_path / "corpus_manifest.json"
+    corpus_manifest.write_text(
+        json.dumps(
+            {
+                "domain": "retail",
+                "train_results_sha256": "not-the-current-sha",
+                "train_transcript_format": module.TRAIN_TRANSCRIPT_OPENVIKING_TEXT,
+                "train_include_system_prompt": False,
+                "train_tool_output_max_chars": module.DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS,
+                "train_skip_failed_sessions": False,
+                "corpus_session_commit_concurrency": 1,
+                "committed_session_count": 1,
+                "memories_extracted_total": 1,
+                "memory_extract_skipped_total": 0,
+                "corpus_probe": {"match_count": 1, "read_non_empty_count": 1},
+                "memory_graph_health": {
+                    "healthy": True,
+                    "memory_type_counts": {"experiences": 1, "trajectories": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = SimpleNamespace(
+        corpus_session_commit_concurrency=1,
+        force_train=False,
+        train_transcript_format=module.TRAIN_TRANSCRIPT_OPENVIKING_TEXT,
+        train_include_system_prompt=False,
+        train_tool_output_max_chars=module.DEFAULT_TRAIN_TOOL_OUTPUT_MAX_CHARS,
+        train_skip_failed_sessions=False,
+        domain="retail",
+    )
+
+    with pytest.raises(ValueError, match="train_results_sha256 mismatch"):
+        module._train(args, train_results, corpus_manifest)
+
+
 def test_memory_graph_root_uri_uses_memories_path_segment():
     module = _load_runner_module()
 

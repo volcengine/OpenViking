@@ -5,7 +5,9 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -46,6 +48,53 @@ def _json(text: str) -> dict[str, Any]:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_head_commit(repo: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    commit = result.stdout.strip()
+    return commit or None
+
+
+def _corpus_provenance(args: argparse.Namespace, train_results: Path) -> dict[str, Any]:
+    config_file = (
+        os.environ.get("OPENVIKING_CONFIG_FILE")
+        or os.environ.get("OPENVIKING_CLI_CONFIG_FILE")
+        or ""
+    )
+    config_path = Path(config_file) if config_file else None
+    config_sha256 = (
+        _file_sha256(config_path) if config_path is not None and config_path.is_file() else None
+    )
+    return {
+        "train_results_sha256": _file_sha256(train_results),
+        "tau2": {
+            "repo": str(args.tau2_repo),
+            "commit": _git_head_commit(args.tau2_repo),
+        },
+        "openviking": {
+            "repo": str(REPO_ROOT),
+            "commit": _git_head_commit(REPO_ROOT),
+            "config_file": config_file or None,
+            "config_file_sha256": config_sha256,
+        },
+    }
 
 
 def _add_tau2_to_path(tau2_repo: Path) -> None:
@@ -780,6 +829,15 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 f"{cached_commit_concurrency!r} != {requested_commit_concurrency!r}; "
                 "use a distinct corpus_id or --force-train"
             )
+        cached_train_sha256 = manifest.get("train_results_sha256")
+        if cached_train_sha256 and train_results.is_file():
+            actual_train_sha256 = _file_sha256(train_results)
+            if cached_train_sha256 != actual_train_sha256:
+                raise ValueError(
+                    "cached corpus train_results_sha256 mismatch: "
+                    f"{cached_train_sha256!r} != {actual_train_sha256!r}; "
+                    "use a distinct corpus_id or --force-train"
+                )
         _raise_if_invalid_corpus_manifest(manifest)
         return manifest
 
@@ -921,15 +979,19 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
     finally:
         client.close()
 
+    provenance = _corpus_provenance(args, train_results)
     manifest = {
         "domain": args.domain,
         "train_results": str(train_results),
+        "train_results_sha256": provenance["train_results_sha256"],
+        "tau2": provenance["tau2"],
         "openviking": {
             "url": args.openviking_url,
             "account": args.openviking_account,
             "user": args.openviking_user,
             "agent_id": args.openviking_agent_id,
             "search_uri": args.search_uri,
+            **provenance["openviking"],
         },
         "train_transcript_format": args.train_transcript_format,
         "train_include_system_prompt": bool(args.train_include_system_prompt),
