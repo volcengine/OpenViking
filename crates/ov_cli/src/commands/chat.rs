@@ -93,8 +93,6 @@ struct ChatResponse {
     session_id: String,
     message: String,
     #[serde(default)]
-    response_id: Option<String>,
-    #[serde(default)]
     events: Option<Vec<serde_json::Value>>,
 }
 
@@ -103,7 +101,6 @@ struct ChatResponse {
 struct ChatStreamEvent {
     event: String, // "reasoning", "tool_call", "tool_result", "response"
     data: serde_json::Value,
-    timestamp: Option<String>,
 }
 
 struct ChatAuth {

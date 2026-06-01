@@ -65,20 +65,6 @@ impl KVFileSystem {
         }
     }
 
-    /// Get parent directory path
-    fn parent_key(key: &str) -> Option<String> {
-        if key == "/" || !key.contains('/') {
-            return Some("/".to_string());
-        }
-
-        let parts: Vec<&str> = key.split('/').collect();
-        if parts.len() <= 1 {
-            return Some("/".to_string());
-        }
-
-        Some(parts[..parts.len() - 1].join("/"))
-    }
-
     /// List all keys with a given prefix
     fn list_keys_with_prefix(&self, store: &HashMap<String, KVEntry>, prefix: &str) -> Vec<String> {
         let search_prefix = if prefix == "/" {
